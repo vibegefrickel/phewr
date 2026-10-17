@@ -217,70 +217,27 @@ fn decode_loop(
         return;
     };
 
-    let mut paused = false;
-
     loop {
-        if let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                VideoCmd::Stop => return,
-                VideoCmd::Pause => paused = true,
-                VideoCmd::Play => paused = false,
-            }
-        }
-
-        if paused {
-            match cmd_rx.recv() {
-                Ok(VideoCmd::Play) => paused = false,
-                Ok(VideoCmd::Stop) | Err(_) => return,
-                Ok(VideoCmd::Pause) => {}
-            }
-            continue;
-        }
-
+        // A pass reads the whole clip, because a pause waits inside the packet loop.
         let mut got_frame = false;
         for (stream, packet) in input.packets() {
-            if let Ok(cmd) = cmd_rx.try_recv() {
-                match cmd {
-                    VideoCmd::Stop => return,
-                    VideoCmd::Pause => {
-                        paused = true;
-                        break;
-                    }
-                    VideoCmd::Play => paused = false,
-                }
+            if !follow_commands(cmd_rx) {
+                return;
             }
 
-            if stream.index() != stream_index {
+            if stream.index() != stream_index || decoder.send_packet(&packet).is_err() {
                 continue;
             }
 
-            if decoder.send_packet(&packet).is_err() {
-                continue;
+            if !send_ready_frames(
+                &mut decoder,
+                &mut scaler,
+                time_base,
+                frame_tx,
+                &mut got_frame,
+            ) {
+                return;
             }
-
-            let mut decoded = ffmpeg::util::frame::video::Video::empty();
-            while decoder.receive_frame(&mut decoded).is_ok() {
-                let mut rgba_frame = ffmpeg::util::frame::video::Video::empty();
-                if scaler.run(&decoded, &mut rgba_frame).is_err() {
-                    continue;
-                }
-
-                if let Some(frame) = extract_frame(&rgba_frame, &decoded, time_base)
-                    && frame_tx.send(frame).is_err()
-                {
-                    return;
-                }
-
-                got_frame = true;
-            }
-
-            if paused {
-                break;
-            }
-        }
-
-        if paused {
-            continue;
         }
 
         #[expect(
@@ -288,15 +245,14 @@ fn decode_loop(
             reason = "a failed flush only means that no frames are left; the loop below ends"
         )]
         let _ = decoder.send_eof();
-        let mut decoded = ffmpeg::util::frame::video::Video::empty();
-        while decoder.receive_frame(&mut decoded).is_ok() {
-            let mut rgba_frame = ffmpeg::util::frame::video::Video::empty();
-            if scaler.run(&decoded, &mut rgba_frame).is_ok()
-                && let Some(frame) = extract_frame(&rgba_frame, &decoded, time_base)
-                && frame_tx.send(frame).is_err()
-            {
-                return;
-            }
+        if !send_ready_frames(
+            &mut decoder,
+            &mut scaler,
+            time_base,
+            frame_tx,
+            &mut got_frame,
+        ) {
+            return;
         }
 
         if input.seek(0, ..).is_err() {
@@ -308,6 +264,51 @@ fn decode_loop(
             return;
         }
     }
+}
+
+/// Apply the queued commands before the next packet. A pause blocks here, so it loses no
+/// packet. `false` means stop.
+fn follow_commands(cmd_rx: &mpsc::Receiver<VideoCmd>) -> bool {
+    let mut paused = false;
+    loop {
+        let cmd = if paused {
+            cmd_rx.recv().ok()
+        } else {
+            cmd_rx.try_recv().ok()
+        };
+        match cmd {
+            Some(VideoCmd::Stop) => return false,
+            Some(VideoCmd::Pause) => paused = true,
+            Some(VideoCmd::Play) => paused = false,
+            None => return !paused,
+        }
+    }
+}
+
+/// Scale and send each frame that the decoder has ready. `got_frame` counts only sent frames,
+/// so a clip without a usable frame ends the loop. `false` means that the receiver is gone.
+fn send_ready_frames(
+    decoder: &mut ffmpeg::decoder::Video,
+    scaler: &mut ffmpeg::software::scaling::Context,
+    time_base: ffmpeg::Rational,
+    frame_tx: &mpsc::SyncSender<VideoFrame>,
+    got_frame: &mut bool,
+) -> bool {
+    let mut decoded = ffmpeg::util::frame::video::Video::empty();
+    while decoder.receive_frame(&mut decoded).is_ok() {
+        let mut rgba_frame = ffmpeg::util::frame::video::Video::empty();
+        if scaler.run(&decoded, &mut rgba_frame).is_err() {
+            continue;
+        }
+        let Some(frame) = extract_frame(&rgba_frame, &decoded, time_base) else {
+            continue;
+        };
+        if frame_tx.send(frame).is_err() {
+            return false;
+        }
+        *got_frame = true;
+    }
+    true
 }
 
 fn extract_frame(
@@ -419,10 +420,15 @@ pub(crate) fn decode_first_frame(
 
 #[cfg(test)]
 mod tests {
-    use super::{VideoPlayback, decode_first_frame, fit_aspect, is_video, sanitize_fps};
+    use super::{
+        VideoCmd, VideoFrame, VideoPlayback, decode_first_frame, decode_loop, fit_aspect, is_video,
+        sanitize_fps,
+    };
     use ratatui::layout::Rect;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::mpsc;
+    use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
 
     /// The longest wait for a frame of the decoder thread.
@@ -614,6 +620,134 @@ mod tests {
         }
         stop_and_drain(&mut playback);
         drop(playback);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Run `decode_loop` in a thread. The frame channel has no buffer, so the decoder waits at
+    /// each frame until the test receives it. After the test receives a frame, the decoder reads
+    /// a command before the next packet or before the packet after it.
+    fn start_decoder(
+        clip: &Path,
+    ) -> (
+        mpsc::Receiver<VideoFrame>,
+        mpsc::Sender<VideoCmd>,
+        JoinHandle<()>,
+    ) {
+        let (frame_tx, frame_rx) = mpsc::sync_channel(0);
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let clip = clip.to_path_buf();
+        let handle = std::thread::spawn(move || decode_loop(&clip, 64, 48, &frame_tx, &cmd_rx));
+        (frame_rx, cmd_tx, handle)
+    }
+
+    /// Receive the next frame as its frame number at 10 frames per second, or fail after
+    /// [`DEADLINE`].
+    fn next_frame(frames: &mpsc::Receiver<VideoFrame>) -> i64 {
+        let frame = frames
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|error| panic!("no frame within {DEADLINE:?}: {error}"));
+        (frame.pts * 10.0).round() as i64
+    }
+
+    /// Pause and resume at once. The test never waits for a frame while the decoder waits for
+    /// the resume, and the decoder reads both commands before the same packet.
+    fn pause_and_resume(commands: &mpsc::Sender<VideoCmd>) {
+        commands.send(VideoCmd::Pause).unwrap();
+        commands.send(VideoCmd::Play).unwrap();
+    }
+
+    /// Stop the decoder thread and wait until it ends.
+    fn stop_decoder(
+        frames: mpsc::Receiver<VideoFrame>,
+        commands: &mpsc::Sender<VideoCmd>,
+        decoder: JoinHandle<()>,
+    ) {
+        commands.send(VideoCmd::Stop).unwrap();
+        // The dropped receiver also ends a decoder that waits to send a frame.
+        drop(frames);
+        decoder.join().unwrap();
+    }
+
+    #[test]
+    fn a_pause_at_the_last_packet_keeps_the_loop() {
+        let dir = test_dir("pause-end");
+        let Some(clip) = test_clip(&dir, "0.5") else {
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        };
+        let (frames, commands, decoder) = start_decoder(&clip);
+        // Each pass pauses before packet 3 or before packet 4, the last packet. The test cannot
+        // select the packet. Only a pause before packet 4 can end a pass without frames, so
+        // three passes give that position more chances.
+        for _ in 0..3 {
+            for expected in 0..3 {
+                assert_eq!(next_frame(&frames), expected);
+            }
+            pause_and_resume(&commands);
+            for expected in 3..5 {
+                assert_eq!(
+                    next_frame(&frames),
+                    expected,
+                    "the paused packet is not lost"
+                );
+            }
+        }
+        assert_eq!(next_frame(&frames), 0, "the clip starts again");
+        stop_decoder(frames, &commands, decoder);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_pause_in_the_middle_loses_no_frame() {
+        let dir = test_dir("pause-middle");
+        let Some(clip) = test_clip(&dir, "1") else {
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        };
+        let (frames, commands, decoder) = start_decoder(&clip);
+        let mut first_loop: Vec<_> = (0..4).map(|_| next_frame(&frames)).collect();
+        // The decoder reads the commands before packet 4 or packet 5 of 10.
+        pause_and_resume(&commands);
+        let next_loop = loop {
+            let frame = next_frame(&frames);
+            if frame == 0 {
+                break frame;
+            }
+            first_loop.push(frame);
+        };
+        assert_eq!(first_loop, (0..10).collect::<Vec<_>>());
+        assert_eq!(next_loop, 0);
+        stop_decoder(frames, &commands, decoder);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_pause_holds_the_decoder_until_the_resume() {
+        let dir = test_dir("pause-hold");
+        let Some(clip) = test_clip(&dir, "1") else {
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        };
+        let (frames, commands, decoder) = start_decoder(&clip);
+        for expected in 0..4 {
+            assert_eq!(next_frame(&frames), expected);
+        }
+        // The decoder reads the pause before packet 4, or it sends frame 4 and reads the pause
+        // before packet 5. A third frame shows that the pause has no effect. A slow decoder can
+        // only hide that error. It cannot make a correct decoder fail.
+        commands.send(VideoCmd::Pause).unwrap();
+        let mut held = Vec::new();
+        while held.len() < 2
+            && let Ok(frame) = frames.recv_timeout(Duration::from_millis(200))
+        {
+            held.push((frame.pts * 10.0).round() as i64);
+        }
+        assert!(held.len() < 2, "frames during the pause: {held:?}");
+        assert!(held.iter().all(|&frame| frame == 4), "{held:?}");
+        commands.send(VideoCmd::Play).unwrap();
+        let expected = if held.is_empty() { 4 } else { 5 };
+        assert_eq!(next_frame(&frames), expected, "the resume continues");
+        stop_decoder(frames, &commands, decoder);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
