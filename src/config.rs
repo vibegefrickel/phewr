@@ -2,7 +2,7 @@
 //! file that remembers the last used thumbnail size.
 //!
 //! Theme-related keys (`theme`, `theme_catalog`) are read by `theme.rs` from
-//! the same file; this module only handles the gallery and slideshow sections.
+//! the same file; this module only handles the gallery, slideshow, info and video sections.
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,32 @@ pub(crate) struct Config {
     pub slideshow_loop: bool,
     /// Open the info panel on start.
     pub info_panel: bool,
+    /// The program that plays a video file.
+    pub video_player: VideoPlayer,
+}
+
+/// The value of `[video] player`: how viewr plays a video file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum VideoPlayer {
+    /// mpv draws into this terminal with `--vo=kitty`.
+    #[default]
+    Terminal,
+    /// mpv opens a window of its own, and viewr keeps running.
+    Window,
+    /// The built-in player of viewr (`video.rs`).
+    Builtin,
+}
+
+impl VideoPlayer {
+    /// Read the config value; an unknown value returns `None`, so the rest of the file still counts.
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "terminal" => Some(Self::Terminal),
+            "window" => Some(Self::Window),
+            "builtin" => Some(Self::Builtin),
+            _ => None,
+        }
+    }
 }
 
 impl Default for Config {
@@ -37,6 +63,7 @@ impl Default for Config {
             slideshow_interval: DEFAULT_SLIDESHOW_INTERVAL,
             slideshow_loop: true,
             info_panel: false,
+            video_player: VideoPlayer::default(),
         }
     }
 }
@@ -49,6 +76,8 @@ struct ConfigFile {
     slideshow: SlideshowSection,
     #[serde(default)]
     info: InfoSection,
+    #[serde(default)]
+    video: VideoSection,
 }
 
 #[derive(Default, Deserialize)]
@@ -67,6 +96,11 @@ struct SlideshowSection {
 #[derive(Default, Deserialize)]
 struct InfoSection {
     show_on_start: Option<bool>,
+}
+
+#[derive(Default, Deserialize)]
+struct VideoSection {
+    player: Option<String>,
 }
 
 /// Remembered thumbnail size, written whenever the user zooms the grid.
@@ -105,6 +139,9 @@ fn load_at(config_path: &Path, state_path: &Path) -> Config {
     }
     if let Some(show) = file.info.show_on_start {
         config.info_panel = show;
+    }
+    if let Some(player) = file.video.player.as_deref().and_then(VideoPlayer::parse) {
+        config.video_player = player;
     }
 
     // The remembered size wins over the configured default until the user
@@ -231,6 +268,30 @@ mod tests {
         );
         let config = load_at(&config_path, &state_path);
         assert_eq!((config.thumb_cols, config.thumb_rows), (16, 6));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn video_player_is_read_and_unknown_values_keep_the_default() {
+        let root = test_root();
+        let config_path = root.join("config.toml");
+        let state_path = root.join("state.toml");
+        for (value, expected) in [
+            ("terminal", VideoPlayer::Terminal),
+            ("window", VideoPlayer::Window),
+            ("builtin", VideoPlayer::Builtin),
+            (" Window ", VideoPlayer::Window),
+            ("vlc", VideoPlayer::Terminal),
+        ] {
+            std::fs::write(
+                &config_path,
+                format!("[video]\nplayer = \"{value}\"\n[info]\nshow_on_start = true\n"),
+            )
+            .unwrap();
+            let config = load_at(&config_path, &state_path);
+            assert_eq!(config.video_player, expected, "player = {value:?}");
+            assert!(config.info_panel, "player = {value:?} keeps the other keys");
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -8,16 +8,17 @@ use ratatui::{
 /// Preferred width of the info panel, including its border.
 const INFO_PANEL_WIDTH: u16 = 42;
 
-pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
+/// Draw the whole frame. `status` is a one-line note of the run loop, in place of the key hints.
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     let area = frame.area();
     frame.render_widget(Block::default().style(app.theme.background), area);
     let (main, info) = split_info(area, app);
     match app.mode {
-        ViewMode::Gallery => draw_gallery(frame, app, main),
+        ViewMode::Gallery => draw_gallery(frame, app, main, status),
         ViewMode::Fullscreen => draw_fullscreen(frame, app, main),
         ViewMode::Picker => draw_picker(frame, app),
         #[cfg(feature = "video")]
-        ViewMode::Video => draw_video(frame, app, main),
+        ViewMode::Video => draw_video(frame, app, main, status),
     }
     if let Some(info) = info {
         draw_info_panel(frame, app, info);
@@ -400,7 +401,7 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 #[cfg(feature = "video")]
-fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Option<&str>) {
     let theme = &app.theme;
 
     let filename = app
@@ -442,9 +443,14 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 ),
                 theme.popup_text,
             ),
-            Span::styled(
-                " Space: pause  \u{2190}/\u{2192}: navigate  ?: help  q: quit ",
-                theme.popup_desc,
+            status_note.map_or_else(
+                || {
+                    Span::styled(
+                        " Space: pause  \u{2190}/\u{2192}: navigate  ?: help  q: quit ",
+                        theme.popup_desc,
+                    )
+                },
+                |note| Span::styled(format!(" {note} "), theme.popup_text),
             ),
         ])
     };
@@ -464,7 +470,7 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     app.image_rect = inner;
 }
 
-fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
     let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
     let search_rect = chunks[0];
     let gallery_area = chunks[1];
@@ -485,7 +491,7 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         format!(" Gallery [{filtered_count}/{total} matches{scanning}] [{thumb_size}] ")
     };
 
-    let bottom_line = gallery_bottom_line(app, filtered_count);
+    let bottom_line = gallery_bottom_line(app, filtered_count, status);
 
     let gallery_block = Block::default()
         .borders(Borders::ALL)
@@ -538,7 +544,7 @@ fn draw_search_bar(frame: &mut Frame<'_>, app: &App, search_rect: Rect) {
 }
 
 /// The bottom border of the grid: a delete question, an error, or name, position and hints.
-fn gallery_bottom_line(app: &App, filtered_count: usize) -> Line<'static> {
+fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -> Line<'static> {
     let theme = &app.theme;
     let selected_name = app
         .gallery
@@ -578,12 +584,17 @@ fn gallery_bottom_line(app: &App, filtered_count: usize) -> Line<'static> {
         ))
     } else {
         let hint = if app.gallery.search_active {
-            " Esc: cancel  Enter: confirm "
+            Span::styled(" Esc: cancel  Enter: confirm ", theme.popup_desc)
+        } else if let Some(status) = status {
+            Span::styled(format!(" {status} "), theme.popup_text)
         } else {
-            " Enter: open  +/-: size  i: info  /: search  ?: help  q: quit "
+            Span::styled(
+                " Enter: open  +/-: size  i: info  /: search  ?: help  q: quit ",
+                theme.popup_desc,
+            )
         };
         if filtered_count == 0 {
-            Line::from(Span::styled(hint, theme.popup_desc))
+            Line::from(hint)
         } else {
             Line::from(vec![
                 Span::styled(
@@ -595,7 +606,7 @@ fn gallery_bottom_line(app: &App, filtered_count: usize) -> Line<'static> {
                     ),
                     theme.popup_text,
                 ),
-                Span::styled(hint, theme.popup_desc),
+                hint,
             ])
         }
     }
@@ -732,7 +743,19 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
         #[cfg(feature = "video")]
         ("", ""),
         #[cfg(feature = "video")]
-        ("", "Video"),
+        ("", "Video in mpv ([video] player)"),
+        #[cfg(feature = "video")]
+        ("q", "Back to gallery"),
+        #[cfg(feature = "video")]
+        ("Space", "Pause / resume"),
+        #[cfg(feature = "video")]
+        ("\u{2190} / \u{2192}", "Seek back / forward"),
+        #[cfg(feature = "video")]
+        ("f", "Fullscreen (window player)"),
+        #[cfg(feature = "video")]
+        ("", ""),
+        #[cfg(feature = "video")]
+        ("", "Video in the built-in player"),
         #[cfg(feature = "video")]
         ("Space", "Pause / resume"),
         #[cfg(feature = "video")]

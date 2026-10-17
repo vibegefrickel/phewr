@@ -4,6 +4,8 @@ mod encoder;
 mod gallery;
 mod image_list;
 mod info;
+#[cfg(feature = "video")]
+mod mpv;
 mod picker;
 mod prefetch;
 mod scanner;
@@ -181,6 +183,7 @@ fn main() -> io::Result<()> {
     let theme = theme_set.themes[theme_set.selected].theme.clone();
 
     let mut config = config::load();
+    let mut state = LoopState::new(&config);
     if let Some(interval) = cli.interval {
         if !interval.is_finite() || interval <= 0.0 {
             return Err(io::Error::new(
@@ -206,7 +209,7 @@ fn main() -> io::Result<()> {
     app.install_themes(theme_set.themes, theme_set.selected);
     app.initial_dir = Some(initial_dir);
     app.slideshow_autostart = cli.slideshow;
-    let run_result = run(session.terminal_mut(), &mut app);
+    let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();
     run_result.and(restore_result)
 }
@@ -226,13 +229,57 @@ fn initial_dir_from_paths(paths: &[PathBuf]) -> PathBuf {
     PathBuf::from(".")
 }
 
-fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> io::Result<()> {
+/// The state of the run loop that `App` does not hold.
+struct LoopState {
+    /// A one-line note for the status bar. The next key press clears it.
+    status: Option<String>,
+    /// The video player after the PATH lookup for mpv.
+    #[cfg(feature = "video")]
+    player: mpv::Player,
+    /// The note that tells why the built-in player plays instead of mpv.
+    #[cfg(feature = "video")]
+    fallback_note: Option<String>,
+}
+
+impl LoopState {
+    /// Without the video feature, the config holds nothing for the run loop.
+    #[cfg(not(feature = "video"))]
+    fn new(_config: &config::Config) -> Self {
+        Self { status: None }
+    }
+
+    /// Look up mpv once at the start, so that a missing mpv does not cost a terminal hand-off.
+    #[cfg(feature = "video")]
+    fn new(config: &config::Config) -> Self {
+        let player = mpv::resolve(
+            config.video_player,
+            mpv::find_on_path("mpv", std::env::var_os("PATH").as_deref()),
+        );
+        Self {
+            status: None,
+            fallback_note: (player == mpv::Player::Builtin
+                && config.video_player != config::VideoPlayer::Builtin)
+                .then(|| mpv::MISSING_NOTE.to_owned()),
+            player,
+        }
+    }
+}
+
+fn run(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    state: &mut LoopState,
+) -> io::Result<()> {
     let mut pending_emits: Vec<usize> = Vec::new();
 
     loop {
         // 1. Drain all buffered input first so navigation is never blocked
         while event::poll(Duration::ZERO)? {
-            if handle_event(app, &event::read()?)? {
+            let event = event::read()?;
+            if matches!(event, Event::Key(_)) {
+                state.status = None;
+            }
+            if handle_event(app, &event)? {
                 return Ok(());
             }
         }
@@ -254,6 +301,12 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
             app.needs_render = true;
         }
 
+        // mpv takes the video before the draw, so that the gallery comes back in this pass.
+        #[cfg(feature = "video")]
+        if app.mode == ViewMode::Video && app.video.is_none() {
+            hand_off_video(app, state, terminal, &mut mpv::SystemRunner)?;
+        }
+
         if app.scan_complete
             && app.images.is_empty()
             && app.error.is_none()
@@ -263,7 +316,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
         }
 
         // 3. Draw UI chrome (always fast — ratatui only)
-        terminal.draw(|frame| ui::draw(frame, app))?;
+        terminal.draw(|frame| ui::draw(frame, app, state.status.as_deref()))?;
 
         // 4. Render Kitty images
         if app.theme_picker.is_some() || app.mode == ViewMode::Picker {
@@ -295,7 +348,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
             app.needs_render = false;
             pending_emits.clear();
             if !is_video {
-                terminal.draw(|frame| ui::draw(frame, app))?;
+                terminal.draw(|frame| ui::draw(frame, app, state.status.as_deref()))?;
             }
         } else if !pending_emits.is_empty() && app.mode == ViewMode::Gallery {
             let count = pending_emits.len().min(4);
@@ -324,6 +377,144 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
             timeout = timeout.min(remaining);
         }
         event::poll(timeout)?;
+    }
+}
+
+/// Gives the terminal to mpv and takes it back. The tests use a fake.
+///
+/// viewr stays in raw mode and in its alternate screen during the hand-off. Raw mode turns
+/// off ISIG, so `Ctrl+C`, `Ctrl+\` and `Ctrl+Z` reach mpv as keys and do not send signals to the
+/// process group of viewr. mpv clears only ICANON and ECHO and restores the old mode at its
+/// exit. The alternate screen stays, so the main screen of the shell never shows.
+#[cfg(feature = "video")]
+trait TerminalHandoff {
+    /// The size for the command line of mpv, see [`mpv::fallback_geometry`].
+    fn geometry(&self, cell_px: (u32, u32)) -> Option<mpv::Geometry>;
+    /// Delete the Kitty images of viewr and clear the screen for mpv.
+    fn suspend(&mut self, app: &mut App) -> io::Result<()>;
+    /// Turn raw mode on if something turned it off, so that Ctrl+C cannot stop viewr.
+    fn ensure_raw_mode(&mut self) -> io::Result<()>;
+    /// Delete the last picture of mpv, stop mouse tracking, hide the cursor, clear the screen.
+    fn resume(&mut self, app: &mut App) -> io::Result<()>;
+    /// Drop the input that is in the queue after mpv. Returns true if it held a resize.
+    fn discard_input(&mut self) -> io::Result<bool>;
+}
+
+#[cfg(feature = "video")]
+impl TerminalHandoff for Terminal<CrosstermBackend<io::Stdout>> {
+    fn geometry(&self, cell_px: (u32, u32)) -> Option<mpv::Geometry> {
+        let size = crossterm::terminal::window_size().ok()?;
+        mpv::fallback_geometry((size.columns, size.rows, size.width, size.height), cell_px)
+    }
+
+    fn suspend(&mut self, app: &mut App) -> io::Result<()> {
+        app.graphics_delete_all_to(self.backend_mut())?;
+        self.clear()
+    }
+
+    fn ensure_raw_mode(&mut self) -> io::Result<()> {
+        if crossterm::terminal::is_raw_mode_enabled()? {
+            return Ok(());
+        }
+        enable_raw_mode()
+    }
+
+    fn resume(&mut self, app: &mut App) -> io::Result<()> {
+        app.graphics_delete_all_to(self.backend_mut())?;
+        execute!(self.backend_mut(), event::DisableMouseCapture, cursor::Hide)?;
+        self.clear()
+    }
+
+    fn discard_input(&mut self) -> io::Result<bool> {
+        let mut resized = false;
+        while event::poll(Duration::ZERO)? {
+            resized |= matches!(event::read()?, Event::Resize(_, _));
+        }
+        Ok(resized)
+    }
+}
+
+/// Play the current video in mpv when the configuration and PATH allow it.
+///
+/// After mpv, viewr shows the gallery with the cursor on the video. If mpv does not start,
+/// the built-in player takes over for the rest of the session.
+#[cfg(feature = "video")]
+fn hand_off_video(
+    app: &mut App,
+    state: &mut LoopState,
+    handoff: &mut impl TerminalHandoff,
+    runner: &mut impl mpv::Runner,
+) -> io::Result<()> {
+    let path = app.current_path().to_path_buf();
+    let played = match &state.player {
+        mpv::Player::Builtin => {
+            state.status.clone_from(&state.fallback_note);
+            return Ok(());
+        }
+        mpv::Player::Window(program) => runner
+            .spawn(program, &mpv::window_args(&path))
+            .map(|()| Some(format!("{} plays in an mpv window", mpv::file_name(&path)))),
+        mpv::Player::Terminal(program) => play_in_terminal(app, handoff, runner, program, &path)?
+            .map(|code| mpv::exit_note(code, &path)),
+    };
+    match played {
+        Ok(note) => {
+            state.status = note;
+            app.stop_slideshow();
+            app.exit_video();
+            focus_gallery_on_current(app);
+        }
+        Err(error) => {
+            state.player = mpv::Player::Builtin;
+            state.fallback_note = Some(format!("mpv did not start ({error}): built-in player"));
+            state.status.clone_from(&state.fallback_note);
+        }
+    }
+    Ok(())
+}
+
+/// Run mpv in this terminal and wait for its exit code.
+///
+/// The outer error is a terminal error and ends viewr. The inner error is a failed mpv start.
+#[cfg(feature = "video")]
+fn play_in_terminal(
+    app: &mut App,
+    handoff: &mut impl TerminalHandoff,
+    runner: &mut impl mpv::Runner,
+    program: &std::path::Path,
+    path: &std::path::Path,
+) -> io::Result<io::Result<Option<i32>>> {
+    let args = mpv::terminal_args(path, handoff.geometry(app.cell_px));
+    if let Err(error) = handoff
+        .suspend(app)
+        .and_then(|()| handoff.ensure_raw_mode())
+    {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the suspend error matters more than a failed cleanup"
+        )]
+        let _ = handoff.resume(app);
+        return Err(error);
+    }
+    let played = runner.run(program, &args);
+    handoff.resume(app)?;
+    if handoff.discard_input()? {
+        app.mark_dirty();
+    }
+    Ok(played)
+}
+
+/// Put the gallery cursor on the current file, so that the gallery shows where the user was.
+#[cfg(feature = "video")]
+fn focus_gallery_on_current(app: &mut App) {
+    if let Some(position) = app
+        .gallery
+        .filtered_indices
+        .iter()
+        .position(|&index| index == app.current)
+    {
+        app.gallery.cursor = position;
+        app.gallery.ensure_cursor_visible();
     }
 }
 
@@ -1069,5 +1260,262 @@ mod tests {
         assert_eq!(app.theme_picker.as_ref().unwrap().selected, 10);
         handle_theme_picker_key(&mut app, KeyCode::PageUp);
         assert_eq!(app.theme_picker.as_ref().unwrap().selected, 5);
+    }
+
+    #[cfg(feature = "video")]
+    mod video_handoff {
+        use super::super::{App, LoopState, SharedImageList, TerminalHandoff, ViewMode};
+        use super::super::{hand_off_video, mpv};
+        use crate::theme::Theme;
+        use std::cell::{Cell, RefCell};
+        use std::ffi::OsString;
+        use std::io;
+        use std::path::{Path, PathBuf};
+        use std::rc::Rc;
+
+        type Log = Rc<RefCell<Vec<String>>>;
+
+        /// A terminal that records each step. `raw` is the raw mode that the runner sees.
+        struct FakeTerminal {
+            log: Log,
+            raw: Rc<Cell<bool>>,
+            fail_suspend: bool,
+            resized: bool,
+        }
+
+        impl TerminalHandoff for FakeTerminal {
+            fn geometry(&self, _cell_px: (u32, u32)) -> Option<mpv::Geometry> {
+                None
+            }
+
+            fn suspend(&mut self, _app: &mut App) -> io::Result<()> {
+                self.log.borrow_mut().push("suspend".to_owned());
+                if self.fail_suspend {
+                    return Err(io::Error::other("broken pipe"));
+                }
+                Ok(())
+            }
+
+            fn ensure_raw_mode(&mut self) -> io::Result<()> {
+                self.log.borrow_mut().push("raw mode".to_owned());
+                self.raw.set(true);
+                Ok(())
+            }
+
+            fn resume(&mut self, _app: &mut App) -> io::Result<()> {
+                self.log.borrow_mut().push("resume".to_owned());
+                Ok(())
+            }
+
+            fn discard_input(&mut self) -> io::Result<bool> {
+                self.log.borrow_mut().push("discard input".to_owned());
+                Ok(self.resized)
+            }
+        }
+
+        /// Records each start; `exit` is the exit code of mpv or the error of the start.
+        struct FakeRunner {
+            log: Log,
+            raw: Rc<Cell<bool>>,
+            exit: Result<Option<i32>, io::ErrorKind>,
+        }
+
+        impl FakeRunner {
+            fn record(&self, verb: &str, program: &Path, args: &[OsString]) -> io::Result<()> {
+                let args: Vec<String> = args
+                    .iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect();
+                let mode = if self.raw.get() { "raw" } else { "cooked" };
+                self.log.borrow_mut().push(format!(
+                    "{verb} ({mode}) {} {}",
+                    program.display(),
+                    args.join(" ")
+                ));
+                self.exit.map(drop).map_err(io::Error::from)
+            }
+        }
+
+        impl mpv::Runner for FakeRunner {
+            fn run(&mut self, program: &Path, args: &[OsString]) -> io::Result<Option<i32>> {
+                self.record("run", program, args)?;
+                Ok(self.exit?)
+            }
+
+            fn spawn(&mut self, program: &Path, args: &[OsString]) -> io::Result<()> {
+                self.record("spawn", program, args)
+            }
+        }
+
+        /// An app with a photo and a video, in video mode for the video.
+        fn video_app() -> App {
+            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            app.images = vec![
+                PathBuf::from("/videos/a.jpg"),
+                PathBuf::from("/videos/clip.mp4"),
+            ];
+            app.filenames = vec!["a.jpg".to_owned(), "clip.mp4".to_owned()];
+            app.gallery.filtered_indices = vec![0, 1];
+            app.enter_video(1);
+            app
+        }
+
+        fn state(player: mpv::Player) -> LoopState {
+            LoopState {
+                status: None,
+                player,
+                fallback_note: None,
+            }
+        }
+
+        /// The fakes start in cooked mode, so the log shows that the hand-off turns raw mode on.
+        fn fakes(exit: Result<Option<i32>, io::ErrorKind>) -> (Log, FakeTerminal, FakeRunner) {
+            let log = Log::default();
+            let raw = Rc::new(Cell::new(false));
+            let terminal = FakeTerminal {
+                log: Rc::clone(&log),
+                raw: Rc::clone(&raw),
+                fail_suspend: false,
+                resized: false,
+            };
+            let runner = FakeRunner {
+                log: Rc::clone(&log),
+                raw,
+                exit,
+            };
+            (log, terminal, runner)
+        }
+
+        fn terminal_state() -> LoopState {
+            state(mpv::Player::Terminal(PathBuf::from("/bin/mpv")))
+        }
+
+        #[test]
+        fn terminal_player_runs_mpv_in_raw_mode_and_returns_to_the_gallery() {
+            let mut app = video_app();
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert_eq!(
+                *log.borrow(),
+                [
+                    "suspend",
+                    "raw mode",
+                    "run (raw) /bin/mpv --vo=kitty --vo-kitty-alt-screen=no --profile=sw-fast \
+                     --really-quiet --terminal=yes --input-terminal=yes --loop-file=inf \
+                     -- /videos/clip.mp4",
+                    "resume",
+                    "discard input",
+                ]
+            );
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert_eq!(app.gallery.cursor, 1, "the cursor is on the video");
+            assert!(app.needs_render);
+            assert!(!app.graphics_storage_dirty, "no resize, no full redraw");
+            assert_eq!(state.status, None);
+        }
+
+        #[test]
+        fn a_resize_during_playback_marks_the_thumbnails_dirty() {
+            let mut app = video_app();
+            let mut state = terminal_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+            terminal.resized = true;
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert!(app.graphics_storage_dirty);
+        }
+
+        #[test]
+        fn a_failed_playback_shows_the_exit_code() {
+            let mut app = video_app();
+            let mut state = terminal_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(Some(2)));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert_eq!(
+                state.status.as_deref(),
+                Some("mpv could not play clip.mp4 (exit code 2)")
+            );
+        }
+
+        #[test]
+        fn an_mpv_that_does_not_start_gives_the_terminal_back_and_falls_back() {
+            let mut app = video_app();
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Err(io::ErrorKind::NotFound));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert_eq!(
+                log.borrow()[log.borrow().len() - 2..],
+                ["resume", "discard input"]
+            );
+            assert_eq!(app.mode, ViewMode::Video);
+            assert_eq!(state.player, mpv::Player::Builtin);
+            assert!(
+                state
+                    .status
+                    .as_deref()
+                    .is_some_and(|status| status.starts_with("mpv did not start"))
+            );
+        }
+
+        #[test]
+        fn a_failed_suspend_starts_no_mpv_and_keeps_the_player() {
+            let mut app = video_app();
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+            terminal.fail_suspend = true;
+
+            let error = hand_off_video(&mut app, &mut state, &mut terminal, &mut runner)
+                .expect_err("a terminal error ends the run loop");
+
+            assert_eq!(error.to_string(), "broken pipe");
+            assert_eq!(*log.borrow(), ["suspend", "resume"]);
+            assert_eq!(state.player, terminal_state().player);
+            assert_eq!(state.fallback_note, None);
+        }
+
+        #[test]
+        fn window_player_starts_mpv_without_the_terminal() {
+            let mut app = video_app();
+            let mut state = state(mpv::Player::Window(PathBuf::from("/bin/mpv")));
+            let (log, mut terminal, mut runner) = fakes(Ok(None));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert_eq!(
+                *log.borrow(),
+                [
+                    "spawn (cooked) /bin/mpv --no-terminal --force-window=immediate \
+                     --loop-file=inf -- /videos/clip.mp4"
+                ]
+            );
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert_eq!(
+                state.status.as_deref(),
+                Some("clip.mp4 plays in an mpv window")
+            );
+        }
+
+        #[test]
+        fn builtin_player_starts_nothing_and_shows_the_fallback_note() {
+            let mut app = video_app();
+            let mut state = state(mpv::Player::Builtin);
+            state.fallback_note = Some(mpv::MISSING_NOTE.to_owned());
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert!(log.borrow().is_empty());
+            assert_eq!(app.mode, ViewMode::Video);
+            assert_eq!(state.status.as_deref(), Some(mpv::MISSING_NOTE));
+        }
     }
 }
