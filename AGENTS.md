@@ -153,6 +153,9 @@ missing.
   selects the view. A video in `ViewMode::Fullscreen` is a placeholder
   (`shows_video_placeholder`). `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because
   the image decode cannot read a video.
+- **Built-in player pause:** a pause blocks the decoder thread before the next packet
+  (`follow_commands` in `video.rs`). The decoder tests drive `decode_loop` through a frame
+  channel without a buffer (`sync_channel(0)`), so no assertion depends on the clock.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `main.rs`. `App` holds no
   status note. The next key press clears it.
 

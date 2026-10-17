@@ -9,8 +9,6 @@
 
 - Slideshow: continue after mpv instead of a stop at the video (decision open)
 - Next and previous video from inside mpv (for example mpv key bindings that run `quit <code>`)
-- Built-in player (`video.rs`, `decode_loop`): a pause after the last packet stops the loop. After the resume, the next pass reads no packet, `got_frame` stays `false` and the thread returns at the end of the clip
-- Built-in player (`video.rs`, `decode_loop`): each pause loses one packet. The `break` on `Pause` leaves the loop before `send_packet` for the packet that `input.packets()` already read
 - Tests: `App::graphics_delete_all()` writes Kitty escape sequences to the real stdout. nextest captures them, but `cargo test -- --nocapture` deletes the images of the terminal. Give `App` a writer or a fake graphics backend
 - Theme: `--theme nope` with a non-empty catalog selects the first catalog entry and shows no error (`load_themes_at` runs the fallback before the `strict` check)
 - Theme: `load_themes_at` reads `~/.config/viewr/config.toml` and ignores `XDG_CONFIG_HOME`, but `config.rs` reads `$XDG_CONFIG_HOME/viewr/config.toml`
@@ -40,6 +38,7 @@
 - Info panel with file data and EXIF (`i`, `--info`)
 - HEIC / HEIF decoding through libheif
 - Video playback in mpv (`[video] player`: terminal, window, builtin)
+- Built-in player: a pause no longer drops a packet or stops the loop
 - Return to the view that opened a video, video placeholder in fullscreen
 - Prefetch: generation counter against stale results, no retry loop after a failed decode
 - AVIF through libheif, embedded HEIC grid thumbnails, EXIF orientation for WebP and PNG
