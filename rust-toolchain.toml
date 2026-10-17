@@ -1,0 +1,8 @@
+# Pins the toolchain for everyone opening this repo: rustup picks it up
+# automatically, so `cargo`, `rustfmt`, `clippy` and `rust-analyzer` always agree.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy", "rust-analyzer", "rust-src", "llvm-tools-preview"]
+# Releases are Apple Silicon only: Homebrew's libheif and FFmpeg are arm64 libraries.
+targets = ["aarch64-apple-darwin"]
+profile = "minimal"

@@ -1,14 +1,14 @@
+use crate::config::{MAX_THUMB_COLS, MAX_THUMB_ROWS, MIN_THUMB_COLS, MIN_THUMB_ROWS};
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::num::NonZeroUsize;
 
-pub const THUMB_COLS: u16 = 20;
-pub const THUMB_ROWS: u16 = 8;
-pub const LABEL_ROWS: u16 = 1;
-pub const CELL_HEIGHT_TOTAL: u16 = THUMB_ROWS + LABEL_ROWS + 1;
+pub(crate) const LABEL_ROWS: u16 = 1;
+/// Multiplier applied to the thumbnail width on each grid zoom step.
+const THUMB_ZOOM_STEP: f64 = 1.25;
 
-pub struct GalleryState {
+pub(crate) struct GalleryState {
     pub filtered_indices: Vec<usize>,
     pub cursor: usize,
     pub scroll_offset: usize,
@@ -17,10 +17,23 @@ pub struct GalleryState {
     pub grid_rect: Rect,
     pub search_active: bool,
     pub search_query: String,
+    /// Thumbnail cell size in terminal cells, border included.
+    pub thumb_cols: u16,
+    pub thumb_rows: u16,
+    /// Size the grid returns to on reset (from config).
+    default_thumb: (u16, u16),
 }
 
 impl GalleryState {
-    pub fn new(image_count: usize) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(image_count: usize) -> Self {
+        use crate::config::{DEFAULT_THUMB_COLS, DEFAULT_THUMB_ROWS};
+        Self::with_thumb_size(image_count, DEFAULT_THUMB_COLS, DEFAULT_THUMB_ROWS)
+    }
+
+    pub(crate) fn with_thumb_size(image_count: usize, thumb_cols: u16, thumb_rows: u16) -> Self {
+        let thumb_cols = thumb_cols.clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
+        let thumb_rows = thumb_rows.clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
         Self {
             filtered_indices: (0..image_count).collect(),
             cursor: 0,
@@ -30,30 +43,82 @@ impl GalleryState {
             grid_rect: Rect::default(),
             search_active: false,
             search_query: String::new(),
+            thumb_cols,
+            thumb_rows,
+            default_thumb: (thumb_cols, thumb_rows),
         }
     }
 
-    pub fn reset_cursor(&mut self) {
+    /// Height of one grid row: thumbnail, label and a spacer line.
+    pub(crate) fn cell_height_total(&self) -> u16 {
+        self.thumb_rows + LABEL_ROWS + 1
+    }
+
+    /// Make the configured default the current size again. Returns `true` if it changed.
+    pub(crate) fn reset_thumb_size(&mut self) -> bool {
+        let (cols, rows) = self.default_thumb;
+        self.set_thumb_size(cols, rows)
+    }
+
+    /// Change the thumbnail size, keeping the hovered image on screen.
+    /// Returns `true` if the size actually changed.
+    pub(crate) fn set_thumb_size(&mut self, cols: u16, rows: u16) -> bool {
+        let cols = cols.clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
+        let rows = rows.clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
+        if (cols, rows) == (self.thumb_cols, self.thumb_rows) {
+            return false;
+        }
+        self.thumb_cols = cols;
+        self.thumb_rows = rows;
+        self.update_grid(self.grid_rect);
+        true
+    }
+
+    /// Larger thumbnails. The width grows by a fixed factor and the height follows
+    /// the configured aspect ratio, so the step feels the same at every size.
+    pub(crate) fn thumb_zoom_in(&mut self) -> bool {
+        let cols = (f64::from(self.thumb_cols) * THUMB_ZOOM_STEP).round() as u16;
+        let cols = cols.max(self.thumb_cols + 1);
+        let rows = self.rows_for_cols(cols);
+        self.set_thumb_size(cols, rows)
+    }
+
+    pub(crate) fn thumb_zoom_out(&mut self) -> bool {
+        let cols = (f64::from(self.thumb_cols) / THUMB_ZOOM_STEP).round() as u16;
+        let cols = cols.min(self.thumb_cols.saturating_sub(1));
+        let rows = self.rows_for_cols(cols);
+        self.set_thumb_size(cols, rows)
+    }
+
+    fn rows_for_cols(&self, cols: u16) -> u16 {
+        let (default_cols, default_rows) = self.default_thumb;
+        let ratio = f64::from(default_rows) / f64::from(default_cols.max(1));
+        (f64::from(cols) * ratio)
+            .round()
+            .max(f64::from(MIN_THUMB_ROWS)) as u16
+    }
+
+    pub(crate) fn reset_cursor(&mut self) {
         self.cursor = 0;
         self.scroll_offset = 0;
     }
 
-    pub fn update_grid(&mut self, grid_rect: Rect) {
+    pub(crate) fn update_grid(&mut self, grid_rect: Rect) {
         self.grid_rect = grid_rect;
-        self.grid_cols = (grid_rect.width as usize / THUMB_COLS as usize).max(1);
-        self.visible_rows = (grid_rect.height as usize / CELL_HEIGHT_TOTAL as usize).max(1);
+        self.grid_cols = (grid_rect.width as usize / self.thumb_cols as usize).max(1);
+        self.visible_rows = (grid_rect.height as usize / self.cell_height_total() as usize).max(1);
         self.ensure_cursor_visible();
     }
 
-    pub fn selected_index(&self) -> Option<usize> {
+    pub(crate) fn selected_index(&self) -> Option<usize> {
         self.filtered_indices.get(self.cursor).copied()
     }
 
-    pub fn cursor_row(&self) -> usize {
+    pub(crate) fn cursor_row(&self) -> usize {
         self.cursor / self.grid_cols
     }
 
-    pub fn ensure_cursor_visible(&mut self) {
+    pub(crate) fn ensure_cursor_visible(&mut self) {
         let row = self.cursor_row();
         if row < self.scroll_offset {
             self.scroll_offset = row;
@@ -69,49 +134,49 @@ impl GalleryState {
         self.ensure_cursor_visible();
     }
 
-    pub fn move_left(&mut self) {
+    pub(crate) fn move_left(&mut self) {
         if self.cursor > 0 {
             self.move_cursor_to(self.cursor - 1);
         }
     }
 
-    pub fn move_right(&mut self) {
+    pub(crate) fn move_right(&mut self) {
         self.move_cursor_to(self.cursor + 1);
     }
 
-    pub fn move_up(&mut self) {
+    pub(crate) fn move_up(&mut self) {
         if self.cursor >= self.grid_cols {
             self.move_cursor_to(self.cursor - self.grid_cols);
         }
     }
 
-    pub fn move_down(&mut self) {
+    pub(crate) fn move_down(&mut self) {
         let target = self.cursor + self.grid_cols;
         if target < self.filtered_indices.len() {
             self.move_cursor_to(target);
         }
     }
 
-    pub fn move_page_up(&mut self) {
+    pub(crate) fn move_page_up(&mut self) {
         let jump = self.visible_rows * self.grid_cols;
         self.move_cursor_to(self.cursor.saturating_sub(jump));
     }
 
-    pub fn move_page_down(&mut self) {
+    pub(crate) fn move_page_down(&mut self) {
         let jump = self.visible_rows * self.grid_cols;
         self.move_cursor_to(self.cursor + jump);
     }
 
-    pub fn move_to_first(&mut self) {
+    pub(crate) fn move_to_first(&mut self) {
         self.move_cursor_to(0);
     }
 
-    pub fn move_to_last(&mut self) {
+    pub(crate) fn move_to_last(&mut self) {
         let last = self.filtered_indices.len().saturating_sub(1);
         self.move_cursor_to(last);
     }
 
-    pub fn visible_items(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+    pub(crate) fn visible_items(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         let start = self.scroll_offset * self.grid_cols;
         let count = self.visible_rows * self.grid_cols;
         self.filtered_indices[start..self.filtered_indices.len().min(start + count)]
@@ -120,21 +185,21 @@ impl GalleryState {
             .map(move |(vis, &img_idx)| (vis, img_idx))
     }
 
-    pub fn cell_rect(&self, vis_index: usize) -> Rect {
+    pub(crate) fn cell_rect(&self, vis_index: usize) -> Rect {
         let col = vis_index % self.grid_cols;
         let row = vis_index / self.grid_cols;
         Rect {
-            x: self.grid_rect.x + (col as u16) * THUMB_COLS,
-            y: self.grid_rect.y + (row as u16) * CELL_HEIGHT_TOTAL,
-            width: THUMB_COLS,
-            height: THUMB_ROWS,
+            x: self.grid_rect.x + (col as u16) * self.thumb_cols,
+            y: self.grid_rect.y + (row as u16) * self.cell_height_total(),
+            width: self.thumb_cols,
+            height: self.thumb_rows,
         }
     }
 }
 
-const THUMB_CACHE_CAPACITY: usize = 200;
+const THUMB_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(200).unwrap();
 
-pub struct ThumbnailCache {
+pub(crate) struct ThumbnailCache {
     cache: LruCache<usize, CachedThumb>,
     next_id: u32,
 }
@@ -145,22 +210,22 @@ struct CachedThumb {
 }
 
 impl ThumbnailCache {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            cache: LruCache::new(NonZeroUsize::new(THUMB_CACHE_CAPACITY).unwrap()),
+            cache: LruCache::new(THUMB_CACHE_CAPACITY),
             next_id: 1,
         }
     }
 
-    pub fn contains(&self, index: usize) -> bool {
+    pub(crate) fn contains(&self, index: usize) -> bool {
         self.cache.contains(&index)
     }
 
-    pub fn peek(&self, index: usize) -> Option<(&RgbaImage, u32)> {
+    pub(crate) fn peek(&self, index: usize) -> Option<(&RgbaImage, u32)> {
         self.cache.peek(&index).map(|t| (&t.image, t.image_id))
     }
 
-    pub fn insert(&mut self, index: usize, image: RgbaImage) {
+    pub(crate) fn insert(&mut self, index: usize, image: RgbaImage) {
         let id = self.next_id;
         self.next_id += 1;
         self.cache.push(
@@ -172,20 +237,21 @@ impl ThumbnailCache {
         );
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.cache.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GalleryState, THUMB_COLS};
+    use super::GalleryState;
+    use crate::config::{DEFAULT_THUMB_COLS, MAX_THUMB_COLS, MIN_THUMB_COLS};
     use ratatui::layout::Rect;
 
     #[test]
     fn grid_navigation_tracks_rows_and_scroll() {
         let mut gallery = GalleryState::new(12);
-        gallery.update_grid(Rect::new(0, 0, THUMB_COLS * 3, 20));
+        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 3, 20));
 
         gallery.move_down();
         assert_eq!(gallery.selected_index(), Some(3));
@@ -203,5 +269,35 @@ mod tests {
         gallery.move_down();
         gallery.move_to_last();
         assert_eq!(gallery.selected_index(), None);
+    }
+
+    #[test]
+    fn thumb_zoom_steps_keep_aspect_and_clamp() {
+        let mut gallery = GalleryState::with_thumb_size(50, 20, 8);
+        gallery.update_grid(Rect::new(0, 0, 100, 40));
+        assert_eq!(gallery.grid_cols, 5);
+
+        assert!(gallery.thumb_zoom_in());
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (25, 10));
+        assert_eq!(gallery.grid_cols, 4);
+
+        assert!(gallery.thumb_zoom_out());
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (20, 8));
+
+        for _ in 0..40 {
+            gallery.thumb_zoom_in();
+        }
+        assert_eq!(gallery.thumb_cols, MAX_THUMB_COLS);
+        assert!(!gallery.thumb_zoom_in());
+
+        for _ in 0..40 {
+            gallery.thumb_zoom_out();
+        }
+        assert_eq!(gallery.thumb_cols, MIN_THUMB_COLS);
+        assert!(!gallery.thumb_zoom_out());
+
+        assert!(gallery.reset_thumb_size());
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (20, 8));
+        assert!(!gallery.reset_thumb_size());
     }
 }

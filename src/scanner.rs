@@ -8,6 +8,9 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "ico", "avif",
 ];
 
+#[cfg(feature = "heic")]
+const HEIC_EXTENSIONS: &[&str] = &["heic", "heif", "hif"];
+
 #[cfg(feature = "video")]
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
 
@@ -18,6 +21,10 @@ pub(crate) fn is_supported(path: &Path) -> bool {
     if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
         return true;
     }
+    #[cfg(feature = "heic")]
+    if HEIC_EXTENSIONS.contains(&ext.as_str()) {
+        return true;
+    }
     #[cfg(feature = "video")]
     if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
         return true;
@@ -25,7 +32,7 @@ pub(crate) fn is_supported(path: &Path) -> bool {
     false
 }
 
-pub fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
+pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
     thread::spawn(move || {
         let mut batch = Vec::with_capacity(BATCH_SIZE);
 
@@ -120,6 +127,13 @@ mod tests {
         assert!(is_supported(Path::new("synthetic.jpeg")));
     }
 
+    #[cfg(feature = "heic")]
+    #[test]
+    fn heic_extensions_are_supported() {
+        assert!(is_supported(Path::new("IMG_0001.HEIC")));
+        assert!(is_supported(Path::new("photo.heif")));
+    }
+
     #[test]
     fn unsupported_extensions_are_rejected() {
         assert!(!is_supported(Path::new("synthetic.txt")));
@@ -130,12 +144,14 @@ mod tests {
     #[test]
     fn scan_dir_follows_symlinked_files() {
         let root = std::env::temp_dir().join(format!(
-            "rview-synthetic-scanner-symlink-{}",
+            "viewr-synthetic-scanner-symlink-{}",
             std::process::id()
         ));
         let source = root.join("source");
         let gallery = root.join("gallery");
-        let _ = fs::remove_dir_all(&root);
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&gallery).unwrap();
 
@@ -149,6 +165,6 @@ mod tests {
         scan_dir(&gallery, &list, &mut batch);
 
         assert_eq!(batch, vec![link]);
-        let _ = fs::remove_dir_all(&root);
+        fs::remove_dir_all(&root).unwrap();
     }
 }

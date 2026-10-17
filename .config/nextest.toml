@@ -1,0 +1,5 @@
+# nextest settings for `just test`.
+
+[profile.default]
+# A test that hangs is a failure, not a stuck gate.
+slow-timeout = { period = "30s", terminate-after = 4 }

@@ -10,7 +10,7 @@ const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
 const FRAME_BUFFER_SIZE: usize = 3;
 const MAX_DISPLAY_FPS: f64 = 10.0;
 
-pub fn is_video(path: &Path) -> bool {
+pub(crate) fn is_video(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
@@ -27,7 +27,7 @@ enum VideoCmd {
     Stop,
 }
 
-pub struct VideoPlayback {
+pub(crate) struct VideoPlayback {
     frame_rx: mpsc::Receiver<VideoFrame>,
     cmd_tx: mpsc::Sender<VideoCmd>,
     pub playing: bool,
@@ -41,9 +41,9 @@ pub struct VideoPlayback {
 }
 
 impl VideoPlayback {
-    pub fn open(path: &Path, rect: Rect, cell_px: (u32, u32)) -> io::Result<Self> {
-        let target_w = (rect.width as u32 * cell_px.0).max(1);
-        let target_h = (rect.height as u32 * cell_px.1).max(1);
+    pub(crate) fn open(path: &Path, rect: Rect, cell_px: (u32, u32)) -> io::Result<Self> {
+        let target_w = (u32::from(rect.width) * cell_px.0).max(1);
+        let target_h = (u32::from(rect.height) * cell_px.1).max(1);
 
         let input = ffmpeg::format::input(path)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -56,7 +56,7 @@ impl VideoPlayback {
         let reported_fps = {
             let rate = stream.avg_frame_rate();
             if rate.denominator() > 0 {
-                rate.numerator() as f64 / rate.denominator() as f64
+                f64::from(rate.numerator()) / f64::from(rate.denominator())
             } else {
                 24.0
             }
@@ -95,7 +95,7 @@ impl VideoPlayback {
         })
     }
 
-    pub fn poll_frame(&mut self) -> bool {
+    pub(crate) fn poll_frame(&mut self) -> bool {
         if !self.playing {
             return false;
         }
@@ -119,29 +119,37 @@ impl VideoPlayback {
         }
     }
 
-    pub fn toggle_pause(&mut self) {
+    pub(crate) fn toggle_pause(&mut self) {
         self.playing = !self.playing;
         if self.playing {
             self.last_frame_time = Instant::now();
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a closed receiver means that nobody waits for the result"
+            )]
             let _ = self.cmd_tx.send(VideoCmd::Play);
         } else {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a closed receiver means that nobody waits for the result"
+            )]
             let _ = self.cmd_tx.send(VideoCmd::Pause);
         }
     }
 
-    pub fn time_until_next_frame(&self) -> Duration {
+    pub(crate) fn time_until_next_frame(&self) -> Duration {
         if !self.playing {
             return Duration::from_millis(250);
         }
-        let elapsed = self.last_frame_time.elapsed();
-        if elapsed >= self.frame_interval {
-            Duration::ZERO
-        } else {
-            self.frame_interval - elapsed
-        }
+        self.frame_interval
+            .saturating_sub(self.last_frame_time.elapsed())
     }
 
-    pub fn stop(&mut self) {
+    pub(crate) fn stop(&self) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a closed receiver means that nobody waits for the result"
+        )]
         let _ = self.cmd_tx.send(VideoCmd::Stop);
     }
 }
@@ -164,11 +172,11 @@ fn fit_aspect(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     if src_w == 0 || src_h == 0 {
         return (max_w, max_h);
     }
-    let scale_w = max_w as f64 / src_w as f64;
-    let scale_h = max_h as f64 / src_h as f64;
+    let scale_w = f64::from(max_w) / f64::from(src_w);
+    let scale_h = f64::from(max_h) / f64::from(src_h);
     let scale = scale_w.min(scale_h);
-    let w = (src_w as f64 * scale).round() as u32;
-    let h = (src_h as f64 * scale).round() as u32;
+    let w = (f64::from(src_w) * scale).round() as u32;
+    let h = (f64::from(src_h) * scale).round() as u32;
     (w.max(1), h.max(1))
 }
 
@@ -223,9 +231,8 @@ fn decode_loop(
         if paused {
             match cmd_rx.recv() {
                 Ok(VideoCmd::Play) => paused = false,
-                Ok(VideoCmd::Stop) => return,
+                Ok(VideoCmd::Stop) | Err(_) => return,
                 Ok(VideoCmd::Pause) => {}
-                Err(_) => return,
             }
             continue;
         }
@@ -276,6 +283,10 @@ fn decode_loop(
             continue;
         }
 
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a failed flush only means that no frames are left; the loop below ends"
+        )]
         let _ = decoder.send_eof();
         let mut decoded = ffmpeg::util::frame::video::Video::empty();
         while decoder.receive_frame(&mut decoded).is_ok() {
@@ -320,17 +331,20 @@ fn extract_frame(
         buf
     };
 
-    let pts = decoded
-        .pts()
-        .map(|p| p as f64 * time_base.numerator() as f64 / time_base.denominator() as f64)
-        .unwrap_or(0.0);
+    let pts = decoded.pts().map_or(0.0, |p| {
+        p as f64 * f64::from(time_base.numerator()) / f64::from(time_base.denominator())
+    });
 
     RgbaImage::from_raw(w, h, pixels).map(|image| VideoFrame { image, pts })
 }
 
-pub fn decode_first_frame(path: &Path, rect: Rect, cell_px: (u32, u32)) -> io::Result<RgbaImage> {
-    let target_w = (rect.width as u32 * cell_px.0).max(1);
-    let target_h = (rect.height as u32 * cell_px.1).max(1);
+pub(crate) fn decode_first_frame(
+    path: &Path,
+    rect: Rect,
+    cell_px: (u32, u32),
+) -> io::Result<RgbaImage> {
+    let target_w = (u32::from(rect.width) * cell_px.0).max(1);
+    let target_h = (u32::from(rect.height) * cell_px.1).max(1);
 
     let mut input = ffmpeg::format::input(path)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;

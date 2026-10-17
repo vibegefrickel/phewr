@@ -1,0 +1,23 @@
+# Project-level rust-analyzer settings (read from the project root, editor-independent).
+# Editor-wide taste (inlay hints, completion) lives in the editor config, not here.
+
+[check]
+# Diagnostics in the editor are clippy's, with the lint table from Cargo.toml: what the
+# editor shows is exactly what `just check` fails on.
+command = "clippy"
+extraArgs = ["--all-targets"]
+
+[cargo]
+# Own target directory, so saving in the editor never blocks or invalidates a `cargo build`
+# running in the terminal.
+targetDir = true
+
+[imports]
+# Match the existing style: one `use crate::{...}` tree per crate, absolute `crate::` paths.
+granularity.group = "crate"
+prefix = "crate"
+preferNoStd = false
+
+[diagnostics.styleLints]
+# Lints that rust-analyzer can run natively without waiting for cargo check.
+enable = true

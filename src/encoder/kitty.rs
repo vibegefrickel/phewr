@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 const CHUNK_SIZE: usize = 4096;
 
-pub fn encode_png_to<W: Write + ?Sized>(
+pub(crate) fn encode_png_to<W: Write + ?Sized>(
     out: &mut W,
     img: &RgbaImage,
     opts: &DisplayOptions,
@@ -31,7 +31,7 @@ pub fn encode_png_to<W: Write + ?Sized>(
     let f_val = if is_ssh { 100 } else { 32 };
 
     for (i, chunk) in chunks.iter().enumerate() {
-        let more = if i + 1 < total { 1 } else { 0 };
+        let more = i32::from(i + 1 < total);
         if i == 0 {
             let id_part = opts.id.map(|id| format!(",i={id}")).unwrap_or_default();
             let cols_part = opts.cols.map(|c| format!(",c={c}")).unwrap_or_default();
@@ -50,24 +50,24 @@ pub fn encode_png_to<W: Write + ?Sized>(
     Ok(())
 }
 
-pub fn delete_all() -> io::Result<()> {
+pub(crate) fn delete_all() -> io::Result<()> {
     let mut out = io::stdout().lock();
     delete_all_to(&mut out)?;
     out.flush()
 }
 
-pub fn delete_all_to<W: Write + ?Sized>(out: &mut W) -> io::Result<()> {
+pub(crate) fn delete_all_to<W: Write + ?Sized>(out: &mut W) -> io::Result<()> {
     out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\")
 }
 
 /// Delete visible placements only; keep stored image data (uppercase `A` would nuke storage).
-pub fn clear_placements_to<W: Write + ?Sized>(out: &mut W) -> io::Result<()> {
+pub(crate) fn clear_placements_to<W: Write + ?Sized>(out: &mut W) -> io::Result<()> {
     out.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")
 }
 
 /// Place an already-transmitted image (by ID) at the cursor position. Cheap — no PNG payload.
 /// `C=1` keeps the text cursor fixed so large placements never scroll the grid.
-pub fn place_by_id_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Result<()> {
+pub(crate) fn place_by_id_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Result<()> {
     write!(out, "\x1b_Ga=p,q=2,C=1,i={id}\x1b\\")
 }
 

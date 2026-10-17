@@ -1,0 +1,48 @@
+# cargo-deny: dependency policy. `just deny` runs all four checks.
+
+[graph]
+targets = ["aarch64-apple-darwin"]
+all-features = true
+
+[advisories]
+# RustSec database. Unmaintained crates we pull in directly are listed with the reason.
+yanked = "warn"
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+# viewr is MIT, so dependencies must be permissive. The native libraries (libheif, FFmpeg,
+# libjpeg-turbo) are system libraries outside this graph. MPL-2.0 (nucleo-matcher, option-ext)
+# is file-level copyleft: viewr ships them unchanged, and their source stays on crates.io.
+# WTFPL is the license of the FFmpeg bindings (ffmpeg-next, ffmpeg-sys-next).
+# Add a license here only when a new dependency needs it: unused entries are warnings.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "WTFPL",
+]
+confidence-threshold = 0.8
+# This crate is not published (publish = false).
+private = { ignore = true }
+
+[bans]
+# Several versions of one crate are reported, not fatal.
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+# crates.io only: no git dependencies, no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"

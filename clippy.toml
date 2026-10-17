@@ -1,0 +1,13 @@
+# Thresholds for the lint table in Cargo.toml ([lints.clippy]).
+# Tests may unwrap: a failing unwrap there is the assertion.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+allow-panic-in-tests = true
+# Private binary: no exported API to keep stable.
+avoid-breaking-exported-api = false
+# Small functions with one-line docs (AGENTS.md). `too_many_lines` is the size limit;
+# `cognitive_complexity` is off, because clippy itself calls its score unreliable.
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 150

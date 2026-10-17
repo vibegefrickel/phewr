@@ -1,15 +1,15 @@
-pub mod kitty;
+pub(crate) mod kitty;
 
 use image::RgbaImage;
 use std::io::{self, Write};
 
-pub struct DisplayOptions {
+pub(crate) struct DisplayOptions {
     pub id: Option<u32>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
 }
 
-pub trait GraphicsBackend {
+pub(crate) trait GraphicsBackend {
     fn transmit(
         &self,
         out: &mut dyn Write,
@@ -23,7 +23,7 @@ pub trait GraphicsBackend {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct KittyBackend;
+pub(crate) struct KittyBackend;
 
 impl GraphicsBackend for KittyBackend {
     fn transmit(

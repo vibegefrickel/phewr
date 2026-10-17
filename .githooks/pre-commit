@@ -1,0 +1,12 @@
+#!/bin/sh
+# Pre-commit: formatting and lints must pass before anything is committed.
+# Enable with `just hooks` (git config core.hooksPath .githooks); skip once with `git commit -n`.
+set -eu
+export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
+
+if git diff --cached --name-only --diff-filter=ACMR | grep -qE '\.rs$|^Cargo\.(toml|lock)$'; then
+    echo "pre-commit: cargo fmt --check"
+    cargo fmt --check
+    echo "pre-commit: cargo clippy"
+    cargo clippy --release --all-targets -- -D warnings
+fi

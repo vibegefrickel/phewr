@@ -1,39 +1,165 @@
 [package]
-name = "rview"
-version = "0.1.0"
+name = "viewr"
+version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
-description = "A fast terminal image viewer with Kitty graphics protocol support"
+rust-version = "1.99"
+
+# Not on crates.io: releases are Apple Silicon macOS binaries on Codeberg (`just release`).
+publish = false
+description = "Terminal image and video gallery for the Kitty graphics protocol: thumbnail grid, slideshow, EXIF, HEIC"
 license = "MIT"
-repository = "https://github.com/jrf/rview"
-homepage = "https://github.com/jrf/rview"
+repository = "https://codeberg.org/webgefrickel/viewr"
+
+# The lint set is the rule set. `just check` turns every warning into an error. A local
+# exception is `#[expect(lint, reason = "...")]`, never `#[allow]`.
+[lints.rust]
+# viewr needs no unsafe code. A single exception needs `#[expect(unsafe_code, reason)]` and a
+# `// SAFETY:` comment.
+unsafe_code = "deny"
+# A `pub` item that no path outside the crate can reach must be `pub(crate)`, so rustc still
+# reports it as dead code. viewr is a binary crate, so every module is private.
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+# A dependency that no code uses must go.
+unused_crate_dependencies = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unit_bindings = "warn"
+unnameable_types = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+meta_variable_misuse = "warn"
+macro_use_extern_crate = "warn"
+missing_abi = "warn"
+non_ascii_idents = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "warn"
+private_intra_doc_links = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+get_unwrap = "warn"
+unwrap_in_result = "warn"
+panic = "warn"
+exit = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+mem_forget = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+clone_on_ref_ptr = "warn"
+str_to_string = "warn"
+string_slice = "warn"
+string_add = "warn"
+format_push_string = "warn"
+infinite_loop = "warn"
+iter_over_hash_type = "warn"
+map_err_ignore = "warn"
+unused_result_ok = "warn"
+unneeded_field_pattern = "warn"
+verbose_file_reads = "warn"
+redundant_test_prefix = "warn"
+ref_patterns = "warn"
+pathbuf_init_then_push = "warn"
+needless_raw_strings = "warn"
+renamed_function_params = "warn"
+same_name_method = "warn"
+error_impl_error = "warn"
+mutex_atomic = "warn"
+mutex_integer = "warn"
+rc_mutex = "warn"
+use_self = "warn"
+redundant_clone = "warn"
+needless_pass_by_ref_mut = "warn"
+collection_is_never_read = "warn"
+derive_partial_eq_without_eq = "warn"
+equatable_if_let = "warn"
+set_contains_or_insert = "warn"
+significant_drop_in_scrutinee = "warn"
+iter_on_single_items = "warn"
+iter_on_empty_collections = "warn"
+unused_peekable = "warn"
+unnecessary_struct_initialization = "warn"
+trait_duplication_in_bounds = "warn"
+type_repetition_in_bounds = "warn"
+useless_let_if_seq = "warn"
+nonstandard_macro_braces = "warn"
+path_buf_push_overwrite = "warn"
+string_lit_as_bytes = "warn"
+fallible_impl_from = "warn"
+read_zero_byte_vec = "warn"
+debug_assert_with_mut_call = "warn"
+# A dropped `Result` (`let _ = tx.send(..)`) must be a visible decision with a reason.
+let_underscore_must_use = "warn"
+
+# Pedantic lints that do not fit this codebase.
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+similar_names = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+large_futures = "allow"
+assert_is_empty = "allow"
 
 [dependencies]
-image = "0.25"
-clap = { version = "4", features = ["derive"] }
+base64 = "0.23"
+chrono = "0.4"
+clap = { version = "4.6", features = ["derive"] }
 crossterm = "0.29"
-ratatui = "0.29"
-base64 = "0.22"
-nucleo-matcher = "0.3"
-lru = "0.12"
-rayon = "1"
-turbojpeg = { version = "1", optional = true }
-fast_image_resize = "6.0.0"
 directories = "6"
-trash = "5.2"
+fast_image_resize = "6.1"
+ffmpeg = { version = "9", optional = true, package = "ffmpeg-next" }
+image = "0.25"
+kamadak-exif = "0.6"
+libheif-rs = { version = "3", optional = true }
+lru = "0.18"
+nucleo-matcher = "0.3"
+ratatui = "0.30"
+rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-ffmpeg = { version = "8", optional = true, package = "ffmpeg-next" }
+toml = "1"
+trash = "5.2"
+turbojpeg = { version = "1.5", optional = true }
 
 [features]
-default = ["turbo"]
+default = ["turbo", "heic", "video"]
+# Fast JPEG decoding with DCT downscaling (libjpeg-turbo).
 turbo = ["dep:turbojpeg"]
+# HEIC / HEIF through the system libheif (>= 1.19).
+heic = ["dep:libheif-rs"]
+# Video playback and first-frame thumbnails through the system FFmpeg (>= 7).
 video = ["dep:ffmpeg"]
 
+# Image decoding is slow without optimizations, also in debug builds and tests.
 [profile.dev.package."*"]
 opt-level = 2
 
 [profile.release]
-opt-level = 3
-lto = true
-strip = true
+debug = 1
+
+# Published binaries (`just dist`): release without debug info, stripped, full LTO. Day-to-day
+# release builds keep line tables for readable backtraces.
+[profile.dist]
+inherits = "release"
+debug = false
+strip = "symbols"
+lto = "fat"
+codegen-units = 1

@@ -1,7 +1,7 @@
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-pub fn filter(query: &str, filenames: &[String]) -> Vec<usize> {
+pub(crate) fn filter(query: &str, filenames: &[String]) -> Vec<usize> {
     if query.is_empty() {
         return (0..filenames.len()).collect();
     }

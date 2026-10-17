@@ -1,7 +1,9 @@
 mod app;
+mod config;
 mod encoder;
 mod gallery;
 mod image_list;
+mod info;
 mod picker;
 mod prefetch;
 mod scanner;
@@ -15,7 +17,7 @@ use app::{App, ViewMode};
 use clap::Parser;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute, queue,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -27,7 +29,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "rview", version, about = "A fast terminal image viewer")]
+#[command(
+    name = "viewr",
+    version,
+    about = "Terminal image gallery: thumbnail grid, slideshow, EXIF, HEIC"
+)]
 struct Cli {
     /// Image file(s) or directory to display [default: .]
     files: Vec<PathBuf>,
@@ -39,6 +45,18 @@ struct Cli {
     /// Number of threads for image decoding [default: all cores]
     #[arg(short = 'j', long)]
     threads: Option<usize>,
+
+    /// Start a fullscreen slideshow right away
+    #[arg(short, long)]
+    slideshow: bool,
+
+    /// Seconds between slides (overrides the configured interval)
+    #[arg(short = 'n', long, value_name = "SECONDS")]
+    interval: Option<f64>,
+
+    /// Open the info panel on start
+    #[arg(short, long)]
+    info: bool,
 }
 
 struct TerminalSession {
@@ -51,8 +69,7 @@ impl TerminalSession {
         enable_raw_mode()?;
         let mut output = stdout();
         if let Err(error) = execute!(output, EnterAlternateScreen, cursor::Hide) {
-            let _ = disable_raw_mode();
-            let _ = execute!(output, cursor::Show, LeaveAlternateScreen);
+            leave_terminal(&mut output);
             return Err(error);
         }
 
@@ -62,8 +79,7 @@ impl TerminalSession {
                 restored: false,
             }),
             Err(error) => {
-                let _ = disable_raw_mode();
-                let _ = execute!(stdout(), cursor::Show, LeaveAlternateScreen);
+                leave_terminal(&mut stdout());
                 Err(error)
             }
         }
@@ -98,7 +114,21 @@ impl TerminalSession {
     }
 }
 
+/// Undo raw mode and the alternate screen after a failed start.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the start error matters more than a failed cleanup"
+)]
+fn leave_terminal(output: &mut io::Stdout) {
+    let _ = disable_raw_mode();
+    let _ = execute!(output, cursor::Show, LeaveAlternateScreen);
+}
+
 impl Drop for TerminalSession {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a panic or an early return is already on its way; restore is best effort"
+    )]
     fn drop(&mut self) {
         let _ = self.restore();
     }
@@ -131,6 +161,10 @@ fn main() -> io::Result<()> {
             })?;
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "the CLI reports a bad path before the TUI starts"
+    )]
     for p in &paths {
         if !p.is_dir() && !p.exists() {
             eprintln!("{}: file not found", p.display());
@@ -146,6 +180,20 @@ fn main() -> io::Result<()> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let theme = theme_set.themes[theme_set.selected].theme.clone();
 
+    let mut config = config::load();
+    if let Some(interval) = cli.interval {
+        if !interval.is_finite() || interval <= 0.0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--interval must be a positive number of seconds",
+            ));
+        }
+        config.slideshow_interval = interval;
+    }
+    if cli.info {
+        config.info_panel = true;
+    }
+
     let initial_dir = initial_dir_from_paths(&paths);
 
     let shared_list = SharedImageList::new();
@@ -154,9 +202,10 @@ fn main() -> io::Result<()> {
     let mut session = TerminalSession::enter()?;
 
     let cell_px = query_cell_pixel_size();
-    let mut app = App::new(theme, cell_px, shared_list);
+    let mut app = App::with_config(theme, cell_px, shared_list, &config);
     app.install_themes(theme_set.themes, theme_set.selected);
     app.initial_dir = Some(initial_dir);
+    app.slideshow_autostart = cli.slideshow;
     let run_result = run(session.terminal_mut(), &mut app);
     let restore_result = session.restore();
     run_result.and(restore_result)
@@ -183,18 +232,20 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
     loop {
         // 1. Drain all buffered input first so navigation is never blocked
         while event::poll(Duration::ZERO)? {
-            if handle_event(app, event::read()?)? {
+            if handle_event(app, &event::read()?)? {
                 return Ok(());
             }
         }
 
         // 2. Poll background tasks
         app.refresh_from_scanner();
+        app.maybe_autostart_slideshow();
         app.poll_filter();
         app.poll_fullscreen();
         app.poll_source();
         app.prefetcher.poll();
         pending_emits.extend(app.poll_thumbnails());
+        app.slideshow_tick();
 
         #[cfg(feature = "video")]
         if let Some(ref mut v) = app.video
@@ -253,9 +304,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
         }
 
         // 5. Wait for next event (shorter timeout when thumbnails are pending)
-        let timeout = {
+        let mut timeout = {
             #[cfg(feature = "video")]
-            if let Some(ref v) = app.video {
+            if let Some(v) = &app.video {
                 v.time_until_next_frame()
             } else if pending_emits.is_empty() {
                 Duration::from_millis(250)
@@ -269,218 +320,284 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
                 Duration::from_millis(50)
             }
         };
+        if let Some(remaining) = app.slideshow_timeout() {
+            timeout = timeout.min(remaining);
+        }
         event::poll(timeout)?;
     }
 }
 
-fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
+fn handle_event(app: &mut App, event: &Event) -> io::Result<bool> {
     match event {
-        Event::Key(key) if key.kind == KeyEventKind::Press => {
-            if app.help_visible {
-                app.help_visible = false;
-                app.needs_render = true;
-            } else if app.pending_delete.is_some() {
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        app.graphics_delete_all()?;
-                        app.confirm_delete();
-                        if app.scan_complete && app.images.is_empty() {
-                            return Ok(true);
-                        }
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                        app.cancel_delete();
-                    }
-                    _ => {}
-                }
-            } else if app.theme_picker.is_some() {
-                handle_theme_picker_key(app, key.code);
-            } else if key.code == KeyCode::Char('t')
-                && !(app.mode == ViewMode::Gallery && app.gallery.search_active)
-                && !(app.mode == ViewMode::Picker
-                    && app
-                        .picker
-                        .as_ref()
-                        .is_some_and(|picker| picker.filter_active))
-            {
+        Event::Key(key) if key.kind == KeyEventKind::Press => handle_key(app, *key),
+        Event::Resize(_, _) => {
+            app.mark_dirty();
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Route a key press: overlays (help, delete question, theme picker) win over the view mode.
+fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
+    if app.help_visible {
+        app.help_visible = false;
+        app.needs_render = true;
+    } else if app.pending_delete.is_some() {
+        match key.code {
+            KeyCode::Char('y' | 'Y') => {
                 app.graphics_delete_all()?;
-                app.open_theme_picker();
-            } else {
-                match app.mode {
-                    ViewMode::Fullscreen => match key.code {
-                        KeyCode::Char('q') => return Ok(true),
-                        KeyCode::Char('?') => {
-                            app.graphics_delete_all()?;
-                            app.help_visible = true;
-                        }
-                        KeyCode::Esc => {
-                            app.graphics_delete_all()?;
-                            app.enter_gallery();
-                        }
-                        KeyCode::Char('+') | KeyCode::Char('=') => app.zoom_in(),
-                        KeyCode::Char('-') | KeyCode::Char('_') => app.zoom_out(),
-                        KeyCode::Char('0') => app.reset_zoom(),
-                        KeyCode::Left | KeyCode::Char('h') if app.zoom > 1.0 => app.pan(-1.0, 0.0),
-                        KeyCode::Right | KeyCode::Char('l') if app.zoom > 1.0 => app.pan(1.0, 0.0),
-                        KeyCode::Up | KeyCode::Char('k') if app.zoom > 1.0 => app.pan(0.0, -1.0),
-                        KeyCode::Down | KeyCode::Char('j') if app.zoom > 1.0 => app.pan(0.0, 1.0),
-                        KeyCode::Left | KeyCode::Char('h') => app.prev(),
-                        KeyCode::Right | KeyCode::Char('l') => app.next(),
-                        KeyCode::Home => {
-                            app.graphics_delete_all()?;
-                            app.first();
-                        }
-                        KeyCode::End => {
-                            app.graphics_delete_all()?;
-                            app.last();
-                        }
-                        KeyCode::Char('d') | KeyCode::Char('D') => {
-                            app.begin_delete(matches!(key.code, KeyCode::Char('D')));
-                        }
-                        _ => {}
-                    },
-                    #[cfg(feature = "video")]
-                    ViewMode::Video => match key.code {
-                        KeyCode::Char('q') => return Ok(true),
-                        KeyCode::Char(' ') => {
-                            if let Some(ref mut v) = app.video {
-                                v.toggle_pause();
-                                app.needs_render = true;
-                            }
-                        }
-                        KeyCode::Esc => {
-                            app.graphics_delete_all()?;
-                            app.exit_video();
-                        }
-                        KeyCode::Char('?') => {
-                            app.graphics_delete_all()?;
-                            app.help_visible = true;
-                        }
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            app.graphics_delete_all()?;
-                            app.prev();
-                        }
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            app.graphics_delete_all()?;
-                            app.next();
-                        }
-                        KeyCode::Home => {
-                            app.graphics_delete_all()?;
-                            app.first();
-                        }
-                        KeyCode::End => {
-                            app.graphics_delete_all()?;
-                            app.last();
-                        }
-                        KeyCode::Char('d') | KeyCode::Char('D') => {
-                            app.begin_delete(matches!(key.code, KeyCode::Char('D')));
-                        }
-                        _ => {}
-                    },
-                    ViewMode::Gallery if app.gallery.search_active => match key.code {
-                        KeyCode::Esc => {
-                            app.gallery.search_active = false;
-                            if !app.gallery.search_query.is_empty() {
-                                app.gallery.search_query.clear();
-                                app.update_filter();
-                            }
-                        }
-                        KeyCode::Enter => {
-                            app.gallery.search_active = false;
-                        }
-                        KeyCode::Backspace if app.gallery.search_query.pop().is_some() => {
-                            app.update_filter();
-                        }
-                        KeyCode::Char(c) => {
-                            app.gallery.search_query.push(c);
-                            app.update_filter();
-                        }
-                        _ => {}
-                    },
-                    ViewMode::Gallery => {
-                        let prev_offset = app.gallery.scroll_offset;
-                        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                        match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
-                            KeyCode::Char('?') => {
-                                app.graphics_delete_all()?;
-                                app.help_visible = true;
-                            }
-                            KeyCode::Char('/') => {
-                                app.gallery.search_active = true;
-                            }
-                            KeyCode::Enter => {
-                                app.graphics_delete_all()?;
-                                app.enter_fullscreen_selected();
-                            }
-                            KeyCode::Left | KeyCode::Char('h') => {
-                                app.gallery.move_left();
-                                app.pre_decode_hovered();
-                            }
-                            KeyCode::Right | KeyCode::Char('l') => {
-                                app.gallery.move_right();
-                                app.pre_decode_hovered();
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                app.gallery.move_up();
-                                app.pre_decode_hovered();
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                app.gallery.move_down();
-                                app.pre_decode_hovered();
-                            }
-                            KeyCode::PageUp | KeyCode::Char('b')
-                                if ctrl || matches!(key.code, KeyCode::PageUp) =>
-                            {
-                                app.gallery.move_page_up();
-                                app.pre_decode_hovered();
-                            }
-                            KeyCode::PageDown | KeyCode::Char('f')
-                                if ctrl || matches!(key.code, KeyCode::PageDown) =>
-                            {
-                                app.gallery.move_page_down();
-                                app.pre_decode_hovered();
-                            }
-                            KeyCode::Char('g') | KeyCode::Home => {
-                                app.gallery.move_to_first();
-                                app.pre_decode_hovered();
-                            }
-                            KeyCode::Char('G') | KeyCode::End => {
-                                app.gallery.move_to_last();
-                                app.pre_decode_hovered();
-                            }
-                            KeyCode::Char(' ') => {
-                                app.toggle_selection_at_cursor();
-                            }
-                            KeyCode::Char('a') => {
-                                app.select_all_filtered();
-                            }
-                            KeyCode::Char('A') => {
-                                app.clear_selection();
-                            }
-                            KeyCode::Char('d') | KeyCode::Char('D') => {
-                                app.begin_delete(matches!(key.code, KeyCode::Char('D')));
-                            }
-                            KeyCode::Char('o') => {
-                                app.graphics_delete_all()?;
-                                app.open_picker();
-                            }
-                            _ => {}
-                        }
-                        if app.gallery.scroll_offset != prev_offset {
-                            app.needs_render = true;
-                        }
-                    }
-                    ViewMode::Picker => {
-                        if handle_picker_key(app, key.code)? {
-                            return Ok(true);
-                        }
-                    }
+                app.confirm_delete();
+                if app.scan_complete && app.images.is_empty() {
+                    return Ok(true);
                 }
             }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                app.cancel_delete();
+            }
+            _ => {}
         }
-        Event::Resize(_, _) => app.mark_dirty(),
+    } else if app.theme_picker.is_some() {
+        handle_theme_picker_key(app, key.code);
+    } else if key.code == KeyCode::Char('t')
+        && !(app.mode == ViewMode::Gallery && app.gallery.search_active)
+        && !(app.mode == ViewMode::Picker
+            && app
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.filter_active))
+    {
+        app.graphics_delete_all()?;
+        app.open_theme_picker();
+    } else {
+        return match app.mode {
+            ViewMode::Fullscreen => handle_fullscreen_key(app, key),
+            #[cfg(feature = "video")]
+            ViewMode::Video => handle_video_key(app, key),
+            ViewMode::Gallery if app.gallery.search_active => {
+                handle_search_key(app, key.code);
+                Ok(false)
+            }
+            ViewMode::Gallery => handle_gallery_key(app, key),
+            ViewMode::Picker => Ok(handle_picker_key(app, key.code)),
+        };
+    }
+    Ok(false)
+}
+
+/// Keys of the fullscreen view: navigation, zoom and pan, slideshow, info, delete.
+fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
+    match key.code {
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('?') => {
+            app.graphics_delete_all()?;
+            app.help_visible = true;
+        }
+        KeyCode::Esc if app.slideshow_running() => app.stop_slideshow(),
+        KeyCode::Esc => {
+            app.graphics_delete_all()?;
+            app.enter_gallery();
+        }
+        KeyCode::Char('i') => {
+            app.graphics_delete_all()?;
+            app.toggle_info();
+        }
+        KeyCode::Char('s') => app.toggle_slideshow(),
+        KeyCode::Char(' ') => app.slideshow_toggle_pause(),
+        KeyCode::Char('[') => app.slideshow_adjust_interval(-1.0),
+        KeyCode::Char(']') => app.slideshow_adjust_interval(1.0),
+        KeyCode::Char('+' | '=') => app.zoom_in(),
+        KeyCode::Char('-' | '_') => app.zoom_out(),
+        KeyCode::Char('0') => app.reset_zoom(),
+        KeyCode::Left | KeyCode::Char('h') if app.zoom > 1.0 => app.pan(-1.0, 0.0),
+        KeyCode::Right | KeyCode::Char('l') if app.zoom > 1.0 => app.pan(1.0, 0.0),
+        KeyCode::Up | KeyCode::Char('k') if app.zoom > 1.0 => app.pan(0.0, -1.0),
+        KeyCode::Down | KeyCode::Char('j') if app.zoom > 1.0 => app.pan(0.0, 1.0),
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.prev();
+            app.slideshow_touch();
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            app.next();
+            app.slideshow_touch();
+        }
+        KeyCode::Home => {
+            app.graphics_delete_all()?;
+            app.first();
+            app.slideshow_touch();
+        }
+        KeyCode::End => {
+            app.graphics_delete_all()?;
+            app.last();
+            app.slideshow_touch();
+        }
+        KeyCode::Char('d' | 'D') => {
+            app.begin_delete(matches!(key.code, KeyCode::Char('D')));
+        }
         _ => {}
+    }
+    Ok(false)
+}
+
+/// Keys of the video player: pause, navigation, delete.
+#[cfg(feature = "video")]
+fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
+    match key.code {
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char(' ') => {
+            if let Some(ref mut v) = app.video {
+                v.toggle_pause();
+                app.needs_render = true;
+            }
+        }
+        KeyCode::Esc => {
+            app.graphics_delete_all()?;
+            app.exit_video();
+        }
+        KeyCode::Char('?') => {
+            app.graphics_delete_all()?;
+            app.help_visible = true;
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.graphics_delete_all()?;
+            app.prev();
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            app.graphics_delete_all()?;
+            app.next();
+        }
+        KeyCode::Home => {
+            app.graphics_delete_all()?;
+            app.first();
+        }
+        KeyCode::End => {
+            app.graphics_delete_all()?;
+            app.last();
+        }
+        KeyCode::Char('d' | 'D') => {
+            app.begin_delete(matches!(key.code, KeyCode::Char('D')));
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+/// Keys while the gallery search line takes input.
+fn handle_search_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.gallery.search_active = false;
+            if !app.gallery.search_query.is_empty() {
+                app.gallery.search_query.clear();
+                app.update_filter();
+            }
+        }
+        KeyCode::Enter => {
+            app.gallery.search_active = false;
+        }
+        KeyCode::Backspace if app.gallery.search_query.pop().is_some() => {
+            app.update_filter();
+        }
+        KeyCode::Char(c) => {
+            app.gallery.search_query.push(c);
+            app.update_filter();
+        }
+        _ => {}
+    }
+}
+
+/// Keys of the thumbnail grid.
+fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
+    let prev_offset = app.gallery.scroll_offset;
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
+        KeyCode::Char('?') => {
+            app.graphics_delete_all()?;
+            app.help_visible = true;
+        }
+        KeyCode::Char('/') => {
+            app.gallery.search_active = true;
+        }
+        KeyCode::Enter => {
+            app.graphics_delete_all()?;
+            app.enter_fullscreen_selected();
+        }
+        KeyCode::Char('s') => {
+            app.graphics_delete_all()?;
+            app.enter_fullscreen_selected();
+            if app.mode == ViewMode::Fullscreen {
+                app.start_slideshow();
+            }
+        }
+        KeyCode::Char('i') => {
+            app.graphics_delete_all()?;
+            app.toggle_info();
+        }
+        KeyCode::Char('+' | '=') => {
+            app.graphics_delete_all()?;
+            app.thumb_zoom_in();
+        }
+        KeyCode::Char('-' | '_') => {
+            app.graphics_delete_all()?;
+            app.thumb_zoom_out();
+        }
+        KeyCode::Char('0') => {
+            app.graphics_delete_all()?;
+            app.thumb_zoom_reset();
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.gallery.move_left();
+            app.pre_decode_hovered();
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            app.gallery.move_right();
+            app.pre_decode_hovered();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.gallery.move_up();
+            app.pre_decode_hovered();
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.gallery.move_down();
+            app.pre_decode_hovered();
+        }
+        KeyCode::PageUp | KeyCode::Char('b') if ctrl || matches!(key.code, KeyCode::PageUp) => {
+            app.gallery.move_page_up();
+            app.pre_decode_hovered();
+        }
+        KeyCode::PageDown | KeyCode::Char('f') if ctrl || matches!(key.code, KeyCode::PageDown) => {
+            app.gallery.move_page_down();
+            app.pre_decode_hovered();
+        }
+        KeyCode::Char('g') | KeyCode::Home => {
+            app.gallery.move_to_first();
+            app.pre_decode_hovered();
+        }
+        KeyCode::Char('G') | KeyCode::End => {
+            app.gallery.move_to_last();
+            app.pre_decode_hovered();
+        }
+        KeyCode::Char(' ') => {
+            app.toggle_selection_at_cursor();
+        }
+        KeyCode::Char('a') => {
+            app.select_all_filtered();
+        }
+        KeyCode::Char('A') => {
+            app.clear_selection();
+        }
+        KeyCode::Char('d' | 'D') => {
+            app.begin_delete(matches!(key.code, KeyCode::Char('D')));
+        }
+        KeyCode::Char('o') => {
+            app.graphics_delete_all()?;
+            app.open_picker();
+        }
+        _ => {}
+    }
+    if app.gallery.scroll_offset != prev_offset {
+        app.needs_render = true;
     }
     Ok(false)
 }
@@ -506,17 +623,17 @@ fn handle_theme_picker_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::PageUp => app.theme_picker_select(selected.saturating_sub(visible_height)),
         KeyCode::Enter => app.theme_picker_confirm(),
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('t') => app.theme_picker_cancel(),
+        KeyCode::Esc | KeyCode::Char('q' | 't') => app.theme_picker_cancel(),
         _ => {}
     }
 }
 
-fn handle_picker_key(app: &mut App, code: KeyCode) -> io::Result<bool> {
+fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
     let filter_active = app.picker.as_ref().is_some_and(|p| p.filter_active);
 
     if filter_active {
         let Some(picker) = app.picker.as_mut() else {
-            return Ok(false);
+            return false;
         };
         match code {
             KeyCode::Esc => {
@@ -541,11 +658,11 @@ fn handle_picker_key(app: &mut App, code: KeyCode) -> io::Result<bool> {
             }
             _ => {}
         }
-        return Ok(false);
+        return false;
     }
 
     match code {
-        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('q') => return true,
         KeyCode::Esc if !app.images.is_empty() => {
             app.close_picker();
         }
@@ -586,9 +703,9 @@ fn handle_picker_key(app: &mut App, code: KeyCode) -> io::Result<bool> {
             }
         }
         KeyCode::Left | KeyCode::Char('h') => {
-            let target = app.picker.as_mut().and_then(|p| p.ascend());
+            let target = app.picker.as_mut().and_then(picker::PickerState::ascend);
             if let Some(t) = target {
-                app.switch_to_dir(t);
+                app.switch_to_dir(&t);
             }
         }
         KeyCode::Right | KeyCode::Char('l') => {
@@ -600,7 +717,7 @@ fn handle_picker_key(app: &mut App, code: KeyCode) -> io::Result<bool> {
                 p.enter_selected()
             });
             if let Some(t) = target {
-                app.switch_to_dir(t);
+                app.switch_to_dir(&t);
             }
         }
         KeyCode::Enter => {
@@ -610,7 +727,7 @@ fn handle_picker_key(app: &mut App, code: KeyCode) -> io::Result<bool> {
                 .and_then(|picker| picker.selected())
                 .map(|entry| entry.path.clone());
             if let Some(target) = target {
-                app.switch_to_dir(target);
+                app.switch_to_dir(&target);
                 app.close_picker();
             }
         }
@@ -628,44 +745,42 @@ fn handle_picker_key(app: &mut App, code: KeyCode) -> io::Result<bool> {
         }
         _ => {}
     }
-    Ok(false)
+    false
 }
 
 fn query_cell_pixel_size() -> (u32, u32) {
-    crossterm::terminal::window_size()
-        .map(|ws| {
-            // A terminal that does not report pixel dimensions (common under
-            // terminal multiplexers such as rift/tmux, and some SSH setups)
-            // returns ws.width/ws.height == 0 even though columns/rows are
-            // valid. Treat a zero pixel report as "unknown" and fall back to
-            // conventional cell metrics, otherwise the division below collapses
-            // to 1x1 and thumbnails render only a few pixels tall.
-            let w = if ws.columns > 0 && ws.width > 0 {
-                ws.width as u32 / ws.columns as u32
-            } else {
-                8
-            };
-            let h = if ws.rows > 0 && ws.height > 0 {
-                ws.height as u32 / ws.rows as u32
-            } else {
-                16
-            };
-            (w.max(1), h.max(1))
-        })
-        .unwrap_or((8, 16))
+    crossterm::terminal::window_size().map_or((8, 16), |ws| {
+        // A terminal that does not report pixel dimensions (common under
+        // terminal multiplexers such as rift/tmux, and some SSH setups)
+        // returns ws.width/ws.height == 0 even though columns/rows are
+        // valid. Treat a zero pixel report as "unknown" and fall back to
+        // conventional cell metrics, otherwise the division below collapses
+        // to 1x1 and thumbnails render only a few pixels tall.
+        let w = if ws.columns > 0 && ws.width > 0 {
+            u32::from(ws.width) / u32::from(ws.columns)
+        } else {
+            8
+        };
+        let h = if ws.rows > 0 && ws.height > 0 {
+            u32::from(ws.height) / u32::from(ws.rows)
+        } else {
+            16
+        };
+        (w.max(1), h.max(1))
+    })
 }
 
 fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
     use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 
-    let mut out = io::stdout().lock();
+    let mut out = stdout().lock();
     // Wrap the delete + retransmit in a synchronized update so the terminal swaps
     // atomically instead of briefly showing a blank viewport (visible as flicker
     // when zooming or panning, which redraw rapidly).
     queue!(out, BeginSynchronizedUpdate)?;
     app.graphics_delete_all_to(&mut out)?;
 
-    if let Some(ref img) = app.loaded {
+    if let Some(img) = &app.loaded {
         let (cpw, cph) = app.cell_px;
         let img_cols = img.width().div_ceil(cpw);
         let img_rows = img.height().div_ceil(cph);
@@ -697,10 +812,10 @@ const VIDEO_IMAGE_ID: u32 = 900;
 fn render_video_frame(app: &App) -> io::Result<()> {
     use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 
-    let mut out = io::stdout().lock();
+    let mut out = stdout().lock();
 
-    if let Some(ref v) = app.video
-        && let Some(ref img) = v.current_frame
+    if let Some(v) = &app.video
+        && let Some(img) = &v.current_frame
     {
         let (cpw, cph) = app.cell_px;
         let img_cols = img.width().div_ceil(cpw);
@@ -728,7 +843,7 @@ fn render_video_frame(app: &App) -> io::Result<()> {
 }
 
 fn emit_new_thumbnails(app: &mut App, new_indices: &[usize]) -> io::Result<()> {
-    let mut out = io::stdout().lock();
+    let mut out = stdout().lock();
     let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
     let mut newly_transmitted: Vec<u32> = Vec::new();
     for (vis_idx, img_idx) in visible {
@@ -772,7 +887,7 @@ fn render_gallery_images(app: &mut App) -> io::Result<()> {
         app.spawn_thumb_decode(img_idx, path, inner);
     }
 
-    let mut out = io::stdout().lock();
+    let mut out = stdout().lock();
     if app.graphics_storage_dirty {
         app.graphics_delete_all_to(&mut out)?;
         app.graphics_storage_dirty = false;
@@ -834,11 +949,13 @@ mod tests {
 
     fn synthetic_tree(test_name: &str) -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!(
-            "rview-synthetic-{test_name}-{}",
+            "viewr-synthetic-{test_name}-{}",
             std::process::id()
         ));
         let child = root.join("synthetic-images");
-        let _ = fs::remove_dir_all(&root);
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
         fs::create_dir_all(&child).unwrap();
         (
             fs::canonicalize(root).unwrap(),
@@ -866,7 +983,7 @@ mod tests {
         let mut app = picker_app(&root);
         select_path(&mut app, &child);
 
-        assert!(!handle_picker_key(&mut app, KeyCode::Enter).unwrap());
+        assert!(!handle_picker_key(&mut app, KeyCode::Enter));
         assert_eq!(app.mode, ViewMode::Gallery);
         assert!(app.picker.is_none());
         assert_eq!(app.current_dir, Some(fs::canonicalize(&child).unwrap()));
@@ -881,7 +998,7 @@ mod tests {
         let mut app = picker_app(&root);
         select_path(&mut app, &child);
 
-        assert!(!handle_picker_key(&mut app, KeyCode::Right).unwrap());
+        assert!(!handle_picker_key(&mut app, KeyCode::Right));
         assert_eq!(app.mode, ViewMode::Picker);
         assert_eq!(
             app.picker.as_ref().map(|picker| &picker.current_dir),
@@ -902,12 +1019,12 @@ mod tests {
         app.install_themes(
             vec![
                 NamedTheme {
-                    name: "first".to_string(),
+                    name: "first".to_owned(),
                     path: None,
                     theme: first.clone(),
                 },
                 NamedTheme {
-                    name: "second".to_string(),
+                    name: "second".to_owned(),
                     path: None,
                     theme: second.clone(),
                 },

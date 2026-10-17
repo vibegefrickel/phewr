@@ -1,18 +1,26 @@
 use crate::app::{App, ViewMode};
-use crate::gallery::{CELL_HEIGHT_TOTAL, LABEL_ROWS, THUMB_COLS, THUMB_ROWS};
+use crate::gallery::LABEL_ROWS;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-pub fn draw(frame: &mut Frame, app: &mut App) {
-    frame.render_widget(Block::default().style(app.theme.background), frame.area());
+/// Preferred width of the info panel, including its border.
+const INFO_PANEL_WIDTH: u16 = 42;
+
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    let area = frame.area();
+    frame.render_widget(Block::default().style(app.theme.background), area);
+    let (main, info) = split_info(area, app);
     match app.mode {
-        ViewMode::Gallery => draw_gallery(frame, app),
-        ViewMode::Fullscreen => draw_fullscreen(frame, app),
+        ViewMode::Gallery => draw_gallery(frame, app, main),
+        ViewMode::Fullscreen => draw_fullscreen(frame, app, main),
         ViewMode::Picker => draw_picker(frame, app),
         #[cfg(feature = "video")]
-        ViewMode::Video => draw_video(frame, app),
+        ViewMode::Video => draw_video(frame, app, main),
+    }
+    if let Some(info) = info {
+        draw_info_panel(frame, app, info);
     }
     if app.theme_picker.is_some() {
         draw_theme_picker(frame, app);
@@ -21,7 +29,64 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_theme_picker(frame: &mut Frame, app: &mut App) {
+/// Reserve the right-hand column for the info panel when it is open.
+/// The picker never shows it, and very narrow terminals keep the full width.
+fn split_info(area: Rect, app: &App) -> (Rect, Option<Rect>) {
+    if !app.info_visible || app.mode == ViewMode::Picker {
+        return (area, None);
+    }
+    let width = INFO_PANEL_WIDTH.min(area.width / 3);
+    if width < 20 {
+        return (area, None);
+    }
+    let chunks = Layout::horizontal([Constraint::Min(1), Constraint::Length(width)]).split(area);
+    (chunks[0], Some(chunks[1]))
+}
+
+fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let theme = app.theme.clone();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.border)
+        .title(Line::from(Span::styled(" Info ", theme.title)))
+        .title_bottom(Line::from(Span::styled(" i: close ", theme.popup_desc)));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(path) = app.info_path() else {
+        frame.render_widget(
+            Paragraph::new(Span::styled("no image selected", theme.popup_desc)),
+            inner,
+        );
+        return;
+    };
+    let info = app.info_for(&path);
+
+    let label_width = info
+        .rows
+        .iter()
+        .filter(|(label, _)| !label.is_empty())
+        .map(|(label, _)| label.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    for (label, value) in &info.rows {
+        if label.is_empty() {
+            if !lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.push(Line::from(Span::styled(value.clone(), theme.popup_title)));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{label:<label_width$}  "), theme.popup_key),
+                Span::styled(value.clone(), theme.popup_text),
+            ]));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_theme_picker(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     let popup = picker_rect(area);
     frame.render_widget(Block::default().style(app.theme.picker_backdrop), area);
@@ -37,8 +102,10 @@ fn draw_theme_picker(frame: &mut Frame, app: &mut App) {
 
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
     let visible = chunks[0].height.max(1) as usize;
+    let Some(picker) = app.theme_picker.as_mut() else {
+        return;
+    };
     let (selected, scroll) = {
-        let picker = app.theme_picker.as_mut().expect("theme picker");
         picker.visible_height = visible;
         if picker.selected < picker.scroll {
             picker.scroll = picker.selected;
@@ -131,7 +198,7 @@ fn picker_rect(area: Rect) -> Rect {
     )
 }
 
-fn draw_picker(frame: &mut Frame, app: &mut App) {
+fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
     let theme = &app.theme;
     let area = frame.area();
 
@@ -189,7 +256,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App) {
         " Enter: choose  /: filter  ?: help  q: quit "
     };
 
-    let bottom_line = if let Some(ref err) = picker.error {
+    let bottom_line = if let Some(err) = &picker.error {
         Line::from(Span::styled(format!(" {err} "), theme.status_bar_error))
     } else {
         Line::from(Span::styled(hint, theme.popup_desc))
@@ -207,7 +274,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App) {
     let visible_height = list_inner.height as usize;
     picker.adjust_scroll(visible_height);
 
-    let lines: Vec<Line> = picker
+    let lines: Vec<Line<'_>> = picker
         .visible_slice(visible_height)
         .iter()
         .enumerate()
@@ -216,7 +283,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App) {
             let is_cursor = picker.scroll_offset + vis == picker.cursor;
             let marker = if is_cursor { "\u{25b6} " } else { "  " };
             let label = if entry.is_parent {
-                "..".to_string()
+                "..".to_owned()
             } else {
                 format!("{}/", entry.name)
             };
@@ -226,7 +293,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App) {
                 theme.label
             };
             Line::from(vec![
-                Span::styled(marker.to_string(), style),
+                Span::styled(marker.to_owned(), style),
                 Span::styled(label, style),
             ])
         })
@@ -235,9 +302,8 @@ fn draw_picker(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(lines), list_inner);
 }
 
-fn draw_fullscreen(frame: &mut Frame, app: &mut App) {
+fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let theme = &app.theme;
-    let area = frame.area();
 
     let filename = app
         .current_path()
@@ -245,7 +311,7 @@ fn draw_fullscreen(frame: &mut Frame, app: &mut App) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let bottom_line = if let Some(ref pending) = app.pending_delete {
+    let bottom_line = if let Some(pending) = &app.pending_delete {
         Line::from(Span::styled(
             format!(
                 " {} {}? [y/N] ",
@@ -258,17 +324,19 @@ fn draw_fullscreen(frame: &mut Frame, app: &mut App) {
                     .paths
                     .first()
                     .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| format!("{} files", pending.paths.len())),
+                    .map_or_else(
+                        || format!("{} files", pending.paths.len()),
+                        |n| n.to_string_lossy().into_owned()
+                    ),
             ),
             theme.status_bar_error,
         ))
-    } else if let Some(ref err) = app.delete_error {
+    } else if let Some(err) = &app.delete_error {
         Line::from(Span::styled(
             format!(" Delete error: {err} "),
             theme.status_bar_error,
         ))
-    } else if let Some(ref err) = app.error {
+    } else if let Some(err) = &app.error {
         Line::from(Span::styled(
             format!(" Error: {err} "),
             theme.status_bar_error,
@@ -284,15 +352,28 @@ fn draw_fullscreen(frame: &mut Frame, app: &mut App) {
         } else {
             String::new()
         };
-        let hint = if app.zoom > 1.0 {
+        let slideshow = app
+            .slideshow
+            .as_ref()
+            .map(|show| {
+                format!(
+                    " {} {:.1}s",
+                    if show.paused { "\u{23f8}" } else { "\u{25b6}" },
+                    show.interval.as_secs_f64()
+                )
+            })
+            .unwrap_or_default();
+        let hint = if app.slideshow.is_some() {
+            " space: pause  [/]: interval  s: stop  i: info  q: quit "
+        } else if app.zoom > 1.0 {
             " hjkl: pan  +/-: zoom  0: reset  ?: help  q: quit "
         } else {
-            " \u{2190}/\u{2192}: navigate  +/-: zoom  ?: help  q: quit "
+            " \u{2190}/\u{2192}: navigate  +/-: zoom  s: slideshow  i: info  ?: help  q: quit "
         };
         Line::from(vec![
             Span::styled(
                 format!(
-                    " {} [{}/{}]{dims}{zoom} ",
+                    " {} [{}/{}]{dims}{zoom}{slideshow} ",
                     filename,
                     app.current + 1,
                     app.images.len(),
@@ -319,9 +400,8 @@ fn draw_fullscreen(frame: &mut Frame, app: &mut App) {
 }
 
 #[cfg(feature = "video")]
-fn draw_video(frame: &mut Frame, app: &mut App) {
+fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let theme = &app.theme;
-    let area = frame.area();
 
     let filename = app
         .current_path()
@@ -342,7 +422,7 @@ fn draw_video(frame: &mut Frame, app: &mut App) {
         format!("{:02}:{:02}", s / 60, s % 60)
     };
 
-    let bottom_line = if let Some(ref err) = app.error {
+    let bottom_line = if let Some(err) = &app.error {
         Line::from(Span::styled(
             format!(" Error: {err} "),
             theme.status_bar_error,
@@ -384,13 +464,44 @@ fn draw_video(frame: &mut Frame, app: &mut App) {
     app.image_rect = inner;
 }
 
-fn draw_gallery(frame: &mut Frame, app: &mut App) {
-    let theme = &app.theme;
-    let area = frame.area();
-
+fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
     let search_rect = chunks[0];
     let gallery_area = chunks[1];
+    draw_search_bar(frame, app, search_rect);
+
+    let theme = &app.theme;
+    let filtered_count = app.gallery.filtered_indices.len();
+    let total = app.images.len();
+    let scanning = if app.is_scanning() {
+        ", scanning\u{2026}"
+    } else {
+        ""
+    };
+    let thumb_size = format!("{}x{}", app.gallery.thumb_cols, app.gallery.thumb_rows);
+    let gallery_title = if app.gallery.search_query.is_empty() {
+        format!(" Gallery [{total} images{scanning}] [{thumb_size}] ")
+    } else {
+        format!(" Gallery [{filtered_count}/{total} matches{scanning}] [{thumb_size}] ")
+    };
+
+    let bottom_line = gallery_bottom_line(app, filtered_count);
+
+    let gallery_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.border)
+        .title(Line::from(Span::styled(gallery_title, theme.title)))
+        .title_bottom(bottom_line);
+
+    let grid_rect = gallery_block.inner(gallery_area);
+    frame.render_widget(gallery_block, gallery_area);
+
+    draw_thumbnail_cells(frame, app, grid_rect);
+}
+
+/// The search line above the grid: the query while typing, else the selection count.
+fn draw_search_bar(frame: &mut Frame<'_>, app: &App, search_rect: Rect) {
+    let theme = &app.theme;
 
     let search_block = Block::default()
         .borders(Borders::ALL)
@@ -424,20 +535,11 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
     } else {
         frame.render_widget(Paragraph::new(""), search_inner);
     }
+}
 
-    let filtered_count = app.gallery.filtered_indices.len();
-    let total = app.images.len();
-    let scanning = if app.is_scanning() {
-        ", scanning\u{2026}"
-    } else {
-        ""
-    };
-    let gallery_title = if app.gallery.search_query.is_empty() {
-        format!(" Gallery [{total} images{scanning}] ")
-    } else {
-        format!(" Gallery [{filtered_count}/{total} matches{scanning}] ")
-    };
-
+/// The bottom border of the grid: a delete question, an error, or name, position and hints.
+fn gallery_bottom_line(app: &App, filtered_count: usize) -> Line<'static> {
+    let theme = &app.theme;
     let selected_name = app
         .gallery
         .selected_index()
@@ -445,7 +547,7 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let bottom_line = if let Some(ref pending) = app.pending_delete {
+    if let Some(pending) = &app.pending_delete {
         let action = if pending.permanent {
             "Permanently delete"
         } else {
@@ -464,12 +566,12 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
             Span::styled(prompt, theme.status_bar_error),
             Span::styled(" y: confirm  n/Esc: cancel ", theme.popup_desc),
         ])
-    } else if let Some(ref err) = app.delete_error {
+    } else if let Some(err) = &app.delete_error {
         Line::from(Span::styled(
             format!(" Delete error: {err} "),
             theme.status_bar_error,
         ))
-    } else if let Some(ref err) = app.error {
+    } else if let Some(err) = &app.error {
         Line::from(Span::styled(
             format!(" Error: {err} "),
             theme.status_bar_error,
@@ -478,7 +580,7 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
         let hint = if app.gallery.search_active {
             " Esc: cancel  Enter: confirm "
         } else {
-            " Enter: open  /: search  ?: help  q: quit "
+            " Enter: open  +/-: size  i: info  /: search  ?: help  q: quit "
         };
         if filtered_count == 0 {
             Line::from(Span::styled(hint, theme.popup_desc))
@@ -496,25 +598,23 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
                 Span::styled(hint, theme.popup_desc),
             ])
         }
-    };
+    }
+}
 
-    let gallery_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme.border)
-        .title(Line::from(Span::styled(gallery_title, theme.title)))
-        .title_bottom(bottom_line);
-
-    let grid_rect = gallery_block.inner(gallery_area);
-    frame.render_widget(gallery_block, gallery_area);
-
+/// One bordered cell with a filename label per visible thumbnail; Kitty draws the pictures.
+fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     app.gallery.update_grid(grid_rect);
+    let thumb_cols = app.gallery.thumb_cols;
+    let thumb_rows = app.gallery.thumb_rows;
+    let cell_height_total = app.gallery.cell_height_total();
+    let theme = &app.theme;
 
     for (vis_idx, img_idx) in app.gallery.visible_items().collect::<Vec<_>>() {
         let col = vis_idx % app.gallery.grid_cols;
         let row = vis_idx / app.gallery.grid_cols;
 
-        let cell_x = grid_rect.x + (col as u16) * THUMB_COLS;
-        let cell_y = grid_rect.y + (row as u16) * CELL_HEIGHT_TOTAL;
+        let cell_x = grid_rect.x + (col as u16) * thumb_cols;
+        let cell_y = grid_rect.y + (row as u16) * cell_height_total;
 
         let is_selected =
             vis_idx + app.gallery.scroll_offset * app.gallery.grid_cols == app.gallery.cursor;
@@ -535,8 +635,8 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
         let block_rect = Rect {
             x: cell_x,
             y: cell_y,
-            width: THUMB_COLS.min(grid_rect.right().saturating_sub(cell_x)),
-            height: THUMB_ROWS.min(grid_rect.bottom().saturating_sub(cell_y)),
+            width: thumb_cols.min(grid_rect.right().saturating_sub(cell_x)),
+            height: thumb_rows.min(grid_rect.bottom().saturating_sub(cell_y)),
         };
         frame.render_widget(thumb_block, block_rect);
 
@@ -545,7 +645,7 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let prefix_len = if is_marked { 2 } else { 0 };
-        let max_label = (THUMB_COLS as usize).saturating_sub(2 + prefix_len);
+        let max_label = (thumb_cols as usize).saturating_sub(2 + prefix_len);
         let trimmed = if raw_filename.chars().count() > max_label {
             let head: String = raw_filename
                 .chars()
@@ -561,12 +661,12 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
             trimmed
         };
 
-        let label_y = cell_y + THUMB_ROWS;
+        let label_y = cell_y + thumb_rows;
         if label_y < grid_rect.bottom() {
             let label_rect = Rect {
                 x: cell_x,
                 y: label_y,
-                width: THUMB_COLS.min(grid_rect.right().saturating_sub(cell_x)),
+                width: thumb_cols.min(grid_rect.right().saturating_sub(cell_x)),
                 height: LABEL_ROWS,
             };
             let label_style = if is_selected || is_marked {
@@ -584,7 +684,7 @@ fn draw_gallery(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_help_popup(frame: &mut Frame, app: &App) {
+fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
     let theme = &app.theme;
     let area = frame.area();
 
@@ -594,6 +694,10 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
         ("g / G", "Jump to first / last"),
         ("Home / End", "Jump to first / last"),
         ("Enter", "Open fullscreen"),
+        ("+ / -", "Larger / smaller thumbnails"),
+        ("0", "Reset thumbnail size"),
+        ("i", "Toggle info panel"),
+        ("s", "Start slideshow from cursor"),
         ("Space", "Toggle selection"),
         ("a / A", "Select all / clear all"),
         ("d / D", "Trash / permanently delete selection"),
@@ -616,6 +720,10 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
         ("+ / -", "Zoom in / out"),
         ("0", "Reset zoom to fit"),
         ("h/j/k/l", "Pan when zoomed"),
+        ("i", "Toggle info panel"),
+        ("s", "Start / stop slideshow"),
+        ("Space", "Pause / resume slideshow"),
+        ("[ / ]", "Shorter / longer slide interval"),
         ("d / D", "Trash / permanently delete image"),
         ("t", "Open session theme picker"),
         ("Esc", "Back to gallery"),
@@ -651,7 +759,7 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
     ];
 
     let height = (help_lines.len() as u16 + 4).min(area.height.saturating_sub(2));
-    let width = 48.min(area.width.saturating_sub(4));
+    let width = 52.min(area.width.saturating_sub(4));
     let x = area.width.saturating_sub(width) / 2;
     let y = area.height.saturating_sub(height) / 2;
     let popup_area = Rect::new(x, y, width, height);
@@ -669,7 +777,7 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
 
     let key_width = 12;
-    let lines: Vec<Line> = help_lines
+    let lines: Vec<Line<'_>> = help_lines
         .iter()
         .map(|(key, desc)| {
             if key.is_empty() {
@@ -716,12 +824,12 @@ mod tests {
         app.install_themes(
             vec![
                 NamedTheme {
-                    name: "first".to_string(),
+                    name: "first".to_owned(),
                     path: None,
                     theme: first,
                 },
                 NamedTheme {
-                    name: "preview".to_string(),
+                    name: "preview".to_owned(),
                     path: None,
                     theme: preview,
                 },

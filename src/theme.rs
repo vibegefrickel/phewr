@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Theme {
+pub(crate) struct Theme {
     pub background: Style,
     pub border: Style,
     pub border_selected: Style,
@@ -31,13 +31,13 @@ pub struct Theme {
 }
 
 #[derive(Debug, Clone)]
-pub struct NamedTheme {
+pub(crate) struct NamedTheme {
     pub name: String,
     pub path: Option<PathBuf>,
     pub theme: Theme,
 }
 
-pub struct ThemeSet {
+pub(crate) struct ThemeSet {
     pub themes: Vec<NamedTheme>,
     pub selected: usize,
 }
@@ -62,13 +62,13 @@ struct ThemeFile {
     ui: BTreeMap<String, String>,
 }
 
-pub fn load_themes(cli_theme: Option<&str>) -> Result<ThemeSet, String> {
+pub(crate) fn load_themes(cli_theme: Option<&str>) -> Result<ThemeSet, String> {
     let home = home_dir();
     load_themes_at(&home, cli_theme)
 }
 
 fn load_themes_at(home: &Path, cli_theme: Option<&str>) -> Result<ThemeSet, String> {
-    let config_path = home.join(".config/rview/config.toml");
+    let config_path = home.join(".config/viewr/config.toml");
     let config = std::fs::read_to_string(config_path)
         .ok()
         .and_then(|contents| toml::from_str::<AppConfig>(&contents).ok())
@@ -112,7 +112,7 @@ fn load_themes_at(home: &Path, cli_theme: Option<&str>) -> Result<ThemeSet, Stri
 
     let selected = selected.unwrap_or_else(|| {
         themes.push(NamedTheme {
-            name: "tokyo night moon fallback".to_string(),
+            name: "tokyo night moon fallback".to_owned(),
             path: None,
             theme: Theme::fallback(),
         });
@@ -252,7 +252,7 @@ impl Theme {
         })
     }
 
-    pub fn fallback() -> Self {
+    pub(crate) fn fallback() -> Self {
         let bg = Color::Rgb(0x22, 0x24, 0x36);
         let bg_dark1 = Color::Rgb(0x19, 0x1b, 0x29);
         let fg = Color::Rgb(0xc8, 0xd3, 0xf5);
@@ -332,23 +332,20 @@ fn parse_hex(value: &str) -> Option<Color> {
         return None;
     }
     Some(Color::Rgb(
-        u8::from_str_radix(&value[0..2], 16).ok()?,
-        u8::from_str_radix(&value[2..4], 16).ok()?,
-        u8::from_str_radix(&value[4..6], 16).ok()?,
+        u8::from_str_radix(value.get(0..2)?, 16).ok()?,
+        u8::from_str_radix(value.get(2..4)?, 16).ok()?,
+        u8::from_str_radix(value.get(4..6)?, 16).ok()?,
     ))
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
 fn expand_home(home: &Path, configured_path: &str) -> PathBuf {
     configured_path
         .strip_prefix("~/")
-        .map(|rest| home.join(rest))
-        .unwrap_or_else(|| PathBuf::from(configured_path))
+        .map_or_else(|| PathBuf::from(configured_path), |rest| home.join(rest))
 }
 
 fn theme_name(path: &Path) -> String {
@@ -360,7 +357,7 @@ fn theme_name(path: &Path) -> String {
 
 fn normalized_name(name: &str) -> String {
     name.chars()
-        .filter(|character| character.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .flat_map(char::to_lowercase)
         .collect()
 }
@@ -402,7 +399,7 @@ error = "red"
 "##;
 
     #[test]
-    fn shared_theme_maps_rview_roles() {
+    fn shared_theme_maps_viewr_roles() {
         let file = toml::from_str::<ThemeFile>(SHARED_THEME).unwrap();
         let theme = Theme::from_file(&file).unwrap();
 
@@ -416,7 +413,7 @@ error = "red"
     #[test]
     fn catalog_is_explicit_and_loading_does_not_rewrite_config() {
         let root = test_root();
-        let config_dir = root.join(".config/rview");
+        let config_dir = root.join(".config/viewr");
         let themes_dir = root.join("themes");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::create_dir_all(&themes_dir).unwrap();
@@ -445,7 +442,7 @@ error = "red"
     fn test_root() -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         std::env::temp_dir().join(format!(
-            "rview-theme-test-{}-{}",
+            "viewr-theme-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ))

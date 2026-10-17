@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 struct Inner {
     paths: Vec<PathBuf>,
@@ -9,14 +9,14 @@ struct Inner {
 }
 
 #[derive(Clone)]
-pub struct SharedImageList {
+pub(crate) struct SharedImageList {
     inner: Arc<Mutex<Inner>>,
     len: Arc<AtomicUsize>,
     complete: Arc<AtomicBool>,
 }
 
 impl SharedImageList {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 paths: Vec::new(),
@@ -28,8 +28,8 @@ impl SharedImageList {
         }
     }
 
-    pub fn push_batch(&self, paths: Vec<PathBuf>) {
-        let mut inner = self.inner.lock().unwrap();
+    pub(crate) fn push_batch(&self, paths: Vec<PathBuf>) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         for path in paths {
             let name = path
                 .file_name()
@@ -41,35 +41,45 @@ impl SharedImageList {
         self.len.store(inner.paths.len(), Ordering::Release);
     }
 
-    pub fn mark_complete(&self) {
+    pub(crate) fn mark_complete(&self) {
         self.complete.store(true, Ordering::Release);
     }
 
-    pub fn push_error(&self, error: String) {
-        self.inner.lock().unwrap().errors.push(error);
+    pub(crate) fn push_error(&self, error: String) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .errors
+            .push(error);
     }
 
-    pub fn drain_errors(&self) -> Vec<String> {
-        std::mem::take(&mut self.inner.lock().unwrap().errors)
+    pub(crate) fn drain_errors(&self) -> Vec<String> {
+        std::mem::take(
+            &mut self
+                .inner
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .errors,
+        )
     }
 
-    pub fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         self.complete.load(Ordering::Acquire)
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::Acquire)
     }
 
-    pub fn drain_since(&self, known_len: usize) -> (Vec<PathBuf>, Vec<String>) {
-        let inner = self.inner.lock().unwrap();
+    pub(crate) fn drain_since(&self, known_len: usize) -> (Vec<PathBuf>, Vec<String>) {
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let paths = inner.paths[known_len..].to_vec();
         let filenames = inner.filenames[known_len..].to_vec();
         (paths, filenames)
     }
 
-    pub fn replace_all(&self, paths: Vec<PathBuf>, filenames: Vec<String>) {
-        let mut inner = self.inner.lock().unwrap();
+    pub(crate) fn replace_all(&self, paths: Vec<PathBuf>, filenames: Vec<String>) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.paths = paths;
         inner.filenames = filenames;
         self.len.store(inner.paths.len(), Ordering::Release);

@@ -2,40 +2,30 @@
 
 ## Now
 
+- Testing phase: measure the coverage baseline (`just coverage`), then add tests for the weak modules
+- Use `tempfile` in the tests instead of hand-made directories below `std::env::temp_dir()`
+
 ## Next
 
-- [ ] Sixel protocol support #feature
-- [ ] Stdin piping support (`curl ... | rview -`) #feature
-- [ ] Animated GIF playback #feature
+- Play videos in mpv (mpv is a dependency of the formula, the code does not use it yet)
+- Modern formats: results of the format research (HEIC details, AVIF, WebP, JPEG XL, AV1, RAW)
+- First release: create the Codeberg repository `viewr`, then `just render` and `just release`
+- Subfolders as entries in the grid (navigate without the picker)
+- Optional thumbnail labels for a denser grid
+- Reveal the picked image back in yazi (`ya emit reveal`)
 
 ## Later
 
-- [ ] Similar image search via embeddings (ort + ONNX Runtime, cosine similarity) #feature
-- [ ] Mouse-based pan/zoom in interactive mode #feature
+- Move / copy / rename files (culling workflow)
+- Shuffle order for slideshows
+- Persistent thumbnail size per directory
 
 ## Done
 
-- [x] Directory picker (o) with fuzzy filter, switches gallery to chosen dir #feature
-- [x] Multi-select with confirmation prompts (Space, a/A, d/D) #feature
-- [x] Recoverable Trash deletion by default with explicit permanent deletion (d/D) #improvement
-- [x] Terminal lifecycle guard for cleanup on error and panic paths #bug
-- [x] Deterministic incremental directory scan batches with surfaced errors #improvement
-- [x] Bounded, platform-aware thumbnail disk cache with atomic writes #improvement
-- [x] Graphics backend boundary for future protocol support #refactor
-- [x] Unit tests, formatting and Clippy gates, and GitHub Actions CI #chore
-- [x] Large directory scaling (streaming background scanner, incremental display) #improvement
-- [x] Kitty graphics protocol encoding #feature
-- [x] CLI arg parsing with clap #feature
-- [x] Auto-resize to terminal dimensions #feature
-- [x] Multi-file support #feature
-- [x] TUI with ratatui (status bar, keyboard navigation, centered images) #feature
-- [x] Thumbnail gallery grid with cursor navigation #feature
-- [x] Fuzzy filename search with nucleo-matcher #feature
-- [x] Semantic theming system (tokyonight, dark, light, catppuccin, nord) #feature
-- [x] Grimoire-inspired UI: bordered titled blocks, search bar, help popup #improvement
-- [x] LRU thumbnail cache (bounded 200 entries) #improvement
-- [x] Fullscreen neighbor prefetch (background decode of N-1/N+1) #improvement
-- [x] Parallel thumbnail loading with rayon #improvement
-- [x] turbojpeg fast path for JPEG decoding #improvement
-- [x] Optimized dev profile for dependencies #chore
-- [x] MP4 video playback via Kitty protocol (ffmpeg-next, 10fps, aspect-ratio-aware) #feature
+- Fork of rview, first as imgrrr, then renamed to viewr
+- Tooling from schnattr: justfile, lint table, cargo deny, nextest, Codeberg release flow
+- Configurable, zoomable thumbnail size (`+` / `-` / `0`, remembered in state file)
+- Slideshow with interval, pause and loop (`s`, `Space`, `[` / `]`, `--slideshow`)
+- Info panel with file data and EXIF (`i`, `--info`)
+- HEIC / HEIF decoding through libheif
+- EXIF orientation applied to JPEG / TIFF

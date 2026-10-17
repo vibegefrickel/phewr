@@ -6,10 +6,10 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-const CACHE_CAPACITY: usize = 8;
+const CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 const PREFETCH_RADIUS: usize = 3;
 
-pub struct Prefetcher {
+pub(crate) struct Prefetcher {
     cache: LruCache<usize, RgbaImage>,
     rx: mpsc::Receiver<(usize, RgbaImage)>,
     tx: mpsc::Sender<(usize, RgbaImage)>,
@@ -18,10 +18,10 @@ pub struct Prefetcher {
 }
 
 impl Prefetcher {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
-            cache: LruCache::new(NonZeroUsize::new(CACHE_CAPACITY).unwrap()),
+            cache: LruCache::new(CACHE_CAPACITY),
             rx,
             tx,
             pending: std::collections::HashSet::new(),
@@ -29,22 +29,22 @@ impl Prefetcher {
         }
     }
 
-    pub fn set_target_hint(&mut self, rect: Rect, cell_px: (u32, u32)) {
-        let w = rect.width as u32 * cell_px.0;
-        let h = rect.height as u32 * cell_px.1;
+    pub(crate) fn set_target_hint(&mut self, rect: Rect, cell_px: (u32, u32)) {
+        let w = u32::from(rect.width) * cell_px.0;
+        let h = u32::from(rect.height) * cell_px.1;
         if w > 0 && h > 0 {
             self.target_hint = Some((w, h));
         }
     }
 
-    pub fn poll(&mut self) {
+    pub(crate) fn poll(&mut self) {
         while let Ok((idx, img)) = self.rx.try_recv() {
             self.pending.remove(&idx);
             self.cache.push(idx, img);
         }
     }
 
-    pub fn take_resized(
+    pub(crate) fn take_resized(
         &mut self,
         index: usize,
         _rect: Rect,
@@ -53,7 +53,7 @@ impl Prefetcher {
         self.cache.pop(&index)
     }
 
-    pub fn kick(&mut self, current: usize, images: &[PathBuf]) {
+    pub(crate) fn kick(&mut self, current: usize, images: &[PathBuf]) {
         for offset in 1..=PREFETCH_RADIUS {
             if current + offset < images.len() {
                 self.ensure_decoding(current + offset, images);
@@ -64,11 +64,11 @@ impl Prefetcher {
         }
     }
 
-    pub fn kick_gallery(&mut self, index: usize, images: &[PathBuf]) {
+    pub(crate) fn kick_gallery(&mut self, index: usize, images: &[PathBuf]) {
         self.ensure_decoding(index, images);
     }
 
-    pub fn invalidate(&mut self) {
+    pub(crate) fn invalidate(&mut self) {
         self.cache.clear();
         self.pending.clear();
     }
@@ -88,6 +88,10 @@ impl Prefetcher {
                 } else {
                     img.to_rgba8()
                 };
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "a closed receiver means that nobody waits for the result"
+                )]
                 let _ = tx.send((index, final_img));
             }
         });
