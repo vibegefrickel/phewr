@@ -15,8 +15,10 @@ imgrrr before 2026-10-17.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
 
 The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
-serde/toml. The features `turbo` (libjpeg-turbo), `heic` (libheif) and `video` (FFmpeg) link
-native Homebrew libraries. All three features are on by default.
+serde/toml, jxl-oxide. The features `turbo` (libjpeg-turbo), `heic` (libheif) and `video` (FFmpeg)
+link native Homebrew libraries. The feature `sips` runs the macOS tool `/usr/bin/sips`. All four
+features are on by default. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew
+dependency.
 
 ## Build, test, run
 
@@ -24,7 +26,7 @@ native Homebrew libraries. All three features are on by default.
 just                 # = just check: fmt --check, clippy -D warnings (2 feature sets), nextest, rustdoc, cargo deny
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
-just test-real       # also the ignored tests that decode VIEWR_TEST_JPEG, _HEIC and _AVIF
+just test-real [FILTER]  # also the ignored tests that decode real files (VIEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
 just build | run | install | uninstall
@@ -112,8 +114,10 @@ missing.
 ### Tests
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module.
-- Tests that need a real photo are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
-  `VIEWR_TEST_HEIC` or `VIEWR_TEST_AVIF`. `just test-real` runs them.
+- Tests that need a real file are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
+  `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW` or `VIEWR_TEST_PSD`.
+  `just test-real` runs them. A test without its variable skips with a note.
+- The `sips` tests run `/usr/bin/sips` to write synthetic PSD and PDF files.
 - The synthetic libheif tests encode with the aom (AVIF) and x265 (HEIC) encoder plugins of
   Homebrew's libheif. If a plugin is missing, `just check` fails.
 - A test that writes files uses `tempfile::tempdir()` (`TempDir`) or `tempfile::NamedTempFile`.
@@ -136,13 +140,19 @@ missing.
 - `app.rs`: `App`, the whole view state. Decoding (`decode_image_with_hint`, turbojpeg,
   libheif for HEIC/HEIF/AVIF), resizing, the disk thumbnail cache, slideshow, zoom and pan,
   delete.
+- `decode/`: the decoders outside `app.rs`. `Route::for_path` picks the route by extension.
+  `jxl.rs` (JPEG XL), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats),
+  `tonemap.rs` (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot` and
+  `imir`).
 - `ui.rs`: the ratatui drawing of each view, the help popup and the pickers.
 - `gallery.rs`: the grid geometry, the cursor and the in-memory thumbnail cache.
 - `scanner.rs`: the background directory scan and the lists of supported extensions.
   `LIBHEIF_EXTENSIONS` is the one list for the libheif route.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
 - `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. Results carry a
-  generation. `invalidate()` drops the jobs in flight and forgets the failed indices.
+  generation. `invalidate()` drops the jobs in flight and forgets the failed indices. Each result
+  (`Prefetched`) keeps its decode box. `take_resized` fits the image into the requested box. If
+  the decode box is smaller, it returns `None`.
 - `picker.rs`: the directory picker. `search.rs`: fuzzy filename search (nucleo-matcher).
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `theme.rs`: themes, the theme catalog and the shared theme file.
@@ -183,15 +193,19 @@ missing.
 - **FFmpeg versions:** `ffmpeg-next` must match the major version of Homebrew's FFmpeg.
   ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
   release binary that links the old `libavcodec.<major>.dylib` does not start.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v3`, the path, the size, the mtime
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v4`, the path, the size, the mtime
   and the target size. Change the version string when the thumbnail output changes.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature
   too. The `image` feature `avif` is the encoder, not a decoder.
 - **Embedded HEIC thumbnails:** a grid decode passes `EmbeddedThumbnail::Allow`. viewr uses the
-  embedded thumbnail if it is at least the fitted size of the primary image and has its
-  portrait or landscape shape. Fullscreen, zoom and prefetch pass `EmbeddedThumbnail::Deny`.
-  The shape guard does not detect a missing 180° rotation or mirror of the thumbnail.
+  embedded thumbnail if it is at least the fitted size of the primary image and has the same
+  `irot` and `imir` properties. `decode/heif_boxes.rs` reads them. Fullscreen, zoom and prefetch
+  pass `EmbeddedThumbnail::Deny`.
+- **The `sips` route:** sips writes an uncompressed TIFF with the Orientation tag into a temp
+  file. The grid and the fullscreen view ask for a copy at the size of their box (`-Z`), and the
+  zoom gets the full image. A relative path gets `./` in front, because sips reads `-x` as a
+  function name. JPEG, PNG and HEIC never take this route.
 
 ## Workflow for agents
 

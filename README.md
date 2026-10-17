@@ -11,6 +11,7 @@ viewr is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork 
 - **Info panel:** `i` shows file data and EXIF next to the grid or the fullscreen image. EXIF data includes the camera, lens, exposure, aperture, ISO, focal length and GPS position.
 - **HEIC / HEIF:** viewr decodes iPhone photos through libheif and applies their rotation.
 - **Upright JPEGs:** viewr applies the EXIF orientation, so portrait photos show upright.
+- **More formats:** JPEG XL, EXR, HDR, QOI and TGA. On macOS, viewr also opens camera RAW, PSD, PDF and SVG through `sips`.
 
 ## Install
 
@@ -50,6 +51,7 @@ Feature flags:
 | `turbo` | on | libjpeg-turbo, fast JPEG decoding with downscaling |
 | `heic` | on | libheif >= 1.19 |
 | `video` | on | FFmpeg >= 7, plays MP4/MOV/MKV/AVI/WebM/M4V |
+| `sips` | on | macOS `/usr/bin/sips`, opens camera RAW, PSD, PDF, SVG and other ImageIO formats |
 
 ```bash
 cargo install --path . --no-default-features --features turbo   # without HEIC and video
@@ -168,9 +170,15 @@ viewr loads themes from the `theme` and `theme_catalog` keys above. `-t` sets th
 
 ## Formats
 
-**Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO.
+**Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, TGA.
 
-**HEIC, HEIF and AVIF** (feature `heic`): viewr decodes these files through libheif. Without `heic`, viewr does not open AVIF. For HEIC grid thumbnails, viewr uses the thumbnail that the file holds, if it is large enough.
+**JPEG XL:** viewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors to sRGB and applies the orientation of the file. An animated JPEG XL shows its first frame.
+
+**EXR and HDR:** viewr maps the float values to 8 bit with an extended Reinhard tone map. The white point is the brightest value of the image.
+
+**Camera RAW, PSD, JPEG 2000, PDF, SVG, ICNS, SGI, DDS and PICT** (feature `sips`, macOS only): viewr converts these files with the built-in macOS tool `sips`. The grid and the fullscreen view get a copy at the size of their box. The zoom gets the full image. A PDF shows its first page.
+
+**HEIC, HEIF and AVIF** (feature `heic`): viewr decodes these files through libheif. Without `heic`, viewr does not open AVIF. For HEIC grid thumbnails, viewr uses the thumbnail that the file holds, if it is large enough and has the rotation and the mirror of the main image.
 
 viewr applies the EXIF orientation of JPEG, TIFF, WebP and PNG files, so portrait photos show upright.
 
@@ -191,7 +199,8 @@ just hooks        # install the pre-commit hook (fmt + clippy)
 # decode real files from your library
 VIEWR_TEST_HEIC=~/Pictures/IMG_0001.HEIC \
 VIEWR_TEST_JPEG=~/Pictures/IMG_0002.JPG \
-just test-real
+just test-real          # a test without its variable skips with a note
+just test-real heic     # only the tests that match the filter
 ```
 
 ## License
