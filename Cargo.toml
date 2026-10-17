@@ -128,7 +128,10 @@ directories = "6"
 fast_image_resize = "6.1"
 ffmpeg = { version = "9", optional = true, package = "ffmpeg-next" }
 # Only the decoders for the formats that the scanner lists. AVIF goes through libheif.
-image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "tiff", "webp"] }
+image = { version = "0.25.10", default-features = false, features = ["bmp", "exr", "gif", "hdr", "ico", "jpeg", "png", "qoi", "tga", "tiff", "webp"] }
+# JPEG XL in pure Rust. The default feature `rayon` decodes on the shared rayon pool. `moxcms`
+# converts an ICC profile to sRGB. `image` uses the same moxcms version.
+jxl-oxide = { version = "0.12.6", features = ["moxcms"] }
 kamadak-exif = "0.6"
 libheif-rs = { version = "3", optional = true }
 lru = "0.18"
@@ -136,6 +139,8 @@ nucleo-matcher = "0.3"
 ratatui = "0.30"
 rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
+# The temp TIFF of the `sips` route.
+tempfile = { version = "3.27", optional = true }
 toml = "1"
 trash = "5.2"
 turbojpeg = { version = "1.5", optional = true }
@@ -144,13 +149,16 @@ turbojpeg = { version = "1.5", optional = true }
 tempfile = "3.27"
 
 [features]
-default = ["turbo", "heic", "video"]
+default = ["turbo", "heic", "video", "sips"]
 # Fast JPEG decoding with DCT downscaling (libjpeg-turbo).
 turbo = ["dep:turbojpeg"]
 # HEIC / HEIF and AVIF through the system libheif (>= 1.19).
 heic = ["dep:libheif-rs"]
 # Video playback and first-frame thumbnails through the system FFmpeg (>= 7).
 video = ["dep:ffmpeg"]
+# Camera RAW, PSD, PDF, SVG and the other ImageIO formats through macOS `/usr/bin/sips`. The
+# feature has no effect on other systems.
+sips = ["dep:tempfile"]
 
 # Image decoding is slow without optimizations, also in debug builds and tests.
 [profile.dev.package."*"]

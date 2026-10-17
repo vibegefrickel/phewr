@@ -1,5 +1,6 @@
 //! File and EXIF metadata for the info panel.
 
+use crate::decode::{self, Route};
 use chrono::{DateTime, Local};
 use exif::{In, Tag};
 use std::fs::File;
@@ -84,12 +85,18 @@ fn dimensions(path: &Path) -> Option<(u32, u32)> {
     if crate::app::decodes_with_libheif(path) {
         return crate::app::libheif_dimensions(path);
     }
-    let file = File::open(path).ok()?;
-    image::ImageReader::new(BufReader::new(file))
-        .with_guessed_format()
-        .ok()?
-        .into_dimensions()
-        .ok()
+    match Route::for_path(path) {
+        // `open` takes the format from the extension first: TGA has no magic bytes.
+        Route::Raster => image::ImageReader::open(path)
+            .ok()?
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok(),
+        Route::Jxl => decode::jxl::dimensions(path),
+        #[cfg(all(feature = "sips", target_os = "macos"))]
+        Route::Sips => decode::sips::dimensions(path),
+    }
 }
 
 fn exif_rows(path: &Path) -> Vec<(String, String)> {
@@ -165,7 +172,12 @@ fn exif_rows(path: &Path) -> Vec<(String, String)> {
     rows
 }
 
+/// The EXIF block of JPEG, TIFF (also the TIFF-based camera RAW formats), HEIF, PNG, WebP and
+/// JPEG XL.
 fn read_exif(path: &Path) -> Option<exif::Exif> {
+    if Route::for_path(path) == Route::Jxl {
+        return exif::Reader::new().read_raw(decode::jxl::exif(path)?).ok();
+    }
     let file = File::open(path).ok()?;
     exif::Reader::new()
         .read_from_container(&mut BufReader::new(file))
@@ -462,5 +474,38 @@ mod tests {
             .unwrap();
         assert!(dims.starts_with("12 x 7"), "dims: {dims}");
         assert!(!info.rows.iter().any(|(_, value)| value == "EXIF"));
+    }
+
+    #[test]
+    fn info_shows_the_dimensions_of_tga_and_exr() {
+        let dir = tempfile::tempdir().unwrap();
+        let tga = dir.path().join("a.tga");
+        image::DynamicImage::new_rgb8(5, 3).save(&tga).unwrap();
+        let exr = dir.path().join("a.exr");
+        image::DynamicImage::new_rgb32f(4, 2).save(&exr).unwrap();
+        let dims = |path: &Path| row(&load(path).rows, "Dimensions").map(str::to_owned);
+        assert!(dims(&tga).unwrap().starts_with("5 x 3"));
+        assert!(dims(&exr).unwrap().starts_with("4 x 2"));
+    }
+
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    #[test]
+    fn info_shows_the_dimensions_of_a_psd() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("a.png");
+        image::DynamicImage::new_rgb8(6, 4).save(&png).unwrap();
+        let psd = dir.path().join("a.psd");
+        let status = std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "format", "psd"])
+            .arg(&png)
+            .arg("--out")
+            .arg(&psd)
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success());
+        let info = load(&psd);
+        let dims = row(&info.rows, "Dimensions").unwrap();
+        assert!(dims.starts_with("6 x 4"), "dims: {dims}");
     }
 }

@@ -36,9 +36,10 @@ fix:
 test *ARGS:
     if command -v cargo-nextest >/dev/null; then cargo nextest run --release {{ARGS}}; else cargo test --release {{ARGS}}; fi
 
-# Also decode real files: VIEWR_TEST_JPEG and VIEWR_TEST_HEIC name a photo each.
-test-real:
-    cargo test --release -- --include-ignored
+# Also decode real files: VIEWR_TEST_JPEG, _HEIC, _AVIF, _JXL, _RAW and _PSD name one file each.
+# A test without its variable skips with a note. FILTER selects tests, for example `just test-real heic`.
+test-real *FILTER:
+    cargo test --release -- --include-ignored --show-output {{FILTER}}
 
 # Line coverage summary per file (needs cargo-llvm-cov: `brew install cargo-llvm-cov`).
 coverage:

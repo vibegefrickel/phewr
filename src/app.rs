@@ -1,4 +1,5 @@
 use crate::config::{self, Config};
+use crate::decode::{self, Route};
 use crate::encoder::{GraphicsBackend, GraphicsOutput, KittyBackend};
 use crate::gallery::{GalleryState, ThumbnailCache};
 use crate::image_list::SharedImageList;
@@ -1529,7 +1530,7 @@ pub(crate) fn resize_decoded_to_dims(img: &DynamicImage, max_w: u32, max_h: u32)
 
 /// Scale `rgba` down into `max_w` x `max_h` with its aspect ratio, and never up. An owned image
 /// needs no second copy.
-fn fit_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
+pub(crate) fn fit_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
     let size = rgba.dimensions();
     scaled_down_size(size, (max_w, max_h))
         .and_then(|dst| resize_rgba(rgba.as_raw(), size, dst))
@@ -1538,7 +1539,7 @@ fn fit_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
 
 /// The size of `size` scaled down into `max` with its aspect ratio, rounded down. `None` when
 /// no scale is necessary: an empty size or box, or an image that fits already.
-fn scaled_down_size(size: (u32, u32), max: (u32, u32)) -> Option<(u32, u32)> {
+pub(crate) fn scaled_down_size(size: (u32, u32), max: (u32, u32)) -> Option<(u32, u32)> {
     let ((orig_w, orig_h), (max_w, max_h)) = (size, max);
     if max_w == 0 || max_h == 0 || orig_w == 0 || orig_h == 0 {
         return None;
@@ -1618,7 +1619,14 @@ pub(crate) fn decode_image_with_hint(
     #[cfg(not(feature = "heic"))]
     let _ = embedded;
 
-    decode_raster(path, target)
+    match Route::for_path(path) {
+        Route::Raster => decode_raster(path, target),
+        Route::Jxl => decode::jxl::decode(path),
+        // The grid and the fullscreen view ask sips for a copy at the size of their box. The
+        // zoom decodes without a target, so it gets the full image with all detail.
+        #[cfg(all(feature = "sips", target_os = "macos"))]
+        Route::Sips => decode::sips::decode(path, target),
+    }
 }
 
 /// Send HEIC, HEIF and AVIF to libheif, because the `image` crate decodes none of them.
@@ -1654,7 +1662,7 @@ fn decode_with_libheif(
     // An embedded thumbnail (iPhone: 320x240) saves the decode of the full frame.
     let handle = target
         .filter(|_| embedded == EmbeddedThumbnail::Allow)
-        .and_then(|target| usable_thumbnail(&primary, target))
+        .and_then(|target| usable_thumbnail(path, &primary, target))
         .unwrap_or(primary);
     let image = LibHeif::new()
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
@@ -1663,17 +1671,24 @@ fn decode_with_libheif(
 }
 
 /// Pick the smallest embedded thumbnail that is large enough for `target`, so that the
-/// grid does not decode the full frame.
+/// grid does not decode the full frame. The thumbnail must have the rotation and mirror of the
+/// primary image. A file without a thumbnail does not read the HEIF boxes.
 #[cfg(feature = "heic")]
 fn usable_thumbnail(
+    path: &Path,
     primary: &libheif_rs::ImageHandle,
     target: (u32, u32),
 ) -> Option<libheif_rs::ImageHandle> {
     let mut ids = vec![0; primary.number_of_thumbnails()];
     let count = primary.thumbnail_ids(&mut ids);
     ids.truncate(count);
+    if ids.is_empty() {
+        return None;
+    }
+    let items = decode::heif_boxes::HeifItems::read(path)?;
     let primary_size = (primary.width(), primary.height());
     ids.into_iter()
+        .filter(|&id| items.thumbnail_matches_primary(id))
         .filter_map(|id| primary.thumbnail(id).ok())
         .filter(|thumb| thumbnail_is_usable((thumb.width(), thumb.height()), primary_size, target))
         .min_by_key(|thumb| u64::from(thumb.width()) * u64::from(thumb.height()))
@@ -1683,10 +1698,9 @@ fn usable_thumbnail(
 /// `target`, so that the grid never upscales it. It must also have the portrait or
 /// landscape shape of the primary image.
 ///
-/// libheif applies the irot and imir properties of the thumbnail item. A thumbnail
-/// without the 90 or 270 degree rotation of the primary image has the other shape and is
-/// rejected. A missing 180 degree rotation or mirror has no effect on the size, so this
-/// check cannot find it. libheif-rs has no safe API for the properties of an item.
+/// libheif applies the irot and imir properties of the thumbnail item. `usable_thumbnail`
+/// compares these properties with the primary image first (`HeifItems`). The shape check
+/// stays as a second guard.
 #[cfg(feature = "heic")]
 fn thumbnail_is_usable(thumbnail: (u32, u32), primary: (u32, u32), target: (u32, u32)) -> bool {
     let Some(fitted) = fit_within(primary, target) else {
@@ -1802,8 +1816,9 @@ fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicI
 }
 
 /// Decode with `image` and apply the EXIF orientation that its decoder reads (JPEG, PNG,
-/// TIFF, WebP), so that phone photos show upright.
-fn decode_upright<R: io::BufRead + io::Seek>(
+/// TIFF, WebP), so that phone photos show upright. A float image (EXR, HDR) is tone-mapped to
+/// 8 bit.
+pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
     reader: ImageReader<R>,
 ) -> image::ImageResult<DynamicImage> {
     let mut decoder = reader.into_decoder()?;
@@ -1813,7 +1828,7 @@ fn decode_upright<R: io::BufRead + io::Seek>(
     image::Limits::default().reserve(decoder.total_bytes())?;
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
-    Ok(img)
+    Ok(decode::tonemap::to_display(img))
 }
 
 #[cfg(feature = "turbo")]
@@ -1925,7 +1940,7 @@ fn get_cache_file_path(
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     let mut hasher = DefaultHasher::new();
-    "viewr-thumbnail-v3".hash(&mut hasher);
+    "viewr-thumbnail-v4".hash(&mut hasher);
     canonical_path.hash(&mut hasher);
     metadata.len().hash(&mut hasher);
     mtime.as_secs().hash(&mut hasher);
@@ -2158,6 +2173,7 @@ mod tests {
         use crate::app::{
             decodes_with_libheif, fit_within, libheif_dimensions, thumbnail_is_usable,
         };
+        use crate::decode::heif_boxes::HeifItems;
         use image::GenericImageView;
         use libheif_rs::{
             Channel, ColorSpace, CompressionFormat, EncoderQuality, EncodingOptions, HeifContext,
@@ -2401,12 +2417,72 @@ mod tests {
             assert_close(center(&small), RED);
         }
 
+        /// The grid decode of a 64x64 box with the thumbnail and the primary image of `path`
+        /// (the thumbnail is blue, the primary image red).
+        fn grid_center(path: &Path) -> [u8; 4] {
+            let small =
+                decode_image_with_hint(path, Some((64, 64)), EmbeddedThumbnail::Allow).unwrap();
+            center(&small)
+        }
+
+        #[test]
+        fn heic_thumbnail_needs_the_half_turn_and_the_mirror_of_the_primary() {
+            let dir = test_dir();
+            let cases = [
+                (ImageOrientation::Rotate180, ImageOrientation::Normal, RED),
+                (
+                    ImageOrientation::Rotate180,
+                    ImageOrientation::Rotate180,
+                    BLUE,
+                ),
+                (
+                    ImageOrientation::FlipHorizontally,
+                    ImageOrientation::Normal,
+                    RED,
+                ),
+                (
+                    ImageOrientation::FlipVertically,
+                    ImageOrientation::FlipVertically,
+                    BLUE,
+                ),
+                (
+                    ImageOrientation::Normal,
+                    ImageOrientation::FlipVertically,
+                    RED,
+                ),
+            ];
+            for (index, (primary, thumbnail, expected)) in cases.into_iter().enumerate() {
+                let path = dir.path().join(format!("case-{index}.heic"));
+                write_heif(&path, CompressionFormat::Hevc, primary, Some(thumbnail));
+                // The shape guard alone accepts each of these thumbnails.
+                assert_close(grid_center(&path), expected);
+            }
+        }
+
+        #[test]
+        fn heif_boxes_of_a_synthetic_file_list_its_thumbnail() {
+            let dir = test_dir();
+            let path = dir.path().join("rotated.heic");
+            let rotation = ImageOrientation::Rotate90Cw;
+            write_heif(&path, CompressionFormat::Hevc, rotation, Some(rotation));
+            let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
+            let primary = ctx.primary_image_handle().unwrap();
+            let mut ids = vec![0; primary.number_of_thumbnails()];
+            primary.thumbnail_ids(&mut ids);
+            let items = HeifItems::read(&path).expect("the meta box");
+            assert_eq!(ids.len(), 1);
+            assert!(items.thumbnail_matches_primary(ids[0]));
+            assert!(!items.thumbnail_matches_primary(primary.item_id()));
+        }
+
         /// Decode a real AVIF file: `VIEWR_TEST_AVIF=/path/to/image.avif cargo test -- --ignored`.
         #[test]
         #[ignore = "needs VIEWR_TEST_AVIF, a real AVIF file"]
         fn decodes_avif_from_env() {
-            let path = std::env::var("VIEWR_TEST_AVIF").expect("VIEWR_TEST_AVIF not set");
-            let path = Path::new(&path);
+            let Some(path) = crate::decode::real_test_file("VIEWR_TEST_AVIF") else {
+                return;
+            };
+            let path = path.as_path();
             let full =
                 decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
             assert_eq!(libheif_dimensions(path), Some(full.dimensions()));
@@ -2420,11 +2496,13 @@ mod tests {
         #[test]
         #[ignore = "needs VIEWR_TEST_HEIC, a real photo"]
         fn heic_thumbnail_from_env() {
-            let path = std::env::var("VIEWR_TEST_HEIC").expect("VIEWR_TEST_HEIC not set");
-            let path = Path::new(&path);
+            let Some(path) = crate::decode::real_test_file("VIEWR_TEST_HEIC") else {
+                return;
+            };
+            let path = path.as_path();
             let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
             let primary = ctx.primary_image_handle().unwrap();
-            let thumbnail = crate::app::usable_thumbnail(&primary, (160, 160))
+            let thumbnail = crate::app::usable_thumbnail(path, &primary, (160, 160))
                 .expect("an embedded thumbnail of at least 160x160");
             let shape = |w: u32, h: u32| w >= h;
             assert_eq!(
@@ -2450,6 +2528,106 @@ mod tests {
                 .sum();
             let mean = total / thumb.as_raw().len() as u64;
             assert!(mean < 20, "mean pixel difference {mean}");
+        }
+    }
+
+    /// QOI, TGA, EXR and HDR: the `image` crate writes a synthetic file of each, and the grid
+    /// and the fullscreen decode open it.
+    mod formats {
+        use super::{BLUE, EmbeddedThumbnail, RED, assert_close, decode_image_with_hint, test_dir};
+        use crate::app::load_and_resize;
+        use image::{ImageEncoder, Rgb, RgbImage};
+        use ratatui::layout::Rect;
+        use std::fs::File;
+        use std::path::Path;
+
+        /// Decode `path` in fullscreen (no target) and in a grid cell of 16x16 px, and return
+        /// the left and right pixels of the full decode.
+        fn open_both_ways(path: &Path) -> ([u8; 4], [u8; 4]) {
+            let full = decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).unwrap();
+            assert_eq!(
+                (full.width(), full.height()),
+                (32, 16),
+                "{}",
+                path.display()
+            );
+            let grid = load_and_resize(
+                path,
+                Rect::new(0, 0, 2, 2),
+                (8, 8),
+                EmbeddedThumbnail::Allow,
+            )
+            .unwrap();
+            assert_eq!(grid.dimensions(), (16, 8), "{}", path.display());
+            let rgba = full.to_rgba8();
+            (rgba.get_pixel(4, 8).0, rgba.get_pixel(28, 8).0)
+        }
+
+        fn red_left_blue_right() -> RgbImage {
+            RgbImage::from_fn(32, 16, |x, _| Rgb(if x < 16 { RED } else { BLUE }))
+        }
+
+        #[test]
+        fn qoi_and_tga_open() {
+            let dir = test_dir();
+            let pixels = red_left_blue_right();
+            let qoi = dir.path().join("synthetic.qoi");
+            image::codecs::qoi::QoiEncoder::new(File::create(&qoi).unwrap())
+                .write_image(pixels.as_raw(), 32, 16, image::ExtendedColorType::Rgb8)
+                .unwrap();
+            let tga = dir.path().join("synthetic.TGA");
+            image::codecs::tga::TgaEncoder::new(File::create(&tga).unwrap())
+                .write_image(pixels.as_raw(), 32, 16, image::ExtendedColorType::Rgb8)
+                .unwrap();
+            for path in [qoi, tga] {
+                let (left, right) = open_both_ways(&path);
+                assert_close(left, RED);
+                assert_close(right, BLUE);
+            }
+        }
+
+        /// Linear light: 0.18 (middle gray) on the left, 4.0 (brighter than white) on the right.
+        fn linear_samples() -> Vec<f32> {
+            (0..16 * 32)
+                .flat_map(|i| {
+                    if i % 32 < 16 {
+                        [0.18; 3]
+                    } else {
+                        [4.0, 0.0, 0.0]
+                    }
+                })
+                .collect()
+        }
+
+        /// After the tone map, middle gray is a mid tone, not black. 4.0 is the white point of
+        /// the image, so it becomes full red.
+        fn assert_tone_mapped(path: &Path) {
+            let (left, right) = open_both_ways(path);
+            assert!(
+                left[..3].iter().all(|&c| (100..=120).contains(&c)),
+                "{left:?}"
+            );
+            assert!(right[0] == 255 && right[1] == 0, "{right:?}");
+            assert_eq!(left[3], 255);
+        }
+
+        #[test]
+        fn exr_and_hdr_are_tone_mapped_to_8_bit() {
+            let dir = test_dir();
+            let samples = linear_samples();
+            let exr = dir.path().join("synthetic.exr");
+            let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+            image::codecs::openexr::OpenExrEncoder::new(File::create(&exr).unwrap())
+                .write_image(&bytes, 32, 16, image::ExtendedColorType::Rgb32F)
+                .unwrap();
+            let hdr = dir.path().join("synthetic.hdr");
+            let pixels: Vec<Rgb<f32>> =
+                samples.chunks(3).map(|c| Rgb([c[0], c[1], c[2]])).collect();
+            image::codecs::hdr::HdrEncoder::new(File::create(&hdr).unwrap())
+                .encode(&pixels, 32, 16)
+                .unwrap();
+            assert_tone_mapped(&exr);
+            assert_tone_mapped(&hdr);
         }
     }
 
@@ -2500,8 +2678,10 @@ mod tests {
     #[test]
     #[ignore = "needs VIEWR_TEST_JPEG, a real photo"]
     fn decodes_jpeg_upright_from_env() {
-        let path = std::env::var("VIEWR_TEST_JPEG").expect("VIEWR_TEST_JPEG not set");
-        let path = std::path::Path::new(&path);
+        let Some(path) = crate::decode::real_test_file("VIEWR_TEST_JPEG") else {
+            return;
+        };
+        let path = path.as_path();
         let mut decoder = image::ImageReader::open(path)
             .unwrap()
             .into_decoder()
@@ -2532,8 +2712,10 @@ mod tests {
     #[test]
     #[ignore = "needs VIEWR_TEST_HEIC, a real photo"]
     fn decodes_heic_from_env() {
-        let path = std::env::var("VIEWR_TEST_HEIC").expect("VIEWR_TEST_HEIC not set");
-        let path = std::path::Path::new(&path);
+        let Some(path) = crate::decode::real_test_file("VIEWR_TEST_HEIC") else {
+            return;
+        };
+        let path = path.as_path();
         let full =
             decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
         assert!(full.width() > 0 && full.height() > 0);
@@ -3516,6 +3698,37 @@ mod tests {
             app.load_if_needed();
             assert!(app.loaded.is_some());
             assert!(app.fullscreen_target.is_none());
+        }
+
+        /// Regression: a gallery pre-decode before the first fullscreen view has no size hint.
+        /// A large photo (an iPhone HEIC, and also a JPEG or PNG) then showed at its full size,
+        /// larger than the screen.
+        #[test]
+        fn a_pre_decode_without_a_hint_fits_the_fullscreen_box() {
+            let dir = test_dir();
+            for name in ["large.png", "large.jpg"] {
+                let path = dir.path().join(name);
+                DynamicImage::new_rgb8(640, 480).save(&path).unwrap();
+                let mut app = app();
+                app.images.push(path);
+                app.filenames.push(name.to_owned());
+                app.gallery.filtered_indices = vec![0];
+                app.pre_decode_hovered();
+                wait_until(|| {
+                    app.prefetcher.poll();
+                    app.prefetcher.pending_count() == 0
+                });
+
+                app.enter_fullscreen_selected();
+                // 10x6 cells of 8x16 px: a box of 80x96 px.
+                app.image_rect = Rect::new(0, 0, 10, 6);
+                app.load_if_needed();
+                let loaded = app
+                    .loaded
+                    .as_ref()
+                    .expect("the prefetched image shows at once");
+                assert_eq!(loaded.dimensions(), (80, 60), "{name}");
+            }
         }
 
         #[test]

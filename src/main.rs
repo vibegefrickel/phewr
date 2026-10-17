@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod decode;
 mod encoder;
 mod gallery;
 mod image_list;

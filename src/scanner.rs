@@ -4,8 +4,23 @@ use std::thread;
 
 const BATCH_SIZE: usize = 64;
 
-const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "ico",
+/// The formats of the `image` crate. JPEG and PNG come first, because most files are JPEG or PNG.
+pub(crate) const IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "ico", "exr", "hdr", "qoi", "tga",
+];
+
+/// JPEG XL, decoded by `jxl-oxide`.
+pub(crate) const JXL_EXTENSIONS: &[&str] = &["jxl"];
+
+/// The formats that macOS `sips` reads and the `image` crate does not: camera RAW, Photoshop,
+/// JPEG 2000, PDF (the first page), SVG and some rare formats. `sips --formats` lists them.
+#[cfg(all(feature = "sips", target_os = "macos"))]
+pub(crate) const SIPS_EXTENSIONS: &[&str] = &[
+    // Camera RAW.
+    "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "mos", "mrw", "nef",
+    "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw",
+    // Other formats of ImageIO.
+    "psd", "jp2", "pdf", "svg", "icns", "sgi", "dds", "pict",
 ];
 
 /// The formats that libheif decodes. The `image` crate has no AVIF decoder, so AVIF is here.
@@ -19,7 +34,11 @@ pub(crate) fn is_supported(path: &Path) -> bool {
     let ext = path.extension().and_then(|e| e.to_str());
     let Some(ext) = ext else { return false };
     let ext = ext.to_ascii_lowercase();
-    if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+    if IMAGE_EXTENSIONS.contains(&ext.as_str()) || JXL_EXTENSIONS.contains(&ext.as_str()) {
+        return true;
+    }
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    if SIPS_EXTENSIONS.contains(&ext.as_str()) {
         return true;
     }
     #[cfg(feature = "heic")]
@@ -158,6 +177,21 @@ mod tests {
     fn video_extensions_are_supported() {
         assert!(is_supported(Path::new("clip.MP4")));
         assert!(is_supported(Path::new("clip.webm")));
+    }
+
+    #[test]
+    fn the_formats_of_image_and_jpeg_xl_are_supported() {
+        for name in ["a.exr", "a.HDR", "a.qoi", "a.tga", "a.jxl"] {
+            assert!(is_supported(Path::new(name)), "{name}");
+        }
+    }
+
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    #[test]
+    fn the_sips_formats_are_supported() {
+        for name in ["a.CR3", "a.nef", "a.dng", "a.psd", "a.pdf", "a.svg"] {
+            assert!(is_supported(Path::new(name)), "{name}");
+        }
     }
 
     #[test]

@@ -1,4 +1,6 @@
-use crate::app::{EmbeddedThumbnail, decode_image_with_hint, resize_decoded_to_dims};
+use crate::app::{
+    EmbeddedThumbnail, decode_image_with_hint, fit_rgba_within, resize_decoded_to_dims,
+};
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
@@ -14,11 +16,31 @@ const PREFETCH_RADIUS: usize = 3;
 struct Decoded {
     generation: u64,
     index: usize,
-    image: Option<RgbaImage>,
+    image: Option<Prefetched>,
+}
+
+/// A decoded image and the box in pixels that it was fitted into. `None` is the full size.
+struct Prefetched {
+    image: RgbaImage,
+    target: Option<(u32, u32)>,
+}
+
+impl Prefetched {
+    /// The image fitted into `max`, or `None` if the decode used a smaller box. A smaller decode
+    /// cannot fill `max` without an upscale, so the caller decodes again.
+    fn fit_into(self, max: (u32, u32)) -> Option<RgbaImage> {
+        if max.0 == 0 || max.1 == 0 || self.target == Some(max) {
+            return Some(self.image);
+        }
+        let covers = self
+            .target
+            .is_none_or(|target| target.0 >= max.0 && target.1 >= max.1);
+        covers.then(|| fit_rgba_within(self.image, max.0, max.1))
+    }
 }
 
 pub(crate) struct Prefetcher {
-    cache: LruCache<usize, RgbaImage>,
+    cache: LruCache<usize, Prefetched>,
     rx: mpsc::Receiver<Decoded>,
     tx: mpsc::Sender<Decoded>,
     pending: HashSet<usize>,
@@ -73,13 +95,20 @@ impl Prefetcher {
         }
     }
 
+    /// Take the cached image of `index`, fitted into `rect`. The hint of the decode can be
+    /// missing (a gallery pre-decode before the first fullscreen view) or stale (a resize, the
+    /// info panel), so the image must not go to the screen at its decoded size.
     pub(crate) fn take_resized(
         &mut self,
         index: usize,
-        _rect: Rect,
-        _cell_px: (u32, u32),
+        rect: Rect,
+        cell_px: (u32, u32),
     ) -> Option<RgbaImage> {
-        self.cache.pop(&index)
+        let max = (
+            u32::from(rect.width) * cell_px.0,
+            u32::from(rect.height) * cell_px.1,
+        );
+        self.cache.pop(&index)?.fit_into(max)
     }
 
     pub(crate) fn kick(&mut self, current: usize, images: &[PathBuf]) {
@@ -119,9 +148,12 @@ impl Prefetcher {
         rayon::spawn(move || {
             let image = decode_image_with_hint(&path, hint, EmbeddedThumbnail::Deny)
                 .ok()
-                .map(|img| match hint {
-                    Some((max_w, max_h)) => resize_decoded_to_dims(&img, max_w, max_h),
-                    None => img.to_rgba8(),
+                .map(|img| Prefetched {
+                    image: match hint {
+                        Some((max_w, max_h)) => resize_decoded_to_dims(&img, max_w, max_h),
+                        None => img.to_rgba8(),
+                    },
+                    target: hint,
                 });
             #[expect(
                 clippy::let_underscore_must_use,
@@ -359,5 +391,46 @@ mod tests {
         prefetcher.kick_gallery(0, &paths);
         assert_eq!(prefetcher.pending_count(), 1, "invalidate allows a new try");
         wait_until_idle(&mut prefetcher);
+    }
+
+    #[test]
+    fn a_decode_without_a_hint_is_fitted_into_the_box() {
+        let (_temp, dir) = synthetic_dir();
+        let paths = vec![save_image(&dir, "0.png", 64, 32)];
+
+        let mut prefetcher = Prefetcher::new();
+        prefetcher.kick_gallery(0, &paths);
+        wait_until_idle(&mut prefetcher);
+
+        let img = prefetcher
+            .take_resized(0, Rect::new(0, 0, 2, 2), (8, 8))
+            .expect("image should be cached");
+        assert_eq!(img.dimensions(), (16, 8));
+    }
+
+    #[test]
+    fn a_decode_for_a_smaller_box_is_not_used() {
+        let (_temp, dir) = synthetic_dir();
+        let paths = vec![
+            save_image(&dir, "0.png", 64, 32),
+            save_image(&dir, "1.png", 64, 32),
+        ];
+
+        let mut prefetcher = Prefetcher::new();
+        prefetcher.set_target_hint(Rect::new(0, 0, 2, 2), (8, 8));
+        prefetcher.kick_gallery(0, &paths);
+        prefetcher.kick_gallery(1, &paths);
+        wait_until_idle(&mut prefetcher);
+
+        assert!(
+            prefetcher
+                .take_resized(0, Rect::new(0, 0, 4, 4), (8, 8))
+                .is_none(),
+            "a 16x8 decode must not fill a 32x32 box"
+        );
+        let img = prefetcher
+            .take_resized(1, Rect::new(0, 0, 1, 1), (8, 8))
+            .expect("a larger decode fits a smaller box");
+        assert_eq!(img.dimensions(), (8, 4));
     }
 }
