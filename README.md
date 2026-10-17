@@ -162,7 +162,7 @@ viewr caches thumbnails in the OS cache directory: `~/Library/Caches/viewr` on m
 
 ### Themes
 
-viewr loads themes from the `theme` and `theme_catalog` keys above. `-t` sets the theme for one session. `t` shows a preview of each catalog theme. viewr does not write that choice back.
+viewr loads themes from the `theme` and `theme_catalog` keys above. `-t` sets the theme for one session. If the `-t` value is neither a theme file nor a catalog name, viewr stops and lists the catalog names. If the `theme` key names an unknown theme, viewr uses the first catalog theme. `t` shows a preview of each catalog theme. viewr does not write that choice back.
 
 ## Formats
 

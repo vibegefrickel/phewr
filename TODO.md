@@ -9,8 +9,6 @@
 - Slideshow: continue after mpv instead of a stop at the video (decision open)
 - Next and previous video from inside mpv (for example mpv key bindings that run `quit <code>`)
 - Tests: `App::graphics_delete_all()` writes Kitty escape sequences to the real stdout. nextest captures them, but `cargo test -- --nocapture` deletes the images of the terminal. Give `App` a writer or a fake graphics backend
-- Theme: `--theme nope` with a non-empty catalog selects the first catalog entry and shows no error (`load_themes_at` runs the fallback before the `strict` check)
-- Theme: `load_themes_at` reads `~/.config/viewr/config.toml` and ignores `XDG_CONFIG_HOME`, but `config.rs` reads `$XDG_CONFIG_HOME/viewr/config.toml`
 - Delete: after a delete in the grid, the cursor jumps to the first image (`update_filter` resets it). Keep the cursor near the deleted image
 - Make sure that the mpv hand-off works in Ghostty, Kitty and WezTerm (the worker tested it only in a herdr pane)
 - Modern formats: JPEG XL (jxl-oxide), EXR/HDR/QOI/TGA in the scanner, Live Photo pairing, animated GIF/WebP/APNG/AVIS, RAW through ImageIO
@@ -38,6 +36,7 @@
 - HEIC / HEIF decoding through libheif
 - Video playback in mpv (`[video] player`: terminal, window, builtin)
 - Built-in player: a pause no longer drops a packet or stops the loop
+- Theme: `-t` with an unknown name stops with an error, the theme follows `XDG_CONFIG_HOME`
 - Testing phase: 39% to 94% line coverage, `tempfile`, no test writes real user files
 - Return to the view that opened a video, video placeholder in fullscreen
 - Prefetch: generation counter against stale results, no retry loop after a failed decode
