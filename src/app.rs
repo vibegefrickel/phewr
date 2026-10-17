@@ -89,6 +89,11 @@ pub(crate) struct App {
     pub info_visible: bool,
     info_cache: LruCache<PathBuf, ImageInfo>,
 
+    /// The state file that remembers the thumbnail size. Tests point it into a temp directory.
+    pub state_file: PathBuf,
+    /// The directory of the thumbnail disk cache. Tests point it into a temp directory.
+    pub disk_cache_dir: PathBuf,
+
     // Slideshow (fullscreen)
     pub slideshow: Option<Slideshow>,
     pub slideshow_interval: Duration,
@@ -160,9 +165,14 @@ pub(crate) struct App {
 }
 
 impl App {
+    /// A test app. The state file and the disk cache sit below `/dev/null`, so every write
+    /// fails quietly and no test can touch the real files. A test that needs them sets a temp path.
     #[cfg(test)]
     pub(crate) fn new(theme: Theme, cell_px: (u32, u32), shared_list: SharedImageList) -> Self {
-        Self::with_config(theme, cell_px, shared_list, &Config::default())
+        let mut app = Self::with_config(theme, cell_px, shared_list, &Config::default());
+        app.state_file = PathBuf::from("/dev/null/viewr/state.toml");
+        app.disk_cache_dir = PathBuf::from("/dev/null/viewr/cache");
+        app
     }
 
     pub(crate) fn with_config(
@@ -188,6 +198,8 @@ impl App {
             graphics: KittyBackend,
             info_visible: config.info_panel,
             info_cache: LruCache::new(INFO_CACHE_CAPACITY),
+            state_file: config::default_state_path(),
+            disk_cache_dir: default_disk_cache_dir(),
             slideshow: None,
             slideshow_interval: Duration::from_secs_f64(config.slideshow_interval),
             slideshow_loop: config.slideshow_loop,
@@ -345,7 +357,7 @@ impl App {
 
     /// Back to the configured size; also forgets the remembered size.
     pub(crate) fn thumb_zoom_reset(&mut self) {
-        config::clear_thumb_size();
+        config::clear_thumb_size(&self.state_file);
         if self.gallery.reset_thumb_size() {
             self.after_thumb_size_change(false);
         }
@@ -353,7 +365,11 @@ impl App {
 
     fn after_thumb_size_change(&mut self, remember: bool) {
         if remember {
-            config::save_thumb_size(self.gallery.thumb_cols, self.gallery.thumb_rows);
+            config::save_thumb_size(
+                &self.state_file,
+                self.gallery.thumb_cols,
+                self.gallery.thumb_rows,
+            );
         }
         // Thumbnails are decoded for a pixel size, so every cached one is stale.
         self.mark_dirty();
@@ -1198,11 +1214,12 @@ impl App {
         let tx = self.thumb_tx.clone();
         let cell_px = self.cell_px;
         let generation = self.thumb_generation;
+        let cache_dir = self.disk_cache_dir.clone();
         rayon::spawn(move || {
             let target_w = u32::from(rect.width) * cell_px.0;
             let target_h = u32::from(rect.height) * cell_px.1;
 
-            if let Some(img) = try_load_from_disk_cache(&path, target_w, target_h) {
+            if let Some(img) = try_load_from_disk_cache(&cache_dir, &path, target_w, target_h) {
                 #[expect(
                     clippy::let_underscore_must_use,
                     reason = "a closed receiver means that nobody waits for the result"
@@ -1222,7 +1239,7 @@ impl App {
             let res = load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Allow);
 
             if let Ok(img) = res {
-                try_save_to_disk_cache(&path, target_w, target_h, &img);
+                try_save_to_disk_cache(&cache_dir, &path, target_w, target_h, &img);
                 #[expect(
                     clippy::let_underscore_must_use,
                     reason = "a closed receiver means that nobody waits for the result"
@@ -1715,7 +1732,20 @@ fn decode_jpeg_turbo(path: &Path, target: Option<(u32, u32)>) -> io::Result<Dyna
     Ok(img)
 }
 
-fn get_cache_file_path(path: &Path, target_w: u32, target_h: u32) -> Option<PathBuf> {
+/// The thumbnail disk cache below the user's cache directory, or a temp directory without one.
+fn default_disk_cache_dir() -> PathBuf {
+    ProjectDirs::from("", "", "viewr").map_or_else(
+        || std::env::temp_dir().join("viewr-cache"),
+        |dirs| dirs.cache_dir().to_path_buf(),
+    )
+}
+
+fn get_cache_file_path(
+    cache_dir: &Path,
+    path: &Path,
+    target_w: u32,
+    target_h: u32,
+) -> Option<PathBuf> {
     use std::collections::hash_map::DefaultHasher;
     use std::fs;
     use std::hash::{Hash, Hasher};
@@ -1738,16 +1768,16 @@ fn get_cache_file_path(path: &Path, target_w: u32, target_h: u32) -> Option<Path
     target_h.hash(&mut hasher);
     let filename = format!("{:016x}.png", hasher.finish());
 
-    let cache_dir = ProjectDirs::from("", "", "viewr").map_or_else(
-        || std::env::temp_dir().join("viewr-cache"),
-        |dirs| dirs.cache_dir().to_path_buf(),
-    );
-
     Some(cache_dir.join(filename))
 }
 
-fn try_load_from_disk_cache(path: &Path, target_w: u32, target_h: u32) -> Option<RgbaImage> {
-    let cache_path = get_cache_file_path(path, target_w, target_h)?;
+fn try_load_from_disk_cache(
+    cache_dir: &Path,
+    path: &Path,
+    target_w: u32,
+    target_h: u32,
+) -> Option<RgbaImage> {
+    let cache_path = get_cache_file_path(cache_dir, path, target_w, target_h)?;
     if cache_path.exists() {
         if let Ok(image) = image::open(&cache_path) {
             Some(image.to_rgba8())
@@ -1765,6 +1795,7 @@ fn try_load_from_disk_cache(path: &Path, target_w: u32, target_h: u32) -> Option
 }
 
 fn try_save_to_disk_cache(
+    cache_dir: &Path,
     path: &Path,
     target_w: u32,
     target_h: u32,
@@ -1774,7 +1805,7 @@ fn try_save_to_disk_cache(
     static CACHE_PRUNED: OnceLock<()> = OnceLock::new();
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    let cache_path = get_cache_file_path(path, target_w, target_h)?;
+    let cache_path = get_cache_file_path(cache_dir, path, target_w, target_h)?;
     let parent = cache_path.parent()?;
     fs::create_dir_all(parent).ok()?;
     CACHE_PRUNED.get_or_init(|| prune_disk_cache(parent, 512 * 1024 * 1024));
@@ -1861,7 +1892,7 @@ mod tests {
     use image::metadata::Orientation;
     use image::{DynamicImage, ImageDecoder, ImageEncoder, Rgb, RgbImage};
     use std::fs;
-    use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[cfg(feature = "turbo")]
     #[test]
@@ -1869,14 +1900,11 @@ mod tests {
         // A file with the JPEG SOI magic but no valid frame: both libjpeg-turbo
         // and the pure-Rust fallback reject it. The error must mention both so a
         // turbo-only diagnosis is not silently lost.
-        let path = std::env::temp_dir().join(format!(
-            "viewr-synthetic-corrupt-{}.jpg",
-            std::process::id()
-        ));
+        let dir = test_dir();
+        let path = dir.path().join("corrupt.jpg");
         fs::write(&path, [0xFF, 0xD8, 0xFF, 0xD9]).unwrap();
         let err = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap_err();
         let message = err.to_string();
-        fs::remove_file(&path).unwrap();
         assert!(message.contains("libjpeg-turbo:"), "message: {message}");
         assert!(message.contains("image:"), "message: {message}");
     }
@@ -1890,14 +1918,9 @@ mod tests {
         0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    /// Give each test its own directory below the temp directory.
-    fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("viewr-{name}-{}", std::process::id()));
-        if dir.exists() {
-            fs::remove_dir_all(&dir).unwrap();
-        }
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Give each test its own temp directory; it goes away with the `TempDir`.
+    fn test_dir() -> TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     /// A 32x16 image: the left half is red, the right half is blue.
@@ -1923,8 +1946,8 @@ mod tests {
 
     #[test]
     fn webp_with_exif_orientation_6_decodes_upright() {
-        let dir = test_dir("synthetic-webp-orientation");
-        let path = dir.join("rotated.webp");
+        let dir = test_dir();
+        let path = dir.path().join("rotated.webp");
         let file = fs::File::create(&path).unwrap();
         let mut encoder = image::codecs::webp::WebPEncoder::new_lossless(file);
         encoder
@@ -1935,14 +1958,13 @@ mod tests {
             .write_image(stored.as_raw(), 32, 16, image::ExtendedColorType::Rgb8)
             .unwrap();
         let decoded = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap();
-        fs::remove_dir_all(&dir).unwrap();
         assert_upright(&decoded);
     }
 
     #[test]
     fn jpeg_with_exif_orientation_6_decodes_upright() {
-        let dir = test_dir("synthetic-jpeg-orientation");
-        let path = dir.join("rotated.jpg");
+        let dir = test_dir();
+        let path = dir.path().join("rotated.jpg");
         let file = fs::File::create(&path).unwrap();
         let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 95);
         encoder
@@ -1954,7 +1976,6 @@ mod tests {
             .unwrap();
         let decoded = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap();
         let scaled = decode_image_with_hint(&path, Some((8, 8)), EmbeddedThumbnail::Deny).unwrap();
-        fs::remove_dir_all(&dir).unwrap();
         assert_upright(&decoded);
         assert!(
             scaled.height() > scaled.width(),
@@ -1976,7 +1997,6 @@ mod tests {
             Channel, ColorSpace, CompressionFormat, EncoderQuality, EncodingOptions, HeifContext,
             Image, ImageOrientation, LibHeif, RgbChroma,
         };
-        use std::fs;
         use std::path::Path;
 
         fn solid_image(width: u32, height: u32, rgb: [u8; 3]) -> Image {
@@ -2076,8 +2096,8 @@ mod tests {
 
         #[test]
         fn avif_opens_through_libheif() {
-            let dir = test_dir("synthetic-avif");
-            let path = dir.join("red.avif");
+            let dir = test_dir();
+            let path = dir.path().join("red.avif");
             write_heif(
                 &path,
                 CompressionFormat::Av1,
@@ -2088,7 +2108,6 @@ mod tests {
             let thumb =
                 decode_image_with_hint(&path, Some((64, 64)), EmbeddedThumbnail::Deny).unwrap();
             let dims = libheif_dimensions(&path);
-            fs::remove_dir_all(&dir).unwrap();
 
             assert_eq!(full.dimensions(), (256, 128));
             assert_close(center(&full), RED);
@@ -2098,8 +2117,8 @@ mod tests {
 
         #[test]
         fn heic_grid_uses_a_large_enough_thumbnail_with_its_rotation() {
-            let dir = test_dir("synthetic-heic-thumbnail");
-            let path = dir.join("rotated.heic");
+            let dir = test_dir();
+            let path = dir.path().join("rotated.heic");
             let rotation = ImageOrientation::Rotate90Cw;
             write_heif(&path, CompressionFormat::Hevc, rotation, Some(rotation));
             let decode =
@@ -2109,7 +2128,6 @@ mod tests {
             let wide = decode(Some((64, 64)), EmbeddedThumbnail::Allow);
             let large = decode(Some((100, 100)), EmbeddedThumbnail::Allow);
             let fullscreen = decode(Some((32, 32)), EmbeddedThumbnail::Deny);
-            fs::remove_dir_all(&dir).unwrap();
 
             assert_eq!(full.dimensions(), (128, 256));
             assert_close(center(&full), RED);
@@ -2129,8 +2147,8 @@ mod tests {
 
         #[test]
         fn heic_thumbnail_without_the_rotation_is_not_used() {
-            let dir = test_dir("synthetic-heic-unrotated-thumbnail");
-            let path = dir.join("rotated.heic");
+            let dir = test_dir();
+            let path = dir.path().join("rotated.heic");
             write_heif(
                 &path,
                 CompressionFormat::Hevc,
@@ -2139,7 +2157,6 @@ mod tests {
             );
             let small =
                 decode_image_with_hint(&path, Some((32, 32)), EmbeddedThumbnail::Allow).unwrap();
-            fs::remove_dir_all(&dir).unwrap();
 
             assert_eq!(small.dimensions(), (16, 32));
             assert_close(center(&small), RED);
@@ -2387,18 +2404,1077 @@ mod tests {
 
     #[test]
     fn cache_key_changes_with_dimensions_and_source_size() {
-        let source = std::env::temp_dir().join(format!(
-            "viewr-synthetic-cache-source-{}.png",
-            std::process::id()
-        ));
+        let dir = test_dir();
+        let cache = dir.path().join("cache");
+        let source = dir.path().join("source.png");
         fs::write(&source, b"synthetic-a").unwrap();
-        let first = get_cache_file_path(&source, 100, 100).unwrap();
-        let resized = get_cache_file_path(&source, 200, 100).unwrap();
+        let first = get_cache_file_path(&cache, &source, 100, 100).unwrap();
+        let resized = get_cache_file_path(&cache, &source, 200, 100).unwrap();
         fs::write(&source, b"synthetic-content-b").unwrap();
-        let changed = get_cache_file_path(&source, 100, 100).unwrap();
-        fs::remove_file(source).unwrap();
+        let changed = get_cache_file_path(&cache, &source, 100, 100).unwrap();
 
+        assert_eq!(first.parent(), Some(cache.as_path()));
         assert_ne!(first, resized);
         assert_ne!(first, changed);
+    }
+
+    /// Tests of the view state in `App`: slideshow, zoom, selection, delete, scan and caches.
+    mod state {
+        use super::test_dir;
+        use crate::app::{
+            App, EmbeddedThumbnail, PendingDelete, Slideshow, ViewMode, get_cache_file_path,
+            load_and_resize, prune_disk_cache, resize_decoded, try_load_from_disk_cache,
+            try_save_to_disk_cache,
+        };
+        use crate::image_list::SharedImageList;
+        use crate::theme::{NamedTheme, Theme};
+        use image::{DynamicImage, RgbaImage};
+        use ratatui::layout::Rect;
+        use ratatui::style::Color;
+        use std::fs;
+        use std::path::{Path, PathBuf};
+        use std::thread;
+        use std::time::{Duration, Instant, SystemTime};
+
+        fn app() -> App {
+            App::new(Theme::fallback(), (8, 16), SharedImageList::new())
+        }
+
+        /// An app with the synthetic paths `names` in the list and the grid. The files do not exist.
+        fn app_with(names: &[&str]) -> App {
+            let mut app = app();
+            app.images = names.iter().map(PathBuf::from).collect();
+            app.filenames = names.iter().map(|name| (*name).to_owned()).collect();
+            app.gallery.filtered_indices = (0..names.len()).collect();
+            app
+        }
+
+        /// An app with real PNG files `names` in `dir`.
+        fn app_with_files(dir: &Path, names: &[&str]) -> App {
+            let mut app = app();
+            for name in names {
+                let path = dir.join(name);
+                RgbaImage::new(8, 8).save(&path).unwrap();
+                app.images.push(path);
+                app.filenames.push((*name).to_owned());
+            }
+            app.gallery.filtered_indices = (0..names.len()).collect();
+            app
+        }
+
+        /// Poll `done` every 10 ms for at most 2 s, so background work cannot hang a test.
+        fn wait_until(mut done: impl FnMut() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !done() {
+                assert!(Instant::now() < deadline, "background work did not finish");
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        fn overdue() -> Instant {
+            Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .unwrap()
+        }
+
+        fn named(name: &str, accent: Color) -> NamedTheme {
+            let mut theme = Theme::fallback();
+            theme.title = theme.title.fg(accent);
+            NamedTheme {
+                name: name.to_owned(),
+                path: None,
+                theme,
+            }
+        }
+
+        #[test]
+        fn theme_picker_previews_confirms_and_cancels() {
+            let mut app = app();
+            app.install_themes(Vec::new(), 3);
+            assert_eq!(app.themes.len(), 1);
+
+            let themes = vec![named("one", Color::Red), named("two", Color::Blue)];
+            app.install_themes(themes, 7);
+            assert_eq!(app.theme_index, 1);
+            assert_eq!(app.theme.title.fg, Some(Color::Blue));
+
+            // Without an open picker, a selection does nothing.
+            app.theme_picker_select(0);
+            assert_eq!(app.theme_index, 1);
+            app.theme_picker_cancel();
+            assert_eq!(app.theme_index, 1);
+
+            app.open_theme_picker();
+            app.theme_picker_select(5);
+            assert_eq!(app.theme_index, 1);
+            app.theme_picker_select(0);
+            assert_eq!(app.theme.title.fg, Some(Color::Red));
+            app.theme_picker_cancel();
+            assert!(app.theme_picker.is_none());
+            assert_eq!(app.theme_index, 1);
+            assert_eq!(app.theme.title.fg, Some(Color::Blue));
+
+            app.open_theme_picker();
+            app.theme_picker_select(0);
+            app.theme_picker_confirm();
+            assert!(app.theme_picker.is_none());
+            assert_eq!(app.theme_index, 0);
+        }
+
+        #[test]
+        fn info_path_follows_the_view_and_info_is_cached() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+            app.toggle_info();
+            assert!(app.info_visible);
+            app.toggle_info();
+            assert!(!app.info_visible);
+
+            app.gallery.cursor = 1;
+            assert_eq!(app.info_path(), Some(app.images[1].clone()));
+            app.mode = ViewMode::Fullscreen;
+            app.current = 0;
+            assert_eq!(app.info_path(), Some(app.images[0].clone()));
+            app.mode = ViewMode::Picker;
+            assert_eq!(app.info_path(), None);
+
+            let path = app.images[0].clone();
+            let first = app.info_for(&path);
+            fs::remove_file(&path).unwrap();
+            // The cache answers, so the removed file still has its first rows.
+            assert_eq!(app.info_for(&path).rows, first.rows);
+        }
+
+        #[test]
+        fn thumb_zoom_writes_and_reset_clears_the_state_file() {
+            let dir = test_dir();
+            let mut app = app_with(&["a.png"]);
+            app.state_file = dir.path().join("state/state.toml");
+            let start = (app.gallery.thumb_cols, app.gallery.thumb_rows);
+
+            app.thumb_zoom_in();
+            assert!(app.gallery.thumb_cols > start.0);
+            assert!(app.graphics_storage_dirty);
+            let saved = fs::read_to_string(&app.state_file).unwrap();
+            assert!(
+                saved.contains(&format!("thumb_cols = {}", app.gallery.thumb_cols)),
+                "{saved}"
+            );
+
+            app.thumb_zoom_out();
+            app.thumb_zoom_out();
+            assert!(app.gallery.thumb_cols < start.0);
+
+            app.thumb_zoom_reset();
+            assert_eq!((app.gallery.thumb_cols, app.gallery.thumb_rows), start);
+            assert!(!app.state_file.exists());
+
+            // A reset at the default size only removes the state file.
+            app.thumb_zoom_reset();
+            assert!(!app.state_file.exists());
+        }
+
+        #[test]
+        fn thumb_zoom_stops_at_the_limits() {
+            let dir = test_dir();
+            let mut app = app_with(&["a.png"]);
+            app.state_file = dir.path().join("state.toml");
+            for _ in 0..40 {
+                app.thumb_zoom_out();
+            }
+            let smallest = app.gallery.thumb_cols;
+            fs::remove_file(&app.state_file).unwrap();
+            app.thumb_zoom_out();
+            assert_eq!(app.gallery.thumb_cols, smallest);
+            assert!(!app.state_file.exists(), "no change, no write");
+        }
+
+        #[test]
+        fn slideshow_starts_pauses_and_stops() {
+            let mut app = app();
+            app.start_slideshow();
+            assert!(!app.slideshow_running(), "no images, no slideshow");
+            app.toggle_slideshow();
+            assert!(!app.slideshow_running());
+
+            let mut app = app_with(&["a.png", "b.png"]);
+            app.toggle_slideshow();
+            assert!(app.slideshow_running());
+            assert!(app.slideshow_timeout().unwrap() <= app.slideshow_interval);
+
+            app.slideshow_toggle_pause();
+            assert!(app.slideshow.as_ref().unwrap().paused);
+            assert_eq!(app.slideshow_timeout(), None);
+            app.slideshow_toggle_pause();
+            assert!(!app.slideshow.as_ref().unwrap().paused);
+            assert!(app.slideshow_timeout().is_some());
+
+            app.slideshow.as_mut().unwrap().next_at = overdue();
+            app.slideshow_touch();
+            assert!(app.slideshow_timeout().unwrap() > Duration::from_secs(1));
+
+            app.slideshow_adjust_interval(2.0);
+            assert_eq!(
+                app.slideshow.as_ref().unwrap().interval,
+                Duration::from_secs(4)
+            );
+            assert_eq!(app.slideshow_interval, Duration::from_secs(4));
+
+            app.toggle_slideshow();
+            assert!(!app.slideshow_running());
+            app.needs_render = false;
+            app.stop_slideshow();
+            assert!(!app.needs_render, "a second stop changes nothing");
+
+            // Without a slideshow, pause and touch do nothing.
+            app.slideshow_toggle_pause();
+            app.slideshow_touch();
+            assert_eq!(app.slideshow_timeout(), None);
+        }
+
+        #[test]
+        fn slideshow_tick_waits_for_its_turn() {
+            let mut app = app_with(&["a.png", "b.png"]);
+            app.slideshow_tick();
+            assert_eq!(app.current, 0, "no slideshow");
+
+            app.loaded = Some(RgbaImage::new(1, 1));
+            app.start_slideshow();
+            app.slideshow.as_mut().unwrap().next_at = overdue();
+            app.slideshow_tick();
+            assert_eq!(app.current, 0, "the gallery does not advance");
+
+            app.mode = ViewMode::Fullscreen;
+            app.slideshow_toggle_pause();
+            app.slideshow.as_mut().unwrap().next_at = overdue();
+            app.slideshow_tick();
+            assert_eq!(app.current, 0, "a paused show does not advance");
+
+            app.slideshow_toggle_pause();
+            app.slideshow_tick();
+            assert_eq!(app.current, 0, "the interval did not elapse");
+
+            app.slideshow.as_mut().unwrap().next_at = overdue();
+            app.slideshow_tick();
+            assert_eq!(app.current, 1);
+            assert!(app.slideshow_timeout().unwrap() > Duration::from_secs(1));
+        }
+
+        #[test]
+        fn autostart_waits_for_the_scan_and_opens_the_first_image() {
+            let mut app = app_with(&["a.png", "b.png"]);
+            app.slideshow_autostart = true;
+            app.maybe_autostart_slideshow();
+            assert!(!app.slideshow_running(), "the scan is still running");
+
+            app.scan_complete = true;
+            app.gallery.cursor = 1;
+            app.maybe_autostart_slideshow();
+            assert!(!app.slideshow_autostart);
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 0);
+            assert!(app.slideshow_running());
+
+            let mut empty = app_with(&[]);
+            empty.slideshow_autostart = true;
+            empty.scan_complete = true;
+            empty.maybe_autostart_slideshow();
+            assert!(!empty.slideshow_autostart);
+            assert!(!empty.slideshow_running());
+        }
+
+        #[test]
+        fn zoom_and_pan_stay_inside_the_limits() {
+            let mut app = app_with(&["a.png"]);
+            app.mode = ViewMode::Fullscreen;
+            app.reset_zoom();
+            app.pan(1.0, 1.0);
+            assert_eq!((app.pan_x, app.pan_y), (0.0, 0.0), "no pan at fit size");
+
+            app.zoom_out();
+            assert_eq!(app.zoom, 1.0);
+            app.zoom_in();
+            assert_eq!(app.zoom, 1.25);
+            assert!(app.zoom_dirty);
+            for _ in 0..30 {
+                app.zoom_in();
+            }
+            assert_eq!(app.zoom, 16.0);
+            app.needs_render = false;
+            app.zoom_in();
+            assert!(!app.needs_render, "the maximum stops the zoom");
+
+            app.pan_x = 0.5;
+            app.pan_y = 0.5;
+            app.pan(-1.0, 1.0);
+            assert!(app.pan_x < 0.5 && app.pan_y > 0.5);
+            for _ in 0..200 {
+                app.pan(-1.0, 1.0);
+            }
+            assert_eq!((app.pan_x, app.pan_y), (0.0, 1.0));
+
+            app.zoom_out();
+            assert_eq!(app.zoom, 12.8);
+            app.reset_zoom();
+            assert_eq!(app.zoom, 1.0);
+            assert_eq!((app.pan_x, app.pan_y), (0.5, 0.5));
+        }
+
+        #[test]
+        fn zoom_view_follows_the_pan_point() {
+            let mut app = app();
+            app.cell_px = (1, 1);
+            app.image_rect = Rect::new(0, 0, 10, 10);
+            // The left half is black, the right half is white.
+            let source = RgbaImage::from_fn(40, 40, |x, _| {
+                image::Rgba(if x < 20 { [0, 0, 0, 255] } else { [255; 4] })
+            });
+            app.source = Some(DynamicImage::ImageRgba8(source));
+            app.zoom = 4.0;
+            app.pan_x = 0.0;
+            let left = app.build_zoom_view().unwrap();
+            app.pan_x = 1.0;
+            let right = app.build_zoom_view().unwrap();
+            assert_eq!(left.dimensions(), (10, 10));
+            assert_eq!(left.get_pixel(5, 5).0, [0, 0, 0, 255]);
+            assert_eq!(right.get_pixel(5, 5).0, [255; 4]);
+
+            app.source = Some(DynamicImage::new_rgba8(0, 0));
+            assert!(app.build_zoom_view().is_none());
+            app.source = None;
+            assert!(app.build_zoom_view().is_none());
+        }
+
+        #[test]
+        fn fullscreen_decode_arrives_and_stale_results_are_dropped() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+            app.image_rect = Rect::new(0, 0, 4, 4);
+            app.enter_fullscreen_selected();
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert!(!app.poll_fullscreen(), "nothing requested yet");
+
+            app.load_if_needed();
+            wait_until(|| app.poll_fullscreen());
+            assert!(app.loaded.is_some());
+            assert!(app.error.is_none());
+
+            // Loaded for this rect: nothing to do.
+            app.load_if_needed();
+            assert!(app.fullscreen_target.is_none());
+
+            // A result for an image that is no longer current is dropped.
+            app.loaded = None;
+            app.load_if_needed();
+            // The same request is in flight, so a second call starts nothing new.
+            app.load_if_needed();
+            app.current = 1;
+            wait_until(|| app.poll_fullscreen());
+            assert!(app.loaded.is_none());
+        }
+
+        #[test]
+        fn a_broken_file_reports_the_decode_error() {
+            let dir = test_dir();
+            let path = dir.path().join("broken.png");
+            fs::write(&path, b"not a png").unwrap();
+            let mut app = app_with(&[path.to_str().unwrap()]);
+            app.image_rect = Rect::new(0, 0, 4, 4);
+            app.enter_fullscreen_at(0);
+            app.load_if_needed();
+            wait_until(|| app.poll_fullscreen());
+            assert!(app.loaded.is_none());
+            assert!(app.error.is_some());
+
+            app.enter_fullscreen_at(9);
+            assert_eq!(app.current, 0, "an index past the end is ignored");
+        }
+
+        #[test]
+        fn zoom_decodes_the_source_and_then_crops_it() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+            app.image_rect = Rect::new(0, 0, 2, 2);
+            app.enter_fullscreen_at(0);
+            app.loaded = Some(RgbaImage::new(1, 1));
+            app.zoom_in();
+            assert!(!app.poll_source(), "nothing requested yet");
+
+            app.load_if_needed();
+            assert_eq!(app.source_target, Some(0));
+            assert_eq!(
+                app.loaded.as_ref().unwrap().dimensions(),
+                (1, 1),
+                "keeps the fit image"
+            );
+            wait_until(|| app.poll_source());
+            assert_eq!(app.source_for, Some(0));
+            assert!(app.zoom_dirty);
+
+            app.load_if_needed();
+            assert!(!app.zoom_dirty);
+            // The 8x8 source at zoom 1.25 fills 10x10 of the 16x32 viewport.
+            assert_eq!(app.loaded.as_ref().unwrap().dimensions(), (10, 10));
+
+            // A source that arrives for an old image is dropped.
+            app.source_for = None;
+            app.source = None;
+            app.load_if_needed();
+            app.current = 1;
+            wait_until(|| app.poll_source());
+            assert!(app.source.is_none());
+
+            // Zoom without a fit image: request the source and decode the fit image too.
+            app.loaded = None;
+            app.load_if_needed();
+            assert_eq!(app.source_target, Some(1));
+            assert!(app.fullscreen_target.is_some());
+        }
+
+        #[test]
+        fn selection_marks_and_clears() {
+            let mut app = app_with(&["a.png", "b.png", "c.png"]);
+            app.toggle_selection_at_cursor();
+            assert!(app.is_marked(0));
+            app.toggle_selection_at_cursor();
+            assert!(!app.is_marked(0));
+            assert!(!app.is_marked(99));
+
+            app.gallery.filtered_indices = vec![0, 2];
+            app.select_all_filtered();
+            assert!(app.is_marked(0) && !app.is_marked(1) && app.is_marked(2));
+            app.clear_selection();
+            assert!(app.selection.is_empty());
+
+            app.gallery.filtered_indices.clear();
+            app.toggle_selection_at_cursor();
+            assert!(app.selection.is_empty());
+        }
+
+        #[test]
+        fn begin_delete_picks_the_paths_of_the_view() {
+            let mut app = app_with(&[]);
+            app.begin_delete(false);
+            assert!(
+                app.pending_delete.is_none(),
+                "an empty grid deletes nothing"
+            );
+
+            let mut app = app_with(&["a.png", "b.png", "c.png"]);
+            app.gallery.cursor = 1;
+            app.delete_error = Some("old".to_owned());
+            app.begin_delete(false);
+            let pending = app.pending_delete.take().unwrap();
+            assert_eq!(pending.paths, vec![PathBuf::from("b.png")]);
+            assert!(!pending.from_fullscreen && !pending.permanent);
+            assert!(app.delete_error.is_none());
+
+            // Marked files go in grid order.
+            app.selection.insert(PathBuf::from("c.png"));
+            app.selection.insert(PathBuf::from("a.png"));
+            app.begin_delete(true);
+            let pending = app.pending_delete.take().unwrap();
+            assert_eq!(
+                pending.paths,
+                vec![PathBuf::from("a.png"), PathBuf::from("c.png")]
+            );
+            assert!(pending.permanent);
+
+            // Marked files outside the filter still go.
+            app.gallery.filtered_indices = vec![1];
+            app.selection.remove(Path::new("a.png"));
+            app.begin_delete(false);
+            assert_eq!(
+                app.pending_delete.take().unwrap().paths,
+                vec![PathBuf::from("c.png")]
+            );
+
+            app.mode = ViewMode::Fullscreen;
+            app.current = 2;
+            app.begin_delete(false);
+            let pending = app.pending_delete.take().unwrap();
+            assert_eq!(pending.paths, vec![PathBuf::from("c.png")]);
+            assert!(pending.from_fullscreen);
+
+            app.current = 7;
+            app.begin_delete(false);
+            assert!(app.pending_delete.is_none());
+
+            app.current = 0;
+            app.begin_delete(false);
+            app.cancel_delete();
+            assert!(app.pending_delete.is_none());
+        }
+
+        #[test]
+        fn confirm_delete_removes_files_from_the_grid() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png", "b.png", "c.png"]);
+            app.confirm_delete();
+            assert_eq!(app.images.len(), 3, "nothing pending");
+
+            let removed = app.images[2].clone();
+            app.info_for(&removed);
+            app.gallery.cursor = 2;
+            app.current = 2;
+            app.selection.insert(removed.clone());
+            app.begin_delete(true);
+            app.confirm_delete();
+
+            assert!(!removed.exists());
+            assert_eq!(app.filenames, ["a.png", "b.png"]);
+            assert_eq!(app.gallery.filtered_indices, vec![0, 1]);
+            // No cursor assertion: the cursor goes back to the first image (TODO.md decides).
+            assert_eq!(app.current, 1);
+            assert!(app.selection.is_empty());
+            assert!(app.delete_error.is_none());
+            assert!(app.graphics_storage_dirty);
+            assert_eq!(app.shared_list.len(), 2);
+            assert_eq!(app.known_len, 2);
+        }
+
+        #[test]
+        fn confirm_delete_reports_the_files_that_stay() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+            let missing = dir.path().join("gone.png");
+            app.pending_delete = Some(PendingDelete {
+                paths: vec![missing.clone()],
+                from_fullscreen: false,
+                permanent: true,
+            });
+            app.confirm_delete();
+            let error = app.delete_error.clone().unwrap();
+            assert!(error.contains("gone.png"), "{error}");
+            assert_eq!(app.images.len(), 2);
+
+            // The trash route fails for a missing file before it asks the system.
+            app.pending_delete = Some(PendingDelete {
+                paths: vec![missing.clone()],
+                from_fullscreen: false,
+                permanent: false,
+            });
+            app.confirm_delete();
+            assert!(app.delete_error.as_ref().unwrap().contains("gone.png"));
+
+            // One file goes, the other one reports its error.
+            let first = app.images[0].clone();
+            app.pending_delete = Some(PendingDelete {
+                paths: vec![first.clone(), missing],
+                from_fullscreen: false,
+                permanent: true,
+            });
+            app.confirm_delete();
+            assert!(!first.exists());
+            assert_eq!(app.filenames, ["b.png"]);
+            assert!(app.delete_error.as_ref().unwrap().contains("gone.png"));
+        }
+
+        #[test]
+        fn confirm_delete_in_fullscreen_moves_on_and_ends_in_the_gallery() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+            app.enter_fullscreen_at(0);
+            app.start_slideshow();
+            app.begin_delete(true);
+            app.confirm_delete();
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.filenames, ["b.png"]);
+            assert_eq!(app.current, 0);
+
+            app.begin_delete(true);
+            app.confirm_delete();
+            assert!(app.images.is_empty());
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert!(!app.slideshow_running());
+            assert_eq!(app.current, 0);
+        }
+
+        #[test]
+        fn confirm_delete_in_the_grid_keeps_the_current_index_valid() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png"]);
+            app.begin_delete(true);
+            app.confirm_delete();
+            assert!(app.images.is_empty());
+            assert_eq!(app.current, 0);
+            assert_eq!(app.mode, ViewMode::Gallery);
+        }
+
+        #[test]
+        fn confirm_delete_keeps_an_active_filter() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["apple.png", "berry.png", "apricot.png"]);
+            app.gallery.search_query = "ap".to_owned();
+            app.gallery.filtered_indices = vec![0, 2];
+            app.gallery.cursor = 1;
+            app.begin_delete(true);
+            app.confirm_delete();
+            assert_eq!(app.filenames, ["apple.png", "berry.png"]);
+            wait_until(|| {
+                app.poll_filter();
+                app.filter_rx.is_none()
+            });
+            assert_eq!(app.gallery.filtered_indices, vec![0]);
+        }
+
+        #[test]
+        fn scanner_results_extend_the_list_and_sort_at_the_end() {
+            let list = SharedImageList::new();
+            let mut app = App::new(Theme::fallback(), (8, 16), list.clone());
+            assert!(app.is_scanning());
+
+            list.push_error("synthetic: denied".to_owned());
+            list.push_error("other: denied".to_owned());
+            list.push_batch(vec![PathBuf::from("/x/b.png"), PathBuf::from("/x/C.png")]);
+            app.refresh_from_scanner();
+            assert_eq!(
+                app.error.as_deref(),
+                Some("synthetic: denied; other: denied")
+            );
+            assert_eq!(app.gallery.filtered_indices, vec![0, 1]);
+
+            list.push_batch(vec![PathBuf::from("/x/a.png")]);
+            app.needs_render = false;
+            app.refresh_from_scanner();
+            assert_eq!(app.images.len(), 3);
+            assert!(!app.needs_render, "only the first batch forces a redraw");
+
+            // Hover and show C.png, then let the scan end: the order sorts, both stay on C.png.
+            app.gallery.cursor = 1;
+            app.current = 1;
+            list.mark_complete();
+            app.refresh_from_scanner();
+            assert!(!app.is_scanning());
+            assert_eq!(app.filenames, ["a.png", "b.png", "C.png"]);
+            assert_eq!(app.gallery.cursor, 2);
+            assert_eq!(app.current, 2);
+            assert_eq!(app.current_path(), Path::new("/x/C.png"));
+            assert!(app.graphics_storage_dirty);
+            let (paths, _) = list.drain_since(0);
+            assert_eq!(paths, app.images);
+        }
+
+        #[test]
+        fn a_single_scanned_image_opens_in_fullscreen() {
+            let list = SharedImageList::new();
+            let mut app = App::new(Theme::fallback(), (8, 16), list.clone());
+            list.push_batch(vec![PathBuf::from("/x/only.png")]);
+            list.mark_complete();
+            app.refresh_from_scanner();
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            // A second refresh after the end changes nothing.
+            app.refresh_from_scanner();
+            assert_eq!(app.images.len(), 1);
+        }
+
+        #[test]
+        fn scanner_results_respect_an_active_filter() {
+            let list = SharedImageList::new();
+            let mut app = App::new(Theme::fallback(), (8, 16), list.clone());
+            app.gallery.search_query = "be".to_owned();
+            list.push_batch(vec![
+                PathBuf::from("/x/zebra.png"),
+                PathBuf::from("/x/berry.png"),
+            ]);
+            app.refresh_from_scanner();
+            wait_until(|| {
+                app.poll_filter();
+                app.filter_rx.is_none()
+            });
+            assert!(app.gallery.filtered_indices.contains(&1));
+            assert!(!app.gallery.filtered_indices.contains(&0));
+
+            list.mark_complete();
+            app.refresh_from_scanner();
+            assert_eq!(app.filenames, ["berry.png", "zebra.png"]);
+            wait_until(|| {
+                app.poll_filter();
+                app.filter_rx.is_none()
+            });
+            assert_eq!(app.gallery.filtered_indices, vec![0]);
+        }
+
+        #[test]
+        fn update_filter_runs_in_the_background_and_an_empty_query_resets() {
+            let mut app = app_with(&["apple.png", "berry.png", "cherry.png"]);
+            app.poll_filter();
+            app.gallery.search_query = "rry".to_owned();
+            app.gallery.cursor = 1;
+            app.update_filter();
+            wait_until(|| {
+                app.poll_filter();
+                app.filter_rx.is_none()
+            });
+            let mut found = app.gallery.filtered_indices.clone();
+            found.sort_unstable();
+            assert_eq!(found, vec![1, 2]);
+            assert_eq!(app.gallery.cursor, 0);
+
+            app.gallery.search_query.clear();
+            app.update_filter();
+            assert_eq!(app.gallery.filtered_indices, vec![0, 1, 2]);
+            assert!(app.filter_rx.is_none());
+        }
+
+        #[test]
+        fn picker_opens_at_the_known_directory_and_switches() {
+            let dir = test_dir();
+            let root = fs::canonicalize(dir.path()).unwrap();
+            let photos = root.join("photos");
+            fs::create_dir(&photos).unwrap();
+            RgbaImage::new(4, 4).save(photos.join("b.png")).unwrap();
+            RgbaImage::new(4, 4).save(photos.join("a.png")).unwrap();
+
+            let mut app = app_with(&["/nowhere/x.png"]);
+            app.initial_dir = Some(root.clone());
+            app.open_picker();
+            assert_eq!(app.mode, ViewMode::Picker);
+            assert_eq!(app.current_dir.as_deref(), Some(root.as_path()));
+            app.close_picker();
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert!(app.picker.is_none());
+
+            app.open_picker();
+            app.selection.insert(PathBuf::from("/nowhere/x.png"));
+            app.gallery.search_query = "x".to_owned();
+            app.switch_to_dir(&photos);
+            assert_eq!(app.current_dir.as_deref(), Some(photos.as_path()));
+            assert_eq!(app.picker.as_ref().unwrap().current_dir, photos);
+            assert!(app.images.is_empty());
+            assert!(app.selection.is_empty());
+            assert!(app.gallery.search_query.is_empty());
+
+            wait_until(|| {
+                app.refresh_from_scanner();
+                !app.is_scanning()
+            });
+            assert_eq!(app.filenames, ["a.png", "b.png"]);
+
+            // Without a known directory, the picker starts at the folder of the first image.
+            let mut app = app_with(&[photos.join("a.png").to_str().unwrap()]);
+            app.open_picker();
+            assert_eq!(app.current_dir.as_deref(), Some(photos.as_path()));
+        }
+
+        #[test]
+        fn navigation_moves_inside_the_list() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png", "b.png", "c.png"]);
+            app.enter_fullscreen_at(0);
+            app.prev();
+            assert_eq!(app.current, 0);
+            app.first();
+            assert_eq!(app.current, 0);
+            app.next();
+            assert_eq!(app.current, 1);
+            assert!(app.fullscreen_target.is_some(), "the move starts a decode");
+            app.last();
+            assert_eq!(app.current, 2);
+            app.next();
+            assert_eq!(app.current, 2);
+            app.last();
+            app.prev();
+            assert_eq!(app.current, 1);
+            app.first();
+            assert_eq!(app.current, 0);
+
+            // A prefetched neighbor shows at once.
+            app.prefetcher
+                .set_target_hint(Rect::new(0, 0, 1, 1), (8, 16));
+            app.prefetcher.kick(0, &app.images);
+            wait_until(|| {
+                app.prefetcher.poll();
+                app.prefetcher.pending_count() == 0
+            });
+            app.next();
+            assert!(app.loaded.is_some());
+            assert!(app.fullscreen_target.is_none());
+
+            app.start_slideshow();
+            app.enter_gallery();
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert!(!app.slideshow_running());
+            assert!(app.loaded.is_none());
+        }
+
+        #[test]
+        fn load_if_needed_takes_a_prefetched_image() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+            app.image_rect = Rect::new(0, 0, 1, 1);
+            app.enter_fullscreen_at(0);
+            app.gallery.cursor = 1;
+            app.pre_decode_hovered();
+            wait_until(|| {
+                app.prefetcher.poll();
+                app.prefetcher.pending_count() == 0
+            });
+            app.current = 1;
+            app.load_if_needed();
+            assert!(app.loaded.is_some());
+            assert!(app.fullscreen_target.is_none());
+        }
+
+        #[test]
+        fn thumbnails_decode_once_and_come_back_from_the_disk_cache() {
+            let dir = test_dir();
+            let cache = dir.path().join("cache");
+            let mut app = app_with_files(dir.path(), &["a.png"]);
+            app.disk_cache_dir = cache.clone();
+            let rect = Rect::new(0, 0, 1, 1);
+            let path = app.images[0].clone();
+
+            app.spawn_thumb_decode(0, path.clone(), rect);
+            // A second request while the first one runs starts nothing.
+            app.spawn_thumb_decode(0, path.clone(), rect);
+            let mut arrived = Vec::new();
+            wait_until(|| {
+                arrived.extend(app.poll_thumbnails());
+                !arrived.is_empty()
+            });
+            assert_eq!(arrived, vec![0]);
+            assert!(app.thumb_cache.contains(0));
+            let cached = get_cache_file_path(&cache, &path, 8, 16).unwrap();
+            assert!(cached.is_file());
+            app.spawn_thumb_decode(0, path.clone(), rect);
+            assert!(
+                !app.thumb_loading.contains(&0),
+                "a cached thumbnail needs no decode"
+            );
+
+            // A fresh app reads the disk cache.
+            let mut fresh = app_with(&[path.to_str().unwrap()]);
+            fresh.disk_cache_dir = cache;
+            fresh.spawn_thumb_decode(0, path, rect);
+            let mut arrived = Vec::new();
+            wait_until(|| {
+                arrived.extend(fresh.poll_thumbnails());
+                !arrived.is_empty()
+            });
+            assert_eq!(fresh.thumb_cache.peek(0).unwrap().0.dimensions(), (8, 8));
+        }
+
+        #[test]
+        fn thumbnails_of_an_old_generation_are_dropped() {
+            let mut app = app_with(&["a.png", "b.png"]);
+            app.mark_dirty();
+            let current = app.thumb_generation;
+            // A job of the old generation and a job of the current one, in this order.
+            app.thumb_tx
+                .send((current - 1, 0, RgbaImage::new(1, 1)))
+                .unwrap();
+            app.thumb_tx
+                .send((current, 1, RgbaImage::new(1, 1)))
+                .unwrap();
+            app.thumb_loading.insert(0);
+
+            assert_eq!(app.poll_thumbnails(), vec![1]);
+            assert!(!app.thumb_cache.contains(0));
+            assert!(app.thumb_cache.contains(1));
+            assert!(
+                !app.thumb_loading.contains(&0),
+                "a stale result still ends the load"
+            );
+        }
+
+        #[test]
+        fn apps_from_new_never_write_the_real_state_or_cache() {
+            let mut app = app_with(&["a.png"]);
+            assert!(app.state_file.starts_with("/dev/null"));
+            assert!(app.disk_cache_dir.starts_with("/dev/null"));
+            app.thumb_zoom_in();
+            assert!(!app.state_file.exists());
+            app.thumb_zoom_reset();
+        }
+
+        #[test]
+        fn graphics_delete_all_forgets_the_transmitted_ids() {
+            let mut app = app();
+            app.transmitted_image_ids.insert(7);
+            let mut out = Vec::new();
+            app.graphics_delete_all_to(&mut out).unwrap();
+            assert!(!out.is_empty());
+            assert!(app.transmitted_image_ids.is_empty());
+        }
+
+        #[test]
+        fn disk_cache_round_trip_and_broken_entries() {
+            let dir = test_dir();
+            let cache = dir.path().join("cache");
+            let source = dir.path().join("a.png");
+            RgbaImage::new(4, 4).save(&source).unwrap();
+            let thumb = RgbaImage::new(2, 3);
+
+            assert!(get_cache_file_path(&cache, &dir.path().join("missing.png"), 1, 1).is_none());
+            assert!(try_load_from_disk_cache(&cache, &source, 2, 3).is_none());
+            assert_eq!(
+                try_save_to_disk_cache(&cache, &source, 2, 3, &thumb),
+                Some(())
+            );
+            assert_eq!(
+                try_save_to_disk_cache(&cache, &source, 2, 3, &thumb),
+                Some(())
+            );
+            assert_eq!(
+                try_load_from_disk_cache(&cache, &source, 2, 3)
+                    .unwrap()
+                    .dimensions(),
+                (2, 3)
+            );
+
+            let entry = get_cache_file_path(&cache, &source, 2, 3).unwrap();
+            fs::write(&entry, b"not a png").unwrap();
+            assert!(try_load_from_disk_cache(&cache, &source, 2, 3).is_none());
+            assert!(!entry.exists(), "a broken entry goes away");
+
+            // A cache directory that is a file cannot hold entries.
+            let blocked = dir.path().join("blocked");
+            fs::write(&blocked, b"file").unwrap();
+            assert!(try_save_to_disk_cache(&blocked, &source, 2, 3, &thumb).is_none());
+        }
+
+        #[test]
+        fn prune_removes_the_oldest_entries_first() {
+            let dir = test_dir();
+            let cache = dir.path();
+            let base = SystemTime::now() - Duration::from_secs(1000);
+            for (index, name) in ["old.png", "middle.png", "new.png"].iter().enumerate() {
+                let path = cache.join(name);
+                fs::write(&path, [0_u8; 100]).unwrap();
+                let file = fs::File::options().write(true).open(&path).unwrap();
+                file.set_modified(base + Duration::from_secs(index as u64 * 100))
+                    .unwrap();
+            }
+            fs::write(cache.join("notes.txt"), [0_u8; 500]).unwrap();
+            fs::create_dir(cache.join("folder.png")).unwrap();
+
+            prune_disk_cache(cache, 1000);
+            assert!(
+                cache.join("old.png").exists(),
+                "under the limit, nothing goes"
+            );
+
+            prune_disk_cache(cache, 150);
+            assert!(!cache.join("old.png").exists());
+            assert!(!cache.join("middle.png").exists());
+            assert!(cache.join("new.png").exists());
+            assert!(cache.join("notes.txt").exists());
+
+            prune_disk_cache(&cache.join("missing"), 0);
+        }
+
+        #[test]
+        fn load_and_resize_fits_the_cells() {
+            let dir = test_dir();
+            let path = dir.path().join("wide.png");
+            RgbaImage::new(64, 32).save(&path).unwrap();
+            let fitted = load_and_resize(
+                &path,
+                Rect::new(0, 0, 2, 2),
+                (8, 8),
+                EmbeddedThumbnail::Deny,
+            )
+            .unwrap();
+            assert_eq!(fitted.dimensions(), (16, 8));
+            let full =
+                load_and_resize(&path, Rect::default(), (8, 8), EmbeddedThumbnail::Deny).unwrap();
+            assert_eq!(full.dimensions(), (64, 32));
+            assert!(
+                load_and_resize(
+                    &dir.path().join("missing.png"),
+                    Rect::new(0, 0, 1, 1),
+                    (8, 8),
+                    EmbeddedThumbnail::Deny
+                )
+                .is_err()
+            );
+            let image = DynamicImage::new_rgba8(10, 0);
+            assert_eq!(
+                resize_decoded(&image, Rect::new(0, 0, 1, 1), (4, 4)).dimensions(),
+                (10, 0)
+            );
+        }
+
+        #[test]
+        fn slideshow_struct_reports_its_interval() {
+            let show = Slideshow {
+                interval: Duration::from_secs(2),
+                paused: true,
+                next_at: Instant::now(),
+            };
+            let mut app = app_with(&["a.png"]);
+            app.slideshow = Some(show);
+            assert_eq!(app.slideshow_timeout(), None);
+            app.slideshow_adjust_interval(-1.0);
+            assert_eq!(
+                app.slideshow.as_ref().unwrap().interval,
+                Duration::from_millis(1500)
+            );
+        }
+
+        #[cfg(feature = "video")]
+        mod video {
+            use super::{app_with, overdue};
+            use crate::app::{VideoReturn, ViewMode};
+
+            #[test]
+            fn a_video_from_the_grid_returns_to_the_grid() {
+                let mut app = app_with(&["clip.mp4", "b.png"]);
+                app.enter_fullscreen_selected();
+                assert_eq!(app.mode, ViewMode::Video);
+                assert_eq!(app.video_return, VideoReturn::Gallery);
+                app.return_from_video();
+                assert_eq!(app.mode, ViewMode::Gallery);
+            }
+
+            #[test]
+            fn a_video_from_fullscreen_returns_to_its_placeholder() {
+                let mut app = app_with(&["a.png", "clip.mp4"]);
+                app.enter_fullscreen_at(0);
+                app.next();
+                assert_eq!(app.mode, ViewMode::Video);
+                assert_eq!(app.video_return, VideoReturn::Fullscreen);
+
+                app.return_from_video();
+                assert_eq!(app.mode, ViewMode::Fullscreen);
+                assert!(app.shows_video_placeholder());
+
+                // The placeholder needs no decode and no zoom.
+                app.load_if_needed();
+                assert!(app.fullscreen_target.is_none());
+                app.zoom_in();
+                assert_eq!(app.zoom, 1.0);
+
+                app.enter_video(1);
+                assert_eq!(app.video_return, VideoReturn::Fullscreen);
+                app.exit_video();
+                assert_eq!(app.mode, ViewMode::Gallery);
+            }
+
+            #[test]
+            fn a_video_that_does_not_open_shows_its_error() {
+                let mut app = app_with(&["/nowhere/clip.mp4"]);
+                app.enter_fullscreen_at(0);
+                app.open_video_if_needed();
+                assert_eq!(app.mode, ViewMode::Fullscreen);
+                assert!(app.error.is_some());
+                assert!(!app.shows_video_placeholder());
+            }
+
+            #[test]
+            fn the_slideshow_moves_past_a_video_placeholder() {
+                let mut app = app_with(&["clip.mp4", "b.png"]);
+                app.mode = ViewMode::Fullscreen;
+                app.start_slideshow();
+                app.slideshow.as_mut().unwrap().next_at = overdue();
+                app.slideshow_tick();
+                assert_eq!(app.current, 1);
+                assert_eq!(app.mode, ViewMode::Fullscreen);
+                // b.png is not prefetched, so its decode starts.
+                assert!(app.loaded.is_none());
+                assert_eq!(app.fullscreen_target.map(|(index, _)| index), Some(1));
+            }
+        }
     }
 }

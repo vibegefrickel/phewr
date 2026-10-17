@@ -117,10 +117,21 @@ fn flush_batch(list: &SharedImageList, batch: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_supported, scan_dir};
+    use super::{BATCH_SIZE, is_supported, scan_dir, spawn};
     use crate::image_list::SharedImageList;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    /// Wait at most 2 s for the scanner thread, so a hang fails the test.
+    fn wait_for_complete(list: &SharedImageList) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !list.is_complete() {
+            assert!(Instant::now() < deadline, "the scanner did not finish");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     #[test]
     fn supported_extensions_are_case_insensitive() {
@@ -142,6 +153,13 @@ mod tests {
         assert!(!is_supported(Path::new("photo.avif")));
     }
 
+    #[cfg(feature = "video")]
+    #[test]
+    fn video_extensions_are_supported() {
+        assert!(is_supported(Path::new("clip.MP4")));
+        assert!(is_supported(Path::new("clip.webm")));
+    }
+
     #[test]
     fn unsupported_extensions_are_rejected() {
         assert!(!is_supported(Path::new("synthetic.txt")));
@@ -151,15 +169,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn scan_dir_follows_symlinked_files() {
-        let root = std::env::temp_dir().join(format!(
-            "viewr-synthetic-scanner-symlink-{}",
-            std::process::id()
-        ));
-        let source = root.join("source");
-        let gallery = root.join("gallery");
-        if root.exists() {
-            fs::remove_dir_all(&root).unwrap();
-        }
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let gallery = root.path().join("gallery");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&gallery).unwrap();
 
@@ -173,6 +185,105 @@ mod tests {
         scan_dir(&gallery, &list, &mut batch);
 
         assert_eq!(batch, vec![link]);
-        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_dir_reports_a_broken_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let link = root.path().join("gone.png");
+        std::os::unix::fs::symlink(root.path().join("missing.png"), &link).unwrap();
+
+        let list = SharedImageList::new();
+        let mut batch: Vec<PathBuf> = Vec::new();
+        scan_dir(root.path(), &list, &mut batch);
+
+        assert!(batch.is_empty());
+        let errors = list.drain_errors();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("gone.png"), "{errors:?}");
+    }
+
+    #[test]
+    fn scan_dir_skips_subdirectories_and_unsupported_files() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("nested.png")).unwrap();
+        fs::write(root.path().join("notes.txt"), b"synthetic").unwrap();
+        fs::write(root.path().join("photo.jpg"), b"synthetic").unwrap();
+
+        let list = SharedImageList::new();
+        let mut batch: Vec<PathBuf> = Vec::new();
+        scan_dir(root.path(), &list, &mut batch);
+
+        assert_eq!(batch, vec![root.path().join("photo.jpg")]);
+        assert!(list.drain_errors().is_empty());
+    }
+
+    #[test]
+    fn spawn_reports_missing_and_unsupported_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let text = root.path().join("notes.txt");
+        fs::write(&text, b"synthetic").unwrap();
+
+        let list = SharedImageList::new();
+        spawn(vec![text, root.path().join("missing")], list.clone());
+        wait_for_complete(&list);
+
+        assert_eq!(list.len(), 0);
+        let errors = list.drain_errors();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.starts_with("unsupported media format")),
+            "{errors:?}"
+        );
+        assert!(errors[0].contains("notes.txt"), "{errors:?}");
+    }
+
+    #[test]
+    fn scan_dir_reports_a_directory_that_it_cannot_read() {
+        let root = tempfile::tempdir().unwrap();
+        let list = SharedImageList::new();
+        let mut batch: Vec<PathBuf> = Vec::new();
+        scan_dir(&root.path().join("missing"), &list, &mut batch);
+        let errors = list.drain_errors();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("missing"), "{errors:?}");
+    }
+
+    #[test]
+    fn spawn_flushes_full_batches_in_name_order() {
+        let root = tempfile::tempdir().unwrap();
+        let gallery = root.path().join("gallery");
+        fs::create_dir(&gallery).unwrap();
+        let count = BATCH_SIZE + 3;
+        for index in (0..count).rev() {
+            fs::write(gallery.join(format!("img{index:03}.png")), b"synthetic").unwrap();
+        }
+        let files: Vec<PathBuf> = (0..count)
+            .map(|index| root.path().join(format!("direct{index:03}.png")))
+            .collect();
+        for file in &files {
+            fs::write(file, b"synthetic").unwrap();
+        }
+
+        let list = SharedImageList::new();
+        let mut paths = files;
+        paths.push(gallery);
+        spawn(paths, list.clone());
+        wait_for_complete(&list);
+
+        assert_eq!(list.len(), 2 * count);
+        let (all, _) = list.drain_since(0);
+        let names: Vec<String> = all
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // Each batch is sorted by file name. The first batch is a full batch of direct files.
+        let first_batch = &names[..BATCH_SIZE];
+        assert!(first_batch.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(names.iter().any(|name| name == "img000.png"));
+        assert!(list.drain_errors().is_empty());
     }
 }

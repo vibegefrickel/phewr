@@ -365,7 +365,7 @@ fn normalized_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use tempfile::TempDir;
 
     const SHARED_THEME: &str = r##"
 [colors]
@@ -413,38 +413,211 @@ error = "red"
     #[test]
     fn catalog_is_explicit_and_loading_does_not_rewrite_config() {
         let root = test_root();
-        let config_dir = root.join(".config/viewr");
-        let themes_dir = root.join("themes");
-        std::fs::create_dir_all(&config_dir).unwrap();
+        let home = root.path();
+        let themes_dir = home.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         let selected = themes_dir.join("synthetic-theme.toml");
         std::fs::write(&selected, SHARED_THEME).unwrap();
         std::fs::write(themes_dir.join("unlisted.toml"), SHARED_THEME).unwrap();
-        let catalog = root.join("catalog.toml");
+        let catalog = home.join("catalog.toml");
         std::fs::write(&catalog, format!("themes = [\"{}\"]\n", selected.display())).unwrap();
-        let config_path = config_dir.join("config.toml");
         let config = format!(
             "theme = \"{}\"\ntheme_catalog = \"{}\"\n",
             selected.display(),
             catalog.display()
         );
-        std::fs::write(&config_path, &config).unwrap();
+        let config_path = write_config(home, &config);
 
-        let set = load_themes_at(&root, None).unwrap();
+        let set = load_themes_at(home, None).unwrap();
 
         assert_eq!(set.themes.len(), 1);
         assert_eq!(set.themes[0].name, "synthetic theme");
         assert_eq!(set.selected, 0);
         assert_eq!(std::fs::read_to_string(config_path).unwrap(), config);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
-    fn test_root() -> PathBuf {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        std::env::temp_dir().join(format!(
-            "viewr-theme-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ))
+    #[test]
+    fn no_config_falls_back_to_the_built_in_theme() {
+        let root = test_root();
+        let set = load_themes_at(root.path(), None).unwrap();
+        assert_eq!(set.themes.len(), 1);
+        assert_eq!(set.themes[0].name, "tokyo night moon fallback");
+        assert!(set.themes[0].path.is_none());
+        assert_eq!(set.selected, 0);
+        assert_eq!(set.themes[0].theme.title, Theme::default().title);
+    }
+
+    #[test]
+    fn cli_theme_selects_a_catalog_entry_by_normalized_name() {
+        let root = test_root();
+        let home = root.path();
+        write_catalog(
+            home,
+            &[
+                "~/themes/tokyo-night.toml",
+                "~/themes/catppuccin-mocha.toml",
+            ],
+        );
+
+        let set = load_themes_at(home, Some("Tokyo_Night")).unwrap();
+        assert_eq!(set.themes.len(), 2);
+        assert_eq!(set.selected, 0);
+
+        let set = load_themes_at(home, Some("catppuccin")).unwrap();
+        assert_eq!(set.themes[set.selected].name, "catppuccin mocha");
+
+        // Without a theme setting, the first catalog entry wins.
+        let set = load_themes_at(home, None).unwrap();
+        assert_eq!(set.selected, 0);
+    }
+
+    #[test]
+    fn duplicate_and_unreadable_catalog_entries_are_skipped() {
+        let root = test_root();
+        let home = root.path();
+        let catalog = write_catalog(home, &["~/themes/one.toml", "~/themes/one.toml"]);
+        let catalog_text = std::fs::read_to_string(&catalog).unwrap().replace(
+            ']',
+            ", \"~/themes/missing.toml\", \"~/themes/broken.toml\"]",
+        );
+        std::fs::write(&catalog, catalog_text).unwrap();
+        std::fs::write(
+            home.join("themes/broken.toml"),
+            "[colors]\nbg = \"#222436\"\n",
+        )
+        .unwrap();
+
+        let set = load_themes_at(home, None).unwrap();
+        assert_eq!(set.themes.len(), 1);
+        assert_eq!(set.themes[0].name, "one");
+    }
+
+    #[test]
+    fn cli_theme_loads_a_file_outside_the_catalog() {
+        let root = test_root();
+        let home = root.path();
+        write_catalog(home, &["~/themes/listed.toml"]);
+        std::fs::write(home.join("extra-theme.toml"), SHARED_THEME).unwrap();
+
+        let set = load_themes_at(home, Some("~/extra-theme.toml")).unwrap();
+        assert_eq!(set.themes.len(), 2);
+        assert_eq!(set.selected, 1);
+        assert_eq!(set.themes[1].name, "extra theme");
+
+        // A catalog file as the theme selects the entry and loads nothing twice.
+        let set = load_themes_at(home, Some("~/themes/listed.toml")).unwrap();
+        assert_eq!(set.themes.len(), 1);
+        assert_eq!(set.selected, 0);
+    }
+
+    #[test]
+    fn unknown_cli_theme_without_a_catalog_is_an_error() {
+        let root = test_root();
+        let home = root.path();
+
+        let error = load_themes_at(home, Some("nope")).err().unwrap();
+        assert_eq!(
+            error,
+            "theme 'nope' is not a readable file or configured catalog entry"
+        );
+
+        // A broken theme file named on the command line is an error too.
+        let broken = home.join("broken.toml");
+        std::fs::write(&broken, "not toml [").unwrap();
+        assert!(load_themes_at(home, Some(broken.to_str().unwrap())).is_err());
+    }
+
+    #[test]
+    fn unknown_configured_theme_falls_back_to_the_first_entry() {
+        let root = test_root();
+        let home = root.path();
+        write_catalog(home, &["~/themes/alpha.toml"]);
+        let config_path = home.join(".config/viewr/config.toml");
+        let config = std::fs::read_to_string(&config_path).unwrap();
+        std::fs::write(&config_path, format!("theme = \"nope\"\n{config}")).unwrap();
+
+        let set = load_themes_at(home, None).unwrap();
+        assert_eq!(set.selected, 0);
+        assert_eq!(set.themes[0].name, "alpha");
+    }
+
+    #[test]
+    fn missing_or_broken_catalog_gives_no_entries() {
+        let root = test_root();
+        let home = root.path();
+        assert!(load_catalog_paths(&home.join("missing.toml"), home).is_empty());
+        let broken = home.join("broken.toml");
+        std::fs::write(&broken, "themes = 7").unwrap();
+        assert!(load_catalog_paths(&broken, home).is_empty());
+    }
+
+    #[test]
+    fn minimal_theme_fills_the_roles_from_bg_and_fg() {
+        let file = toml::from_str::<ThemeFile>(
+            "[colors]\nbg = \"#101010\"\nfg = \"#f0f0f0\"\n[ui]\naccent = \"#ABCDEF\"\n",
+        )
+        .unwrap();
+        let theme = Theme::from_file(&file).unwrap();
+        assert_eq!(theme.status_bar.bg, Some(Color::Rgb(0x10, 0x10, 0x10)));
+        assert_eq!(theme.border.fg, Some(Color::Rgb(0xf0, 0xf0, 0xf0)));
+        assert_eq!(theme.border_selected.fg, Some(Color::Rgb(0xab, 0xcd, 0xef)));
+        assert_eq!(theme.popup_title.fg, Some(Color::Rgb(0xab, 0xcd, 0xef)));
+    }
+
+    #[test]
+    fn parse_hex_needs_a_hash_and_six_hex_digits() {
+        assert_eq!(parse_hex("#0a0B0c"), Some(Color::Rgb(10, 11, 12)));
+        assert_eq!(parse_hex("0a0b0c"), None);
+        assert_eq!(parse_hex("#abc"), None);
+        assert_eq!(parse_hex("#gg0000"), None);
+        assert_eq!(parse_hex("#ä0000"), None);
+    }
+
+    #[test]
+    fn names_come_from_the_file_stem() {
+        assert_eq!(
+            theme_name(Path::new("/x/rose-pine-moon.toml")),
+            "rose pine moon"
+        );
+        assert_eq!(normalized_name("Rosé Pine-Moon"), "rospinemoon");
+        assert_eq!(
+            expand_home(Path::new("/home/synthetic"), "~/themes/a.toml"),
+            PathBuf::from("/home/synthetic/themes/a.toml")
+        );
+        assert_eq!(
+            expand_home(Path::new("/h"), "/abs.toml"),
+            PathBuf::from("/abs.toml")
+        );
+    }
+
+    fn test_root() -> TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    /// Write `config.toml` below `home` and return its path.
+    fn write_config(home: &Path, contents: &str) -> PathBuf {
+        let config_dir = home.join(".config/viewr");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+        std::fs::write(&config_path, contents).unwrap();
+        config_path
+    }
+
+    /// Write a catalog with `entries`, the theme files they name, and a config that uses it.
+    fn write_catalog(home: &Path, entries: &[&str]) -> PathBuf {
+        for entry in entries {
+            let path = expand_home(home, entry);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, SHARED_THEME).unwrap();
+        }
+        let list = entries
+            .iter()
+            .map(|entry| format!("\"{entry}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let catalog = home.join("catalog.toml");
+        std::fs::write(&catalog, format!("themes = [{list}]\n")).unwrap();
+        write_config(home, "theme_catalog = \"~/catalog.toml\"\n");
+        catalog
     }
 }

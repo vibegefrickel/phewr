@@ -161,15 +161,13 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
+    use tempfile::TempDir;
 
-    fn synthetic_dir(name: &str) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("viewr-prefetch-test-{name}-{}", std::process::id()));
-        if root.exists() {
-            fs::remove_dir_all(&root).unwrap();
-        }
-        fs::create_dir_all(&root).unwrap();
-        root
+    /// A temp directory and its path; the directory goes away with the `TempDir`.
+    fn synthetic_dir() -> (TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        (temp, root)
     }
 
     fn save_image(dir: &Path, name: &str, width: u32, height: u32) -> PathBuf {
@@ -191,7 +189,7 @@ mod tests {
 
     #[test]
     fn prefetch_decodes_neighbors_async() {
-        let dir = synthetic_dir("neighbors");
+        let (_temp, dir) = synthetic_dir();
         let paths: Vec<_> = (0..5)
             .map(|i| save_image(&dir, &format!("{i}.png"), 8, 8))
             .collect();
@@ -212,13 +210,11 @@ mod tests {
                 .take_resized(2, Rect::default(), (1, 1))
                 .is_none()
         );
-
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn prefetch_gallery_decodes_selected() {
-        let dir = synthetic_dir("gallery");
+        let (_temp, dir) = synthetic_dir();
         let paths: Vec<_> = (0..3)
             .map(|i| save_image(&dir, &format!("{i}.png"), 4, 4))
             .collect();
@@ -231,13 +227,11 @@ mod tests {
             .take_resized(1, Rect::default(), (1, 1))
             .expect("gallery target should be cached");
         assert_eq!(img.dimensions(), (4, 4));
-
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn prefetch_zero_hint_keeps_original_size() {
-        let dir = synthetic_dir("no-hint");
+        let (_temp, dir) = synthetic_dir();
         let paths = vec![save_image(&dir, "0.png", 8, 8)];
 
         let mut prefetcher = Prefetcher::new();
@@ -249,13 +243,11 @@ mod tests {
             .take_resized(0, Rect::default(), (1, 1))
             .expect("image should be cached");
         assert_eq!(img.dimensions(), (8, 8));
-
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn prefetch_invalidate_clears_cache() {
-        let dir = synthetic_dir("invalidate");
+        let (_temp, dir) = synthetic_dir();
         let paths: Vec<_> = (0..3)
             .map(|i| save_image(&dir, &format!("{i}.png"), 4, 4))
             .collect();
@@ -274,13 +266,11 @@ mod tests {
                     .is_none()
             );
         }
-
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn prefetch_lru_evicts_oldest() {
-        let dir = synthetic_dir("lru");
+        let (_temp, dir) = synthetic_dir();
         let paths: Vec<_> = (0..10)
             .map(|i| save_image(&dir, &format!("{i}.png"), 4, 4))
             .collect();
@@ -308,13 +298,11 @@ mod tests {
                     .is_some()
             );
         }
-
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn prefetch_drops_a_result_that_finishes_after_invalidate() {
-        let dir = synthetic_dir("stale");
+        let (_temp, dir) = synthetic_dir();
         let paths = vec![save_image(&dir, "0.png", 4, 4)];
 
         let mut prefetcher = Prefetcher::new();
@@ -342,13 +330,11 @@ mod tests {
                 .take_resized(0, Rect::default(), (1, 1))
                 .is_some()
         );
-
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn prefetch_remembers_a_failed_decode_until_invalidate() {
-        let dir = synthetic_dir("corrupt");
+        let (_temp, dir) = synthetic_dir();
         let path = dir.join("0.png");
         fs::write(&path, b"this is not a PNG file").unwrap();
         let paths = vec![path];
@@ -373,7 +359,5 @@ mod tests {
         prefetcher.kick_gallery(0, &paths);
         assert_eq!(prefetcher.pending_count(), 1, "invalidate allows a new try");
         wait_until_idle(&mut prefetcher);
-
-        fs::remove_dir_all(dir).unwrap();
     }
 }

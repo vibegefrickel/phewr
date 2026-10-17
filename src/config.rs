@@ -5,6 +5,7 @@
 //! the same file; this module only handles the gallery, slideshow, info and video sections.
 
 use serde::Deserialize;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 pub(crate) const DEFAULT_THUMB_COLS: u16 = 20;
@@ -160,19 +161,22 @@ fn load_at(config_path: &Path, state_path: &Path) -> Config {
     config
 }
 
-/// Remember `cols` x `rows` as the thumbnail size for the next start.
-pub(crate) fn save_thumb_size(cols: u16, rows: u16) {
-    let path = state_path(&home_dir());
+/// The state file below the user's home, the default target of the thumbnail-size functions.
+pub(crate) fn default_state_path() -> PathBuf {
+    state_path(&home_dir())
+}
+
+/// Remember `cols` x `rows` in the state file at `path` for the next start.
+pub(crate) fn save_thumb_size(path: &Path, cols: u16, rows: u16) {
     let state = StateFile {
         thumb_cols: Some(cols),
         thumb_rows: Some(rows),
     };
-    write_state(&path, &state);
+    write_state(path, &state);
 }
 
-/// Forget the remembered thumbnail size.
-pub(crate) fn clear_thumb_size() {
-    let path = state_path(&home_dir());
+/// Forget the remembered thumbnail size: remove the state file at `path`.
+pub(crate) fn clear_thumb_size(path: &Path) {
     if path.exists() {
         #[expect(
             clippy::let_underscore_must_use,
@@ -199,19 +203,29 @@ fn write_state(path: &Path, state: &StateFile) {
 }
 
 fn config_path(home: &Path) -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(".config"))
-        .join("viewr/config.toml")
+    xdg_path(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        home,
+        ".config",
+        "viewr/config.toml",
+    )
 }
 
 fn state_path(home: &Path) -> PathBuf {
-    std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
+    xdg_path(
+        std::env::var_os("XDG_STATE_HOME"),
+        home,
+        ".local/state",
+        "viewr/state.toml",
+    )
+}
+
+/// Join `file` to an absolute XDG base, else to `home/fallback`; the caller reads the variable.
+fn xdg_path(base: Option<OsString>, home: &Path, fallback: &str, file: &str) -> PathBuf {
+    base.map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(".local/state"))
-        .join("viewr/state.toml")
+        .unwrap_or_else(|| home.join(fallback))
+        .join(file)
 }
 
 fn home_dir() -> PathBuf {
@@ -221,32 +235,27 @@ fn home_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use tempfile::TempDir;
 
-    fn test_root() -> PathBuf {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join(format!(
-            "viewr-config-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        root
+    fn test_root() -> TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
     fn missing_files_yield_defaults() {
         let root = test_root();
-        let config = load_at(&root.join("config.toml"), &root.join("state.toml"));
+        let config = load_at(
+            &root.path().join("config.toml"),
+            &root.path().join("state.toml"),
+        );
         assert_eq!(config, Config::default());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn config_sections_are_read_and_state_overrides_thumb_size() {
         let root = test_root();
-        let config_path = root.join("config.toml");
-        let state_path = root.join("state.toml");
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("state.toml");
         std::fs::write(
             &config_path,
             "theme = \"ignored-here\"\n[gallery]\nthumb_cols = 30\nthumb_rows = 12\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
@@ -268,14 +277,13 @@ mod tests {
         );
         let config = load_at(&config_path, &state_path);
         assert_eq!((config.thumb_cols, config.thumb_rows), (16, 6));
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn video_player_is_read_and_unknown_values_keep_the_default() {
         let root = test_root();
-        let config_path = root.join("config.toml");
-        let state_path = root.join("state.toml");
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("state.toml");
         for (value, expected) in [
             ("terminal", VideoPlayer::Terminal),
             ("window", VideoPlayer::Window),
@@ -292,21 +300,123 @@ mod tests {
             assert_eq!(config.video_player, expected, "player = {value:?}");
             assert!(config.info_panel, "player = {value:?} keeps the other keys");
         }
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn out_of_range_sizes_are_clamped() {
         let root = test_root();
-        let config_path = root.join("config.toml");
+        let config_path = root.path().join("config.toml");
         std::fs::write(
             &config_path,
             "[gallery]\nthumb_cols = 2\nthumb_rows = 999\n",
         )
         .unwrap();
-        let config = load_at(&config_path, &root.join("state.toml"));
+        let config = load_at(&config_path, &root.path().join("state.toml"));
         assert_eq!(config.thumb_cols, MIN_THUMB_COLS);
         assert_eq!(config.thumb_rows, MAX_THUMB_ROWS);
-        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_intervals_and_broken_files_keep_the_defaults() {
+        let root = test_root();
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("state.toml");
+        for interval in ["0.0", "-2.0", "nan", "inf"] {
+            std::fs::write(
+                &config_path,
+                format!("[slideshow]\ninterval = {interval}\n"),
+            )
+            .unwrap();
+            let config = load_at(&config_path, &state_path);
+            assert_eq!(
+                config.slideshow_interval, DEFAULT_SLIDESHOW_INTERVAL,
+                "interval = {interval}"
+            );
+        }
+
+        std::fs::write(&config_path, "[gallery\nthumb_cols = 30").unwrap();
+        std::fs::write(&state_path, "thumb_cols = \"wide\"").unwrap();
+        assert_eq!(load_at(&config_path, &state_path), Config::default());
+    }
+
+    #[test]
+    fn a_state_file_with_one_dimension_is_ignored() {
+        let root = test_root();
+        let state_path = root.path().join("state.toml");
+        std::fs::write(&state_path, "thumb_cols = 40\n").unwrap();
+        let config = load_at(&root.path().join("config.toml"), &state_path);
+        assert_eq!(
+            (config.thumb_cols, config.thumb_rows),
+            (DEFAULT_THUMB_COLS, DEFAULT_THUMB_ROWS)
+        );
+    }
+
+    #[test]
+    fn save_and_clear_thumb_size_round_trip_through_the_state_file() {
+        let root = test_root();
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("nested/viewr/state.toml");
+
+        save_thumb_size(&state_path, 24, 10);
+        let config = load_at(&config_path, &state_path);
+        assert_eq!((config.thumb_cols, config.thumb_rows), (24, 10));
+
+        clear_thumb_size(&state_path);
+        assert!(!state_path.exists());
+        assert_eq!(load_at(&config_path, &state_path), Config::default());
+
+        // A second clear finds no file and does nothing.
+        clear_thumb_size(&state_path);
+        assert!(!state_path.exists());
+    }
+
+    #[test]
+    fn write_state_gives_up_without_a_usable_parent() {
+        let root = test_root();
+        let blocker = root.path().join("file");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let state = StateFile {
+            thumb_cols: Some(16),
+            thumb_rows: Some(6),
+        };
+
+        write_state(&blocker.join("state.toml"), &state);
+        assert!(blocker.is_file());
+
+        write_state(Path::new("/"), &state);
+    }
+
+    #[test]
+    fn xdg_path_uses_only_an_absolute_base() {
+        let home = Path::new("/home/synthetic");
+        assert_eq!(
+            xdg_path(None, home, ".config", "viewr/config.toml"),
+            home.join(".config/viewr/config.toml")
+        );
+        assert_eq!(
+            xdg_path(
+                Some(OsString::from("relative/config")),
+                home,
+                ".config",
+                "viewr/config.toml"
+            ),
+            home.join(".config/viewr/config.toml")
+        );
+        assert_eq!(
+            xdg_path(
+                Some(OsString::from("/xdg/state")),
+                home,
+                ".local/state",
+                "viewr/state.toml"
+            ),
+            PathBuf::from("/xdg/state/viewr/state.toml")
+        );
+    }
+
+    #[test]
+    fn config_and_state_paths_end_in_the_viewr_files() {
+        let home = Path::new("/home/synthetic");
+        assert!(config_path(home).ends_with("viewr/config.toml"));
+        assert!(state_path(home).ends_with("viewr/state.toml"));
     }
 }

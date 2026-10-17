@@ -218,17 +218,6 @@ mod tests {
     use exif::experimental::Writer;
     use exif::{Field, Rational, Value};
     use image::{ExtendedColorType, ImageEncoder};
-    use std::path::PathBuf;
-
-    /// Give each test its own directory below the temp directory.
-    fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("viewr-info-{name}-{}", std::process::id()));
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).unwrap();
-        }
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     /// An EXIF field of the primary image.
     fn field(tag: Tag, value: Value) -> Field {
@@ -277,13 +266,11 @@ mod tests {
     }
 
     /// The EXIF rows of a JPEG with `fields`, in a directory of their own.
-    fn exif_rows_for(name: &str, fields: &[Field]) -> Vec<(String, String)> {
-        let dir = test_dir(name);
-        let path = dir.join("photo.jpg");
+    fn exif_rows_for(fields: &[Field]) -> Vec<(String, String)> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.jpg");
         jpeg_with_exif(&path, fields);
-        let rows = exif_rows(&path);
-        std::fs::remove_dir_all(&dir).unwrap();
-        rows
+        exif_rows(&path)
     }
 
     /// The value of the first row with `label`.
@@ -312,9 +299,8 @@ mod tests {
 
     #[test]
     fn info_for_a_missing_file_has_name_folder_and_format_only() {
-        let path = std::env::temp_dir()
-            .join(format!("viewr-info-missing-{}", std::process::id()))
-            .join("gone.jpeg");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing").join("gone.jpeg");
         let info = load(&path);
         let labels: Vec<&str> = info.rows.iter().map(|(label, _)| label.as_str()).collect();
         assert_eq!(labels, ["", "Name", "Folder", "Format"]);
@@ -325,8 +311,8 @@ mod tests {
 
     #[test]
     fn info_for_a_jpeg_with_exif_has_file_and_exif_rows() {
-        let dir = test_dir("jpeg-exif");
-        let path = dir.join("photo.jpg");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.jpg");
         jpeg_with_exif(
             &path,
             &[
@@ -351,7 +337,6 @@ mod tests {
         );
         let info = load(&path);
         let size = std::fs::metadata(&path).unwrap().len();
-        std::fs::remove_dir_all(&dir).unwrap();
         let rows = &info.rows;
 
         assert_eq!(row(rows, "Name"), Some("photo.jpg"));
@@ -376,41 +361,35 @@ mod tests {
 
     #[test]
     fn camera_joins_make_and_model() {
-        let both = exif_rows_for(
-            "camera-both",
-            &[ascii(Tag::Make, "Nikon"), ascii(Tag::Model, "Z 6")],
-        );
+        let both = exif_rows_for(&[ascii(Tag::Make, "Nikon"), ascii(Tag::Model, "Z 6")]);
         assert_eq!(row(&both, "Camera"), Some("Nikon Z 6"));
 
-        let make = exif_rows_for("camera-make", &[ascii(Tag::Make, "Nikon")]);
+        let make = exif_rows_for(&[ascii(Tag::Make, "Nikon")]);
         assert_eq!(row(&make, "Camera"), Some("Nikon"));
 
-        let model = exif_rows_for("camera-model", &[ascii(Tag::Model, "Z 6")]);
+        let model = exif_rows_for(&[ascii(Tag::Model, "Z 6")]);
         assert_eq!(row(&model, "Camera"), Some("Z 6"));
     }
 
     #[test]
     fn focal_length_shows_the_values_that_exist() {
-        let focal = exif_rows_for("focal-only", &[rational(Tag::FocalLength, &[(35, 1)])]);
+        let focal = exif_rows_for(&[rational(Tag::FocalLength, &[(35, 1)])]);
         let value = row(&focal, "Focal length").unwrap();
         assert!(!value.contains("eq."), "focal: {value}");
 
-        let equivalent = exif_rows_for("focal-35-only", &[short(Tag::FocalLengthIn35mmFilm, 28)]);
+        let equivalent = exif_rows_for(&[short(Tag::FocalLengthIn35mmFilm, 28)]);
         assert_eq!(row(&equivalent, "Focal length"), Some("28 mm eq."));
     }
 
     #[test]
     fn exif_rows_skip_an_empty_description_and_an_incomplete_gps() {
-        let rows = exif_rows_for(
-            "partial",
-            &[
-                ascii(Tag::DateTime, "2023:01:02 03:04:05"),
-                ascii(Tag::ImageDescription, " "),
-                rational(Tag::GPSLatitude, &[(52, 1), (30, 1)]),
-                ascii(Tag::GPSLatitudeRef, "S"),
-                rational(Tag::GPSLongitude, &[(13, 1), (24, 1), (0, 1)]),
-            ],
-        );
+        let rows = exif_rows_for(&[
+            ascii(Tag::DateTime, "2023:01:02 03:04:05"),
+            ascii(Tag::ImageDescription, " "),
+            rational(Tag::GPSLatitude, &[(52, 1), (30, 1)]),
+            ascii(Tag::GPSLatitudeRef, "S"),
+            rational(Tag::GPSLongitude, &[(13, 1), (24, 1), (0, 1)]),
+        ]);
         assert_eq!(row(&rows, "Taken"), Some("2023-01-02 03:04:05"));
         assert_eq!(row(&rows, "Description"), None);
         assert_eq!(row(&rows, "GPS"), None);
@@ -419,37 +398,30 @@ mod tests {
 
     #[test]
     fn gps_reads_only_rational_coordinates() {
-        let rows = exif_rows_for(
-            "gps-ascii",
-            &[
-                ascii(Tag::GPSLatitude, "52"),
-                rational(Tag::GPSLongitude, &[(13, 1), (24, 1), (0, 1)]),
-                ascii(Tag::Software, "only software"),
-            ],
-        );
+        let rows = exif_rows_for(&[
+            ascii(Tag::GPSLatitude, "52"),
+            rational(Tag::GPSLongitude, &[(13, 1), (24, 1), (0, 1)]),
+            ascii(Tag::Software, "only software"),
+        ]);
         assert_eq!(row(&rows, "GPS"), None);
         assert_eq!(row(&rows, "Software"), Some("only software"));
 
-        let south_east = exif_rows_for(
-            "gps-south",
-            &[
-                rational(Tag::GPSLatitude, &[(33, 1), (51, 1), (36, 1)]),
-                ascii(Tag::GPSLatitudeRef, "S"),
-                rational(Tag::GPSLongitude, &[(151, 1), (12, 1), (36, 1)]),
-                ascii(Tag::GPSLongitudeRef, "E"),
-            ],
-        );
+        let south_east = exif_rows_for(&[
+            rational(Tag::GPSLatitude, &[(33, 1), (51, 1), (36, 1)]),
+            ascii(Tag::GPSLatitudeRef, "S"),
+            rational(Tag::GPSLongitude, &[(151, 1), (12, 1), (36, 1)]),
+            ascii(Tag::GPSLongitudeRef, "E"),
+        ]);
         assert_eq!(row(&south_east, "GPS"), Some("-33.86000, 151.21000"));
     }
 
     #[test]
     fn exif_rows_of_a_file_without_exif_are_empty() {
-        let dir = test_dir("no-exif");
-        let path = dir.join("plain.jpg");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.jpg");
         image::DynamicImage::new_rgb8(4, 4).save(&path).unwrap();
         assert!(exif_rows(&path).is_empty());
-        assert!(exif_rows(&dir.join("missing.jpg")).is_empty());
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(exif_rows(&dir.path().join("missing.jpg")).is_empty());
     }
 
     #[cfg(feature = "turbo")]
@@ -476,11 +448,11 @@ mod tests {
 
     #[test]
     fn info_for_a_png_without_exif_has_file_rows_only() {
-        let path =
-            std::env::temp_dir().join(format!("viewr-synthetic-info-{}.png", std::process::id()));
-        image::DynamicImage::new_rgba8(12, 7).save(&path).unwrap();
-        let info = load(&path);
-        std::fs::remove_file(&path).unwrap();
+        let file = tempfile::Builder::new().suffix(".png").tempfile().unwrap();
+        image::DynamicImage::new_rgba8(12, 7)
+            .save(file.path())
+            .unwrap();
+        let info = load(file.path());
 
         let dims = info
             .rows

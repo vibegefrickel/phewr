@@ -189,20 +189,18 @@ mod tests {
     use super::{PickerState, canonicalize_or_self, initial_picker_dir};
     use std::fs;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
-    fn synthetic_dir(name: &str) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("viewr-picker-test-{name}-{}", std::process::id()));
-        if root.exists() {
-            fs::remove_dir_all(&root).unwrap();
-        }
-        fs::create_dir_all(&root).unwrap();
-        fs::canonicalize(&root).unwrap()
+    /// A temp directory and its canonical path; the directory goes away with the `TempDir`.
+    fn synthetic_dir() -> (TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        (temp, root)
     }
 
     #[test]
     fn new_loads_parent_and_visible_directories_sorted() {
-        let root = synthetic_dir("load");
+        let (_temp, root) = synthetic_dir();
         let alpha = root.join("alpha");
         let beta = root.join("beta");
         let hidden = root.join(".hidden");
@@ -212,66 +210,58 @@ mod tests {
         fs::create_dir_all(&hidden).unwrap();
         fs::write(&file, b"").unwrap();
 
-        let picker = PickerState::new(root.clone());
+        let picker = PickerState::new(root);
         assert_eq!(picker.entries.len(), 3);
         assert!(picker.entries[0].is_parent);
         assert_eq!(picker.entries[1].name, "alpha");
         assert_eq!(picker.entries[2].name, "beta");
         assert_eq!(picker.filtered_indices, vec![0, 1, 2]);
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn load_dir_reports_error_for_missing_path() {
-        let root = synthetic_dir("error");
+        let (_temp, root) = synthetic_dir();
         let missing = root.join("missing");
-        let mut picker = PickerState::new(root.clone());
+        let mut picker = PickerState::new(root);
         picker.current_dir = missing;
         picker.load_dir();
         assert!(picker.error.is_some());
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn filter_scores_and_reorders() {
-        let root = synthetic_dir("filter");
+        let (_temp, root) = synthetic_dir();
         fs::create_dir_all(root.join("apple")).unwrap();
         fs::create_dir_all(root.join("banana")).unwrap();
-        let mut picker = PickerState::new(root.clone());
+        let mut picker = PickerState::new(root);
         picker.filter = "ana".to_owned();
         picker.rebuild_filter();
 
         assert_eq!(picker.filtered_indices.len(), 1);
         assert_eq!(picker.entries[picker.filtered_indices[0]].name, "banana");
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn empty_filter_preserves_order_and_cursor() {
-        let root = synthetic_dir("empty-filter");
+        let (_temp, root) = synthetic_dir();
         fs::create_dir_all(root.join("a")).unwrap();
         fs::create_dir_all(root.join("b")).unwrap();
-        let mut picker = PickerState::new(root.clone());
+        let mut picker = PickerState::new(root);
         picker.cursor = 2;
         picker.filter = String::new();
         picker.rebuild_filter();
 
         assert_eq!(picker.filtered_indices, vec![0, 1, 2]);
         assert_eq!(picker.cursor, 2);
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn cursor_navigation_stays_in_filtered_bounds() {
-        let root = synthetic_dir("cursor");
+        let (_temp, root) = synthetic_dir();
         fs::create_dir_all(root.join("a")).unwrap();
         fs::create_dir_all(root.join("b")).unwrap();
         fs::create_dir_all(root.join("c")).unwrap();
-        let mut picker = PickerState::new(root.clone());
+        let mut picker = PickerState::new(root);
 
         assert_eq!(picker.selected().map(|e| &e.name), Some(&"..".to_owned()));
         picker.move_down();
@@ -286,17 +276,15 @@ mod tests {
         assert_eq!(picker.selected().map(|e| &e.name), Some(&"..".to_owned()));
         picker.move_up();
         assert_eq!(picker.selected().map(|e| &e.name), Some(&"..".to_owned()));
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn page_navigation_jumps_and_clamps() {
-        let root = synthetic_dir("page");
+        let (_temp, root) = synthetic_dir();
         for i in 0..5 {
             fs::create_dir_all(root.join(format!("dir{i}"))).unwrap();
         }
-        let mut picker = PickerState::new(root.clone());
+        let mut picker = PickerState::new(root);
 
         picker.move_page_down(2);
         assert_eq!(picker.cursor, 2);
@@ -304,13 +292,11 @@ mod tests {
         assert_eq!(picker.cursor, 5);
         picker.move_page_up(10);
         assert_eq!(picker.cursor, 0);
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn enter_descends_and_ascend_goes_up() {
-        let root = synthetic_dir("navigate");
+        let (_temp, root) = synthetic_dir();
         let child = root.join("child");
         fs::create_dir_all(&child).unwrap();
         let mut picker = PickerState::new(root.clone());
@@ -321,19 +307,16 @@ mod tests {
         assert_eq!(picker.current_dir, fs::canonicalize(&child).unwrap());
 
         let parent = picker.ascend();
-        assert_eq!(parent, Some(root.clone()));
-
-        fs::remove_dir_all(root).unwrap();
+        assert_eq!(parent, Some(root));
     }
 
     #[test]
     fn ascend_from_root_returns_none() {
-        let root = synthetic_dir("root");
-        let mut picker = PickerState::new(root.clone());
+        let (_temp, root) = synthetic_dir();
+        let mut picker = PickerState::new(root);
         picker.current_dir = PathBuf::from("/");
 
         assert!(picker.ascend().is_none());
-        fs::remove_dir_all(root).unwrap();
     }
 
     fn empty_picker() -> PickerState {

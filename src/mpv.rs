@@ -278,9 +278,9 @@ mod tests {
 
     #[test]
     fn find_on_path_takes_the_first_executable_file() {
-        let root = std::env::temp_dir().join(format!("viewr-mpv-path-{}", std::process::id()));
-        let plain = root.join("plain");
-        let executable = root.join("executable");
+        let root = tempfile::tempdir().unwrap();
+        let plain = root.path().join("plain");
+        let executable = root.path().join("executable");
         std::fs::create_dir_all(&plain).unwrap();
         std::fs::create_dir_all(&executable).unwrap();
         std::fs::write(plain.join("mpv"), "").unwrap();
@@ -300,8 +300,6 @@ mod tests {
         assert_eq!(find_on_path("mpv", None), None);
         let only_plain = std::env::join_paths([&plain]).unwrap();
         assert_eq!(find_on_path("mpv", Some(&only_plain)), None);
-
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
