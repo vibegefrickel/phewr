@@ -946,36 +946,43 @@ fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
 }
 
 fn query_cell_pixel_size() -> (u32, u32) {
-    crossterm::terminal::window_size().map_or((8, 16), |ws| {
-        // A terminal that does not report pixel dimensions (common under
-        // terminal multiplexers such as rift/tmux, and some SSH setups)
-        // returns ws.width/ws.height == 0 even though columns/rows are
-        // valid. Treat a zero pixel report as "unknown" and fall back to
-        // conventional cell metrics, otherwise the division below collapses
-        // to 1x1 and thumbnails render only a few pixels tall.
-        let w = if ws.columns > 0 && ws.width > 0 {
-            u32::from(ws.width) / u32::from(ws.columns)
-        } else {
-            8
-        };
-        let h = if ws.rows > 0 && ws.height > 0 {
-            u32::from(ws.height) / u32::from(ws.rows)
-        } else {
-            16
-        };
-        (w.max(1), h.max(1))
-    })
+    crossterm::terminal::window_size().map_or((8, 16), |ws| cell_pixel_size(&ws))
+}
+
+/// The pixel size of one cell from a window size report, so that the tests need no terminal.
+fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
+    // A terminal that does not report pixel dimensions (common under
+    // terminal multiplexers such as rift/tmux, and some SSH setups)
+    // returns ws.width/ws.height == 0 even though columns/rows are
+    // valid. Treat a zero pixel report as "unknown" and fall back to
+    // conventional cell metrics, otherwise the division below collapses
+    // to 1x1 and thumbnails render only a few pixels tall.
+    let w = if ws.columns > 0 && ws.width > 0 {
+        u32::from(ws.width) / u32::from(ws.columns)
+    } else {
+        8
+    };
+    let h = if ws.rows > 0 && ws.height > 0 {
+        u32::from(ws.height) / u32::from(ws.rows)
+    } else {
+        16
+    };
+    (w.max(1), h.max(1))
 }
 
 fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
+    render_fullscreen_image_to(app, &mut stdout().lock())
+}
+
+/// Write the fullscreen image to `out`, so that the tests can read the escape sequences.
+fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
     use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 
-    let mut out = stdout().lock();
     // Wrap the delete + retransmit in a synchronized update so the terminal swaps
     // atomically instead of briefly showing a blank viewport (visible as flicker
     // when zooming or panning, which redraw rapidly).
     queue!(out, BeginSynchronizedUpdate)?;
-    app.graphics_delete_all_to(&mut out)?;
+    app.graphics_delete_all_to(out)?;
 
     if let Some(img) = &app.loaded {
         let (cpw, cph) = app.cell_px;
@@ -988,7 +995,7 @@ fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
 
         queue!(out, cursor::MoveTo(offset_x, offset_y))?;
         app.graphics.transmit(
-            &mut out,
+            out,
             img,
             &encoder::DisplayOptions {
                 id: None,
@@ -1007,9 +1014,13 @@ const VIDEO_IMAGE_ID: u32 = 900;
 
 #[cfg(feature = "video")]
 fn render_video_frame(app: &App) -> io::Result<()> {
-    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+    render_video_frame_to(app, &mut stdout().lock())
+}
 
-    let mut out = stdout().lock();
+/// Write the current video frame to `out`, so that the tests can read the escape sequences.
+#[cfg(feature = "video")]
+fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
+    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 
     if let Some(v) = &app.video
         && let Some(img) = &v.current_frame
@@ -1025,7 +1036,7 @@ fn render_video_frame(app: &App) -> io::Result<()> {
         queue!(out, BeginSynchronizedUpdate)?;
         queue!(out, cursor::MoveTo(offset_x, offset_y))?;
         app.graphics.transmit(
-            &mut out,
+            out,
             img,
             &encoder::DisplayOptions {
                 id: Some(VIDEO_IMAGE_ID),
@@ -1040,7 +1051,15 @@ fn render_video_frame(app: &App) -> io::Result<()> {
 }
 
 fn emit_new_thumbnails(app: &mut App, new_indices: &[usize]) -> io::Result<()> {
-    let mut out = stdout().lock();
+    emit_new_thumbnails_to(app, new_indices, &mut stdout().lock())
+}
+
+/// Write the new thumbnails to `out`, so that the tests can read the escape sequences.
+fn emit_new_thumbnails_to(
+    app: &mut App,
+    new_indices: &[usize],
+    out: &mut impl Write,
+) -> io::Result<()> {
     let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
     let mut newly_transmitted: Vec<u32> = Vec::new();
     for (vis_idx, img_idx) in visible {
@@ -1051,7 +1070,7 @@ fn emit_new_thumbnails(app: &mut App, new_indices: &[usize]) -> io::Result<()> {
         if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
             queue!(out, cursor::MoveTo(cell_rect.x + 1, cell_rect.y + 1))?;
             app.graphics.transmit(
-                &mut out,
+                out,
                 img,
                 &encoder::DisplayOptions {
                     id: Some(id),
@@ -1084,28 +1103,36 @@ fn render_gallery_images(app: &mut App) -> io::Result<()> {
         app.spawn_thumb_decode(img_idx, path, inner);
     }
 
-    let mut out = stdout().lock();
+    place_gallery_images_to(app, &visible, &mut stdout().lock())
+}
+
+/// Write the `visible` thumbnails to `out`, so that the tests can read the escape sequences.
+fn place_gallery_images_to(
+    app: &mut App,
+    visible: &[(usize, usize)],
+    out: &mut impl Write,
+) -> io::Result<()> {
     if app.graphics_storage_dirty {
-        app.graphics_delete_all_to(&mut out)?;
+        app.graphics_delete_all_to(out)?;
         app.graphics_storage_dirty = false;
     } else {
         // Drop visible placements only; keep stored image data so already-transmitted thumbs
         // can be re-placed with a cheap `a=p` instead of a full PNG retransmit.
-        app.graphics.clear_placements_to(&mut out)?;
+        app.graphics.clear_placements_to(out)?;
     }
 
     let mut newly_transmitted: Vec<u32> = Vec::new();
-    for &(vis_idx, img_idx) in &visible {
+    for &(vis_idx, img_idx) in visible {
         let cell_rect = app.gallery.cell_rect(vis_idx);
         if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
             let inner_x = cell_rect.x + 1;
             let inner_y = cell_rect.y + 1;
             queue!(out, cursor::MoveTo(inner_x, inner_y))?;
             if app.transmitted_image_ids.contains(&id) {
-                app.graphics.place_by_id_to(&mut out, id)?;
+                app.graphics.place_by_id_to(out, id)?;
             } else {
                 app.graphics.transmit(
-                    &mut out,
+                    out,
                     img,
                     &encoder::DisplayOptions {
                         id: Some(id),
@@ -1647,6 +1674,1057 @@ mod tests {
             assert!(log.borrow().is_empty());
             assert_eq!(app.mode, ViewMode::Video);
             assert_eq!(state.status.as_deref(), Some(mpv::MISSING_NOTE));
+        }
+    }
+
+    /// The CLI and the start directory, before the TUI starts.
+    mod cli {
+        use super::super::{Cli, initial_dir_from_paths};
+        use super::synthetic_tree;
+        use clap::Parser;
+        use std::fs;
+        use std::path::PathBuf;
+
+        #[test]
+        fn parses_files_and_all_options() {
+            let cli = Cli::try_parse_from([
+                "viewr", "-t", "nord", "-j", "4", "-s", "-n", "2.5", "-i", "a.jpg", "photos",
+            ])
+            .unwrap();
+
+            assert_eq!(cli.files, [PathBuf::from("a.jpg"), PathBuf::from("photos")]);
+            assert_eq!(cli.theme.as_deref(), Some("nord"));
+            assert_eq!(cli.threads, Some(4));
+            assert!(cli.slideshow);
+            assert_eq!(cli.interval, Some(2.5));
+            assert!(cli.info);
+        }
+
+        #[test]
+        fn parses_the_long_options() {
+            let cli = Cli::try_parse_from([
+                "viewr",
+                "--theme",
+                "/themes/dark.toml",
+                "--threads",
+                "2",
+                "--slideshow",
+                "--interval",
+                "7",
+                "--info",
+            ])
+            .unwrap();
+
+            assert!(cli.files.is_empty());
+            assert_eq!(cli.theme.as_deref(), Some("/themes/dark.toml"));
+            assert_eq!(cli.threads, Some(2));
+            assert!(cli.slideshow && cli.info);
+            assert_eq!(cli.interval, Some(7.0));
+        }
+
+        #[test]
+        fn defaults_are_empty() {
+            let cli = Cli::try_parse_from(["viewr"]).unwrap();
+
+            assert!(cli.files.is_empty());
+            assert_eq!(cli.theme, None);
+            assert_eq!(cli.threads, None);
+            assert_eq!(cli.interval, None);
+            assert!(!cli.slideshow && !cli.info);
+        }
+
+        #[test]
+        fn rejects_bad_values_and_unknown_flags() {
+            assert!(Cli::try_parse_from(["viewr", "--interval", "soon"]).is_err());
+            assert!(Cli::try_parse_from(["viewr", "--threads", "-1"]).is_err());
+            assert!(Cli::try_parse_from(["viewr", "--fullscreen"]).is_err());
+        }
+
+        #[test]
+        fn a_directory_argument_is_the_start_directory() {
+            let (root, child) = synthetic_tree("initial-directory");
+
+            let paths = [root.join("missing.jpg"), child.clone()];
+            assert_eq!(initial_dir_from_paths(&paths), child);
+
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn a_file_argument_starts_in_its_parent_directory() {
+            assert_eq!(
+                initial_dir_from_paths(&[PathBuf::from("/photos/a.jpg")]),
+                PathBuf::from("/photos")
+            );
+            assert_eq!(
+                initial_dir_from_paths(&[PathBuf::from("a.jpg")]),
+                PathBuf::from(".")
+            );
+            assert_eq!(initial_dir_from_paths(&[]), PathBuf::from("."));
+        }
+    }
+
+    /// The key handlers, driven through `handle_event` like the run loop does.
+    mod keys {
+        use super::super::{App, SharedImageList, ViewMode, handle_event, handle_theme_picker_key};
+        use super::{picker_app, select_path, synthetic_tree};
+        use crate::config::{
+            Config, MAX_THUMB_COLS, MAX_THUMB_ROWS, MIN_THUMB_COLS, MIN_THUMB_ROWS,
+        };
+        use crate::theme::{NamedTheme, Theme};
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        use ratatui::layout::Rect;
+        use std::fs;
+        use std::path::{Path, PathBuf};
+        use std::time::Duration;
+
+        fn press(app: &mut App, code: KeyCode) -> bool {
+            press_with(app, code, KeyModifiers::NONE)
+        }
+
+        fn press_with(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> bool {
+            handle_event(app, &Event::Key(KeyEvent::new(code, modifiers))).unwrap()
+        }
+
+        fn char_key(app: &mut App, c: char) -> bool {
+            press(app, KeyCode::Char(c))
+        }
+
+        /// Paths that do not exist: a decode fails in the background and writes no cache.
+        fn photo_paths(count: usize) -> Vec<PathBuf> {
+            (0..count)
+                .map(|index| PathBuf::from(format!("/photos/photo-{index:02}.jpg")))
+                .collect()
+        }
+
+        /// A scanned gallery of `count` photos in a grid of 3 columns and 2 visible rows.
+        fn gallery_app_with(count: usize, config: &Config) -> App {
+            let mut app =
+                App::with_config(Theme::default(), (8, 16), SharedImageList::new(), config);
+            app.images = photo_paths(count);
+            app.filenames = app
+                .images
+                .iter()
+                .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            app.gallery.filtered_indices = (0..count).collect();
+            let width = app.gallery.thumb_cols * 3;
+            let height = app.gallery.cell_height_total() * 2;
+            app.gallery.update_grid(Rect::new(0, 0, width, height));
+            app.scan_complete = true;
+            app.needs_render = false;
+            app
+        }
+
+        fn gallery_app(count: usize) -> App {
+            gallery_app_with(count, &Config::default())
+        }
+
+        fn fullscreen_app(count: usize, index: usize) -> App {
+            let mut app = gallery_app(count);
+            app.enter_fullscreen_at(index);
+            app
+        }
+
+        fn themed_app() -> App {
+            let mut app = gallery_app(2);
+            let themes = ["first", "second", "third"]
+                .into_iter()
+                .map(|name| NamedTheme {
+                    name: name.to_owned(),
+                    path: None,
+                    theme: Theme::fallback(),
+                })
+                .collect();
+            app.install_themes(themes, 0);
+            app
+        }
+
+        fn theme_selected(app: &App) -> usize {
+            app.theme_picker.as_ref().unwrap().selected
+        }
+
+        fn zoom_is_one(app: &App) -> bool {
+            (app.zoom - 1.0).abs() < f64::EPSILON
+        }
+
+        #[test]
+        fn resize_marks_the_pictures_dirty() {
+            let mut app = gallery_app(3);
+            app.graphics_storage_dirty = false;
+
+            assert!(!handle_event(&mut app, &Event::Resize(80, 24)).unwrap());
+
+            assert!(app.graphics_storage_dirty);
+            assert!(app.needs_render);
+        }
+
+        #[test]
+        fn key_releases_and_other_events_change_nothing() {
+            let mut app = gallery_app(3);
+            let release = KeyEvent::new_with_kind(
+                KeyCode::Char('q'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            );
+
+            assert!(!handle_event(&mut app, &Event::Key(release)).unwrap());
+            assert!(!handle_event(&mut app, &Event::FocusGained).unwrap());
+            assert!(!app.needs_render);
+        }
+
+        #[test]
+        fn any_key_closes_the_help_and_does_nothing_else() {
+            let mut app = gallery_app(3);
+
+            assert!(!char_key(&mut app, '?'));
+            assert!(app.help_visible);
+            assert!(!char_key(&mut app, 'q'), "q only closes the help");
+            assert!(!app.help_visible);
+            assert!(app.needs_render);
+            assert_eq!(app.mode, ViewMode::Gallery);
+        }
+
+        #[test]
+        fn t_opens_the_theme_picker_and_its_keys_move_the_selection() {
+            let mut app = themed_app();
+
+            assert!(!char_key(&mut app, 't'));
+            assert_eq!(theme_selected(&app), 0);
+            press(&mut app, KeyCode::Down);
+            assert_eq!(theme_selected(&app), 1);
+            char_key(&mut app, 'j');
+            char_key(&mut app, 'j');
+            assert_eq!(theme_selected(&app), 0, "Down wraps to the first theme");
+            char_key(&mut app, 'k');
+            assert_eq!(theme_selected(&app), 2, "Up wraps to the last theme");
+            press(&mut app, KeyCode::Up);
+            assert_eq!(theme_selected(&app), 1);
+            char_key(&mut app, 'g');
+            assert_eq!(theme_selected(&app), 0);
+            char_key(&mut app, 'G');
+            assert_eq!(theme_selected(&app), 2);
+            press(&mut app, KeyCode::Home);
+            assert_eq!(theme_selected(&app), 0);
+            press(&mut app, KeyCode::End);
+            assert_eq!(theme_selected(&app), 2);
+            char_key(&mut app, 'x');
+            assert_eq!(theme_selected(&app), 2, "other keys do nothing");
+
+            press(&mut app, KeyCode::Enter);
+            assert!(app.theme_picker.is_none());
+            assert_eq!(app.theme_index, 2);
+        }
+
+        #[test]
+        fn esc_q_and_t_cancel_the_theme_picker() {
+            for code in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Char('t')] {
+                let mut app = themed_app();
+                char_key(&mut app, 't');
+                press(&mut app, KeyCode::Down);
+
+                assert!(!press(&mut app, code), "{code:?} does not quit");
+                assert!(app.theme_picker.is_none());
+                assert_eq!(app.theme_index, 0);
+            }
+        }
+
+        #[test]
+        fn the_theme_picker_keys_do_nothing_without_a_picker() {
+            let mut app = themed_app();
+
+            handle_theme_picker_key(&mut app, KeyCode::Down);
+
+            assert!(app.theme_picker.is_none());
+            assert_eq!(app.theme_index, 0);
+        }
+
+        #[test]
+        fn t_is_text_in_the_gallery_search() {
+            let mut app = themed_app();
+            char_key(&mut app, '/');
+
+            char_key(&mut app, 't');
+
+            assert!(app.theme_picker.is_none());
+            assert_eq!(app.gallery.search_query, "t");
+        }
+
+        #[test]
+        fn fullscreen_arrows_step_through_the_photos() {
+            let mut app = fullscreen_app(4, 1);
+
+            press(&mut app, KeyCode::Right);
+            assert_eq!(app.current, 2);
+            char_key(&mut app, 'l');
+            assert_eq!(app.current, 3);
+            char_key(&mut app, 'l');
+            assert_eq!(app.current, 3, "the last photo stays");
+            press(&mut app, KeyCode::Left);
+            assert_eq!(app.current, 2);
+            char_key(&mut app, 'h');
+            assert_eq!(app.current, 1);
+            press(&mut app, KeyCode::End);
+            assert_eq!(app.current, 3);
+            press(&mut app, KeyCode::Home);
+            assert_eq!(app.current, 0);
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+        }
+
+        #[test]
+        fn fullscreen_zoom_keys_and_pan_keys() {
+            let mut app = fullscreen_app(3, 1);
+
+            char_key(&mut app, '+');
+            let zoom = app.zoom;
+            assert!(zoom > 1.0);
+            char_key(&mut app, '=');
+            assert!(app.zoom > zoom);
+
+            for code in [
+                KeyCode::Left,
+                KeyCode::Char('h'),
+                KeyCode::Right,
+                KeyCode::Char('l'),
+                KeyCode::Up,
+                KeyCode::Char('k'),
+                KeyCode::Down,
+                KeyCode::Char('j'),
+            ] {
+                app.needs_render = false;
+                press(&mut app, code);
+                assert_eq!(app.current, 1, "{code:?} pans and does not step");
+                assert!(app.needs_render, "{code:?} pans");
+            }
+
+            let zoomed = app.zoom;
+            char_key(&mut app, '-');
+            assert!(app.zoom < zoomed, "- zooms out");
+            char_key(&mut app, '_');
+            char_key(&mut app, '_');
+            char_key(&mut app, '_');
+            assert!(zoom_is_one(&app), "zoom out stops at 1");
+
+            char_key(&mut app, '+');
+            char_key(&mut app, '0');
+            assert!(zoom_is_one(&app));
+        }
+
+        #[test]
+        fn fullscreen_slideshow_keys() {
+            let mut app = fullscreen_app(3, 0);
+
+            char_key(&mut app, 's');
+            assert!(app.slideshow_running());
+            char_key(&mut app, ' ');
+            assert!(app.slideshow.as_ref().unwrap().paused);
+            char_key(&mut app, ' ');
+            assert!(!app.slideshow.as_ref().unwrap().paused);
+
+            let interval = app.slideshow.as_ref().unwrap().interval;
+            char_key(&mut app, ']');
+            assert!(app.slideshow.as_ref().unwrap().interval > interval);
+            char_key(&mut app, '[');
+            assert_eq!(app.slideshow.as_ref().unwrap().interval, interval);
+
+            press(&mut app, KeyCode::Right);
+            assert_eq!(app.current, 1);
+            assert!(app.slideshow_running(), "a step keeps the slideshow");
+
+            press(&mut app, KeyCode::Esc);
+            assert!(!app.slideshow_running());
+            assert_eq!(
+                app.mode,
+                ViewMode::Fullscreen,
+                "Esc stops the slideshow first"
+            );
+
+            char_key(&mut app, 's');
+            char_key(&mut app, 's');
+            assert!(!app.slideshow_running(), "s toggles");
+
+            press(&mut app, KeyCode::Esc);
+            assert_eq!(app.mode, ViewMode::Gallery);
+        }
+
+        #[test]
+        fn fullscreen_info_help_quit_and_other_keys() {
+            let mut app = fullscreen_app(2, 0);
+            let info = app.info_visible;
+
+            char_key(&mut app, 'i');
+            assert_ne!(app.info_visible, info);
+            char_key(&mut app, '?');
+            assert!(app.help_visible);
+            char_key(&mut app, 'x');
+            assert!(!app.help_visible);
+
+            press(&mut app, KeyCode::Enter);
+            char_key(&mut app, 'x');
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 0);
+            assert!(char_key(&mut app, 'q'));
+        }
+
+        #[test]
+        fn fullscreen_delete_asks_and_n_or_esc_cancel() {
+            let mut app = fullscreen_app(3, 1);
+
+            char_key(&mut app, 'd');
+            let pending = app.pending_delete.as_ref().unwrap();
+            assert_eq!(pending.paths, [PathBuf::from("/photos/photo-01.jpg")]);
+            assert!(pending.from_fullscreen);
+            assert!(!pending.permanent);
+
+            char_key(&mut app, 'x');
+            assert!(app.pending_delete.is_some(), "other keys keep the question");
+            char_key(&mut app, 'n');
+            assert!(app.pending_delete.is_none());
+
+            char_key(&mut app, 'D');
+            assert!(app.pending_delete.as_ref().unwrap().permanent);
+            char_key(&mut app, 'N');
+            assert!(app.pending_delete.is_none());
+
+            char_key(&mut app, 'D');
+            press(&mut app, KeyCode::Esc);
+            assert!(app.pending_delete.is_none());
+            assert_eq!(
+                app.mode,
+                ViewMode::Fullscreen,
+                "Esc only cancels the question"
+            );
+            assert_eq!(app.images.len(), 3);
+        }
+
+        /// The root of a `synthetic_tree` with small files that the test can delete.
+        fn deletable_files(test_name: &str, names: &[&str]) -> (PathBuf, Vec<PathBuf>) {
+            let (dir, _child) = synthetic_tree(test_name);
+            let paths = names
+                .iter()
+                .map(|name| {
+                    let path = dir.join(name);
+                    fs::write(&path, b"not an image").unwrap();
+                    path
+                })
+                .collect();
+            (dir, paths)
+        }
+
+        #[test]
+        fn y_deletes_permanently_and_the_last_delete_quits() {
+            let (dir, paths) = deletable_files("delete-keys", &["a.jpg", "b.jpg"]);
+            let mut app = gallery_app(0);
+            app.images.clone_from(&paths);
+            app.filenames = vec!["a.jpg".to_owned(), "b.jpg".to_owned()];
+            app.gallery.filtered_indices = vec![0, 1];
+
+            char_key(&mut app, 'D');
+            assert!(!char_key(&mut app, 'y'));
+            assert!(!paths[0].exists());
+            assert_eq!(app.images, [paths[1].clone()]);
+            assert!(app.pending_delete.is_none());
+
+            char_key(&mut app, 'D');
+            assert!(char_key(&mut app, 'Y'), "an empty scanned list ends viewr");
+            assert!(!paths[1].exists());
+            assert!(app.images.is_empty());
+
+            fs::remove_dir_all(dir).unwrap();
+        }
+
+        #[test]
+        fn gallery_arrows_move_the_cursor_in_the_grid() {
+            let mut app = gallery_app(9);
+
+            press(&mut app, KeyCode::Right);
+            char_key(&mut app, 'l');
+            assert_eq!(app.gallery.cursor, 2);
+            press(&mut app, KeyCode::Down);
+            assert_eq!(app.gallery.cursor, 5);
+            char_key(&mut app, 'j');
+            assert_eq!(app.gallery.cursor, 8);
+            assert_eq!(app.gallery.scroll_offset, 1);
+            assert!(app.needs_render, "a scroll redraws the pictures");
+            press(&mut app, KeyCode::Left);
+            char_key(&mut app, 'h');
+            assert_eq!(app.gallery.cursor, 6);
+            press(&mut app, KeyCode::Up);
+            assert_eq!(app.gallery.cursor, 3);
+            char_key(&mut app, 'k');
+            assert_eq!(app.gallery.cursor, 0);
+            assert_eq!(app.gallery.scroll_offset, 0);
+        }
+
+        #[test]
+        fn gallery_jumps_by_page_and_to_the_ends() {
+            let mut app = gallery_app(9);
+
+            press(&mut app, KeyCode::PageDown);
+            assert_eq!(app.gallery.cursor, 6);
+            press(&mut app, KeyCode::PageUp);
+            assert_eq!(app.gallery.cursor, 0);
+            press_with(&mut app, KeyCode::Char('f'), KeyModifiers::CONTROL);
+            assert_eq!(app.gallery.cursor, 6);
+            press_with(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+            assert_eq!(app.gallery.cursor, 0);
+            char_key(&mut app, 'f');
+            assert_eq!(app.gallery.cursor, 0, "f without Ctrl does nothing");
+
+            char_key(&mut app, 'G');
+            assert_eq!(app.gallery.cursor, 8);
+            char_key(&mut app, 'b');
+            assert_eq!(app.gallery.cursor, 8, "b without Ctrl does nothing");
+            char_key(&mut app, 'g');
+            assert_eq!(app.gallery.cursor, 0);
+            press(&mut app, KeyCode::End);
+            assert_eq!(app.gallery.cursor, 8);
+            press(&mut app, KeyCode::Home);
+            assert_eq!(app.gallery.cursor, 0);
+        }
+
+        #[test]
+        fn gallery_selection_keys_and_a_delete_of_the_selection() {
+            let mut app = gallery_app(4);
+
+            char_key(&mut app, ' ');
+            assert!(app.is_marked(0));
+            char_key(&mut app, ' ');
+            assert!(!app.is_marked(0));
+            char_key(&mut app, 'a');
+            assert_eq!(app.selection.len(), 4);
+            char_key(&mut app, 'A');
+            assert!(app.selection.is_empty());
+
+            press(&mut app, KeyCode::Right);
+            char_key(&mut app, ' ');
+            press(&mut app, KeyCode::Right);
+            char_key(&mut app, ' ');
+            char_key(&mut app, 'd');
+            let pending = app.pending_delete.as_ref().unwrap();
+            assert_eq!(pending.paths, photo_paths(3)[1..]);
+            assert!(!pending.from_fullscreen);
+            char_key(&mut app, 'n');
+        }
+
+        #[test]
+        fn gallery_enter_and_s_open_the_fullscreen_view() {
+            let mut app = gallery_app(4);
+            press(&mut app, KeyCode::Right);
+
+            press(&mut app, KeyCode::Enter);
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 1);
+            assert!(!app.slideshow_running());
+
+            press(&mut app, KeyCode::Esc);
+            assert_eq!(app.mode, ViewMode::Gallery);
+            char_key(&mut app, 's');
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert!(app.slideshow_running());
+        }
+
+        #[test]
+        fn gallery_s_without_a_photo_starts_no_slideshow() {
+            let mut app = gallery_app(0);
+
+            char_key(&mut app, 's');
+
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert!(!app.slideshow_running());
+        }
+
+        #[test]
+        fn gallery_info_help_quit_and_other_keys() {
+            let mut app = gallery_app(2);
+            let info = app.info_visible;
+
+            char_key(&mut app, 'i');
+            assert_ne!(app.info_visible, info);
+            char_key(&mut app, '?');
+            assert!(app.help_visible);
+            press(&mut app, KeyCode::Tab);
+            assert!(!app.help_visible);
+            press(&mut app, KeyCode::Tab);
+            assert_eq!(app.mode, ViewMode::Gallery);
+
+            assert!(char_key(&mut app, 'q'));
+            assert!(press(&mut app, KeyCode::Esc));
+        }
+
+        /// The thumbnail keys save the size in the state file of the user, so these tests only
+        /// press them at the size limits, where the size does not change.
+        #[test]
+        fn gallery_thumbnail_size_keys_stop_at_the_limits() {
+            let largest = Config {
+                thumb_cols: MAX_THUMB_COLS,
+                thumb_rows: MAX_THUMB_ROWS,
+                ..Config::default()
+            };
+            let mut app = gallery_app_with(2, &largest);
+            assert!(
+                !app.gallery.thumb_zoom_in(),
+                "the guard: no state file write"
+            );
+            char_key(&mut app, '+');
+            char_key(&mut app, '=');
+            assert_eq!(app.gallery.thumb_cols, MAX_THUMB_COLS);
+
+            let smallest = Config {
+                thumb_cols: MIN_THUMB_COLS,
+                thumb_rows: MIN_THUMB_ROWS,
+                ..Config::default()
+            };
+            let mut app = gallery_app_with(2, &smallest);
+            assert!(
+                !app.gallery.thumb_zoom_out(),
+                "the guard: no state file write"
+            );
+            char_key(&mut app, '-');
+            char_key(&mut app, '_');
+            assert_eq!(app.gallery.thumb_cols, MIN_THUMB_COLS);
+        }
+
+        #[test]
+        fn gallery_search_keys_edit_the_query() {
+            let mut app = gallery_app(3);
+
+            char_key(&mut app, '/');
+            assert!(app.gallery.search_active);
+            char_key(&mut app, 'q');
+            char_key(&mut app, '7');
+            assert_eq!(app.gallery.search_query, "q7", "q is text in the search");
+            press(&mut app, KeyCode::Backspace);
+            assert_eq!(app.gallery.search_query, "q");
+            press(&mut app, KeyCode::Tab);
+            assert_eq!(app.gallery.search_query, "q");
+            press(&mut app, KeyCode::Enter);
+            assert!(!app.gallery.search_active);
+            assert_eq!(app.gallery.search_query, "q", "Enter keeps the filter");
+
+            char_key(&mut app, '/');
+            press(&mut app, KeyCode::Esc);
+            assert!(!app.gallery.search_active);
+            assert!(app.gallery.search_query.is_empty(), "Esc clears the filter");
+            assert_eq!(app.gallery.filtered_indices, [0, 1, 2]);
+
+            char_key(&mut app, '/');
+            press(&mut app, KeyCode::Backspace);
+            press(&mut app, KeyCode::Esc);
+            assert!(!app.gallery.search_active);
+            assert_eq!(app.mode, ViewMode::Gallery);
+        }
+
+        #[test]
+        fn gallery_o_opens_the_directory_picker() {
+            let (root, _child) = synthetic_tree("gallery-picker");
+            let mut app = gallery_app(2);
+            app.initial_dir = Some(root.clone());
+
+            char_key(&mut app, 'o');
+
+            assert_eq!(app.mode, ViewMode::Picker);
+            assert_eq!(app.picker.as_ref().unwrap().current_dir, root);
+            press(&mut app, KeyCode::Esc);
+            assert_eq!(
+                app.mode,
+                ViewMode::Gallery,
+                "Esc closes the picker over photos"
+            );
+
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        /// A picker in `root` with the directories a, b and c.
+        fn picker_tree(test_name: &str) -> (PathBuf, App) {
+            let (root, _child) = synthetic_tree(test_name);
+            fs::remove_dir_all(root.join("synthetic-images")).unwrap();
+            for name in ["a", "b", "c"] {
+                fs::create_dir(root.join(name)).unwrap();
+            }
+            let app = picker_app(&root);
+            (root, app)
+        }
+
+        fn picker_cursor(app: &App) -> usize {
+            app.picker.as_ref().unwrap().cursor
+        }
+
+        fn cleanup(root: &Path) {
+            // switch_to_dir starts a scanner thread in the tree.
+            std::thread::sleep(Duration::from_millis(20));
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn picker_keys_move_the_cursor() {
+            let (root, mut app) = picker_tree("picker-moves");
+
+            press(&mut app, KeyCode::Down);
+            char_key(&mut app, 'j');
+            assert_eq!(picker_cursor(&app), 2);
+            press(&mut app, KeyCode::Up);
+            assert_eq!(picker_cursor(&app), 1);
+            char_key(&mut app, 'k');
+            assert_eq!(picker_cursor(&app), 0);
+            char_key(&mut app, 'G');
+            assert_eq!(picker_cursor(&app), 3, "the parent entry and a, b, c");
+            char_key(&mut app, 'g');
+            assert_eq!(picker_cursor(&app), 0);
+            press(&mut app, KeyCode::End);
+            assert_eq!(picker_cursor(&app), 3);
+            press(&mut app, KeyCode::Home);
+            assert_eq!(picker_cursor(&app), 0);
+            press(&mut app, KeyCode::PageDown);
+            assert_eq!(picker_cursor(&app), 3);
+            press(&mut app, KeyCode::PageUp);
+            assert_eq!(picker_cursor(&app), 0);
+
+            press(&mut app, KeyCode::Tab);
+            press(&mut app, KeyCode::Esc);
+            assert_eq!(app.mode, ViewMode::Picker, "Esc needs photos to go back to");
+            char_key(&mut app, '?');
+            assert!(app.help_visible);
+            char_key(&mut app, 'x');
+            assert!(char_key(&mut app, 'q'));
+
+            cleanup(&root);
+        }
+
+        #[test]
+        fn picker_filter_keys() {
+            let (root, mut app) = picker_tree("picker-filter");
+
+            char_key(&mut app, '/');
+            assert!(app.picker.as_ref().unwrap().filter_active);
+            char_key(&mut app, 'b');
+            char_key(&mut app, 't');
+            assert!(app.theme_picker.is_none(), "t is text in the filter");
+            assert_eq!(app.picker.as_ref().unwrap().filter, "bt");
+            press(&mut app, KeyCode::Backspace);
+            press(&mut app, KeyCode::Tab);
+            let picker = app.picker.as_ref().unwrap();
+            assert_eq!(picker.filter, "b");
+            assert_eq!(picker.selected().unwrap().name, "b");
+
+            press(&mut app, KeyCode::Enter);
+            let picker = app.picker.as_ref().unwrap();
+            assert!(!picker.filter_active);
+            assert_eq!(picker.filter, "b", "Enter keeps the filter");
+            assert_eq!(app.mode, ViewMode::Picker);
+
+            char_key(&mut app, '/');
+            assert!(
+                app.picker.as_ref().unwrap().filter.is_empty(),
+                "/ starts anew"
+            );
+            char_key(&mut app, 'c');
+            press(&mut app, KeyCode::Esc);
+            let picker = app.picker.as_ref().unwrap();
+            assert!(!picker.filter_active);
+            assert!(picker.filter.is_empty());
+            assert_eq!(picker.filtered_indices.len(), 4);
+
+            cleanup(&root);
+        }
+
+        #[test]
+        fn picker_left_and_the_parent_entry_go_up() {
+            let (root, child) = synthetic_tree("picker-ascend");
+            let grandchild = child.join("grandchild");
+            fs::create_dir(&grandchild).unwrap();
+            let mut app = picker_app(&grandchild);
+
+            assert_eq!(picker_cursor(&app), 0, "the cursor is on the parent entry");
+            press(&mut app, KeyCode::Right);
+            assert_eq!(app.picker.as_ref().unwrap().current_dir, child);
+            assert_eq!(app.current_dir.as_ref(), Some(&child));
+
+            char_key(&mut app, 'l');
+            assert_eq!(app.picker.as_ref().unwrap().current_dir, root);
+
+            select_path(&mut app, &child);
+            char_key(&mut app, 'l');
+            assert_eq!(app.picker.as_ref().unwrap().current_dir, child);
+            char_key(&mut app, 'h');
+            assert_eq!(app.picker.as_ref().unwrap().current_dir, root);
+            assert_eq!(app.mode, ViewMode::Picker);
+
+            cleanup(&root);
+        }
+
+        #[test]
+        fn t_opens_the_theme_picker_over_the_directory_picker() {
+            let (root, mut app) = picker_tree("picker-theme");
+
+            char_key(&mut app, 't');
+
+            assert!(app.theme_picker.is_some());
+            assert_eq!(app.mode, ViewMode::Picker);
+
+            cleanup(&root);
+        }
+
+        #[cfg(feature = "video")]
+        fn video_app() -> App {
+            let mut app = gallery_app(0);
+            app.images = ["a.jpg", "clip.mp4", "other.mp4", "b.jpg"]
+                .into_iter()
+                .map(|name| PathBuf::from("/videos").join(name))
+                .collect();
+            app.filenames = ["a.jpg", "clip.mp4", "other.mp4", "b.jpg"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+            app.gallery.filtered_indices = vec![0, 1, 2, 3];
+            app.enter_video(1);
+            app
+        }
+
+        #[cfg(feature = "video")]
+        #[test]
+        fn video_keys_step_between_the_videos() {
+            let mut app = video_app();
+
+            char_key(&mut app, ' ');
+            assert!(app.video.is_none(), "space without a player does nothing");
+            press(&mut app, KeyCode::Right);
+            assert_eq!(app.current, 2);
+            assert_eq!(app.mode, ViewMode::Video);
+            press(&mut app, KeyCode::Left);
+            assert_eq!(app.current, 1);
+            char_key(&mut app, 'l');
+            assert_eq!(app.current, 2);
+            char_key(&mut app, 'h');
+            assert_eq!(app.current, 1);
+            press(&mut app, KeyCode::Tab);
+            assert_eq!(app.current, 1);
+
+            char_key(&mut app, '?');
+            assert!(app.help_visible);
+            char_key(&mut app, 'x');
+            assert!(!app.help_visible);
+
+            press(&mut app, KeyCode::Home);
+            assert_eq!(app.current, 0);
+            assert_eq!(app.mode, ViewMode::Fullscreen, "a.jpg is a photo");
+
+            let mut app = video_app();
+            press(&mut app, KeyCode::End);
+            assert_eq!(app.current, 3);
+            assert_eq!(app.mode, ViewMode::Fullscreen, "b.jpg is a photo");
+        }
+
+        #[cfg(feature = "video")]
+        #[test]
+        fn video_delete_and_quit_keys() {
+            let mut app = video_app();
+
+            char_key(&mut app, 'd');
+            let pending = app.pending_delete.as_ref().unwrap();
+            assert_eq!(pending.paths, [PathBuf::from("/videos/clip.mp4")]);
+            assert!(pending.from_fullscreen && !pending.permanent);
+            press(&mut app, KeyCode::Esc);
+            assert!(app.pending_delete.is_none());
+            assert_eq!(app.mode, ViewMode::Video, "Esc only cancels the question");
+
+            char_key(&mut app, 'D');
+            assert!(app.pending_delete.as_ref().unwrap().permanent);
+            char_key(&mut app, 'n');
+
+            assert!(char_key(&mut app, 'q'));
+        }
+    }
+
+    /// The Kitty output, written to a buffer instead of the terminal.
+    mod output {
+        use super::super::{
+            App, LoopState, SharedImageList, cell_pixel_size, emit_new_thumbnails_to,
+            place_gallery_images_to, query_cell_pixel_size, render_fullscreen_image_to,
+        };
+        use crate::config::Config;
+        use crate::theme::Theme;
+        use crossterm::terminal::WindowSize;
+        use image::RgbaImage;
+        use ratatui::layout::Rect;
+        use std::path::PathBuf;
+
+        const TRANSMIT: &str = "\x1b_Ga=T,";
+        const PLACE: &str = "\x1b_Ga=p,";
+        const DELETE_ALL: &str = "\x1b_Ga=d,d=A,";
+        const CLEAR_PLACEMENTS: &str = "\x1b_Ga=d,d=a,";
+
+        fn text(out: &[u8]) -> String {
+            String::from_utf8_lossy(out).into_owned()
+        }
+
+        /// A gallery of `count` photos with a decoded thumbnail for each, so no decode starts.
+        fn thumbnail_app(count: usize) -> App {
+            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            app.images = (0..count)
+                .map(|index| PathBuf::from(format!("/photos/{index}.jpg")))
+                .collect();
+            app.gallery.filtered_indices = (0..count).collect();
+            let width = app.gallery.thumb_cols * 3;
+            let height = app.gallery.cell_height_total();
+            app.gallery.update_grid(Rect::new(0, 0, width, height));
+            for index in 0..count {
+                app.thumb_cache.insert(index, RgbaImage::new(4, 4));
+            }
+            app
+        }
+
+        /// The write half of `render_gallery_images`, for the visible cells of the grid.
+        fn place_visible(app: &mut App, out: &mut Vec<u8>) {
+            let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
+            place_gallery_images_to(app, &visible, out).unwrap();
+        }
+
+        #[test]
+        fn fullscreen_centers_the_image_in_a_synchronized_update() {
+            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            app.loaded = Some(RgbaImage::new(16, 32));
+            app.image_rect = Rect::new(2, 1, 10, 10);
+            app.transmitted_image_ids.insert(7);
+            let mut out = Vec::new();
+
+            render_fullscreen_image_to(&mut app, &mut out).unwrap();
+
+            let text = text(&out);
+            assert!(text.starts_with("\x1b[?2026h"));
+            assert!(text.ends_with("\x1b[?2026l"));
+            assert!(text.contains(DELETE_ALL));
+            assert!(text.contains("\x1b[6;7H"), "2 by 2 cells in the middle");
+            assert!(text.contains(TRANSMIT));
+            assert!(app.transmitted_image_ids.is_empty());
+        }
+
+        #[test]
+        fn fullscreen_without_an_image_only_deletes() {
+            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            let mut out = Vec::new();
+
+            render_fullscreen_image_to(&mut app, &mut out).unwrap();
+
+            let text = text(&out);
+            assert!(text.contains(DELETE_ALL));
+            assert!(!text.contains(TRANSMIT));
+        }
+
+        #[test]
+        fn gallery_transmits_once_and_then_places_by_id() {
+            let mut app = thumbnail_app(3);
+            app.graphics_storage_dirty = true;
+            let mut out = Vec::new();
+
+            place_visible(&mut app, &mut out);
+
+            let first = text(&out);
+            assert!(first.contains(DELETE_ALL));
+            assert_eq!(first.matches(TRANSMIT).count(), 3);
+            assert!(!first.contains(PLACE));
+            assert_eq!(app.transmitted_image_ids.len(), 3);
+            assert!(!app.graphics_storage_dirty);
+
+            out.clear();
+            place_visible(&mut app, &mut out);
+
+            let second = text(&out);
+            assert!(second.starts_with(CLEAR_PLACEMENTS));
+            assert!(!second.contains(DELETE_ALL));
+            assert!(!second.contains(TRANSMIT));
+            assert_eq!(second.matches(PLACE).count(), 3);
+        }
+
+        #[test]
+        fn gallery_skips_a_cell_without_a_thumbnail() {
+            let mut app = thumbnail_app(2);
+            app.images.push(PathBuf::from("/photos/missing.jpg"));
+            app.gallery.filtered_indices.push(2);
+            let mut out = Vec::new();
+
+            place_visible(&mut app, &mut out);
+
+            assert_eq!(text(&out).matches(TRANSMIT).count(), 2);
+            assert_eq!(app.transmitted_image_ids.len(), 2);
+        }
+
+        #[test]
+        fn new_thumbnails_go_out_without_a_delete() {
+            let mut app = thumbnail_app(3);
+            let mut out = Vec::new();
+
+            emit_new_thumbnails_to(&mut app, &[1, 2, 5], &mut out).unwrap();
+
+            let text = text(&out);
+            assert_eq!(text.matches(TRANSMIT).count(), 2);
+            assert!(!text.contains("\x1b_Ga=d"));
+            assert_eq!(app.transmitted_image_ids.len(), 2);
+            assert!(text.contains(&format!("\x1b[2;{}H", app.gallery.thumb_cols + 2)));
+        }
+
+        #[cfg(feature = "video")]
+        #[test]
+        fn a_video_without_a_frame_writes_nothing() {
+            let app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            let mut out = Vec::new();
+
+            super::super::render_video_frame_to(&app, &mut out).unwrap();
+
+            assert!(out.is_empty());
+        }
+
+        #[test]
+        fn the_cell_size_is_never_zero() {
+            let (width, height) = query_cell_pixel_size();
+
+            assert!(width >= 1 && height >= 1);
+        }
+
+        fn window(columns: u16, rows: u16, width: u16, height: u16) -> WindowSize {
+            WindowSize {
+                rows,
+                columns,
+                width,
+                height,
+            }
+        }
+
+        #[test]
+        fn the_cell_size_divides_the_pixels_by_the_cells() {
+            assert_eq!(cell_pixel_size(&window(100, 50, 1000, 1100)), (10, 22));
+        }
+
+        #[test]
+        fn a_missing_pixel_report_gives_the_default_cell_size() {
+            assert_eq!(cell_pixel_size(&window(100, 50, 0, 0)), (8, 16));
+            assert_eq!(cell_pixel_size(&window(0, 0, 1000, 1100)), (8, 16));
+            assert_eq!(cell_pixel_size(&window(100, 50, 0, 1100)), (8, 22));
+        }
+
+        #[test]
+        fn a_tiny_pixel_report_gives_at_least_one_pixel() {
+            assert_eq!(cell_pixel_size(&window(100, 50, 10, 10)), (1, 1));
+        }
+
+        #[test]
+        fn the_loop_state_starts_without_a_status() {
+            let config = Config {
+                video_player: crate::config::VideoPlayer::Builtin,
+                ..Config::default()
+            };
+
+            let state = LoopState::new(&config);
+
+            assert_eq!(state.status, None);
+            #[cfg(feature = "video")]
+            {
+                assert_eq!(state.player, crate::mpv::Player::Builtin);
+                assert_eq!(
+                    state.fallback_note, None,
+                    "the user chose the built-in player"
+                );
+            }
         }
     }
 }
