@@ -54,7 +54,8 @@ The repository pins the toolchain, the formatter and the lints:
 
 Files at run time:
 
-- Config: `~/.config/viewr/config.toml`, or `$XDG_CONFIG_HOME/viewr/config.toml`.
+- Config: `~/.config/viewr/config.toml`, or `$XDG_CONFIG_HOME/viewr/config.toml`. The sections
+  are `[gallery]`, `[slideshow]`, `[info]` and `[video]`.
 - State (the remembered thumbnail size): `~/.local/state/viewr/state.toml`.
 - Thumbnail cache: `~/Library/Caches/viewr/`, pruned at 512 MB.
 
@@ -134,10 +135,21 @@ missing.
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `theme.rs`: themes, the theme catalog and the shared theme file.
 - `config.rs`: `config.toml` and the state file.
-- `video.rs` (feature `video`): FFmpeg playback in a thread, and first-frame thumbnails.
+- `video.rs` (feature `video`): the built-in FFmpeg player in a thread, and first-frame
+  thumbnails.
+- `mpv.rs` (feature `video`): video playback in mpv. The PATH lookup, the argument lists, the
+  exit notes and the `Runner` trait for the process start.
 - `encoder/`: the Kitty graphics protocol (`KittyBackend`).
 
 ## Gotchas
+
+- **The mpv hand-off keeps raw mode and the alternate screen.** viewr deletes the Kitty images,
+  runs mpv with `--vo-kitty-alt-screen=no` and waits. Raw mode keeps ISIG off, so Ctrl+C, Ctrl+\
+  and Ctrl+Z reach mpv as keys and do not stop viewr. After mpv, viewr drops the queued input,
+  deletes the images and clears the screen. Tests use a fake `mpv::Runner` and a fake
+  `TerminalHandoff`. Never start a real mpv in a test.
+- **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `main.rs`. `App` holds no
+  status note. The next key press clears it.
 
 - **Kitty images are not ratatui widgets.** ratatui draws the frame and the borders. viewr then
   writes the pictures with Kitty escape sequences at the cell positions of the last draw. A

@@ -115,6 +115,12 @@ desc = "Image grid (viewr)"
 | `Esc` | Stop the slideshow, or back to the gallery |
 | `q` | Quit |
 
+### Video
+
+viewr gives a video to mpv. All mpv keys work: `Space` pauses, `←` / `→` seek, `f` toggles fullscreen in window mode. `q` or `Ctrl-c` stops mpv, and viewr shows the gallery with the cursor on the video.
+
+The built-in player (`[video] player = "builtin"`) keeps its keys: `Space`, `←` / `→`, `h` / `l`, `Home` / `End`, `d` / `D`, `Esc`, `q`.
+
 ## Configuration
 
 viewr reads `~/.config/viewr/config.toml`. If `XDG_CONFIG_HOME` is set, viewr reads `$XDG_CONFIG_HOME/viewr/config.toml`.
@@ -134,7 +140,15 @@ loop = true          # start over after the last image
 
 [info]
 show_on_start = false
+
+[video]
+# "terminal" (default): mpv plays in this terminal with --vo=kitty. Press q in mpv to go back.
+# "window": mpv plays in a window of its own, and viewr keeps running.
+# "builtin": the built-in FFmpeg player (10 fps, no sound).
+player = "terminal"
 ```
+
+If mpv is not on PATH, viewr uses the built-in player and shows a note.
 
 When you zoom the grid with `+` / `-`, viewr writes the new size to `~/.local/state/viewr/state.toml`. On the next start, that size wins over `[gallery]`. `0` returns to the configured size and erases the remembered size.
 
@@ -152,7 +166,7 @@ viewr loads themes from the `theme` and `theme_catalog` keys above. `-t` sets th
 
 viewr applies the EXIF orientation of JPEG, TIFF, WebP and PNG files, so portrait photos show upright.
 
-**Video** (feature `video`): MP4, MOV, MKV, AVI, WebM, M4V. Playback loops at up to 10 fps. Gallery thumbnails use the first frame.
+**Video** (feature `video`): MP4, MOV, MKV, AVI, WebM, M4V. mpv plays the video in a loop. Gallery thumbnails use the first frame, which FFmpeg decodes.
 
 ## Development
 

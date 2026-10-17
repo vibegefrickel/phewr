@@ -7,7 +7,10 @@
 
 ## Next
 
-- Play videos in mpv (mpv is a dependency of the formula, the code does not use it yet)
+- After mpv, go back to the fullscreen view instead of the gallery (needs `app.rs`: remember the mode before the video)
+- Next and previous video from inside mpv (for example mpv key bindings that run `quit <code>`)
+- Prefetch: drop stale results after `invalidate()` (a generation counter like `thumb_generation`), and retry an index after a failed decode
+- Make sure that the mpv hand-off works in Ghostty, Kitty and WezTerm (the worker tested it only in a herdr pane)
 - Modern formats: JPEG XL (jxl-oxide), EXR/HDR/QOI/TGA in the scanner, Live Photo pairing, animated GIF/WebP/APNG/AVIS, RAW through ImageIO
 - HEIC thumbnails: a full check of the 180° rotation and the mirror needs one `#[expect(unsafe_code)]` call into libheif (decision open)
 - libheif path: scale with fast_image_resize instead of the nearest-neighbour scaling of libheif
@@ -30,5 +33,6 @@
 - Slideshow with interval, pause and loop (`s`, `Space`, `[` / `]`, `--slideshow`)
 - Info panel with file data and EXIF (`i`, `--info`)
 - HEIC / HEIF decoding through libheif
+- Video playback in mpv (`[video] player`: terminal, window, builtin)
 - AVIF through libheif, embedded HEIC grid thumbnails, EXIF orientation for WebP and PNG
 - EXIF orientation applied to JPEG / TIFF
