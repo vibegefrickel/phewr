@@ -1,3 +1,4 @@
+use crate::config;
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
@@ -64,11 +65,15 @@ struct ThemeFile {
 
 pub(crate) fn load_themes(cli_theme: Option<&str>) -> Result<ThemeSet, String> {
     let home = home_dir();
-    load_themes_at(&home, cli_theme)
+    let config_path = config::config_path(&home);
+    load_themes_at(&home, &config_path, cli_theme)
 }
 
-fn load_themes_at(home: &Path, cli_theme: Option<&str>) -> Result<ThemeSet, String> {
-    let config_path = home.join(".config/viewr/config.toml");
+fn load_themes_at(
+    home: &Path,
+    config_path: &Path,
+    cli_theme: Option<&str>,
+) -> Result<ThemeSet, String> {
     let config = std::fs::read_to_string(config_path)
         .ok()
         .and_then(|contents| toml::from_str::<AppConfig>(&contents).ok())
@@ -89,9 +94,8 @@ fn load_themes_at(home: &Path, cli_theme: Option<&str>) -> Result<ThemeSet, Stri
 
     let configured = cli_theme.or(config.theme.as_deref());
     let strict = cli_theme.is_some();
-    let selected = configured
-        .and_then(|value| select_theme(value, home, &mut themes, &mut loaded_paths))
-        .or_else(|| (!themes.is_empty()).then_some(0));
+    let selected =
+        configured.and_then(|value| select_theme(value, home, &mut themes, &mut loaded_paths));
 
     if strict && selected.is_none() {
         let available = themes
@@ -110,14 +114,16 @@ fn load_themes_at(home: &Path, cli_theme: Option<&str>) -> Result<ThemeSet, Stri
         ));
     }
 
-    let selected = selected.unwrap_or_else(|| {
-        themes.push(NamedTheme {
-            name: "tokyo night moon fallback".to_owned(),
-            path: None,
-            theme: Theme::fallback(),
+    let selected = selected
+        .or_else(|| (!themes.is_empty()).then_some(0))
+        .unwrap_or_else(|| {
+            themes.push(NamedTheme {
+                name: "tokyo night moon fallback".to_owned(),
+                path: None,
+                theme: Theme::fallback(),
+            });
+            0
         });
-        0
-    });
 
     Ok(ThemeSet { themes, selected })
 }
@@ -365,6 +371,7 @@ fn normalized_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use tempfile::TempDir;
 
     const SHARED_THEME: &str = r##"
@@ -428,7 +435,7 @@ error = "red"
         );
         let config_path = write_config(home, &config);
 
-        let set = load_themes_at(home, None).unwrap();
+        let set = load_themes_at(home, &config_path, None).unwrap();
 
         assert_eq!(set.themes.len(), 1);
         assert_eq!(set.themes[0].name, "synthetic theme");
@@ -439,7 +446,9 @@ error = "red"
     #[test]
     fn no_config_falls_back_to_the_built_in_theme() {
         let root = test_root();
-        let set = load_themes_at(root.path(), None).unwrap();
+        let home = root.path();
+        let config_path = default_config_path(home);
+        let set = load_themes_at(home, &config_path, None).unwrap();
         assert_eq!(set.themes.len(), 1);
         assert_eq!(set.themes[0].name, "tokyo night moon fallback");
         assert!(set.themes[0].path.is_none());
@@ -458,16 +467,17 @@ error = "red"
                 "~/themes/catppuccin-mocha.toml",
             ],
         );
+        let config_path = default_config_path(home);
 
-        let set = load_themes_at(home, Some("Tokyo_Night")).unwrap();
+        let set = load_themes_at(home, &config_path, Some("Tokyo_Night")).unwrap();
         assert_eq!(set.themes.len(), 2);
         assert_eq!(set.selected, 0);
 
-        let set = load_themes_at(home, Some("catppuccin")).unwrap();
+        let set = load_themes_at(home, &config_path, Some("catppuccin")).unwrap();
         assert_eq!(set.themes[set.selected].name, "catppuccin mocha");
 
         // Without a theme setting, the first catalog entry wins.
-        let set = load_themes_at(home, None).unwrap();
+        let set = load_themes_at(home, &config_path, None).unwrap();
         assert_eq!(set.selected, 0);
     }
 
@@ -486,8 +496,9 @@ error = "red"
             "[colors]\nbg = \"#222436\"\n",
         )
         .unwrap();
+        let config_path = default_config_path(home);
 
-        let set = load_themes_at(home, None).unwrap();
+        let set = load_themes_at(home, &config_path, None).unwrap();
         assert_eq!(set.themes.len(), 1);
         assert_eq!(set.themes[0].name, "one");
     }
@@ -498,14 +509,15 @@ error = "red"
         let home = root.path();
         write_catalog(home, &["~/themes/listed.toml"]);
         std::fs::write(home.join("extra-theme.toml"), SHARED_THEME).unwrap();
+        let config_path = default_config_path(home);
 
-        let set = load_themes_at(home, Some("~/extra-theme.toml")).unwrap();
+        let set = load_themes_at(home, &config_path, Some("~/extra-theme.toml")).unwrap();
         assert_eq!(set.themes.len(), 2);
         assert_eq!(set.selected, 1);
         assert_eq!(set.themes[1].name, "extra theme");
 
         // A catalog file as the theme selects the entry and loads nothing twice.
-        let set = load_themes_at(home, Some("~/themes/listed.toml")).unwrap();
+        let set = load_themes_at(home, &config_path, Some("~/themes/listed.toml")).unwrap();
         assert_eq!(set.themes.len(), 1);
         assert_eq!(set.selected, 0);
     }
@@ -514,8 +526,11 @@ error = "red"
     fn unknown_cli_theme_without_a_catalog_is_an_error() {
         let root = test_root();
         let home = root.path();
+        let config_path = default_config_path(home);
 
-        let error = load_themes_at(home, Some("nope")).err().unwrap();
+        let error = load_themes_at(home, &config_path, Some("nope"))
+            .err()
+            .unwrap();
         assert_eq!(
             error,
             "theme 'nope' is not a readable file or configured catalog entry"
@@ -524,7 +539,7 @@ error = "red"
         // A broken theme file named on the command line is an error too.
         let broken = home.join("broken.toml");
         std::fs::write(&broken, "not toml [").unwrap();
-        assert!(load_themes_at(home, Some(broken.to_str().unwrap())).is_err());
+        assert!(load_themes_at(home, &config_path, Some(broken.to_str().unwrap())).is_err());
     }
 
     #[test]
@@ -532,11 +547,11 @@ error = "red"
         let root = test_root();
         let home = root.path();
         write_catalog(home, &["~/themes/alpha.toml"]);
-        let config_path = home.join(".config/viewr/config.toml");
+        let config_path = default_config_path(home);
         let config = std::fs::read_to_string(&config_path).unwrap();
         std::fs::write(&config_path, format!("theme = \"nope\"\n{config}")).unwrap();
 
-        let set = load_themes_at(home, None).unwrap();
+        let set = load_themes_at(home, &config_path, None).unwrap();
         assert_eq!(set.selected, 0);
         assert_eq!(set.themes[0].name, "alpha");
     }
@@ -594,6 +609,11 @@ error = "red"
         tempfile::tempdir().unwrap()
     }
 
+    /// The config file path that `load_themes` would use when `XDG_CONFIG_HOME` is not set.
+    fn default_config_path(home: &Path) -> PathBuf {
+        config::config_path_for(home, None)
+    }
+
     /// Write `config.toml` below `home` and return its path.
     fn write_config(home: &Path, contents: &str) -> PathBuf {
         let config_dir = home.join(".config/viewr");
@@ -619,5 +639,68 @@ error = "red"
         std::fs::write(&catalog, format!("themes = [{list}]\n")).unwrap();
         write_config(home, "theme_catalog = \"~/catalog.toml\"\n");
         catalog
+    }
+
+    #[test]
+    fn unknown_cli_theme_with_catalog_lists_available_names() {
+        let root = test_root();
+        let home = root.path();
+        write_catalog(home, &["~/themes/alpha.toml", "~/themes/beta.toml"]);
+        let config_path = default_config_path(home);
+
+        let error = load_themes_at(home, &config_path, Some("nope"))
+            .err()
+            .unwrap();
+
+        assert!(error.contains("theme 'nope' is not a readable file or configured catalog entry"));
+        assert!(
+            error.contains("available: alpha, beta"),
+            "error was: {error}"
+        );
+    }
+
+    #[test]
+    fn theme_and_config_read_the_same_xdg_config_file() {
+        let root = test_root();
+        let home = root.path().join("home");
+        let xdg = root.path().join("xdg");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&xdg).unwrap();
+        let config_path = config::config_path_for(&home, Some(OsString::from(&xdg)));
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        assert_eq!(config_path, xdg.join("viewr/config.toml"));
+
+        // A decoy config below home must lose against the XDG config.
+        let decoy_config = config::config_path_for(&home, None);
+        std::fs::create_dir_all(decoy_config.parent().unwrap()).unwrap();
+
+        let custom_theme = home.join("custom.toml");
+        let decoy_theme = home.join("decoy.toml");
+        std::fs::write(&custom_theme, SHARED_THEME).unwrap();
+        std::fs::write(&decoy_theme, SHARED_THEME).unwrap();
+
+        std::fs::write(
+            &decoy_config,
+            format!("theme = \"{}\"\n", decoy_theme.display()),
+        )
+        .unwrap();
+        std::fs::write(
+            &config_path,
+            format!(
+                "theme = \"{}\"\n[gallery]\nthumb_cols = 55\n",
+                custom_theme.display()
+            ),
+        )
+        .unwrap();
+
+        let set = load_themes_at(&home, &config_path, None).unwrap();
+        assert_eq!(set.themes.len(), 1);
+        assert_eq!(set.themes[0].name, "custom");
+        assert_eq!(set.selected, 0);
+
+        // config.rs reads the same file, so the gallery key is visible there too.
+        let state_path = home.join(".local/state/viewr/state.toml");
+        let config = config::load_at(&config_path, &state_path);
+        assert_eq!(config.thumb_cols, 55);
     }
 }

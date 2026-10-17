@@ -116,7 +116,7 @@ pub(crate) fn load() -> Config {
     load_at(&config_path(&home), &state_path(&home))
 }
 
-fn load_at(config_path: &Path, state_path: &Path) -> Config {
+pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     let mut config = Config::default();
 
     let file = std::fs::read_to_string(config_path)
@@ -202,13 +202,12 @@ fn write_state(path: &Path, state: &StateFile) {
     }
 }
 
-fn config_path(home: &Path) -> PathBuf {
-    xdg_path(
-        std::env::var_os("XDG_CONFIG_HOME"),
-        home,
-        ".config",
-        "viewr/config.toml",
-    )
+pub(crate) fn config_path(home: &Path) -> PathBuf {
+    config_path_for(home, std::env::var_os("XDG_CONFIG_HOME"))
+}
+
+pub(crate) fn config_path_for(home: &Path, xdg_config_home: Option<OsString>) -> PathBuf {
+    xdg_path(xdg_config_home, home, ".config", "viewr/config.toml")
 }
 
 fn state_path(home: &Path) -> PathBuf {
