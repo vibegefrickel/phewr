@@ -2,14 +2,13 @@
 
 ## Now
 
-- Testing phase: measure the coverage baseline (`just coverage`), then add tests for the weak modules
+- Testing phase: tests for `app.rs` and `main.rs` (the other modules are at 87 to 100%)
 - Use `tempfile` in the tests instead of hand-made directories below `std::env::temp_dir()`
 
 ## Next
 
-- After mpv, go back to the fullscreen view instead of the gallery (needs `app.rs`: remember the mode before the video)
+- Slideshow: continue after mpv instead of a stop at the video (decision open)
 - Next and previous video from inside mpv (for example mpv key bindings that run `quit <code>`)
-- Prefetch: drop stale results after `invalidate()` (a generation counter like `thumb_generation`), and retry an index after a failed decode
 - Make sure that the mpv hand-off works in Ghostty, Kitty and WezTerm (the worker tested it only in a herdr pane)
 - Modern formats: JPEG XL (jxl-oxide), EXR/HDR/QOI/TGA in the scanner, Live Photo pairing, animated GIF/WebP/APNG/AVIS, RAW through ImageIO
 - HEIC thumbnails: a full check of the 180° rotation and the mirror needs one `#[expect(unsafe_code)]` call into libheif (decision open)
@@ -34,5 +33,7 @@
 - Info panel with file data and EXIF (`i`, `--info`)
 - HEIC / HEIF decoding through libheif
 - Video playback in mpv (`[video] player`: terminal, window, builtin)
+- Return to the view that opened a video, video placeholder in fullscreen
+- Prefetch: generation counter against stale results, no retry loop after a failed decode
 - AVIF through libheif, embedded HEIC grid thumbnails, EXIF orientation for WebP and PNG
 - EXIF orientation applied to JPEG / TIFF

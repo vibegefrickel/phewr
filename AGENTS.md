@@ -130,7 +130,8 @@ missing.
 - `scanner.rs`: the background directory scan and the lists of supported extensions.
   `LIBHEIF_EXTENSIONS` is the one list for the libheif route.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
-- `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time.
+- `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. Results carry a
+  generation. `invalidate()` drops the jobs in flight and forgets the failed indices.
 - `picker.rs`: the directory picker. `search.rs`: fuzzy filename search (nucleo-matcher).
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `theme.rs`: themes, the theme catalog and the shared theme file.
@@ -148,6 +149,10 @@ missing.
   and Ctrl+Z reach mpv as keys and do not stop viewr. After mpv, viewr drops the queued input,
   deletes the images and clears the screen. Tests use a fake `mpv::Runner` and a fake
   `TerminalHandoff`. Never start a real mpv in a test.
+- **Video placeholder:** after mpv, and after Esc in the built-in player, `App::video_return`
+  selects the view. A video in `ViewMode::Fullscreen` is a placeholder
+  (`shows_video_placeholder`). `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because
+  the image decode cannot read a video.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `main.rs`. `App` holds no
   status note. The next key press clears it.
 

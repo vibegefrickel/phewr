@@ -112,12 +112,18 @@ desc = "Image grid (viewr)"
 | `[` `]` | Shorter / longer interval (0.5 s steps) |
 | `i` | Toggle the info panel |
 | `d` `D` | Trash / permanently delete, with confirm |
+| `Enter` | Play the video again (on a video placeholder) |
 | `Esc` | Stop the slideshow, or back to the gallery |
 | `q` | Quit |
 
 ### Video
 
-viewr gives a video to mpv. All mpv keys work: `Space` pauses, `←` / `→` seek, `f` toggles fullscreen in window mode. `q` or `Ctrl-c` stops mpv, and viewr shows the gallery with the cursor on the video.
+viewr gives a video to mpv. All mpv keys work: `Space` pauses, `←` / `→` seek, `f` toggles fullscreen in window mode. `q` or `Ctrl-c` stops mpv. viewr then goes back to the view that opened the video:
+
+- From the gallery (`Enter`), viewr shows the gallery with the cursor on the video.
+- From fullscreen (`←` / `→`, `Home` / `End`), viewr stays on the video and shows "video: press Enter to play". `Enter` plays the video again, and `←` / `→` step on. A slideshow stops at a video.
+
+In fullscreen, a status note (for example "clip.mp4 plays in an mpv window") replaces the key hints until the next key press.
 
 The built-in player (`[video] player = "builtin"`) keeps its keys: `Space`, `←` / `→`, `h` / `l`, `Home` / `End`, `d` / `D`, `Esc`, `q`.
 
