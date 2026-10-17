@@ -109,4 +109,59 @@ mod tests {
         assert!(encoded.contains(",s=2,v=3,i=7,"));
         assert!(encoded.ends_with("\u{1b}\\"));
     }
+
+    #[test]
+    fn transmission_includes_cell_size_options() {
+        let image = RgbaImage::new(2, 3);
+        let mut output = Vec::new();
+        encode_png_to(
+            &mut output,
+            &image,
+            &DisplayOptions {
+                id: None,
+                cols: Some(4),
+                rows: Some(2),
+            },
+        )
+        .unwrap();
+        let encoded = String::from_utf8(output).unwrap();
+        assert!(encoded.contains(",c=4,r=2,"));
+    }
+
+    #[test]
+    fn large_payload_is_split_into_chunks() {
+        // Non-uniform 2000x1 RGBA data: the raw base64 path and the SSH PNG path
+        // both produce more than 4096 bytes of payload, so the encoder must chunk.
+        let image = RgbaImage::from_fn(2000, 1, |x, _y| {
+            image::Rgba([
+                (x & 0xFF) as u8,
+                ((x * 7) & 0xFF) as u8,
+                ((x * 13) & 0xFF) as u8,
+                255,
+            ])
+        });
+        let mut output = Vec::new();
+        encode_png_to(
+            &mut output,
+            &image,
+            &DisplayOptions {
+                id: None,
+                cols: None,
+                rows: None,
+            },
+        )
+        .unwrap();
+        let encoded = String::from_utf8(output).unwrap();
+
+        let first_semicolon = encoded.find(';').expect("semicolon after first header");
+        let (first_header, _rest) = encoded.split_at(first_semicolon);
+        assert!(
+            first_header.ends_with(",m=1"),
+            "first header should request more chunks"
+        );
+        assert!(
+            encoded.contains("\x1b_Gm=0;"),
+            "last chunk should not request more"
+        );
+    }
 }

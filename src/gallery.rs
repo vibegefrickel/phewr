@@ -244,7 +244,7 @@ impl ThumbnailCache {
 
 #[cfg(test)]
 mod tests {
-    use super::GalleryState;
+    use super::{GalleryState, ThumbnailCache};
     use crate::config::{DEFAULT_THUMB_COLS, MAX_THUMB_COLS, MIN_THUMB_COLS};
     use ratatui::layout::Rect;
 
@@ -299,5 +299,118 @@ mod tests {
         assert!(gallery.reset_thumb_size());
         assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (20, 8));
         assert!(!gallery.reset_thumb_size());
+    }
+
+    #[test]
+    fn selected_index_follows_filtered_indices() {
+        let mut gallery = GalleryState::new(5);
+        gallery.filtered_indices = vec![4, 2, 0];
+        gallery.cursor = 1;
+
+        assert_eq!(gallery.selected_index(), Some(2));
+    }
+
+    #[test]
+    fn cursor_row_matches_grid_columns() {
+        let mut gallery = GalleryState::new(15);
+        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 3, 20));
+
+        gallery.move_to_first();
+        for _ in 0..4 {
+            gallery.move_right();
+        }
+        assert_eq!(gallery.cursor_row(), 1);
+        gallery.move_down();
+        gallery.move_down();
+        assert_eq!(gallery.cursor_row(), 3);
+    }
+
+    #[test]
+    fn directional_moves_within_grid_bounds() {
+        let mut gallery = GalleryState::new(12);
+        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 3, 20));
+
+        gallery.move_right();
+        assert_eq!(gallery.selected_index(), Some(1));
+        gallery.move_down();
+        assert_eq!(gallery.selected_index(), Some(4));
+        gallery.move_left();
+        assert_eq!(gallery.selected_index(), Some(3));
+        gallery.move_up();
+        assert_eq!(gallery.selected_index(), Some(0));
+        gallery.move_to_last();
+        assert_eq!(gallery.selected_index(), Some(11));
+        gallery.move_to_first();
+        assert_eq!(gallery.selected_index(), Some(0));
+    }
+
+    #[test]
+    fn page_moves_jump_by_visible_rows() {
+        let mut gallery = GalleryState::new(20);
+        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 4, 24));
+
+        gallery.move_page_down();
+        assert_eq!(gallery.selected_index(), Some(8));
+        gallery.move_page_down();
+        assert_eq!(gallery.selected_index(), Some(16));
+        gallery.move_page_up();
+        assert_eq!(gallery.selected_index(), Some(8));
+    }
+
+    #[test]
+    fn scroll_follows_cursor() {
+        let mut gallery = GalleryState::new(20);
+        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 4, 24));
+
+        gallery.move_page_down();
+        gallery.move_right();
+        gallery.move_right();
+        assert_eq!(gallery.selected_index(), Some(10));
+        assert_eq!(gallery.scroll_offset, 1);
+    }
+
+    #[test]
+    fn visible_items_and_cell_rect_match_geometry() {
+        let mut gallery = GalleryState::new(12);
+        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 3, 20));
+        gallery.scroll_offset = 1;
+
+        let items: Vec<_> = gallery.visible_items().collect();
+        assert_eq!(items.len(), gallery.visible_rows * gallery.grid_cols);
+
+        let first = gallery.cell_rect(0);
+        assert_eq!(first.x, gallery.grid_rect.x);
+        assert_eq!(first.y, gallery.grid_rect.y);
+        assert_eq!(first.width, gallery.thumb_cols);
+        assert_eq!(first.height, gallery.thumb_rows);
+
+        let last_col = gallery.grid_cols - 1;
+        let last = gallery.cell_rect(last_col);
+        assert_eq!(
+            last.x,
+            gallery.grid_rect.x + (last_col as u16) * gallery.thumb_cols
+        );
+    }
+
+    #[test]
+    fn thumbnail_cache_insert_peek_and_clear() {
+        let mut cache = ThumbnailCache::new();
+        let img = image::RgbaImage::new(2, 2);
+        cache.insert(0, img.clone());
+
+        assert!(cache.contains(0));
+        assert!(!cache.contains(1));
+
+        let (peeked, id) = cache.peek(0).expect("peek should return the cached image");
+        assert_eq!(peeked.dimensions(), (2, 2));
+        assert_eq!(id, 1);
+
+        cache.insert(1, img);
+        let (_, id2) = cache.peek(1).expect("second image should be cached");
+        assert_eq!(id2, 2);
+
+        cache.clear();
+        assert!(!cache.contains(0));
+        assert!(!cache.contains(1));
     }
 }

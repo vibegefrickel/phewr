@@ -107,4 +107,45 @@ mod tests {
         assert_eq!(list.drain_errors(), vec!["synthetic scanner error"]);
         assert!(list.drain_errors().is_empty());
     }
+
+    #[test]
+    fn batch_push_updates_len_and_drain_since() {
+        let list = SharedImageList::new();
+        list.push_batch(vec![PathBuf::from("a.png"), PathBuf::from("b.png")]);
+
+        assert_eq!(list.len(), 2);
+        assert!(!list.is_complete());
+
+        let (paths, filenames) = list.drain_since(0);
+        assert_eq!(paths, vec![PathBuf::from("a.png"), PathBuf::from("b.png")]);
+        assert_eq!(filenames, vec!["a.png", "b.png"]);
+
+        let (empty, _) = list.drain_since(2);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn mark_complete_and_replace_all() {
+        let list = SharedImageList::new();
+        list.push_batch(vec![PathBuf::from("a.png")]);
+        list.mark_complete();
+
+        assert!(list.is_complete());
+
+        list.replace_all(vec![PathBuf::from("x.png")], vec!["x.png".into()]);
+        assert_eq!(list.len(), 1);
+
+        let (paths, filenames) = list.drain_since(0);
+        assert_eq!(paths, vec![PathBuf::from("x.png")]);
+        assert_eq!(filenames, vec!["x.png"]);
+    }
+
+    #[test]
+    fn filenames_use_default_for_root_path() {
+        let list = SharedImageList::new();
+        list.push_batch(vec![PathBuf::from("/")]);
+
+        let (_, filenames) = list.drain_since(0);
+        assert_eq!(filenames, vec![""]);
+    }
 }

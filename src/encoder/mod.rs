@@ -51,3 +51,38 @@ impl GraphicsBackend for KittyBackend {
         kitty::place_by_id_to(out, id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DisplayOptions, GraphicsBackend, KittyBackend};
+    use image::RgbaImage;
+
+    #[test]
+    fn kitty_backend_delegates_through_trait() {
+        let backend = KittyBackend;
+        let image = RgbaImage::new(2, 2);
+        let mut out = Vec::new();
+
+        backend
+            .transmit(
+                &mut out,
+                &image,
+                &DisplayOptions {
+                    id: Some(7),
+                    cols: Some(5),
+                    rows: Some(3),
+                },
+            )
+            .unwrap();
+        backend.delete_all_to(&mut out).unwrap();
+        backend.clear_placements_to(&mut out).unwrap();
+        backend.place_by_id_to(&mut out, 9).unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(",i=7,"));
+        assert!(text.contains(",c=5,r=3,"));
+        assert!(text.contains("\x1b_Ga=d,d=A,q=2\x1b\\"));
+        assert!(text.contains("\x1b_Ga=d,d=a,q=2\x1b\\"));
+        assert!(text.contains("\x1b_Ga=p,q=2,C=1,i=9\x1b\\"));
+    }
+}
