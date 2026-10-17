@@ -10,7 +10,8 @@ use crate::search;
 use crate::theme::{NamedTheme, Theme};
 use directories::ProjectDirs;
 use fast_image_resize as fir;
-use image::{DynamicImage, ImageReader, RgbaImage};
+use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageReader, RgbaImage};
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::collections::HashSet;
@@ -681,7 +682,7 @@ impl App {
         let path = self.images[idx].clone();
         let cell_px = self.cell_px;
         rayon::spawn(move || {
-            let result = load_and_resize(&path, rect, cell_px);
+            let result = load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Deny);
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
@@ -793,7 +794,7 @@ impl App {
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
             )]
-            let _ = tx.send(decode_image_with_hint(&path, None));
+            let _ = tx.send(decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny));
         });
     }
 
@@ -1155,11 +1156,11 @@ impl App {
             let res = if crate::video::is_video(&path) {
                 crate::video::decode_first_frame(&path, rect, cell_px)
             } else {
-                load_and_resize(&path, rect, cell_px)
+                load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Allow)
             };
 
             #[cfg(not(feature = "video"))]
-            let res = load_and_resize(&path, rect, cell_px);
+            let res = load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Allow);
 
             if let Ok(img) = res {
                 try_save_to_disk_cache(&path, target_w, target_h, &img);
@@ -1276,6 +1277,7 @@ pub(crate) fn load_and_resize(
     path: &Path,
     rect: Rect,
     cell_px: (u32, u32),
+    embedded: EmbeddedThumbnail,
 ) -> io::Result<RgbaImage> {
     let target_w = u32::from(rect.width) * cell_px.0;
     let target_h = u32::from(rect.height) * cell_px.1;
@@ -1284,7 +1286,7 @@ pub(crate) fn load_and_resize(
     } else {
         None
     };
-    let img = decode_image_with_hint(path, hint)?;
+    let img = decode_image_with_hint(path, hint, embedded)?;
     Ok(resize_decoded(&img, rect, cell_px))
 }
 
@@ -1347,56 +1349,41 @@ pub(crate) fn resize_to_exact(img: &DynamicImage, dst_w: u32, dst_h: u32) -> Rgb
     RgbaImage::from_raw(dst_w, dst_h, dst_image.into_vec()).unwrap_or_else(|| img.to_rgba8())
 }
 
+/// Only grid thumbnails can use an embedded HEIF thumbnail. A camera preview can differ
+/// in color or crop from the primary image, so the fullscreen view does not use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmbeddedThumbnail {
+    Allow,
+    Deny,
+}
+
 pub(crate) fn decode_image_with_hint(
     path: &Path,
     target: Option<(u32, u32)>,
+    embedded: EmbeddedThumbnail,
 ) -> io::Result<DynamicImage> {
     #[cfg(feature = "heic")]
-    if is_heic(path) {
-        // libheif applies the file's rotation/crop transformations itself.
-        return decode_heic(path, target);
+    if decodes_with_libheif(path) {
+        // libheif applies the irot, imir and clap properties itself, so the EXIF
+        // orientation must not apply a second time.
+        return decode_with_libheif(path, target, embedded);
     }
+    #[cfg(not(feature = "heic"))]
+    let _ = embedded;
 
-    decode_raster(path, target).map(|img| apply_exif_orientation(path, img))
+    decode_raster(path, target)
 }
 
-/// Rotate/flip `img` according to the EXIF orientation tag, so phone photos
-/// show upright. Only JPEG and TIFF carry the tag in practice; other formats
-/// are returned untouched to avoid a second file read.
-fn apply_exif_orientation(path: &Path, img: DynamicImage) -> DynamicImage {
-    if !has_exif_orientation_container(path) {
-        return img;
-    }
-    match info::orientation(path) {
-        Some(2) => img.fliph(),
-        Some(3) => img.rotate180(),
-        Some(4) => img.flipv(),
-        Some(5) => img.rotate90().fliph(),
-        Some(6) => img.rotate90(),
-        Some(7) => img.rotate270().fliph(),
-        Some(8) => img.rotate270(),
-        _ => img,
-    }
-}
-
-fn has_exif_orientation_container(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        matches!(
-            e.to_ascii_lowercase().as_str(),
-            "jpg" | "jpeg" | "tif" | "tiff"
-        )
-    })
-}
-
+/// Send HEIC, HEIF and AVIF to libheif, because the `image` crate decodes none of them.
 #[cfg(feature = "heic")]
-pub(crate) fn is_heic(path: &Path) -> bool {
+pub(crate) fn decodes_with_libheif(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif" | "hif"))
+        .is_some_and(|e| scanner::LIBHEIF_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
 #[cfg(feature = "heic")]
-pub(crate) fn heic_dimensions(path: &Path) -> Option<(u32, u32)> {
+pub(crate) fn libheif_dimensions(path: &Path) -> Option<(u32, u32)> {
     let name = path.to_str()?;
     let ctx = libheif_rs::HeifContext::read_from_file(name).ok()?;
     let handle = ctx.primary_image_handle().ok()?;
@@ -1404,7 +1391,11 @@ pub(crate) fn heic_dimensions(path: &Path) -> Option<(u32, u32)> {
 }
 
 #[cfg(feature = "heic")]
-fn decode_heic(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicImage> {
+fn decode_with_libheif(
+    path: &Path,
+    target: Option<(u32, u32)>,
+    embedded: EmbeddedThumbnail,
+) -> io::Result<DynamicImage> {
     use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 
     let invalid = |e: libheif_rs::HeifError| io::Error::new(io::ErrorKind::InvalidData, e);
@@ -1412,14 +1403,20 @@ fn decode_heic(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicIma
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path is not valid UTF-8"))?;
     let ctx = HeifContext::read_from_file(name).map_err(invalid)?;
-    let handle = ctx.primary_image_handle().map_err(invalid)?;
+    let primary = ctx.primary_image_handle().map_err(invalid)?;
+    // An embedded thumbnail (iPhone: 320x240) saves the decode of the full frame.
+    let handle = target
+        .filter(|_| embedded == EmbeddedThumbnail::Allow)
+        .and_then(|target| usable_thumbnail(&primary, target))
+        .unwrap_or(primary);
     let lib_heif = LibHeif::new();
     let mut image = lib_heif
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
         .map_err(invalid)?;
 
-    // Downscale inside libheif when only a thumbnail is needed; it is much cheaper
-    // than converting the full-size frame first.
+    // libheif decodes the selected image (primary image or thumbnail) at its full size.
+    // Scale it before the RGBA copy, so that the copy stays small when only a thumbnail
+    // is necessary.
     if let Some((max_w, max_h)) = target
         && max_w > 0
         && max_h > 0
@@ -1438,11 +1435,68 @@ fn decode_heic(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicIma
         }
     }
 
+    heif_image_to_rgba(&image)
+}
+
+/// Pick the smallest embedded thumbnail that is large enough for `target`, so that the
+/// grid does not decode the full frame.
+#[cfg(feature = "heic")]
+fn usable_thumbnail(
+    primary: &libheif_rs::ImageHandle,
+    target: (u32, u32),
+) -> Option<libheif_rs::ImageHandle> {
+    let mut ids = vec![0; primary.number_of_thumbnails()];
+    let count = primary.thumbnail_ids(&mut ids);
+    ids.truncate(count);
+    let primary_size = (primary.width(), primary.height());
+    ids.into_iter()
+        .filter_map(|id| primary.thumbnail(id).ok())
+        .filter(|thumb| thumbnail_is_usable((thumb.width(), thumb.height()), primary_size, target))
+        .min_by_key(|thumb| u64::from(thumb.width()) * u64::from(thumb.height()))
+}
+
+/// Accept a thumbnail only if it is at least as large as the primary image fitted into
+/// `target`, so that the grid never upscales it. It must also have the portrait or
+/// landscape shape of the primary image.
+///
+/// libheif applies the irot and imir properties of the thumbnail item. A thumbnail
+/// without the 90 or 270 degree rotation of the primary image has the other shape and is
+/// rejected. A missing 180 degree rotation or mirror has no effect on the size, so this
+/// check cannot find it. libheif-rs has no safe API for the properties of an item.
+#[cfg(feature = "heic")]
+fn thumbnail_is_usable(thumbnail: (u32, u32), primary: (u32, u32), target: (u32, u32)) -> bool {
+    let Some(fitted) = fit_within(primary, target) else {
+        return false;
+    };
+    let covers = thumbnail.0 >= fitted.0 && thumbnail.1 >= fitted.1;
+    let same_shape = (thumbnail.0 >= thumbnail.1) == (primary.0 >= primary.1);
+    covers && same_shape
+}
+
+/// The size of `size` fitted into `target` without upscale, rounded down as
+/// `resize_decoded_to_dims` does. `None` for an empty size or target.
+#[cfg(feature = "heic")]
+fn fit_within(size: (u32, u32), target: (u32, u32)) -> Option<(u32, u32)> {
+    if size.0 == 0 || size.1 == 0 || target.0 == 0 || target.1 == 0 {
+        return None;
+    }
+    let scale = f64::min(
+        f64::from(target.0) / f64::from(size.0),
+        f64::from(target.1) / f64::from(size.1),
+    )
+    .min(1.0);
+    let fitted = |side: u32| ((f64::from(side) * scale) as u32).max(1);
+    Some((fitted(size.0), fitted(size.1)))
+}
+
+/// Copy the interleaved RGBA plane of a libheif image row by row, because rows can have padding.
+#[cfg(feature = "heic")]
+fn heif_image_to_rgba(image: &libheif_rs::Image) -> io::Result<DynamicImage> {
     let planes = image.planes();
     let plane = planes.interleaved.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "HEIC decode produced no RGBA plane",
+            "libheif decode produced no RGBA plane",
         )
     })?;
     let (w, h) = (plane.width, plane.height);
@@ -1454,7 +1508,12 @@ fn decode_heic(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicIma
     }
     RgbaImage::from_raw(w, h, pixels)
         .map(DynamicImage::ImageRgba8)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid HEIC dimensions"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid libheif image dimensions",
+            )
+        })
 }
 
 fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicImage> {
@@ -1475,13 +1534,12 @@ fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicI
         None
     };
 
-    let fallback = ImageReader::open(path)
+    let reader = ImageReader::open(path)
         .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?
         .with_guessed_format()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-        .decode();
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    match fallback {
+    match decode_upright(reader) {
         Ok(img) => Ok(img),
         Err(fallback_error) => {
             #[cfg(feature = "turbo")]
@@ -1496,6 +1554,21 @@ fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicI
             Err(io::Error::new(io::ErrorKind::InvalidData, fallback_error))
         }
     }
+}
+
+/// Decode with `image` and apply the EXIF orientation that its decoder reads (JPEG, PNG,
+/// TIFF, WebP), so that phone photos show upright.
+fn decode_upright<R: io::BufRead + io::Seek>(
+    reader: ImageReader<R>,
+) -> image::ImageResult<DynamicImage> {
+    let mut decoder = reader.into_decoder()?;
+    // A broken EXIF block must not stop the decode of the pixels.
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    // The same allocation limit as `ImageReader::decode`.
+    image::Limits::default().reserve(decoder.total_bytes())?;
+    let mut img = DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    Ok(img)
 }
 
 #[cfg(feature = "turbo")]
@@ -1569,9 +1642,15 @@ fn decode_jpeg_turbo(path: &Path, target: Option<(u32, u32)>) -> io::Result<Dyna
 
     let w = image.width as u32;
     let h = image.height as u32;
-    RgbaImage::from_raw(w, h, image.pixels)
+    let mut img = RgbaImage::from_raw(w, h, image.pixels)
         .map(DynamicImage::ImageRgba8)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid image dimensions"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid image dimensions"))?;
+    // libjpeg-turbo ignores the EXIF orientation, so phone photos need it here.
+    if let Some(orientation) = info::orientation_from_bytes(&data).and_then(Orientation::from_exif)
+    {
+        img.apply_orientation(orientation);
+    }
+    Ok(img)
 }
 
 fn get_cache_file_path(path: &Path, target_w: u32, target_h: u32) -> Option<PathBuf> {
@@ -1588,7 +1667,7 @@ fn get_cache_file_path(path: &Path, target_w: u32, target_h: u32) -> Option<Path
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     let mut hasher = DefaultHasher::new();
-    "viewr-thumbnail-v1".hash(&mut hasher);
+    "viewr-thumbnail-v2".hash(&mut hasher);
     canonical_path.hash(&mut hasher);
     metadata.len().hash(&mut hasher);
     mtime.as_secs().hash(&mut hasher);
@@ -1714,10 +1793,13 @@ fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_image_with_hint, get_cache_file_path, resize_decoded_to_dims, resize_to_exact,
+        EmbeddedThumbnail, decode_image_with_hint, get_cache_file_path, resize_decoded_to_dims,
+        resize_to_exact,
     };
-    use image::DynamicImage;
+    use image::metadata::Orientation;
+    use image::{DynamicImage, ImageDecoder, ImageEncoder, Rgb, RgbImage};
     use std::fs;
+    use std::path::PathBuf;
 
     #[cfg(feature = "turbo")]
     #[test]
@@ -1730,11 +1812,327 @@ mod tests {
             std::process::id()
         ));
         fs::write(&path, [0xFF, 0xD8, 0xFF, 0xD9]).unwrap();
-        let err = decode_image_with_hint(&path, None).unwrap_err();
+        let err = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap_err();
         let message = err.to_string();
         fs::remove_file(&path).unwrap();
         assert!(message.contains("libjpeg-turbo:"), "message: {message}");
         assert!(message.contains("image:"), "message: {message}");
+    }
+
+    const RED: [u8; 3] = [255, 0, 0];
+    const BLUE: [u8; 3] = [0, 0, 255];
+
+    /// A minimal little-endian TIFF block with one IFD entry: Orientation = 6 (rotate 90 CW).
+    const EXIF_ORIENTATION_6: [u8; 26] = [
+        b'I', b'I', 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    /// Give each test its own directory below the temp directory.
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("viewr-{name}-{}", std::process::id()));
+        if dir.exists() {
+            fs::remove_dir_all(&dir).unwrap();
+        }
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A 32x16 image: the left half is red, the right half is blue.
+    fn red_left_blue_right() -> RgbImage {
+        RgbImage::from_fn(32, 16, |x, _| Rgb(if x < 16 { RED } else { BLUE }))
+    }
+
+    fn assert_close(pixel: [u8; 4], expected: [u8; 3]) {
+        let close = pixel
+            .iter()
+            .zip(expected)
+            .all(|(&got, want)| got.abs_diff(want) < 60);
+        assert!(close, "pixel {pixel:?}, expected {expected:?}");
+    }
+
+    /// Orientation 6 turns the stored 32x16 into 16x32 with red on top and blue below.
+    fn assert_upright(decoded: &DynamicImage) {
+        let rgba = decoded.to_rgba8();
+        assert_eq!(rgba.dimensions(), (16, 32));
+        assert_close(rgba.get_pixel(8, 4).0, RED);
+        assert_close(rgba.get_pixel(8, 27).0, BLUE);
+    }
+
+    #[test]
+    fn webp_with_exif_orientation_6_decodes_upright() {
+        let dir = test_dir("synthetic-webp-orientation");
+        let path = dir.join("rotated.webp");
+        let file = fs::File::create(&path).unwrap();
+        let mut encoder = image::codecs::webp::WebPEncoder::new_lossless(file);
+        encoder
+            .set_exif_metadata(EXIF_ORIENTATION_6.to_vec())
+            .unwrap();
+        let stored = red_left_blue_right();
+        encoder
+            .write_image(stored.as_raw(), 32, 16, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let decoded = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_upright(&decoded);
+    }
+
+    #[test]
+    fn jpeg_with_exif_orientation_6_decodes_upright() {
+        let dir = test_dir("synthetic-jpeg-orientation");
+        let path = dir.join("rotated.jpg");
+        let file = fs::File::create(&path).unwrap();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 95);
+        encoder
+            .set_exif_metadata(EXIF_ORIENTATION_6.to_vec())
+            .unwrap();
+        let stored = red_left_blue_right();
+        encoder
+            .write_image(stored.as_raw(), 32, 16, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let decoded = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap();
+        let scaled = decode_image_with_hint(&path, Some((8, 8)), EmbeddedThumbnail::Deny).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_upright(&decoded);
+        assert!(
+            scaled.height() > scaled.width(),
+            "scaled decodes rotate too"
+        );
+    }
+
+    #[cfg(feature = "heic")]
+    mod libheif {
+        use super::{
+            BLUE, EmbeddedThumbnail, RED, assert_close, decode_image_with_hint, resize_to_exact,
+            test_dir,
+        };
+        use crate::app::{
+            decodes_with_libheif, fit_within, libheif_dimensions, thumbnail_is_usable,
+        };
+        use image::GenericImageView;
+        use libheif_rs::{
+            Channel, ColorSpace, CompressionFormat, EncoderQuality, EncodingOptions, HeifContext,
+            Image, ImageOrientation, LibHeif, RgbChroma,
+        };
+        use std::fs;
+        use std::path::Path;
+
+        fn solid_image(width: u32, height: u32, rgb: [u8; 3]) -> Image {
+            let mut image = Image::new(width, height, ColorSpace::Rgb(RgbChroma::Rgb)).unwrap();
+            image
+                .create_plane(Channel::Interleaved, width, height, 8)
+                .unwrap();
+            let planes = image.planes_mut();
+            let plane = planes.interleaved.unwrap();
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    let start = y * plane.stride + x * 3;
+                    plane.data[start..start + 3].copy_from_slice(&rgb);
+                }
+            }
+            image
+        }
+
+        fn options(orientation: ImageOrientation) -> EncodingOptions {
+            let mut options = EncodingOptions::new().unwrap();
+            options.set_image_orientation(orientation);
+            options
+        }
+
+        /// Write a red 256x128 primary image. A blue thumbnail of 64x32 is optional, with
+        /// its own orientation.
+        fn write_heif(
+            path: &Path,
+            format: CompressionFormat,
+            orientation: ImageOrientation,
+            thumbnail: Option<ImageOrientation>,
+        ) {
+            let lib_heif = LibHeif::new();
+            let mut ctx = HeifContext::new().unwrap();
+            let mut encoder = lib_heif.encoder_for_format(format).unwrap();
+            encoder.set_quality(EncoderQuality::Lossy(90)).unwrap();
+            let primary = ctx
+                .encode_image(
+                    &solid_image(256, 128, RED),
+                    &mut encoder,
+                    Some(options(orientation)),
+                )
+                .unwrap();
+            if let Some(thumbnail_orientation) = thumbnail {
+                ctx.encode_thumbnail(
+                    &solid_image(256, 128, BLUE),
+                    &primary,
+                    64,
+                    &mut encoder,
+                    Some(options(thumbnail_orientation)),
+                )
+                .unwrap();
+            }
+            ctx.write_to_file(path.to_str().unwrap()).unwrap();
+        }
+
+        fn center(image: &image::DynamicImage) -> [u8; 4] {
+            image
+                .to_rgba8()
+                .get_pixel(image.width() / 2, image.height() / 2)
+                .0
+        }
+
+        #[test]
+        fn libheif_routing_covers_heic_and_avif() {
+            assert!(decodes_with_libheif(Path::new("IMG_0001.HEIC")));
+            assert!(decodes_with_libheif(Path::new("photo.hif")));
+            assert!(decodes_with_libheif(Path::new("photo.AVIF")));
+            assert!(!decodes_with_libheif(Path::new("photo.webp")));
+            assert!(!decodes_with_libheif(Path::new("avif")));
+        }
+
+        #[test]
+        fn thumbnail_must_cover_the_fitted_primary_and_keep_the_shape() {
+            // iPhone: 320x240 thumbnail of a 4032x3024 photo. The default grid cell on a
+            // Retina display is 18x6 cells of 17x37 px: the photo fits as 296x222.
+            assert!(thumbnail_is_usable((320, 240), (4032, 3024), (306, 222)));
+            // A wide box: the photo fits as 320x240, so the thumbnail is enough.
+            assert!(thumbnail_is_usable((320, 240), (4032, 3024), (400, 240)));
+            // The photo fits as 391x293: the thumbnail is too small.
+            assert!(!thumbnail_is_usable((320, 240), (4032, 3024), (391, 296)));
+            // Portrait photo, rotated thumbnail, tall box: the photo fits as 200x266.
+            assert!(thumbnail_is_usable((240, 320), (3024, 4032), (200, 400)));
+            // The thumbnail misses the rotation of the primary image.
+            assert!(!thumbnail_is_usable((320, 240), (3024, 4032), (200, 200)));
+            // A zero target never uses a thumbnail.
+            assert!(!thumbnail_is_usable((320, 240), (4032, 3024), (0, 100)));
+        }
+
+        #[test]
+        fn fit_within_does_not_upscale() {
+            assert_eq!(fit_within((4032, 3024), (306, 222)), Some((296, 222)));
+            assert_eq!(fit_within((100, 50), (400, 400)), Some((100, 50)));
+            assert_eq!(fit_within((100, 50), (0, 400)), None);
+            assert_eq!(fit_within((0, 50), (400, 400)), None);
+        }
+
+        #[test]
+        fn avif_opens_through_libheif() {
+            let dir = test_dir("synthetic-avif");
+            let path = dir.join("red.avif");
+            write_heif(
+                &path,
+                CompressionFormat::Av1,
+                ImageOrientation::Normal,
+                None,
+            );
+            let full = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap();
+            let thumb =
+                decode_image_with_hint(&path, Some((64, 64)), EmbeddedThumbnail::Deny).unwrap();
+            let dims = libheif_dimensions(&path);
+            fs::remove_dir_all(&dir).unwrap();
+
+            assert_eq!(full.dimensions(), (256, 128));
+            assert_close(center(&full), RED);
+            assert_eq!(thumb.dimensions(), (64, 32));
+            assert_eq!(dims, Some((256, 128)));
+        }
+
+        #[test]
+        fn heic_grid_uses_a_large_enough_thumbnail_with_its_rotation() {
+            let dir = test_dir("synthetic-heic-thumbnail");
+            let path = dir.join("rotated.heic");
+            let rotation = ImageOrientation::Rotate90Cw;
+            write_heif(&path, CompressionFormat::Hevc, rotation, Some(rotation));
+            let decode =
+                |target, embedded| decode_image_with_hint(&path, target, embedded).unwrap();
+            let full = decode(None, EmbeddedThumbnail::Allow);
+            let small = decode(Some((32, 32)), EmbeddedThumbnail::Allow);
+            let wide = decode(Some((64, 64)), EmbeddedThumbnail::Allow);
+            let large = decode(Some((100, 100)), EmbeddedThumbnail::Allow);
+            let fullscreen = decode(Some((32, 32)), EmbeddedThumbnail::Deny);
+            fs::remove_dir_all(&dir).unwrap();
+
+            assert_eq!(full.dimensions(), (128, 256));
+            assert_close(center(&full), RED);
+            // The 32x64 thumbnail covers the fitted 16x32: blue, and upright like the primary.
+            assert_eq!(small.dimensions(), (16, 32));
+            assert_close(center(&small), BLUE);
+            // In a 64x64 box the primary image fits as 32x64: the thumbnail is just enough.
+            assert_eq!(wide.dimensions(), (32, 64));
+            assert_close(center(&wide), BLUE);
+            // In a 100x100 box the primary image fits as 50x100: libheif decodes the primary.
+            assert_eq!(large.dimensions(), (50, 100));
+            assert_close(center(&large), RED);
+            // The fullscreen view never uses the embedded thumbnail.
+            assert_eq!(fullscreen.dimensions(), (16, 32));
+            assert_close(center(&fullscreen), RED);
+        }
+
+        #[test]
+        fn heic_thumbnail_without_the_rotation_is_not_used() {
+            let dir = test_dir("synthetic-heic-unrotated-thumbnail");
+            let path = dir.join("rotated.heic");
+            write_heif(
+                &path,
+                CompressionFormat::Hevc,
+                ImageOrientation::Rotate90Cw,
+                Some(ImageOrientation::Normal),
+            );
+            let small =
+                decode_image_with_hint(&path, Some((32, 32)), EmbeddedThumbnail::Allow).unwrap();
+            fs::remove_dir_all(&dir).unwrap();
+
+            assert_eq!(small.dimensions(), (16, 32));
+            assert_close(center(&small), RED);
+        }
+
+        /// Decode a real AVIF file: `VIEWR_TEST_AVIF=/path/to/image.avif cargo test -- --ignored`.
+        #[test]
+        #[ignore = "needs VIEWR_TEST_AVIF, a real AVIF file"]
+        fn decodes_avif_from_env() {
+            let path = std::env::var("VIEWR_TEST_AVIF").expect("VIEWR_TEST_AVIF not set");
+            let path = Path::new(&path);
+            let full =
+                decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
+            assert_eq!(libheif_dimensions(path), Some(full.dimensions()));
+            let thumb = decode_image_with_hint(path, Some((200, 200)), EmbeddedThumbnail::Deny)
+                .expect("scaled decode");
+            assert!(thumb.width() <= 200 && thumb.height() <= 200);
+        }
+
+        /// The grid decode of a real iPhone HEIC uses the embedded thumbnail and keeps the
+        /// shape of the full image: `VIEWR_TEST_HEIC=/path/to/photo.heic`.
+        #[test]
+        #[ignore = "needs VIEWR_TEST_HEIC, a real photo"]
+        fn heic_thumbnail_from_env() {
+            let path = std::env::var("VIEWR_TEST_HEIC").expect("VIEWR_TEST_HEIC not set");
+            let path = Path::new(&path);
+            let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
+            let primary = ctx.primary_image_handle().unwrap();
+            let thumbnail = crate::app::usable_thumbnail(&primary, (160, 160))
+                .expect("an embedded thumbnail of at least 160x160");
+            let shape = |w: u32, h: u32| w >= h;
+            assert_eq!(
+                shape(thumbnail.width(), thumbnail.height()),
+                shape(primary.width(), primary.height())
+            );
+            let thumb = decode_image_with_hint(path, Some((160, 160)), EmbeddedThumbnail::Allow)
+                .expect("thumbnail decode");
+            assert_eq!(
+                shape(thumb.width(), thumb.height()),
+                shape(primary.width(), primary.height())
+            );
+            // A shape check misses a 180 degree turn: compare the pixels with the primary image.
+            let full =
+                decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
+            let reference = resize_to_exact(&full, thumb.width(), thumb.height());
+            let thumb = thumb.to_rgba8();
+            let total: u64 = thumb
+                .as_raw()
+                .iter()
+                .zip(reference.as_raw())
+                .map(|(&a, &b)| u64::from(a.abs_diff(b)))
+                .sum();
+            let mean = total / thumb.as_raw().len() as u64;
+            assert!(mean < 20, "mean pixel difference {mean}");
+        }
     }
 
     #[test]
@@ -1786,20 +2184,28 @@ mod tests {
     fn decodes_jpeg_upright_from_env() {
         let path = std::env::var("VIEWR_TEST_JPEG").expect("VIEWR_TEST_JPEG not set");
         let path = std::path::Path::new(&path);
-        let orientation = crate::info::orientation(path).expect("orientation tag");
-        let stored = image::ImageReader::open(path)
+        let mut decoder = image::ImageReader::open(path)
             .unwrap()
-            .into_dimensions()
+            .into_decoder()
             .unwrap();
-        let decoded = decode_image_with_hint(path, None).expect("decode");
-        let expected = if matches!(orientation, 5..=8) {
+        let orientation = decoder.orientation().expect("orientation tag");
+        let stored = decoder.dimensions();
+        let decoded = decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("decode");
+        let expected = if matches!(
+            orientation,
+            Orientation::Rotate90
+                | Orientation::Rotate270
+                | Orientation::Rotate90FlipH
+                | Orientation::Rotate270FlipH
+        ) {
             (stored.1, stored.0)
         } else {
             stored
         };
         assert_eq!((decoded.width(), decoded.height()), expected);
         // Scaled decodes must be rotated the same way.
-        let small = decode_image_with_hint(path, Some((300, 300))).expect("scaled decode");
+        let small = decode_image_with_hint(path, Some((300, 300)), EmbeddedThumbnail::Deny)
+            .expect("scaled decode");
         assert_eq!(small.width() < small.height(), expected.0 < expected.1);
     }
 
@@ -1810,16 +2216,18 @@ mod tests {
     fn decodes_heic_from_env() {
         let path = std::env::var("VIEWR_TEST_HEIC").expect("VIEWR_TEST_HEIC not set");
         let path = std::path::Path::new(&path);
-        let full = decode_image_with_hint(path, None).expect("full decode");
+        let full =
+            decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
         assert!(full.width() > 0 && full.height() > 0);
-        let thumb = decode_image_with_hint(path, Some((200, 200))).expect("scaled decode");
+        let thumb = decode_image_with_hint(path, Some((200, 200)), EmbeddedThumbnail::Deny)
+            .expect("scaled decode");
         assert!(
             thumb.width() <= 200 && thumb.height() <= 200,
             "{}x{}",
             thumb.width(),
             thumb.height()
         );
-        let dims = super::heic_dimensions(path).expect("dimensions");
+        let dims = super::libheif_dimensions(path).expect("dimensions");
         assert_eq!(dims, (full.width(), full.height()));
         let info = crate::info::load(path);
         assert!(

@@ -5,11 +5,12 @@ use std::thread;
 const BATCH_SIZE: usize = 64;
 
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "ico", "avif",
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "ico",
 ];
 
+/// The formats that libheif decodes. The `image` crate has no AVIF decoder, so AVIF is here.
 #[cfg(feature = "heic")]
-const HEIC_EXTENSIONS: &[&str] = &["heic", "heif", "hif"];
+pub(crate) const LIBHEIF_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "avif"];
 
 #[cfg(feature = "video")]
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
@@ -22,7 +23,7 @@ pub(crate) fn is_supported(path: &Path) -> bool {
         return true;
     }
     #[cfg(feature = "heic")]
-    if HEIC_EXTENSIONS.contains(&ext.as_str()) {
+    if LIBHEIF_EXTENSIONS.contains(&ext.as_str()) {
         return true;
     }
     #[cfg(feature = "video")]
@@ -132,6 +133,13 @@ mod tests {
     fn heic_extensions_are_supported() {
         assert!(is_supported(Path::new("IMG_0001.HEIC")));
         assert!(is_supported(Path::new("photo.heif")));
+        assert!(is_supported(Path::new("photo.AVIF")));
+    }
+
+    #[cfg(not(feature = "heic"))]
+    #[test]
+    fn avif_needs_the_heic_feature() {
+        assert!(!is_supported(Path::new("photo.avif")));
     }
 
     #[test]

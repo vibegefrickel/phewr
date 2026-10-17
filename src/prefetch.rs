@@ -1,4 +1,4 @@
-use crate::app::{decode_image_with_hint, resize_decoded_to_dims};
+use crate::app::{EmbeddedThumbnail, decode_image_with_hint, resize_decoded_to_dims};
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
@@ -82,7 +82,7 @@ impl Prefetcher {
         let path = images[index].clone();
         let hint = self.target_hint;
         rayon::spawn(move || {
-            if let Ok(img) = decode_image_with_hint(&path, hint) {
+            if let Ok(img) = decode_image_with_hint(&path, hint, EmbeddedThumbnail::Deny) {
                 let final_img = if let Some((max_w, max_h)) = hint {
                     resize_decoded_to_dims(&img, max_w, max_h)
                 } else {

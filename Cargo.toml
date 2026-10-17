@@ -127,7 +127,8 @@ crossterm = "0.29"
 directories = "6"
 fast_image_resize = "6.1"
 ffmpeg = { version = "9", optional = true, package = "ffmpeg-next" }
-image = "0.25"
+# Only the decoders for the formats that the scanner lists. AVIF goes through libheif.
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "tiff", "webp"] }
 kamadak-exif = "0.6"
 libheif-rs = { version = "3", optional = true }
 lru = "0.18"
@@ -143,7 +144,7 @@ turbojpeg = { version = "1.5", optional = true }
 default = ["turbo", "heic", "video"]
 # Fast JPEG decoding with DCT downscaling (libjpeg-turbo).
 turbo = ["dep:turbojpeg"]
-# HEIC / HEIF through the system libheif (>= 1.19).
+# HEIC / HEIF and AVIF through the system libheif (>= 1.19).
 heic = ["dep:libheif-rs"]
 # Video playback and first-frame thumbnails through the system FFmpeg (>= 7).
 video = ["dep:ffmpeg"]

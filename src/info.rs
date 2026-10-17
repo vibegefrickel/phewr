@@ -81,8 +81,8 @@ pub(crate) fn human_size(bytes: u64) -> String {
 
 fn dimensions(path: &Path) -> Option<(u32, u32)> {
     #[cfg(feature = "heic")]
-    if crate::app::is_heic(path) {
-        return crate::app::heic_dimensions(path);
+    if crate::app::decodes_with_libheif(path) {
+        return crate::app::libheif_dimensions(path);
     }
     let file = File::open(path).ok()?;
     image::ImageReader::new(BufReader::new(file))
@@ -172,11 +172,16 @@ fn read_exif(path: &Path) -> Option<exif::Exif> {
         .ok()
 }
 
-/// Read the EXIF orientation tag (1..=8) if the file carries one.
-pub(crate) fn orientation(path: &Path) -> Option<u32> {
-    let exif = read_exif(path)?;
+/// Read the EXIF orientation tag (1..=8) from JPEG bytes in memory, because libjpeg-turbo
+/// ignores it and the file is already read.
+#[cfg(feature = "turbo")]
+pub(crate) fn orientation_from_bytes(data: &[u8]) -> Option<u8> {
+    let exif = exif::Reader::new()
+        .read_from_container(&mut std::io::Cursor::new(data))
+        .ok()?;
     let field = exif.get_field(Tag::Orientation, In::PRIMARY)?;
-    field.value.get_uint(0).filter(|o| (1..=8).contains(o))
+    let orientation = u8::try_from(field.value.get_uint(0)?).ok()?;
+    (1..=8).contains(&orientation).then_some(orientation)
 }
 
 fn gps_coordinates(exif: &exif::Exif) -> Option<String> {
