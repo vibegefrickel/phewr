@@ -146,7 +146,11 @@ viewr loads themes from the `theme` and `theme_catalog` keys above. `-t` sets th
 
 ## Formats
 
-**Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, AVIF, HEIC/HEIF (feature `heic`).
+**Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO.
+
+**HEIC, HEIF and AVIF** (feature `heic`): viewr decodes these files through libheif. Without `heic`, viewr does not open AVIF. For HEIC grid thumbnails, viewr uses the thumbnail that the file holds, if it is large enough.
+
+viewr applies the EXIF orientation of JPEG, TIFF, WebP and PNG files, so portrait photos show upright.
 
 **Video** (feature `video`): MP4, MOV, MKV, AVI, WebM, M4V. Playback loops at up to 10 fps. Gallery thumbnails use the first frame.
 

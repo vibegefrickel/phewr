@@ -24,7 +24,7 @@ native Homebrew libraries. All three features are on by default.
 just                 # = just check: fmt --check, clippy -D warnings (2 feature sets), nextest, rustdoc, cargo deny
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
-just test-real       # also the ignored tests that decode VIEWR_TEST_JPEG and VIEWR_TEST_HEIC
+just test-real       # also the ignored tests that decode VIEWR_TEST_JPEG, _HEIC and _AVIF
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
 just build | run | install | uninstall
@@ -111,8 +111,10 @@ missing.
 ### Tests
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module.
-- Tests that need a real photo are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG` or
-  `VIEWR_TEST_HEIC`. `just test-real` runs them.
+- Tests that need a real photo are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
+  `VIEWR_TEST_HEIC` or `VIEWR_TEST_AVIF`. `just test-real` runs them.
+- The synthetic libheif tests encode with the aom (AVIF) and x265 (HEIC) encoder plugins of
+  Homebrew's libheif. If a plugin is missing, `just check` fails.
 - A test that writes files works in its own directory below `std::env::temp_dir()`, with the
   process id in the name, and removes it at the end.
 
@@ -120,10 +122,12 @@ missing.
 
 - `main.rs`: CLI (clap), terminal session, event loop, key handlers, Kitty output per frame.
 - `app.rs`: `App`, the whole view state. Decoding (`decode_image_with_hint`, turbojpeg,
-  libheif), resizing, the disk thumbnail cache, slideshow, zoom and pan, delete.
+  libheif for HEIC/HEIF/AVIF), resizing, the disk thumbnail cache, slideshow, zoom and pan,
+  delete.
 - `ui.rs`: the ratatui drawing of each view, the help popup and the pickers.
 - `gallery.rs`: the grid geometry, the cursor and the in-memory thumbnail cache.
-- `scanner.rs`: the background directory scan and the list of supported extensions.
+- `scanner.rs`: the background directory scan and the lists of supported extensions.
+  `LIBHEIF_EXTENSIONS` is the one list for the libheif route.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
 - `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time.
 - `picker.rs`: the directory picker. `search.rs`: fuzzy filename search (nucleo-matcher).
@@ -142,8 +146,15 @@ missing.
 - **FFmpeg versions:** `ffmpeg-next` must match the major version of Homebrew's FFmpeg.
   ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
   release binary that links the old `libavcodec.<major>.dylib` does not start.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v1`, the path, the size, the mtime
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v2`, the path, the size, the mtime
   and the target size. Change the version string when the thumbnail output changes.
+- **`image` decoders:** the `image` crate has only the decoders that the scanner lists
+  (`default-features = false`). If you add a format to the scanner, add the `image` feature
+  too. The `image` feature `avif` is the encoder, not a decoder.
+- **Embedded HEIC thumbnails:** a grid decode passes `EmbeddedThumbnail::Allow`. viewr uses the
+  embedded thumbnail if it is at least the fitted size of the primary image and has its
+  portrait or landscape shape. Fullscreen, zoom and prefetch pass `EmbeddedThumbnail::Deny`.
+  The shape guard does not detect a missing 180° rotation or mirror of the thumbnail.
 
 ## Workflow for agents
 
