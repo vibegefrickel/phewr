@@ -1,5 +1,5 @@
 use crate::config::{self, Config};
-use crate::encoder::{GraphicsBackend, KittyBackend};
+use crate::encoder::{GraphicsBackend, GraphicsOutput, KittyBackend};
 use crate::gallery::{GalleryState, ThumbnailCache};
 use crate::image_list::SharedImageList;
 use crate::info::{self, ImageInfo};
@@ -15,7 +15,7 @@ use image::{DynamicImage, ImageDecoder, ImageReader, RgbaImage};
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::collections::HashSet;
-use std::io;
+use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -84,6 +84,8 @@ pub(crate) struct App {
     pub theme_picker: Option<ThemePickerState>,
     pub cell_px: (u32, u32),
     pub graphics: KittyBackend,
+    /// Where `graphics_delete_all` and the render functions write. A test app writes to a buffer.
+    pub graphics_out: GraphicsOutput,
 
     // Info panel (gallery + fullscreen)
     pub info_visible: bool,
@@ -142,6 +144,9 @@ pub(crate) struct App {
     pub video: Option<crate::video::VideoPlayback>,
     #[cfg(feature = "video")]
     pub video_return: VideoReturn,
+    /// The slideshow position of a video in an mpv window, and the exit code of the window.
+    #[cfg(feature = "video")]
+    video_window: Option<(usize, mpsc::Receiver<Option<i32>>)>,
 
     // Scanner state
     shared_list: SharedImageList,
@@ -150,6 +155,8 @@ pub(crate) struct App {
 
     // Async filter
     filter_rx: Option<mpsc::Receiver<Vec<usize>>>,
+    /// The cursor position for the next filter result. A delete sets it, a new query clears it.
+    filter_cursor: Option<usize>,
 
     // Async thumbnails
     thumb_tx: mpsc::Sender<(u32, usize, RgbaImage)>,
@@ -169,9 +176,21 @@ impl App {
     /// fails quietly and no test can touch the real files. A test that needs them sets a temp path.
     #[cfg(test)]
     pub(crate) fn new(theme: Theme, cell_px: (u32, u32), shared_list: SharedImageList) -> Self {
-        let mut app = Self::with_config(theme, cell_px, shared_list, &Config::default());
+        Self::new_with_config(theme, cell_px, shared_list, &Config::default())
+    }
+
+    /// A test app with `config`. The Kitty sequences go to a buffer, not to the terminal.
+    #[cfg(test)]
+    pub(crate) fn new_with_config(
+        theme: Theme,
+        cell_px: (u32, u32),
+        shared_list: SharedImageList,
+        config: &Config,
+    ) -> Self {
+        let mut app = Self::with_config(theme, cell_px, shared_list, config);
         app.state_file = PathBuf::from("/dev/null/viewr/state.toml");
         app.disk_cache_dir = PathBuf::from("/dev/null/viewr/cache");
+        app.graphics_out = GraphicsOutput::buffer();
         app
     }
 
@@ -196,6 +215,7 @@ impl App {
             theme_picker: None,
             cell_px,
             graphics: KittyBackend,
+            graphics_out: GraphicsOutput::Stdout,
             info_visible: config.info_panel,
             info_cache: LruCache::new(INFO_CACHE_CAPACITY),
             state_file: config::default_state_path(),
@@ -234,10 +254,13 @@ impl App {
             video: None,
             #[cfg(feature = "video")]
             video_return: VideoReturn::Gallery,
+            #[cfg(feature = "video")]
+            video_window: None,
             shared_list,
             known_len: 0,
             scan_complete: false,
             filter_rx: None,
+            filter_cursor: None,
             thumb_tx,
             thumb_rx,
             thumb_loading: HashSet::new(),
@@ -399,7 +422,18 @@ impl App {
             paused: false,
             next_at: Instant::now() + interval,
         });
+        // A slideshow lives in the fullscreen view, also when it starts on a video.
+        #[cfg(feature = "video")]
+        if self.mode == ViewMode::Video {
+            self.video_return = VideoReturn::Fullscreen;
+        }
         self.needs_render = true;
+    }
+
+    /// A running slideshow that is not paused. It plays a video one time and then moves on.
+    /// Outside of it, a video plays in a loop until the user stops it.
+    pub(crate) fn slideshow_advancing(&self) -> bool {
+        self.slideshow.as_ref().is_some_and(|show| !show.paused)
     }
 
     pub(crate) fn stop_slideshow(&mut self) {
@@ -447,7 +481,8 @@ impl App {
     /// How long the event loop may sleep before the slideshow needs attention.
     pub(crate) fn slideshow_timeout(&self) -> Option<Duration> {
         let show = self.slideshow.as_ref()?;
-        if show.paused {
+        // In the video view, the end of the clip moves the slideshow on, not the clock.
+        if show.paused || self.in_video_view() {
             return None;
         }
         Some(show.next_at.saturating_duration_since(Instant::now()))
@@ -456,22 +491,37 @@ impl App {
     /// Advance when the interval elapsed. Waits for the current image to finish
     /// decoding so every slide is actually shown for the full interval.
     pub(crate) fn slideshow_tick(&mut self) {
+        if !self.slideshow_advancing() {
+            return;
+        }
+        #[cfg(feature = "video")]
+        if self.slideshow_video_holds() {
+            return;
+        }
         let Some(show) = self.slideshow.as_ref() else {
             return;
         };
-        if show.paused || self.mode != ViewMode::Fullscreen {
-            return;
-        }
-        if Instant::now() < show.next_at {
+        if self.mode != ViewMode::Fullscreen || Instant::now() < show.next_at {
             return;
         }
         if self.loaded.is_none() && !self.fullscreen_on_video() {
             // Still decoding: check again shortly instead of skipping the slide.
-            if let Some(show) = self.slideshow.as_mut() {
-                show.next_at = Instant::now() + Duration::from_millis(100);
-            }
+            self.slideshow_check_again_soon();
             return;
         }
+        self.slideshow_step();
+    }
+
+    /// Push the next check of the slideshow 100 ms out, while a decode or a video holds the slide.
+    fn slideshow_check_again_soon(&mut self) {
+        if let Some(show) = self.slideshow.as_mut() {
+            show.next_at = Instant::now() + Duration::from_millis(100);
+        }
+    }
+
+    /// Go to the next file, or wrap to the first with the loop setting, or stop at the end.
+    /// The next file gets the full interval.
+    fn slideshow_step(&mut self) {
         let last = self.images.len().saturating_sub(1);
         if self.current < last {
             self.next();
@@ -488,12 +538,12 @@ impl App {
 
     /// Wipe backend storage and drop transmitted-image tracking.
     pub(crate) fn graphics_delete_all(&mut self) -> io::Result<()> {
-        self.graphics.delete_all()?;
-        self.transmitted_image_ids.clear();
-        Ok(())
+        let mut out = self.graphics_out.clone();
+        self.graphics_delete_all_to(&mut out)?;
+        out.flush()
     }
 
-    pub(crate) fn graphics_delete_all_to<W: io::Write>(&mut self, out: &mut W) -> io::Result<()> {
+    pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         self.graphics.delete_all_to(out)?;
         self.transmitted_image_ids.clear();
         Ok(())
@@ -589,6 +639,7 @@ impl App {
     }
 
     pub(crate) fn update_filter(&mut self) {
+        self.filter_cursor = None;
         if self.gallery.search_query.is_empty() {
             self.gallery.filtered_indices = (0..self.images.len()).collect();
             self.gallery.reset_cursor();
@@ -616,7 +667,10 @@ impl App {
         let results = self.filter_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(results) = results {
             self.gallery.filtered_indices = results;
-            self.gallery.reset_cursor();
+            match self.filter_cursor.take() {
+                Some(position) => self.place_cursor(position),
+                None => self.gallery.reset_cursor(),
+            }
             self.needs_render = true;
             self.filter_rx = None;
         }
@@ -664,7 +718,7 @@ impl App {
         if self.mode == ViewMode::Gallery {
             self.enter_fullscreen_at(0);
         }
-        if self.mode == ViewMode::Fullscreen {
+        if self.in_slideshow_view() {
             self.start_slideshow();
         }
     }
@@ -690,7 +744,8 @@ impl App {
             return;
         }
         let path = &self.images[self.current];
-        match crate::video::VideoPlayback::open(path, self.image_rect, self.cell_px) {
+        let repeat = !self.slideshow_advancing();
+        match crate::video::VideoPlayback::open(path, self.image_rect, self.cell_px, repeat) {
             Ok(v) => self.video = Some(v),
             Err(e) => {
                 self.error = Some(e.to_string());
@@ -727,6 +782,78 @@ impl App {
         self.fullscreen_target = None;
         self.reset_zoom_state();
         self.needs_render = true;
+    }
+
+    /// A slideshow video holds the slide until its end. Returns true while it holds.
+    ///
+    /// The built-in player ends the clip and the slideshow moves on. An mpv window holds the
+    /// placeholder until the window closes: exit code 0 moves on, a quit stops the slideshow.
+    /// If the user leaves the placeholder, the slideshow forgets the window.
+    #[cfg(feature = "video")]
+    fn slideshow_video_holds(&mut self) -> bool {
+        if self.mode == ViewMode::Video {
+            if self.video.as_ref().is_some_and(|video| video.finished) {
+                self.return_from_video();
+                self.slideshow_step();
+            }
+            return true;
+        }
+        let Some((index, exit)) = self.video_window.as_ref() else {
+            return false;
+        };
+        if *index != self.current || self.mode != ViewMode::Fullscreen {
+            self.video_window = None;
+            return false;
+        }
+        let code = match exit.try_recv() {
+            Ok(code) => code,
+            Err(mpsc::TryRecvError::Empty) => {
+                self.slideshow_check_again_soon();
+                return true;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        self.video_window = None;
+        self.after_slideshow_video(crate::mpv::reached_the_end(code));
+        true
+    }
+
+    /// Hold the slideshow on the placeholder of the current video until the mpv window closes.
+    #[cfg(feature = "video")]
+    pub(crate) fn hold_slideshow_for_window(&mut self, exit: mpsc::Receiver<Option<i32>>) {
+        self.video_window = Some((self.current, exit));
+    }
+
+    /// After a video that a slideshow played one time: the end of the clip moves the slideshow
+    /// on. A quit by the user stops the slideshow and keeps the placeholder.
+    #[cfg(feature = "video")]
+    pub(crate) fn after_slideshow_video(&mut self, reached_end: bool) {
+        if reached_end {
+            self.slideshow_step();
+        } else {
+            self.stop_slideshow();
+        }
+    }
+
+    /// True in the fullscreen view or in a video player: the views of a slideshow.
+    pub(crate) fn in_slideshow_view(&self) -> bool {
+        self.mode == ViewMode::Fullscreen || self.in_video_view()
+    }
+
+    /// True in the view of a video player, where the clip and not the clock drives the slideshow.
+    #[cfg_attr(
+        not(feature = "video"),
+        expect(
+            clippy::unused_self,
+            reason = "without the video feature, no view plays a video"
+        )
+    )]
+    fn in_video_view(&self) -> bool {
+        #[cfg(feature = "video")]
+        let in_video = self.mode == ViewMode::Video;
+        #[cfg(not(feature = "video"))]
+        let in_video = false;
+        in_video
     }
 
     /// The image decode cannot read a video, so the fullscreen view must not try it.
@@ -1004,6 +1131,7 @@ impl App {
         }
 
         let current_path = self.images.get(self.current).cloned();
+        let cursor_target = self.cursor_after_delete(&removed);
 
         let mut new_images = Vec::with_capacity(self.images.len() - removed.len());
         let mut new_filenames = Vec::with_capacity(self.filenames.len() - removed.len());
@@ -1022,15 +1150,14 @@ impl App {
         self.shared_list
             .replace_all(self.images.clone(), self.filenames.clone());
 
-        self.update_filter();
         if self.gallery.search_query.is_empty() {
+            self.filter_rx = None;
             self.gallery.filtered_indices = (0..self.images.len()).collect();
+            self.place_cursor(cursor_target);
+        } else {
+            self.update_filter();
+            self.filter_cursor = Some(cursor_target);
         }
-
-        let cursor = self.gallery.cursor;
-        let max_cursor = self.gallery.filtered_indices.len().saturating_sub(1);
-        self.gallery.cursor = cursor.min(max_cursor);
-        self.gallery.ensure_cursor_visible();
 
         self.thumb_cache.clear();
         self.thumb_loading.clear();
@@ -1065,6 +1192,28 @@ impl App {
         }
 
         self.needs_render = true;
+    }
+
+    /// The grid position for the cursor after a delete of `removed`: the image that moves up
+    /// into the place of the cursor. The count of the kept images before the cursor is that place.
+    fn cursor_after_delete(&self, removed: &HashSet<PathBuf>) -> usize {
+        self.gallery
+            .filtered_indices
+            .iter()
+            .take(self.gallery.cursor)
+            .filter(|&&index| {
+                self.images
+                    .get(index)
+                    .is_some_and(|path| !removed.contains(path))
+            })
+            .count()
+    }
+
+    /// Put the grid cursor on `position`, or on the last image of a shorter list.
+    fn place_cursor(&mut self, position: usize) {
+        let last = self.gallery.filtered_indices.len().saturating_sub(1);
+        self.gallery.cursor = position.min(last);
+        self.gallery.ensure_cursor_visible();
     }
 
     pub(crate) fn open_picker(&mut self) {
@@ -1164,6 +1313,11 @@ impl App {
         #[cfg(feature = "video")]
         if let Some(v) = self.video.take() {
             v.stop();
+        }
+        // A step away from the placeholder forgets the mpv window of the slideshow.
+        #[cfg(feature = "video")]
+        {
+            self.video_window = None;
         }
 
         self.current = target;
@@ -1370,33 +1524,47 @@ pub(crate) fn load_and_resize(
 }
 
 pub(crate) fn resize_decoded_to_dims(img: &DynamicImage, max_w: u32, max_h: u32) -> RgbaImage {
-    let (orig_w, orig_h) = (img.width(), img.height());
+    fit_rgba_within(img.to_rgba8(), max_w, max_h)
+}
+
+/// Scale `rgba` down into `max_w` x `max_h` with its aspect ratio, and never up. An owned image
+/// needs no second copy.
+fn fit_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
+    let size = rgba.dimensions();
+    scaled_down_size(size, (max_w, max_h))
+        .and_then(|dst| resize_rgba(rgba.as_raw(), size, dst))
+        .unwrap_or(rgba)
+}
+
+/// The size of `size` scaled down into `max` with its aspect ratio, rounded down. `None` when
+/// no scale is necessary: an empty size or box, or an image that fits already.
+fn scaled_down_size(size: (u32, u32), max: (u32, u32)) -> Option<(u32, u32)> {
+    let ((orig_w, orig_h), (max_w, max_h)) = (size, max);
     if max_w == 0 || max_h == 0 || orig_w == 0 || orig_h == 0 {
-        return img.to_rgba8();
+        return None;
     }
     let scale = f64::min(
         f64::from(max_w) / f64::from(orig_w),
         f64::from(max_h) / f64::from(orig_h),
     );
     if scale >= 1.0 {
-        return img.to_rgba8();
+        return None;
     }
     let dst_w = ((f64::from(orig_w) * scale) as u32).max(1);
     let dst_h = ((f64::from(orig_h) * scale) as u32).max(1);
+    Some((dst_w, dst_h))
+}
 
-    let src_rgba = img.to_rgba8();
-    let Ok(src_image) =
-        fir::images::Image::from_vec_u8(orig_w, orig_h, src_rgba.into_raw(), fir::PixelType::U8x4)
-    else {
-        return img.to_rgba8();
-    };
-    let mut dst_image = fir::images::Image::new(dst_w, dst_h, fir::PixelType::U8x4);
-    let mut resizer = fir::Resizer::new();
-    if resizer.resize(&src_image, &mut dst_image, None).is_err() {
-        return img.to_rgba8();
-    }
-
-    RgbaImage::from_raw(dst_w, dst_h, dst_image.into_vec()).unwrap_or_else(|| img.to_rgba8())
+/// Resize the packed RGBA `pixels` of `size` to `dst` with `fast_image_resize`. The pixels stay
+/// borrowed, so a caller can pass a decoder buffer without a copy. `None` when the resize fails.
+fn resize_rgba(pixels: &[u8], size: (u32, u32), dst: (u32, u32)) -> Option<RgbaImage> {
+    let src_image =
+        fir::images::ImageRef::new(size.0, size.1, pixels, fir::PixelType::U8x4).ok()?;
+    let mut dst_image = fir::images::Image::new(dst.0, dst.1, fir::PixelType::U8x4);
+    fir::Resizer::new()
+        .resize(&src_image, &mut dst_image, None)
+        .ok()?;
+    RgbaImage::from_raw(dst.0, dst.1, dst_image.into_vec())
 }
 
 pub(crate) fn resize_decoded(img: &DynamicImage, rect: Rect, cell_px: (u32, u32)) -> RgbaImage {
@@ -1488,33 +1656,10 @@ fn decode_with_libheif(
         .filter(|_| embedded == EmbeddedThumbnail::Allow)
         .and_then(|target| usable_thumbnail(&primary, target))
         .unwrap_or(primary);
-    let lib_heif = LibHeif::new();
-    let mut image = lib_heif
+    let image = LibHeif::new()
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
         .map_err(invalid)?;
-
-    // libheif decodes the selected image (primary image or thumbnail) at its full size.
-    // Scale it before the RGBA copy, so that the copy stays small when only a thumbnail
-    // is necessary.
-    if let Some((max_w, max_h)) = target
-        && max_w > 0
-        && max_h > 0
-    {
-        let (w, h) = (image.width(), image.height());
-        let scale = f64::min(
-            f64::from(max_w) / f64::from(w),
-            f64::from(max_h) / f64::from(h),
-        );
-        if scale < 1.0 {
-            let dst_w = ((f64::from(w) * scale).round() as u32).max(1);
-            let dst_h = ((f64::from(h) * scale).round() as u32).max(1);
-            if let Ok(scaled) = image.scale(dst_w, dst_h, None) {
-                image = scaled;
-            }
-        }
-    }
-
-    heif_image_to_rgba(&image)
+    heif_image_to_rgba(&image, target).map(DynamicImage::ImageRgba8)
 }
 
 /// Pick the smallest embedded thumbnail that is large enough for `target`, so that the
@@ -1568,9 +1713,17 @@ fn fit_within(size: (u32, u32), target: (u32, u32)) -> Option<(u32, u32)> {
     Some((fitted(size.0), fitted(size.1)))
 }
 
-/// Copy the interleaved RGBA plane of a libheif image row by row, because rows can have padding.
+/// Turn the interleaved RGBA plane of a libheif image into an image that fits `target`.
+///
+/// libheif decodes the selected image (primary image or thumbnail) at its full size. Its
+/// `scale` is nearest neighbour, so `fast_image_resize` scales, as for the other formats. A plane
+/// without row padding goes to the resize directly, so a full-size frame is not copied. A plane
+/// with padding is copied row by row first.
 #[cfg(feature = "heic")]
-fn heif_image_to_rgba(image: &libheif_rs::Image) -> io::Result<DynamicImage> {
+fn heif_image_to_rgba(
+    image: &libheif_rs::Image,
+    target: Option<(u32, u32)>,
+) -> io::Result<RgbaImage> {
     let planes = image.planes();
     let plane = planes.interleaved.ok_or_else(|| {
         io::Error::new(
@@ -1580,19 +1733,32 @@ fn heif_image_to_rgba(image: &libheif_rs::Image) -> io::Result<DynamicImage> {
     })?;
     let (w, h) = (plane.width, plane.height);
     let row_bytes = w as usize * 4;
+    let fitted = target.and_then(|max| scaled_down_size((w, h), max));
+    if let Some(dst) = fitted
+        && plane.stride == row_bytes
+        && let Some(resized) = plane
+            .data
+            .get(..row_bytes * h as usize)
+            .and_then(|pixels| resize_rgba(pixels, (w, h), dst))
+    {
+        return Ok(resized);
+    }
+
     let mut pixels = Vec::with_capacity(row_bytes * h as usize);
     for y in 0..h as usize {
         let start = y * plane.stride;
         pixels.extend_from_slice(&plane.data[start..start + row_bytes]);
     }
-    RgbaImage::from_raw(w, h, pixels)
-        .map(DynamicImage::ImageRgba8)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid libheif image dimensions",
-            )
-        })
+    let rgba = RgbaImage::from_raw(w, h, pixels).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid libheif image dimensions",
+        )
+    })?;
+    Ok(match fitted {
+        Some(dst) => resize_rgba(rgba.as_raw(), (w, h), dst).unwrap_or(rgba),
+        None => rgba,
+    })
 }
 
 fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicImage> {
@@ -1759,7 +1925,7 @@ fn get_cache_file_path(
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     let mut hasher = DefaultHasher::new();
-    "viewr-thumbnail-v2".hash(&mut hasher);
+    "viewr-thumbnail-v3".hash(&mut hasher);
     canonical_path.hash(&mut hasher);
     metadata.len().hash(&mut hasher);
     mtime.as_secs().hash(&mut hasher);
@@ -1986,8 +2152,8 @@ mod tests {
     #[cfg(feature = "heic")]
     mod libheif {
         use super::{
-            BLUE, EmbeddedThumbnail, RED, assert_close, decode_image_with_hint, resize_to_exact,
-            test_dir,
+            BLUE, EmbeddedThumbnail, RED, assert_close, decode_image_with_hint,
+            resize_decoded_to_dims, resize_to_exact, test_dir,
         };
         use crate::app::{
             decodes_with_libheif, fit_within, libheif_dimensions, thumbnail_is_usable,
@@ -2053,6 +2219,28 @@ mod tests {
             ctx.write_to_file(path.to_str().unwrap()).unwrap();
         }
 
+        /// Write a red AVIF of `width` x `height` without a thumbnail.
+        fn write_red_avif(path: &Path, width: u32, height: u32) {
+            let lib_heif = LibHeif::new();
+            let mut ctx = HeifContext::new().unwrap();
+            let mut encoder = lib_heif.encoder_for_format(CompressionFormat::Av1).unwrap();
+            encoder.set_quality(EncoderQuality::Lossy(90)).unwrap();
+            ctx.encode_image(&solid_image(width, height, RED), &mut encoder, None)
+                .unwrap();
+            ctx.write_to_file(path.to_str().unwrap()).unwrap();
+        }
+
+        /// True when the decoded RGBA plane of `path` has padding at the end of each row.
+        fn rows_have_padding(path: &Path) -> bool {
+            let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
+            let handle = ctx.primary_image_handle().unwrap();
+            let image = LibHeif::new()
+                .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
+                .unwrap();
+            let plane = image.planes().interleaved.unwrap();
+            plane.stride != plane.width as usize * 4
+        }
+
         fn center(image: &image::DynamicImage) -> [u8; 4] {
             image
                 .to_rgba8()
@@ -2113,6 +2301,57 @@ mod tests {
             assert_close(center(&full), RED);
             assert_eq!(thumb.dimensions(), (64, 32));
             assert_eq!(dims, Some((256, 128)));
+        }
+
+        #[test]
+        fn libheif_output_has_the_fitted_size_of_the_other_decoders() {
+            let dir = test_dir();
+            let path = dir.path().join("red.avif");
+            write_heif(
+                &path,
+                CompressionFormat::Av1,
+                ImageOrientation::Normal,
+                None,
+            );
+            for target in [(64, 64), (77, 77), (100, 30), (500, 500)] {
+                let decoded =
+                    decode_image_with_hint(&path, Some(target), EmbeddedThumbnail::Deny).unwrap();
+                assert_eq!(
+                    Some(decoded.dimensions()),
+                    fit_within((256, 128), target),
+                    "{target:?}"
+                );
+                // load_and_resize resizes again: the fitted decode must stay as it is.
+                let resized = resize_decoded_to_dims(&decoded, target.0, target.1);
+                assert_eq!(resized.dimensions(), decoded.dimensions(), "{target:?}");
+                assert_close(center(&decoded), RED);
+            }
+            let sizes: Vec<_> = [(64, 64), (100, 30), (500, 500)]
+                .into_iter()
+                .map(|target| fit_within((256, 128), target).unwrap())
+                .collect();
+            assert_eq!(sizes, [(64, 32), (60, 30), (256, 128)]);
+        }
+
+        #[test]
+        fn libheif_scales_planes_with_and_without_row_padding() {
+            let dir = test_dir();
+            let mut padding = Vec::new();
+            for (width, height) in [(256, 128), (250, 126)] {
+                let path = dir.path().join(format!("red-{width}.avif"));
+                write_red_avif(&path, width, height);
+                padding.push(rows_have_padding(&path));
+                for target in [Some((50, 50)), None] {
+                    let decoded =
+                        decode_image_with_hint(&path, target, EmbeddedThumbnail::Deny).unwrap();
+                    let expected = target.map_or(Some((width, height)), |target| {
+                        fit_within((width, height), target)
+                    });
+                    assert_eq!(Some(decoded.dimensions()), expected, "{width} {target:?}");
+                    assert_close(center(&decoded), RED);
+                }
+            }
+            assert_eq!(padding, [false, true], "the test covers both plane layouts");
         }
 
         #[test]
@@ -2924,13 +3163,48 @@ mod tests {
             assert!(!removed.exists());
             assert_eq!(app.filenames, ["a.png", "b.png"]);
             assert_eq!(app.gallery.filtered_indices, vec![0, 1]);
-            // No cursor assertion: the cursor goes back to the first image (TODO.md decides).
+            assert_eq!(app.gallery.cursor, 1, "the new last image");
             assert_eq!(app.current, 1);
             assert!(app.selection.is_empty());
             assert!(app.delete_error.is_none());
             assert!(app.graphics_storage_dirty);
             assert_eq!(app.shared_list.len(), 2);
             assert_eq!(app.known_len, 2);
+        }
+
+        #[test]
+        fn confirm_delete_in_the_grid_keeps_the_cursor_in_place() {
+            let dir = test_dir();
+            let names = ["a.png", "b.png", "c.png", "d.png", "e.png"];
+            let mut app = app_with_files(dir.path(), &names);
+            app.gallery.visible_rows = 1;
+            app.gallery.grid_cols = 2;
+
+            // In the middle, the next image moves up into the place of the cursor.
+            app.gallery.cursor = 1;
+            app.begin_delete(true);
+            app.confirm_delete();
+            assert_eq!(app.filenames, ["a.png", "c.png", "d.png", "e.png"]);
+            assert_eq!(app.gallery.cursor, 1);
+            assert_eq!(app.gallery.selected_index(), Some(1), "c.png");
+
+            // At the end, the cursor goes to the new last image and the grid scrolls to it.
+            app.gallery.cursor = 3;
+            app.gallery.scroll_offset = 1;
+            app.begin_delete(true);
+            app.confirm_delete();
+            assert_eq!(app.filenames, ["a.png", "c.png", "d.png"]);
+            assert_eq!(app.gallery.cursor, 2);
+            assert_eq!(app.gallery.scroll_offset, 1);
+
+            // A selection before the cursor: the cursor stays on its image.
+            app.selection.insert(app.images[0].clone());
+            app.selection.insert(app.images[1].clone());
+            app.begin_delete(true);
+            app.confirm_delete();
+            assert_eq!(app.filenames, ["d.png"]);
+            assert_eq!(app.gallery.cursor, 0);
+            assert_eq!(app.gallery.scroll_offset, 0);
         }
 
         #[test]
@@ -3016,6 +3290,34 @@ mod tests {
                 app.filter_rx.is_none()
             });
             assert_eq!(app.gallery.filtered_indices, vec![0]);
+            assert_eq!(app.gallery.cursor, 0, "the new last match");
+        }
+
+        #[test]
+        fn confirm_delete_with_a_filter_keeps_the_cursor_place() {
+            let dir = test_dir();
+            let names = ["ap-1.png", "ap-2.png", "ap-3.png", "berry.png"];
+            let mut app = app_with_files(dir.path(), &names);
+            app.gallery.search_query = "ap".to_owned();
+            app.gallery.filtered_indices = vec![0, 1, 2];
+            app.gallery.cursor = 1;
+            app.begin_delete(true);
+            app.confirm_delete();
+            wait_until(|| {
+                app.poll_filter();
+                app.filter_rx.is_none()
+            });
+            assert_eq!(app.gallery.filtered_indices.len(), 2);
+            assert_eq!(app.gallery.cursor, 1);
+
+            // A new query starts at the first match again.
+            app.gallery.search_query = "ap-".to_owned();
+            app.update_filter();
+            wait_until(|| {
+                app.poll_filter();
+                app.filter_rx.is_none()
+            });
+            assert_eq!(app.gallery.cursor, 0);
         }
 
         #[test]
@@ -3296,6 +3598,15 @@ mod tests {
             app.graphics_delete_all_to(&mut out).unwrap();
             assert!(!out.is_empty());
             assert!(app.transmitted_image_ids.is_empty());
+
+            app.transmitted_image_ids.insert(8);
+            app.graphics_delete_all().unwrap();
+            assert_eq!(
+                app.graphics_out.take_bytes(),
+                out,
+                "the test buffer, not stdout"
+            );
+            assert!(app.transmitted_image_ids.is_empty());
         }
 
         #[test]
@@ -3460,6 +3771,39 @@ mod tests {
                 assert_eq!(app.mode, ViewMode::Fullscreen);
                 assert!(app.error.is_some());
                 assert!(!app.shows_video_placeholder());
+            }
+
+            #[test]
+            fn the_clock_does_not_move_the_slideshow_in_the_video_view() {
+                let mut app = app_with(&["a.png", "clip.mp4", "b.png"]);
+                app.enter_fullscreen_at(0);
+                app.start_slideshow();
+                app.next();
+                assert_eq!(app.mode, ViewMode::Video);
+                assert!(app.slideshow_advancing());
+                assert_eq!(app.slideshow_timeout(), None, "no wake-up for the clock");
+
+                app.slideshow.as_mut().unwrap().next_at = overdue();
+                app.slideshow_tick();
+                assert_eq!(app.current, 1, "the clip, not the clock, ends the slide");
+                assert_eq!(app.mode, ViewMode::Video);
+            }
+
+            #[test]
+            fn a_slideshow_can_start_on_a_video() {
+                let mut app = app_with(&["clip.mp4", "b.png"]);
+                app.slideshow_autostart = true;
+                app.scan_complete = true;
+                app.maybe_autostart_slideshow();
+                assert_eq!(app.mode, ViewMode::Video);
+                assert!(app.slideshow_running());
+                assert_eq!(app.video_return, VideoReturn::Fullscreen);
+
+                // A paused slideshow does not wait for the end of the clip.
+                app.slideshow_toggle_pause();
+                assert!(!app.slideshow_advancing());
+                app.slideshow_tick();
+                assert_eq!(app.current, 0, "a paused slideshow waits");
             }
 
             #[test]

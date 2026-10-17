@@ -909,16 +909,6 @@ mod tests {
         }
     }
 
-    /// Give each test its own directory below the temp directory.
-    fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("viewr-ui-{name}-{}", std::process::id()));
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).unwrap();
-        }
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn theme_picker_uses_the_previewed_theme_and_pdfterm_layout() {
         let first = Theme::fallback();
@@ -1214,7 +1204,8 @@ mod tests {
 
     #[test]
     fn directory_picker_lists_the_directories_filter_and_error() {
-        let dir = test_dir("picker");
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().to_path_buf();
         std::fs::create_dir(dir.join("alpha")).unwrap();
         std::fs::create_dir(dir.join("beta")).unwrap();
         let mut app = app_with(&["a.jpg"]);
@@ -1251,7 +1242,5 @@ mod tests {
         app.picker = None;
         let screen = render(&mut app, None, width, 20);
         assert_hides(&screen, " Filter ");
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

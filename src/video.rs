@@ -31,6 +31,8 @@ pub(crate) struct VideoPlayback {
     frame_rx: mpsc::Receiver<VideoFrame>,
     cmd_tx: mpsc::Sender<VideoCmd>,
     pub playing: bool,
+    /// The decoder thread ended: the clip without a repeat is over, or the decode failed.
+    pub finished: bool,
     pub current_pts: f64,
     pub duration: f64,
     pub fps: f64,
@@ -41,7 +43,14 @@ pub(crate) struct VideoPlayback {
 }
 
 impl VideoPlayback {
-    pub(crate) fn open(path: &Path, rect: Rect, cell_px: (u32, u32)) -> io::Result<Self> {
+    /// Start the decoder thread. Without `repeat`, the clip plays one time and then `finished`
+    /// turns true.
+    pub(crate) fn open(
+        path: &Path,
+        rect: Rect,
+        cell_px: (u32, u32),
+        repeat: bool,
+    ) -> io::Result<Self> {
         let target_w = (u32::from(rect.width) * cell_px.0).max(1);
         let target_h = (u32::from(rect.height) * cell_px.1).max(1);
 
@@ -75,7 +84,13 @@ impl VideoPlayback {
 
         let path_owned = path.to_path_buf();
         let handle = thread::spawn(move || {
-            decode_loop(&path_owned, target_w, target_h, &frame_tx, &cmd_rx);
+            decode_loop(
+                &path_owned,
+                (target_w, target_h),
+                repeat,
+                &frame_tx,
+                &cmd_rx,
+            );
         });
 
         let display_fps = fps.min(MAX_DISPLAY_FPS);
@@ -85,6 +100,7 @@ impl VideoPlayback {
             frame_rx,
             cmd_tx,
             playing: true,
+            finished: false,
             current_pts: 0.0,
             duration,
             fps,
@@ -114,6 +130,7 @@ impl VideoPlayback {
             Err(mpsc::TryRecvError::Empty) => false,
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.playing = false;
+                self.finished = true;
                 false
             }
         }
@@ -180,13 +197,16 @@ fn fit_aspect(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     (w.max(1), h.max(1))
 }
 
+/// Decode the clip into `frame_tx`, fitted into `target`. With `repeat`, the clip starts
+/// again at its end. The thread ends at a stop, at the end without `repeat`, or at an error.
 fn decode_loop(
     path: &Path,
-    target_w: u32,
-    target_h: u32,
+    target: (u32, u32),
+    repeat: bool,
     frame_tx: &mpsc::SyncSender<VideoFrame>,
     cmd_rx: &mpsc::Receiver<VideoCmd>,
 ) {
+    let (target_w, target_h) = target;
     let Ok(mut input) = ffmpeg::format::input(path) else {
         return;
     };
@@ -255,7 +275,7 @@ fn decode_loop(
             return;
         }
 
-        if input.seek(0, ..).is_err() {
+        if !repeat || input.seek(0, ..).is_err() {
             return;
         }
         decoder.flush();
@@ -424,24 +444,23 @@ mod tests {
         VideoCmd, VideoFrame, VideoPlayback, decode_first_frame, decode_loop, fit_aspect, is_video,
         sanitize_fps,
     };
+    use crate::app::{App, ViewMode};
+    use crate::image_list::SharedImageList;
+    use crate::theme::Theme;
     use ratatui::layout::Rect;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::mpsc;
     use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
+    use tempfile::TempDir;
 
     /// The longest wait for a frame of the decoder thread.
     const DEADLINE: Duration = Duration::from_secs(10);
 
-    /// Give each test its own directory below the temp directory.
-    fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("viewr-video-{name}-{}", std::process::id()));
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).unwrap();
-        }
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Give each test its own directory. It goes away on drop, also after a panic.
+    fn test_dir() -> TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     /// Run the ffmpeg program with `args`. `false` means that ffmpeg is missing or failed.
@@ -515,36 +534,35 @@ mod tests {
 
     #[test]
     fn first_frame_fits_the_target_rectangle() {
-        let dir = test_dir("first-frame");
-        let Some(clip) = test_clip(&dir, "0.5") else {
-            std::fs::remove_dir_all(&dir).unwrap();
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "0.5") else {
             return;
         };
         let frame = decode_first_frame(&clip, Rect::new(0, 0, 4, 3), (8, 16)).unwrap();
         let tiny = decode_first_frame(&clip, Rect::new(0, 0, 0, 0), (8, 16)).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(frame.dimensions(), (32, 24));
         assert_eq!(tiny.dimensions(), (1, 1));
     }
 
     #[test]
     fn files_without_a_video_stream_give_an_error() {
-        let dir = test_dir("no-stream");
-        let text = dir.join("notes.mp4");
+        let dir = test_dir();
+        let text = dir.path().join("notes.mp4");
         std::fs::write(&text, "not a video").unwrap();
         let rect = Rect::new(0, 0, 4, 3);
         assert!(decode_first_frame(&text, rect, (8, 16)).is_err());
-        assert!(VideoPlayback::open(&text, rect, (8, 16)).is_err());
+        assert!(VideoPlayback::open(&text, rect, (8, 16), true).is_err());
 
-        let audio = dir.join("tone.m4a");
+        let audio = dir.path().join("tone.m4a");
         let audio_text = audio.to_str().unwrap();
         if run_ffmpeg(&["-f", "lavfi", "-i", "sine=duration=0.2", audio_text]) {
             let error = decode_first_frame(&audio, rect, (8, 16)).unwrap_err();
             assert_eq!(error.to_string(), "no video stream");
-            let error = VideoPlayback::open(&audio, rect, (8, 16)).err().unwrap();
+            let error = VideoPlayback::open(&audio, rect, (8, 16), true)
+                .err()
+                .unwrap();
             assert_eq!(error.to_string(), "no video stream found");
         }
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Send the stop command and poll until the decoder thread ends, or fail after [`DEADLINE`].
@@ -560,12 +578,12 @@ mod tests {
 
     #[test]
     fn player_delivers_a_fitted_frame_and_pauses() {
-        let dir = test_dir("player-pause");
-        let Some(clip) = test_clip(&dir, "0.5") else {
-            std::fs::remove_dir_all(&dir).unwrap();
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "0.5") else {
             return;
         };
-        let mut playback = VideoPlayback::open(&clip, Rect::new(0, 0, 8, 6), (8, 16)).unwrap();
+        let mut playback =
+            VideoPlayback::open(&clip, Rect::new(0, 0, 8, 6), (8, 16), true).unwrap();
         assert!(playback.playing);
         assert!((playback.fps - 10.0).abs() < 0.01, "fps: {}", playback.fps);
         assert!(playback.duration > 0.4, "duration: {}", playback.duration);
@@ -596,18 +614,16 @@ mod tests {
 
         playback.frame_interval = Duration::ZERO;
         stop_and_drain(&mut playback);
-        drop(playback);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn player_starts_the_clip_again_at_the_end() {
-        let dir = test_dir("player-loop");
-        let Some(clip) = test_clip(&dir, "0.5") else {
-            std::fs::remove_dir_all(&dir).unwrap();
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "0.5") else {
             return;
         };
-        let mut playback = VideoPlayback::open(&clip, Rect::new(0, 0, 8, 6), (8, 16)).unwrap();
+        let mut playback =
+            VideoPlayback::open(&clip, Rect::new(0, 0, 8, 6), (8, 16), true).unwrap();
         // Without the interval, the frames arrive as fast as the decoder makes them.
         playback.frame_interval = Duration::ZERO;
         wait_for_frame(&mut playback);
@@ -619,15 +635,25 @@ mod tests {
             last_pts = playback.current_pts;
         }
         stop_and_drain(&mut playback);
-        drop(playback);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Run `decode_loop` in a thread. The frame channel has no buffer, so the decoder waits at
-    /// each frame until the test receives it. After the test receives a frame, the decoder reads
-    /// a command before the next packet or before the packet after it.
+    /// Run `decode_loop` with a repeat in a thread. The frame channel has no buffer, so the
+    /// decoder waits at each frame until the test receives it. After the test receives a frame,
+    /// the decoder reads a command before the next packet or before the packet after it.
     fn start_decoder(
         clip: &Path,
+    ) -> (
+        mpsc::Receiver<VideoFrame>,
+        mpsc::Sender<VideoCmd>,
+        JoinHandle<()>,
+    ) {
+        start_decoder_with(clip, true)
+    }
+
+    /// Run `decode_loop` in a thread, with or without `repeat`.
+    fn start_decoder_with(
+        clip: &Path,
+        repeat: bool,
     ) -> (
         mpsc::Receiver<VideoFrame>,
         mpsc::Sender<VideoCmd>,
@@ -636,7 +662,8 @@ mod tests {
         let (frame_tx, frame_rx) = mpsc::sync_channel(0);
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let clip = clip.to_path_buf();
-        let handle = std::thread::spawn(move || decode_loop(&clip, 64, 48, &frame_tx, &cmd_rx));
+        let handle =
+            std::thread::spawn(move || decode_loop(&clip, (64, 48), repeat, &frame_tx, &cmd_rx));
         (frame_rx, cmd_tx, handle)
     }
 
@@ -670,9 +697,8 @@ mod tests {
 
     #[test]
     fn a_pause_at_the_last_packet_keeps_the_loop() {
-        let dir = test_dir("pause-end");
-        let Some(clip) = test_clip(&dir, "0.5") else {
-            std::fs::remove_dir_all(&dir).unwrap();
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "0.5") else {
             return;
         };
         let (frames, commands, decoder) = start_decoder(&clip);
@@ -694,14 +720,12 @@ mod tests {
         }
         assert_eq!(next_frame(&frames), 0, "the clip starts again");
         stop_decoder(frames, &commands, decoder);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_pause_in_the_middle_loses_no_frame() {
-        let dir = test_dir("pause-middle");
-        let Some(clip) = test_clip(&dir, "1") else {
-            std::fs::remove_dir_all(&dir).unwrap();
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "1") else {
             return;
         };
         let (frames, commands, decoder) = start_decoder(&clip);
@@ -718,14 +742,12 @@ mod tests {
         assert_eq!(first_loop, (0..10).collect::<Vec<_>>());
         assert_eq!(next_loop, 0);
         stop_decoder(frames, &commands, decoder);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_pause_holds_the_decoder_until_the_resume() {
-        let dir = test_dir("pause-hold");
-        let Some(clip) = test_clip(&dir, "1") else {
-            std::fs::remove_dir_all(&dir).unwrap();
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "1") else {
             return;
         };
         let (frames, commands, decoder) = start_decoder(&clip);
@@ -748,6 +770,73 @@ mod tests {
         let expected = if held.is_empty() { 4 } else { 5 };
         assert_eq!(next_frame(&frames), expected, "the resume continues");
         stop_decoder(frames, &commands, decoder);
-        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_clip_without_repeat_ends_after_its_last_frame() {
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "0.5") else {
+            return;
+        };
+        let (frames, commands, decoder) = start_decoder_with(&clip, false);
+        for expected in 0..5 {
+            assert_eq!(next_frame(&frames), expected);
+        }
+        assert!(
+            frames.recv_timeout(DEADLINE).is_err(),
+            "no second pass: the decoder ends"
+        );
+        decoder.join().unwrap();
+        drop(commands);
+    }
+
+    #[test]
+    fn a_slideshow_moves_on_at_the_end_of_the_clip_in_the_builtin_player() {
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "0.5") else {
+            return;
+        };
+        let photo = dir.path().join("photo.png");
+        image::RgbaImage::new(4, 4).save(&photo).unwrap();
+        let mut app = App::new(Theme::fallback(), (8, 16), SharedImageList::new());
+        app.images = vec![clip, photo];
+        app.filenames = vec!["clip.mp4".to_owned(), "photo.png".to_owned()];
+        app.gallery.filtered_indices = vec![0, 1];
+        app.enter_fullscreen_at(0);
+        app.start_slideshow();
+        app.open_video_if_needed();
+        app.video.as_mut().unwrap().frame_interval = Duration::ZERO;
+
+        let start = Instant::now();
+        while app.mode == ViewMode::Video {
+            assert!(start.elapsed() < DEADLINE, "the clip did not end");
+            app.video.as_mut().unwrap().poll_frame();
+            app.slideshow_tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert_eq!(app.current, 1, "no second pass of the clip");
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+        assert!(app.slideshow_running());
+    }
+
+    #[test]
+    fn a_player_without_repeat_reports_the_end_of_the_clip() {
+        let dir = test_dir();
+        let Some(clip) = test_clip(dir.path(), "0.5") else {
+            return;
+        };
+        let mut playback =
+            VideoPlayback::open(&clip, Rect::new(0, 0, 8, 6), (8, 16), false).unwrap();
+        playback.frame_interval = Duration::ZERO;
+        let start = Instant::now();
+        let mut frames = 0;
+        while !playback.finished {
+            assert!(start.elapsed() < DEADLINE, "the clip did not end");
+            frames += usize::from(playback.poll_frame());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(frames, 5, "each frame shows one time");
+        assert!(!playback.playing);
     }
 }

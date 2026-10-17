@@ -9,10 +9,30 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 
 /// The status note when the configuration asks for mpv and PATH has none.
 pub(crate) const MISSING_NOTE: &str = "mpv not found on PATH: built-in player";
+
+/// The exit code of mpv after a quit by the user in [`Playback::Once`]: `q`, `Q`, `Ctrl+C` and,
+/// in a window, the close button. mpv also uses it after a signal.
+pub(crate) const USER_QUIT: i32 = 4;
+
+/// How mpv plays the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Playback {
+    /// Play the file again and again, until the user quits mpv.
+    Loop,
+    /// Play the file one time for a running slideshow. Only the end of the file exits with 0,
+    /// because each key that quits mpv exits with [`USER_QUIT`].
+    Once,
+}
+
+/// True when mpv in [`Playback::Once`] played the file to its end, and the user did not quit.
+pub(crate) fn reached_the_end(code: Option<i32>) -> bool {
+    code == Some(0)
+}
 
 /// The player after the PATH lookup. The mpv variants hold the path of the program.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +96,11 @@ pub(crate) fn fallback_geometry(
 ///
 /// mpv draws into the alternate screen of viewr. A screen of its own shows the main screen of
 /// the shell for a moment at the start and at the end.
-pub(crate) fn terminal_args(video: &Path, geometry: Option<Geometry>) -> Vec<OsString> {
+pub(crate) fn terminal_args(
+    video: &Path,
+    geometry: Option<Geometry>,
+    playback: Playback,
+) -> Vec<OsString> {
     let mut args: Vec<OsString> = [
         "--vo=kitty",
         "--vo-kitty-alt-screen=no",
@@ -84,11 +108,11 @@ pub(crate) fn terminal_args(video: &Path, geometry: Option<Geometry>) -> Vec<OsS
         "--really-quiet",
         "--terminal=yes",
         "--input-terminal=yes",
-        "--loop-file=inf",
     ]
     .into_iter()
     .map(OsString::from)
     .collect();
+    push_playback(&mut args, playback, &["q", "Q"]);
     if let Some(geometry) = geometry {
         args.extend(
             [
@@ -105,17 +129,48 @@ pub(crate) fn terminal_args(video: &Path, geometry: Option<Geometry>) -> Vec<OsS
 }
 
 /// mpv in a window of its own. `--no-terminal` keeps it away from the keys of viewr.
-pub(crate) fn window_args(video: &Path) -> Vec<OsString> {
-    let mut args: Vec<OsString> = [
-        "--no-terminal",
-        "--force-window=immediate",
-        "--loop-file=inf",
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect();
+pub(crate) fn window_args(video: &Path, playback: Playback) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["--no-terminal", "--force-window=immediate"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    push_playback(&mut args, playback, &["q", "Q", "CLOSE_WIN"]);
     push_file(&mut args, video);
     args
+}
+
+/// Append the loop options.
+///
+/// [`Playback::Once`] turns off each option of a user `mpv.conf` that keeps mpv open after the
+/// file: `keep-open`, `idle` and `loop-playlist`. It also binds each key in `quit_keys` to an
+/// exit with [`USER_QUIT`], because a plain `quit` exits with 0, like the end of the file.
+/// `Ctrl+C` quits with that code already. `--input-commands` needs mpv 0.38 or later.
+///
+/// A key binding cannot catch the quit of the macOS app (Cmd+Q, "Quit mpv" in the app menu).
+/// The quit event of the app also ends mpv 0.41 with 0, so a window slideshow continues.
+fn push_playback(args: &mut Vec<OsString>, playback: Playback, quit_keys: &[&str]) {
+    match playback {
+        Playback::Loop => args.push(OsString::from("--loop-file=inf")),
+        Playback::Once => {
+            args.extend(
+                [
+                    "--loop-file=no",
+                    "--keep-open=no",
+                    "--idle=no",
+                    "--loop-playlist=no",
+                ]
+                .map(OsString::from),
+            );
+            let bindings: Vec<String> = quit_keys
+                .iter()
+                .map(|key| format!("keybind {key} \"quit {USER_QUIT}\""))
+                .collect();
+            args.push(OsString::from(format!(
+                "--input-commands={}",
+                bindings.join(",")
+            )));
+        }
+    }
 }
 
 /// Append the file after `--`, so that a name that starts with `-` is not an option.
@@ -150,8 +205,13 @@ pub(crate) fn file_name(video: &Path) -> String {
 pub(crate) trait Runner {
     /// Run `program` in the foreground with the terminal of viewr, and wait for its exit code.
     fn run(&mut self, program: &Path, args: &[OsString]) -> io::Result<Option<i32>>;
-    /// Start `program` without a terminal and return at once.
-    fn spawn(&mut self, program: &Path, args: &[OsString]) -> io::Result<()>;
+    /// Start `program` without a terminal and return at once. The receiver gets the exit code
+    /// when the process ends, so that a slideshow can wait for the window without a block.
+    fn spawn(
+        &mut self,
+        program: &Path,
+        args: &[OsString],
+    ) -> io::Result<mpsc::Receiver<Option<i32>>>;
 }
 
 /// The [`Runner`] that starts real processes.
@@ -162,7 +222,11 @@ impl Runner for SystemRunner {
         Ok(Command::new(program).args(args).status()?.code())
     }
 
-    fn spawn(&mut self, program: &Path, args: &[OsString]) -> io::Result<()> {
+    fn spawn(
+        &mut self,
+        program: &Path,
+        args: &[OsString],
+    ) -> io::Result<mpsc::Receiver<Option<i32>>> {
         // A process group of its own keeps the job control signals of the terminal away.
         let mut child = Command::new(program)
             .args(args)
@@ -172,14 +236,16 @@ impl Runner for SystemRunner {
             .process_group(0)
             .spawn()?;
         // Wait in a thread, so that the exited window process does not stay as a zombie.
+        let (exit_tx, exit_rx) = mpsc::channel();
         thread::spawn(move || {
+            let code = child.wait().ok().and_then(|status| status.code());
             #[expect(
                 clippy::let_underscore_must_use,
-                reason = "nobody reads the exit status of a detached window"
+                reason = "outside a slideshow, nobody waits for the exit of the window"
             )]
-            let _ = child.wait();
+            let _ = exit_tx.send(code);
         });
-        Ok(())
+        Ok(exit_rx)
     }
 }
 
@@ -195,7 +261,7 @@ mod tests {
 
     #[test]
     fn terminal_args_use_kitty_and_loop_and_end_with_the_file() {
-        let args = terminal_args(Path::new("-clip.mp4"), None);
+        let args = terminal_args(Path::new("-clip.mp4"), None, Playback::Loop);
         assert_eq!(
             strings(&args),
             [
@@ -224,7 +290,11 @@ mod tests {
                 height: 480,
             })
         );
-        let args = strings(&terminal_args(Path::new("/videos/a.mov"), geometry));
+        let args = strings(&terminal_args(
+            Path::new("/videos/a.mov"),
+            geometry,
+            Playback::Loop,
+        ));
         let options = &args[7..11];
         assert_eq!(
             options,
@@ -246,7 +316,7 @@ mod tests {
     #[test]
     fn window_args_detach_from_the_terminal() {
         assert_eq!(
-            strings(&window_args(Path::new("b.webm"))),
+            strings(&window_args(Path::new("b.webm"), Playback::Loop)),
             [
                 "--no-terminal",
                 "--force-window=immediate",
@@ -255,6 +325,46 @@ mod tests {
                 "b.webm",
             ]
         );
+    }
+
+    #[test]
+    fn once_plays_without_the_loop_and_gives_the_quit_keys_their_own_code() {
+        let terminal = strings(&terminal_args(Path::new("a.mp4"), None, Playback::Once));
+        assert_eq!(
+            terminal[6..],
+            [
+                "--loop-file=no",
+                "--keep-open=no",
+                "--idle=no",
+                "--loop-playlist=no",
+                r#"--input-commands=keybind q "quit 4",keybind Q "quit 4""#,
+                "--",
+                "a.mp4",
+            ]
+        );
+        let window = strings(&window_args(Path::new("b.webm"), Playback::Once));
+        assert_eq!(
+            window,
+            [
+                "--no-terminal",
+                "--force-window=immediate",
+                "--loop-file=no",
+                "--keep-open=no",
+                "--idle=no",
+                "--loop-playlist=no",
+                r#"--input-commands=keybind q "quit 4",keybind Q "quit 4",keybind CLOSE_WIN "quit 4""#,
+                "--",
+                "b.webm",
+            ]
+        );
+    }
+
+    #[test]
+    fn only_exit_code_zero_is_the_end_of_the_file() {
+        assert!(reached_the_end(Some(0)));
+        assert!(!reached_the_end(Some(USER_QUIT)));
+        assert!(!reached_the_end(Some(2)));
+        assert!(!reached_the_end(None));
     }
 
     #[test]
@@ -333,10 +443,14 @@ mod tests {
     }
 
     #[test]
-    fn system_runner_spawns_a_detached_program() {
+    fn system_runner_spawns_a_detached_program_and_reports_its_exit() {
         let shell = Path::new("/bin/sh");
-        let args = [OsString::from("-c"), OsString::from("exit 0")];
-        SystemRunner.spawn(shell, &args).unwrap();
+        let args = [OsString::from("-c"), OsString::from("exit 5")];
+        let exit = SystemRunner.spawn(shell, &args).unwrap();
+        assert_eq!(
+            exit.recv_timeout(std::time::Duration::from_secs(10)),
+            Ok(Some(5))
+        );
         assert!(
             SystemRunner
                 .spawn(Path::new("/nonexistent/mpv"), &[])

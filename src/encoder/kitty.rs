@@ -50,12 +50,6 @@ pub(crate) fn encode_png_to<W: Write + ?Sized>(
     Ok(())
 }
 
-pub(crate) fn delete_all() -> io::Result<()> {
-    let mut out = io::stdout().lock();
-    delete_all_to(&mut out)?;
-    out.flush()
-}
-
 pub(crate) fn delete_all_to<W: Write + ?Sized>(out: &mut W) -> io::Result<()> {
     out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\")
 }

@@ -97,7 +97,11 @@ impl TerminalSession {
         }
         self.restored = true;
 
-        let mut first_error = encoder::KittyBackend.delete_all().err();
+        let backend = self.terminal.backend_mut();
+        let mut first_error = encoder::KittyBackend
+            .delete_all_to(backend)
+            .and_then(|()| Write::flush(backend))
+            .err();
         if let Err(error) = disable_raw_mode()
             && first_error.is_none()
         {
@@ -434,11 +438,20 @@ impl TerminalHandoff for Terminal<CrosstermBackend<io::Stdout>> {
     }
 }
 
+/// The result of an mpv start: a window that plays on, or the exit code of mpv in the terminal.
+#[cfg(feature = "video")]
+enum Played {
+    Window(std::sync::mpsc::Receiver<Option<i32>>),
+    Terminal(Option<i32>),
+}
+
 /// Play the current video in mpv when the configuration and PATH allow it.
 ///
 /// After mpv, viewr goes back to the view that opened the video. The gallery has the cursor
 /// on the video. The fullscreen view stays on the video and shows a play hint. If mpv does
 /// not start, the built-in player takes over for the rest of the session.
+///
+/// A running slideshow that is not paused plays the video one time, see [`after_mpv`].
 #[cfg(feature = "video")]
 fn hand_off_video(
     app: &mut App,
@@ -447,23 +460,28 @@ fn hand_off_video(
     runner: &mut impl mpv::Runner,
 ) -> io::Result<()> {
     let path = app.current_path().to_path_buf();
+    let playback = if app.slideshow_advancing() {
+        mpv::Playback::Once
+    } else {
+        mpv::Playback::Loop
+    };
     let played = match &state.player {
         mpv::Player::Builtin => {
             state.status.clone_from(&state.fallback_note);
             return Ok(());
         }
         mpv::Player::Window(program) => runner
-            .spawn(program, &mpv::window_args(&path))
-            .map(|()| Some(format!("{} plays in an mpv window", mpv::file_name(&path)))),
-        mpv::Player::Terminal(program) => play_in_terminal(app, handoff, runner, program, &path)?
-            .map(|code| mpv::exit_note(code, &path)),
+            .spawn(program, &mpv::window_args(&path, playback))
+            .map(Played::Window),
+        mpv::Player::Terminal(program) => {
+            play_in_terminal(app, handoff, runner, program, &path, playback)?.map(Played::Terminal)
+        }
     };
     match played {
-        Ok(note) => {
-            state.status = note;
-            app.stop_slideshow();
+        Ok(played) => {
             app.return_from_video();
             focus_gallery_on_current(app);
+            state.status = after_mpv(app, played, playback, &path);
         }
         Err(error) => {
             state.player = mpv::Player::Builtin;
@@ -472,6 +490,43 @@ fn hand_off_video(
         }
     }
     Ok(())
+}
+
+/// Lead the slideshow on after mpv, and return the status note.
+///
+/// Outside a slideshow, or in a paused one, mpv played in a loop until the user quit it, so a
+/// slideshow stops. In [`mpv::Playback::Once`], exit code 0 in the terminal is the end of the
+/// file and the slideshow moves on. Each other exit stops the slideshow on the placeholder:
+/// `q`, `Q` and `Ctrl+C` (code 4), an error or a signal. A window holds the slideshow on the
+/// placeholder until the window closes, see [`App::hold_slideshow_for_window`].
+#[cfg(feature = "video")]
+fn after_mpv(
+    app: &mut App,
+    played: Played,
+    playback: mpv::Playback,
+    path: &std::path::Path,
+) -> Option<String> {
+    let name = mpv::file_name(path);
+    match (played, playback) {
+        (Played::Window(_), mpv::Playback::Loop) => {
+            app.stop_slideshow();
+            Some(format!("{name} plays in an mpv window"))
+        }
+        (Played::Window(exit), mpv::Playback::Once) => {
+            app.hold_slideshow_for_window(exit);
+            Some(format!(
+                "{name} plays in an mpv window, the slideshow waits for its end"
+            ))
+        }
+        (Played::Terminal(code), mpv::Playback::Loop) => {
+            app.stop_slideshow();
+            mpv::exit_note(code, path)
+        }
+        (Played::Terminal(code), mpv::Playback::Once) => {
+            app.after_slideshow_video(mpv::reached_the_end(code));
+            mpv::exit_note(code, path)
+        }
+    }
 }
 
 /// Run mpv in this terminal and wait for its exit code.
@@ -484,8 +539,9 @@ fn play_in_terminal(
     runner: &mut impl mpv::Runner,
     program: &std::path::Path,
     path: &std::path::Path,
+    playback: mpv::Playback,
 ) -> io::Result<io::Result<Option<i32>>> {
-    let args = mpv::terminal_args(path, handoff.geometry(app.cell_px));
+    let args = mpv::terminal_args(path, handoff.geometry(app.cell_px), playback);
     if let Err(error) = handoff
         .suspend(app)
         .and_then(|()| handoff.ensure_raw_mode())
@@ -636,6 +692,9 @@ fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
 }
 
 /// Keys of the video player: pause, navigation, delete.
+///
+/// Esc stops a running slideshow, like `q` in mpv: the user wants out. A step to another file
+/// keeps the slideshow and gives that file the full interval, like in the fullscreen view.
 #[cfg(feature = "video")]
 fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     match key.code {
@@ -648,6 +707,7 @@ fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
         }
         KeyCode::Esc => {
             app.graphics_delete_all()?;
+            app.stop_slideshow();
             app.return_from_video();
             focus_gallery_on_current(app);
         }
@@ -658,18 +718,22 @@ fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
         KeyCode::Left | KeyCode::Char('h') => {
             app.graphics_delete_all()?;
             app.prev();
+            app.slideshow_touch();
         }
         KeyCode::Right | KeyCode::Char('l') => {
             app.graphics_delete_all()?;
             app.next();
+            app.slideshow_touch();
         }
         KeyCode::Home => {
             app.graphics_delete_all()?;
             app.first();
+            app.slideshow_touch();
         }
         KeyCode::End => {
             app.graphics_delete_all()?;
             app.last();
+            app.slideshow_touch();
         }
         KeyCode::Char('d' | 'D') => {
             app.begin_delete(matches!(key.code, KeyCode::Char('D')));
@@ -723,7 +787,7 @@ fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
         KeyCode::Char('s') => {
             app.graphics_delete_all()?;
             app.enter_fullscreen_selected();
-            if app.mode == ViewMode::Fullscreen {
+            if app.in_slideshow_view() {
                 app.start_slideshow();
             }
         }
@@ -971,7 +1035,8 @@ fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
 }
 
 fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
-    render_fullscreen_image_to(app, &mut stdout().lock())
+    let mut out = app.graphics_out.clone();
+    render_fullscreen_image_to(app, &mut out)
 }
 
 /// Write the fullscreen image to `out`, so that the tests can read the escape sequences.
@@ -1014,7 +1079,8 @@ const VIDEO_IMAGE_ID: u32 = 900;
 
 #[cfg(feature = "video")]
 fn render_video_frame(app: &App) -> io::Result<()> {
-    render_video_frame_to(app, &mut stdout().lock())
+    let mut out = app.graphics_out.clone();
+    render_video_frame_to(app, &mut out)
 }
 
 /// Write the current video frame to `out`, so that the tests can read the escape sequences.
@@ -1051,7 +1117,8 @@ fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
 }
 
 fn emit_new_thumbnails(app: &mut App, new_indices: &[usize]) -> io::Result<()> {
-    emit_new_thumbnails_to(app, new_indices, &mut stdout().lock())
+    let mut out = app.graphics_out.clone();
+    emit_new_thumbnails_to(app, new_indices, &mut out)
 }
 
 /// Write the new thumbnails to `out`, so that the tests can read the escape sequences.
@@ -1103,7 +1170,8 @@ fn render_gallery_images(app: &mut App) -> io::Result<()> {
         app.spawn_thumb_decode(img_idx, path, inner);
     }
 
-    place_gallery_images_to(app, &visible, &mut stdout().lock())
+    let mut out = app.graphics_out.clone();
+    place_gallery_images_to(app, &visible, &mut out)
 }
 
 /// Write the `visible` thumbnails to `out`, so that the tests can read the escape sequences.
@@ -1162,6 +1230,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
+    use tempfile::TempDir;
 
     fn picker_app(root: &Path) -> App {
         let list = SharedImageList::new();
@@ -1171,20 +1240,20 @@ mod tests {
         app
     }
 
-    fn synthetic_tree(test_name: &str) -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!(
-            "viewr-synthetic-{test_name}-{}",
-            std::process::id()
-        ));
+    /// A temp directory with the subdirectory `synthetic-images`. The tree goes away on drop.
+    /// Both paths are canonical, because the picker canonicalizes its directories.
+    fn synthetic_tree() -> (TempDir, PathBuf, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
         let child = root.join("synthetic-images");
-        if root.exists() {
-            fs::remove_dir_all(&root).unwrap();
-        }
-        fs::create_dir_all(&child).unwrap();
-        (
-            fs::canonicalize(root).unwrap(),
-            fs::canonicalize(child).unwrap(),
-        )
+        fs::create_dir(&child).unwrap();
+        (temp, root, child)
+    }
+
+    /// Drop the tree after a short wait: `switch_to_dir` starts a scanner thread in it.
+    fn cleanup(temp: TempDir) {
+        std::thread::sleep(Duration::from_millis(20));
+        drop(temp);
     }
 
     fn select_path(app: &mut App, target: &Path) {
@@ -1203,7 +1272,7 @@ mod tests {
 
     #[test]
     fn enter_chooses_directory_and_closes_picker() {
-        let (root, child) = synthetic_tree("choose-directory");
+        let (temp, root, child) = synthetic_tree();
         let mut app = picker_app(&root);
         select_path(&mut app, &child);
 
@@ -1212,13 +1281,12 @@ mod tests {
         assert!(app.picker.is_none());
         assert_eq!(app.current_dir, Some(fs::canonicalize(&child).unwrap()));
 
-        std::thread::sleep(Duration::from_millis(20));
-        fs::remove_dir_all(root).unwrap();
+        cleanup(temp);
     }
 
     #[test]
     fn right_descends_without_closing_picker() {
-        let (root, child) = synthetic_tree("descend-directory");
+        let (temp, root, child) = synthetic_tree();
         let mut app = picker_app(&root);
         select_path(&mut app, &child);
 
@@ -1229,8 +1297,7 @@ mod tests {
             Some(&fs::canonicalize(&child).unwrap())
         );
 
-        std::thread::sleep(Duration::from_millis(20));
-        fs::remove_dir_all(root).unwrap();
+        cleanup(temp);
     }
 
     #[test]
@@ -1306,6 +1373,7 @@ mod tests {
         use std::io;
         use std::path::{Path, PathBuf};
         use std::rc::Rc;
+        use std::sync::mpsc;
 
         type Log = Rc<RefCell<Vec<String>>>;
 
@@ -1348,10 +1416,12 @@ mod tests {
         }
 
         /// Records each start; `exit` is the exit code of mpv or the error of the start.
+        /// `window` sends the exit code of the last window, so that the test closes it.
         struct FakeRunner {
             log: Log,
             raw: Rc<Cell<bool>>,
             exit: Result<Option<i32>, io::ErrorKind>,
+            window: Option<mpsc::Sender<Option<i32>>>,
         }
 
         impl FakeRunner {
@@ -1376,8 +1446,15 @@ mod tests {
                 Ok(self.exit?)
             }
 
-            fn spawn(&mut self, program: &Path, args: &[OsString]) -> io::Result<()> {
-                self.record("spawn", program, args)
+            fn spawn(
+                &mut self,
+                program: &Path,
+                args: &[OsString],
+            ) -> io::Result<mpsc::Receiver<Option<i32>>> {
+                self.record("spawn", program, args)?;
+                let (exit_tx, exit_rx) = mpsc::channel();
+                self.window = Some(exit_tx);
+                Ok(exit_rx)
             }
         }
 
@@ -1394,22 +1471,30 @@ mod tests {
             app
         }
 
-        /// An app in a running slideshow that steps from a photo onto a video.
+        /// An app in the fullscreen view that steps from a photo onto a video.
         fn fullscreen_video_app() -> App {
+            fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], false)
+        }
+
+        /// An app in a running slideshow that steps from a photo onto a video.
+        fn slideshow_video_app() -> App {
+            fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], true)
+        }
+
+        /// An app with `names` below `/videos` that steps from the first file onto the second,
+        /// a video, in the fullscreen view. `slideshow` starts a slideshow on the first file.
+        fn fullscreen_app_on_video(names: &[&str], slideshow: bool) -> App {
             let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
-            app.images = vec![
-                PathBuf::from("/videos/a.jpg"),
-                PathBuf::from("/videos/clip.mp4"),
-                PathBuf::from("/videos/b.jpg"),
-            ];
-            app.filenames = vec![
-                "a.jpg".to_owned(),
-                "clip.mp4".to_owned(),
-                "b.jpg".to_owned(),
-            ];
-            app.gallery.filtered_indices = vec![0, 1, 2];
+            app.images = names
+                .iter()
+                .map(|name| Path::new("/videos").join(name))
+                .collect();
+            app.filenames = names.iter().map(|name| (*name).to_owned()).collect();
+            app.gallery.filtered_indices = (0..names.len()).collect();
             app.enter_fullscreen_at(0);
-            app.start_slideshow();
+            if slideshow {
+                app.start_slideshow();
+            }
             app.next();
             assert_eq!(app.mode, ViewMode::Video);
             app
@@ -1437,6 +1522,7 @@ mod tests {
                 log: Rc::clone(&log),
                 raw,
                 exit,
+                window: None,
             };
             (log, terminal, runner)
         }
@@ -1484,9 +1570,184 @@ mod tests {
             assert_eq!(app.current, 1, "fullscreen stays on the video");
             assert!(app.shows_video_placeholder());
             assert!(app.loaded.is_none());
-            assert!(!app.slideshow_running(), "the slideshow stops at the video");
             assert!(app.needs_render);
             assert_eq!(state.status, None);
+        }
+
+        fn window_state() -> LoopState {
+            state(mpv::Player::Window(PathBuf::from("/bin/mpv")))
+        }
+
+        /// The arguments of the last mpv start in `log`.
+        fn last_start(log: &Log) -> String {
+            log.borrow()
+                .iter()
+                .rev()
+                .find(|entry| entry.starts_with("run ") || entry.starts_with("spawn "))
+                .cloned()
+                .unwrap()
+        }
+
+        #[test]
+        fn a_slideshow_plays_the_video_once_in_the_terminal_and_moves_on() {
+            let mut app = slideshow_video_app();
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            let start = last_start(&log);
+            assert!(start.contains(" --loop-file=no "), "{start}");
+            assert!(
+                start.contains(r#" --input-commands=keybind q "quit 4",keybind Q "quit 4" "#),
+                "{start}"
+            );
+            assert_eq!(app.current, 2, "the end of the clip moves on");
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert!(app.slideshow_running());
+            let interval = app.slideshow.as_ref().unwrap().interval;
+            assert!(
+                app.slideshow_timeout().unwrap() > interval / 2,
+                "the next slide gets the full interval"
+            );
+            assert_eq!(state.status, None);
+        }
+
+        #[test]
+        fn a_quit_in_mpv_stops_the_slideshow_on_the_placeholder() {
+            for (code, note) in [
+                (Some(mpv::USER_QUIT), None),
+                (None, None),
+                (Some(2), Some("mpv could not play clip.mp4 (exit code 2)")),
+            ] {
+                let mut app = slideshow_video_app();
+                let mut state = terminal_state();
+                let (_log, mut terminal, mut runner) = fakes(Ok(code));
+
+                hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+                assert_eq!(app.current, 1, "{code:?}");
+                assert!(app.shows_video_placeholder(), "{code:?}");
+                assert!(!app.slideshow_running(), "{code:?} stops the slideshow");
+                assert_eq!(state.status.as_deref(), note);
+            }
+        }
+
+        #[test]
+        fn the_last_video_ends_the_slideshow_or_wraps_with_the_loop() {
+            for wrap in [false, true] {
+                let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4"], true);
+                app.slideshow_loop = wrap;
+                let mut state = terminal_state();
+                let (_log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+
+                hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+                assert_eq!(app.slideshow_running(), wrap);
+                assert_eq!(
+                    app.current,
+                    usize::from(!wrap),
+                    "the loop wraps to the first"
+                );
+                assert_eq!(app.mode, ViewMode::Fullscreen);
+            }
+        }
+
+        #[test]
+        fn a_paused_slideshow_loops_the_video_and_stops_after_mpv() {
+            let mut app = slideshow_video_app();
+            app.slideshow_toggle_pause();
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert!(last_start(&log).contains(" --loop-file=inf -- "));
+            assert_eq!(app.current, 1);
+            assert!(app.shows_video_placeholder());
+            assert!(!app.slideshow_running(), "the user quit the loop");
+        }
+
+        #[test]
+        fn the_terminal_player_outside_a_slideshow_loops_as_before() {
+            let mut app = fullscreen_video_app();
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            let start = last_start(&log);
+            assert!(start.contains(" --loop-file=inf -- "), "{start}");
+            assert!(!start.contains("--input-commands"), "{start}");
+            assert_eq!(app.current, 1);
+            assert!(!app.slideshow_running());
+        }
+
+        #[test]
+        fn a_window_holds_the_slideshow_until_the_end_of_the_clip() {
+            let mut app = slideshow_video_app();
+            let mut state = window_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(None));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            let start = last_start(&log);
+            assert!(start.contains(" --loop-file=no "), "{start}");
+            assert!(start.contains(r#"keybind CLOSE_WIN "quit 4""#), "{start}");
+            assert_eq!(
+                state.status.as_deref(),
+                Some("clip.mp4 plays in an mpv window, the slideshow waits for its end")
+            );
+            assert!(app.shows_video_placeholder());
+            app.slideshow_tick();
+            assert_eq!(app.current, 1, "the open window holds the slide");
+            assert!(app.slideshow_timeout().is_some(), "the loop checks again");
+
+            runner.window.take().unwrap().send(Some(0)).unwrap();
+            app.slideshow_tick();
+            assert_eq!(app.current, 2);
+            assert!(app.slideshow_running());
+        }
+
+        #[test]
+        fn a_closed_or_quit_window_stops_the_slideshow() {
+            for close in [Some(Some(mpv::USER_QUIT)), Some(None), None] {
+                let mut app = slideshow_video_app();
+                let mut state = window_state();
+                let (_log, mut terminal, mut runner) = fakes(Ok(None));
+                hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+                let window = runner.window.take().unwrap();
+                match close {
+                    Some(code) => window.send(code).unwrap(),
+                    // A wait thread that ends without a code.
+                    None => drop(window),
+                }
+                app.slideshow_tick();
+
+                assert_eq!(app.current, 1, "{close:?}");
+                assert!(!app.slideshow_running(), "{close:?}");
+                assert!(app.shows_video_placeholder());
+            }
+        }
+
+        #[test]
+        fn a_step_away_from_the_window_forgets_it() {
+            let mut app = slideshow_video_app();
+            let mut state = window_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(None));
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            app.next();
+            let late_quit = runner.window.take().unwrap().send(Some(mpv::USER_QUIT));
+            assert!(late_quit.is_err(), "viewr dropped the exit of the window");
+            app.prev();
+            assert_eq!(app.mode, ViewMode::Video, "prev steps onto the video");
+            app.return_from_video();
+            app.slideshow_tick();
+
+            assert!(app.slideshow_running(), "the late quit does not count");
+            assert!(app.shows_video_placeholder());
         }
 
         #[test]
@@ -1539,6 +1800,32 @@ mod tests {
             assert_eq!(app.mode, ViewMode::Fullscreen);
             assert_eq!(app.current, 1);
             assert!(app.shows_video_placeholder());
+        }
+
+        #[test]
+        fn esc_in_the_builtin_player_stops_a_running_slideshow() {
+            let mut app = slideshow_video_app();
+            let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+            assert!(!handle_video_key(&mut app, esc).unwrap());
+            app.slideshow_tick();
+
+            assert!(!app.slideshow_running(), "Esc is a quit, like q in mpv");
+            assert_eq!(app.current, 1);
+            assert!(app.shows_video_placeholder());
+        }
+
+        #[test]
+        fn a_step_in_the_builtin_player_gives_the_next_file_the_full_interval() {
+            let mut app = slideshow_video_app();
+            let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+
+            assert!(!handle_video_key(&mut app, right).unwrap());
+
+            assert_eq!(app.current, 2);
+            assert!(app.slideshow_running());
+            let interval = app.slideshow.as_ref().unwrap().interval;
+            assert!(app.slideshow_timeout().unwrap() > interval / 2);
         }
 
         #[test]
@@ -1648,7 +1935,7 @@ mod tests {
         #[test]
         fn window_player_keeps_the_fullscreen_view_on_the_video() {
             let mut app = fullscreen_video_app();
-            let mut state = state(mpv::Player::Window(PathBuf::from("/bin/mpv")));
+            let mut state = window_state();
             let (_log, mut terminal, mut runner) = fakes(Ok(None));
 
             hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
@@ -1682,7 +1969,6 @@ mod tests {
         use super::super::{Cli, initial_dir_from_paths};
         use super::synthetic_tree;
         use clap::Parser;
-        use std::fs;
         use std::path::PathBuf;
 
         #[test]
@@ -1742,12 +2028,10 @@ mod tests {
 
         #[test]
         fn a_directory_argument_is_the_start_directory() {
-            let (root, child) = synthetic_tree("initial-directory");
+            let (_temp, root, child) = synthetic_tree();
 
             let paths = [root.join("missing.jpg"), child.clone()];
             assert_eq!(initial_dir_from_paths(&paths), child);
-
-            fs::remove_dir_all(root).unwrap();
         }
 
         #[test]
@@ -1767,7 +2051,7 @@ mod tests {
     /// The key handlers, driven through `handle_event` like the run loop does.
     mod keys {
         use super::super::{App, SharedImageList, ViewMode, handle_event, handle_theme_picker_key};
-        use super::{picker_app, select_path, synthetic_tree};
+        use super::{cleanup, picker_app, select_path, synthetic_tree};
         use crate::config::{
             Config, MAX_THUMB_COLS, MAX_THUMB_ROWS, MIN_THUMB_COLS, MIN_THUMB_ROWS,
         };
@@ -1775,8 +2059,8 @@ mod tests {
         use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         use ratatui::layout::Rect;
         use std::fs;
-        use std::path::{Path, PathBuf};
-        use std::time::Duration;
+        use std::path::PathBuf;
+        use tempfile::TempDir;
 
         fn press(app: &mut App, code: KeyCode) -> bool {
             press_with(app, code, KeyModifiers::NONE)
@@ -1800,7 +2084,7 @@ mod tests {
         /// A scanned gallery of `count` photos in a grid of 3 columns and 2 visible rows.
         fn gallery_app_with(count: usize, config: &Config) -> App {
             let mut app =
-                App::with_config(Theme::default(), (8, 16), SharedImageList::new(), config);
+                App::new_with_config(Theme::default(), (8, 16), SharedImageList::new(), config);
             app.images = photo_paths(count);
             app.filenames = app
                 .images
@@ -1871,6 +2155,25 @@ mod tests {
             assert!(!handle_event(&mut app, &Event::Key(release)).unwrap());
             assert!(!handle_event(&mut app, &Event::FocusGained).unwrap());
             assert!(!app.needs_render);
+        }
+
+        #[test]
+        fn key_handlers_write_the_kitty_sequences_to_the_app_output() {
+            const DELETE_ALL: &[u8] = b"\x1b_Ga=d,d=A,q=2\x1b\\";
+            let mut app = gallery_app(3);
+            app.transmitted_image_ids.insert(5);
+
+            char_key(&mut app, '?');
+            assert_eq!(app.graphics_out.take_bytes(), DELETE_ALL);
+            assert!(app.transmitted_image_ids.is_empty());
+            char_key(&mut app, 'x');
+            assert!(
+                app.graphics_out.take_bytes().is_empty(),
+                "no picture change"
+            );
+            press(&mut app, KeyCode::Enter);
+            assert_eq!(app.graphics_out.take_bytes(), DELETE_ALL);
+            assert_eq!(app.mode, ViewMode::Fullscreen);
         }
 
         #[test]
@@ -2097,13 +2400,13 @@ mod tests {
             assert_eq!(app.images.len(), 3);
         }
 
-        /// The root of a `synthetic_tree` with small files that the test can delete.
-        fn deletable_files(test_name: &str, names: &[&str]) -> (PathBuf, Vec<PathBuf>) {
-            let (dir, _child) = synthetic_tree(test_name);
+        /// A temp directory with small files that the test can delete.
+        fn deletable_files(names: &[&str]) -> (TempDir, Vec<PathBuf>) {
+            let dir = tempfile::tempdir().unwrap();
             let paths = names
                 .iter()
                 .map(|name| {
-                    let path = dir.join(name);
+                    let path = dir.path().join(name);
                     fs::write(&path, b"not an image").unwrap();
                     path
                 })
@@ -2113,7 +2416,7 @@ mod tests {
 
         #[test]
         fn y_deletes_permanently_and_the_last_delete_quits() {
-            let (dir, paths) = deletable_files("delete-keys", &["a.jpg", "b.jpg"]);
+            let (_dir, paths) = deletable_files(&["a.jpg", "b.jpg"]);
             let mut app = gallery_app(0);
             app.images.clone_from(&paths);
             app.filenames = vec!["a.jpg".to_owned(), "b.jpg".to_owned()];
@@ -2129,8 +2432,6 @@ mod tests {
             assert!(char_key(&mut app, 'Y'), "an empty scanned list ends viewr");
             assert!(!paths[1].exists());
             assert!(app.images.is_empty());
-
-            fs::remove_dir_all(dir).unwrap();
         }
 
         #[test]
@@ -2317,7 +2618,7 @@ mod tests {
 
         #[test]
         fn gallery_o_opens_the_directory_picker() {
-            let (root, _child) = synthetic_tree("gallery-picker");
+            let (_temp, root, _child) = synthetic_tree();
             let mut app = gallery_app(2);
             app.initial_dir = Some(root.clone());
 
@@ -2331,34 +2632,26 @@ mod tests {
                 ViewMode::Gallery,
                 "Esc closes the picker over photos"
             );
-
-            fs::remove_dir_all(root).unwrap();
         }
 
-        /// A picker in `root` with the directories a, b and c.
-        fn picker_tree(test_name: &str) -> (PathBuf, App) {
-            let (root, _child) = synthetic_tree(test_name);
-            fs::remove_dir_all(root.join("synthetic-images")).unwrap();
+        /// A picker in a temp directory with the directories a, b and c.
+        fn picker_tree() -> (TempDir, App) {
+            let (temp, root, child) = synthetic_tree();
+            fs::remove_dir(child).unwrap();
             for name in ["a", "b", "c"] {
                 fs::create_dir(root.join(name)).unwrap();
             }
             let app = picker_app(&root);
-            (root, app)
+            (temp, app)
         }
 
         fn picker_cursor(app: &App) -> usize {
             app.picker.as_ref().unwrap().cursor
         }
 
-        fn cleanup(root: &Path) {
-            // switch_to_dir starts a scanner thread in the tree.
-            std::thread::sleep(Duration::from_millis(20));
-            fs::remove_dir_all(root).unwrap();
-        }
-
         #[test]
         fn picker_keys_move_the_cursor() {
-            let (root, mut app) = picker_tree("picker-moves");
+            let (temp, mut app) = picker_tree();
 
             press(&mut app, KeyCode::Down);
             char_key(&mut app, 'j');
@@ -2388,12 +2681,12 @@ mod tests {
             char_key(&mut app, 'x');
             assert!(char_key(&mut app, 'q'));
 
-            cleanup(&root);
+            cleanup(temp);
         }
 
         #[test]
         fn picker_filter_keys() {
-            let (root, mut app) = picker_tree("picker-filter");
+            let (temp, mut app) = picker_tree();
 
             char_key(&mut app, '/');
             assert!(app.picker.as_ref().unwrap().filter_active);
@@ -2425,12 +2718,12 @@ mod tests {
             assert!(picker.filter.is_empty());
             assert_eq!(picker.filtered_indices.len(), 4);
 
-            cleanup(&root);
+            cleanup(temp);
         }
 
         #[test]
         fn picker_left_and_the_parent_entry_go_up() {
-            let (root, child) = synthetic_tree("picker-ascend");
+            let (temp, root, child) = synthetic_tree();
             let grandchild = child.join("grandchild");
             fs::create_dir(&grandchild).unwrap();
             let mut app = picker_app(&grandchild);
@@ -2450,19 +2743,19 @@ mod tests {
             assert_eq!(app.picker.as_ref().unwrap().current_dir, root);
             assert_eq!(app.mode, ViewMode::Picker);
 
-            cleanup(&root);
+            cleanup(temp);
         }
 
         #[test]
         fn t_opens_the_theme_picker_over_the_directory_picker() {
-            let (root, mut app) = picker_tree("picker-theme");
+            let (temp, mut app) = picker_tree();
 
             char_key(&mut app, 't');
 
             assert!(app.theme_picker.is_some());
             assert_eq!(app.mode, ViewMode::Picker);
 
-            cleanup(&root);
+            cleanup(temp);
         }
 
         #[cfg(feature = "video")]
@@ -2513,6 +2806,20 @@ mod tests {
             press(&mut app, KeyCode::End);
             assert_eq!(app.current, 3);
             assert_eq!(app.mode, ViewMode::Fullscreen, "b.jpg is a photo");
+        }
+
+        #[cfg(feature = "video")]
+        #[test]
+        fn gallery_s_on_a_video_starts_the_slideshow_with_the_video() {
+            let mut app = video_app();
+            app.enter_gallery();
+            app.gallery.cursor = 1;
+
+            char_key(&mut app, 's');
+
+            assert_eq!(app.mode, ViewMode::Video);
+            assert!(app.slideshow_running());
+            assert_eq!(app.video_return, crate::app::VideoReturn::Fullscreen);
         }
 
         #[cfg(feature = "video")]
