@@ -116,8 +116,17 @@ missing.
   `VIEWR_TEST_HEIC` or `VIEWR_TEST_AVIF`. `just test-real` runs them.
 - The synthetic libheif tests encode with the aom (AVIF) and x265 (HEIC) encoder plugins of
   Homebrew's libheif. If a plugin is missing, `just check` fails.
-- A test that writes files works in its own directory below `std::env::temp_dir()`, with the
-  process id in the name, and removes it at the end.
+- A test that writes files uses `tempfile::tempdir()` (`TempDir`) or `tempfile::NamedTempFile`.
+  The directory goes away on drop, also when the test panics. (`main.rs`, `ui.rs` and `video.rs`
+  still use their old temp-dir helpers, see TODO.md.)
+- A test never writes to the real state file or the real thumbnail cache. The test-only
+  `App::new` points `app.state_file` and `app.disk_cache_dir` below `/dev/null`. A test that
+  needs them sets them to temp paths.
+- A test never sets `HOME` or `XDG_*`. Use the functions that take a path: `config::load_at`,
+  `theme::load_themes_at`, `config::xdg_path`, `config::save_thumb_size(path, ..)`.
+- A test waits for background work in a loop with a limit (for example 2 s in 10 ms steps), and
+  never depends on the clock within a frame interval.
+- A test calls `trash::delete` only with a missing path, so it never asks Finder.
 
 ## Layout
 

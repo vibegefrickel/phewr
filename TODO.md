@@ -2,8 +2,7 @@
 
 ## Now
 
-- Testing phase: tests for `app.rs` (58%) and `main.rs` (43%), then `scanner.rs` (71%), `config.rs` (75%) and `theme.rs` (84%). Total line coverage: 76%
-- Use `tempfile` in the tests instead of hand-made directories below `std::env::temp_dir()`
+- Tests: move `main.rs`, `ui.rs` and `video.rs` to `tempfile`. Total line coverage: 94% (lowest: `main.rs` 86%, `video.rs` 91%)
 
 ## Next
 
@@ -39,6 +38,7 @@
 - HEIC / HEIF decoding through libheif
 - Video playback in mpv (`[video] player`: terminal, window, builtin)
 - Built-in player: a pause no longer drops a packet or stops the loop
+- Testing phase: 39% to 94% line coverage, `tempfile`, no test writes real user files
 - Return to the view that opened a video, video placeholder in fullscreen
 - Prefetch: generation counter against stale results, no retry loop after a failed decode
 - AVIF through libheif, embedded HEIC grid thumbnails, EXIF orientation for WebP and PNG
