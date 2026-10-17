@@ -215,12 +215,263 @@ fn gps_decimal(exif: &exif::Exif, tag: Tag, ref_tag: Tag, negative_ref: char) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use exif::experimental::Writer;
+    use exif::{Field, Rational, Value};
+    use image::{ExtendedColorType, ImageEncoder};
+    use std::path::PathBuf;
+
+    /// Give each test its own directory below the temp directory.
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("viewr-info-{name}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// An EXIF field of the primary image.
+    fn field(tag: Tag, value: Value) -> Field {
+        Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value,
+        }
+    }
+
+    fn ascii(tag: Tag, text: &str) -> Field {
+        field(tag, Value::Ascii(vec![text.as_bytes().to_vec()]))
+    }
+
+    fn short(tag: Tag, number: u16) -> Field {
+        field(tag, Value::Short(vec![number]))
+    }
+
+    fn rational(tag: Tag, parts: &[(u32, u32)]) -> Field {
+        let parts = parts
+            .iter()
+            .map(|&(num, denom)| Rational { num, denom })
+            .collect();
+        field(tag, Value::Rational(parts))
+    }
+
+    /// Encode `fields` as the little-endian TIFF block of an EXIF segment.
+    fn exif_block(fields: &[Field]) -> Vec<u8> {
+        let mut writer = Writer::new();
+        for field in fields {
+            writer.push_field(field);
+        }
+        let mut out = std::io::Cursor::new(Vec::new());
+        writer.write(&mut out, true).unwrap();
+        out.into_inner()
+    }
+
+    /// Write a black 16x8 JPEG that carries `fields` as EXIF.
+    fn jpeg_with_exif(path: &Path, fields: &[Field]) {
+        let file = File::create(path).unwrap();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 90);
+        encoder.set_exif_metadata(exif_block(fields)).unwrap();
+        encoder
+            .write_image(&[0; 16 * 8 * 3], 16, 8, ExtendedColorType::Rgb8)
+            .unwrap();
+    }
+
+    /// The EXIF rows of a JPEG with `fields`, in a directory of their own.
+    fn exif_rows_for(name: &str, fields: &[Field]) -> Vec<(String, String)> {
+        let dir = test_dir(name);
+        let path = dir.join("photo.jpg");
+        jpeg_with_exif(&path, fields);
+        let rows = exif_rows(&path);
+        std::fs::remove_dir_all(&dir).unwrap();
+        rows
+    }
+
+    /// The value of the first row with `label`.
+    fn row<'a>(rows: &'a [(String, String)], label: &str) -> Option<&'a str> {
+        rows.iter()
+            .find(|(candidate, _)| candidate == label)
+            .map(|(_, value)| value.as_str())
+    }
 
     #[test]
     fn human_size_scales_units() {
+        assert_eq!(human_size(0), "0 B");
         assert_eq!(human_size(512), "512 B");
         assert_eq!(human_size(2048), "2.0 KB");
         assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GB");
+        assert_eq!(human_size(2048 * 1024 * 1024 * 1024 * 1024), "2048.0 TB");
+    }
+
+    #[test]
+    fn megapixels_drop_the_decimal_from_ten_up() {
+        assert_eq!(megapixels(1920, 1080), "2.1 MP");
+        assert_eq!(megapixels(4000, 3000), "12 MP");
+        assert_eq!(megapixels(16, 8), "0.0 MP");
+    }
+
+    #[test]
+    fn info_for_a_missing_file_has_name_folder_and_format_only() {
+        let path = std::env::temp_dir()
+            .join(format!("viewr-info-missing-{}", std::process::id()))
+            .join("gone.jpeg");
+        let info = load(&path);
+        let labels: Vec<&str> = info.rows.iter().map(|(label, _)| label.as_str()).collect();
+        assert_eq!(labels, ["", "Name", "Folder", "Format"]);
+        assert_eq!(row(&info.rows, ""), Some("File"));
+        assert_eq!(row(&info.rows, "Name"), Some("gone.jpeg"));
+        assert_eq!(row(&info.rows, "Format"), Some("JPEG"));
+    }
+
+    #[test]
+    fn info_for_a_jpeg_with_exif_has_file_and_exif_rows() {
+        let dir = test_dir("jpeg-exif");
+        let path = dir.join("photo.jpg");
+        jpeg_with_exif(
+            &path,
+            &[
+                ascii(Tag::Make, "Canon"),
+                ascii(Tag::Model, "Canon EOS R5"),
+                ascii(Tag::LensModel, "RF 50mm"),
+                ascii(Tag::DateTimeOriginal, "2024:05:01 10:20:30"),
+                rational(Tag::ExposureTime, &[(1, 250)]),
+                rational(Tag::FNumber, &[(28, 10)]),
+                short(Tag::PhotographicSensitivity, 400),
+                rational(Tag::FocalLength, &[(50, 1)]),
+                short(Tag::FocalLengthIn35mmFilm, 75),
+                short(Tag::Flash, 0),
+                short(Tag::Orientation, 1),
+                rational(Tag::GPSLatitude, &[(52, 1), (30, 1), (0, 1)]),
+                ascii(Tag::GPSLatitudeRef, "N"),
+                rational(Tag::GPSLongitude, &[(13, 1), (24, 1), (0, 1)]),
+                ascii(Tag::GPSLongitudeRef, "W"),
+                ascii(Tag::Software, "viewr test"),
+                ascii(Tag::ImageDescription, "A test photo"),
+            ],
+        );
+        let info = load(&path);
+        let size = std::fs::metadata(&path).unwrap().len();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let rows = &info.rows;
+
+        assert_eq!(row(rows, "Name"), Some("photo.jpg"));
+        assert_eq!(row(rows, "Size"), Some(human_size(size).as_str()));
+        assert!(row(rows, "Modified").is_some());
+        assert_eq!(row(rows, "Dimensions"), Some("16 x 8 (0.0 MP)"));
+        assert_eq!(row(rows, "Format"), Some("JPG"));
+        assert!(rows.contains(&(String::new(), "EXIF".to_owned())));
+        assert_eq!(row(rows, "Camera"), Some("Canon EOS R5"));
+        assert_eq!(row(rows, "Lens"), Some("RF 50mm"));
+        assert_eq!(row(rows, "Taken"), Some("2024-05-01 10:20:30"));
+        assert_eq!(row(rows, "ISO"), Some("400"));
+        assert_eq!(row(rows, "GPS"), Some("52.50000, -13.40000"));
+        assert_eq!(row(rows, "Software"), Some("viewr test"));
+        assert_eq!(row(rows, "Description"), Some("A test photo"));
+        let focal = row(rows, "Focal length").unwrap();
+        assert!(focal.ends_with("eq.)"), "focal: {focal}");
+        for label in ["Exposure", "Aperture", "Flash", "Orientation"] {
+            assert!(row(rows, label).is_some(), "missing {label}");
+        }
+    }
+
+    #[test]
+    fn camera_joins_make_and_model() {
+        let both = exif_rows_for(
+            "camera-both",
+            &[ascii(Tag::Make, "Nikon"), ascii(Tag::Model, "Z 6")],
+        );
+        assert_eq!(row(&both, "Camera"), Some("Nikon Z 6"));
+
+        let make = exif_rows_for("camera-make", &[ascii(Tag::Make, "Nikon")]);
+        assert_eq!(row(&make, "Camera"), Some("Nikon"));
+
+        let model = exif_rows_for("camera-model", &[ascii(Tag::Model, "Z 6")]);
+        assert_eq!(row(&model, "Camera"), Some("Z 6"));
+    }
+
+    #[test]
+    fn focal_length_shows_the_values_that_exist() {
+        let focal = exif_rows_for("focal-only", &[rational(Tag::FocalLength, &[(35, 1)])]);
+        let value = row(&focal, "Focal length").unwrap();
+        assert!(!value.contains("eq."), "focal: {value}");
+
+        let equivalent = exif_rows_for("focal-35-only", &[short(Tag::FocalLengthIn35mmFilm, 28)]);
+        assert_eq!(row(&equivalent, "Focal length"), Some("28 mm eq."));
+    }
+
+    #[test]
+    fn exif_rows_skip_an_empty_description_and_an_incomplete_gps() {
+        let rows = exif_rows_for(
+            "partial",
+            &[
+                ascii(Tag::DateTime, "2023:01:02 03:04:05"),
+                ascii(Tag::ImageDescription, " "),
+                rational(Tag::GPSLatitude, &[(52, 1), (30, 1)]),
+                ascii(Tag::GPSLatitudeRef, "S"),
+                rational(Tag::GPSLongitude, &[(13, 1), (24, 1), (0, 1)]),
+            ],
+        );
+        assert_eq!(row(&rows, "Taken"), Some("2023-01-02 03:04:05"));
+        assert_eq!(row(&rows, "Description"), None);
+        assert_eq!(row(&rows, "GPS"), None);
+        assert_eq!(row(&rows, "Camera"), None);
+    }
+
+    #[test]
+    fn gps_reads_only_rational_coordinates() {
+        let rows = exif_rows_for(
+            "gps-ascii",
+            &[
+                ascii(Tag::GPSLatitude, "52"),
+                rational(Tag::GPSLongitude, &[(13, 1), (24, 1), (0, 1)]),
+                ascii(Tag::Software, "only software"),
+            ],
+        );
+        assert_eq!(row(&rows, "GPS"), None);
+        assert_eq!(row(&rows, "Software"), Some("only software"));
+
+        let south_east = exif_rows_for(
+            "gps-south",
+            &[
+                rational(Tag::GPSLatitude, &[(33, 1), (51, 1), (36, 1)]),
+                ascii(Tag::GPSLatitudeRef, "S"),
+                rational(Tag::GPSLongitude, &[(151, 1), (12, 1), (36, 1)]),
+                ascii(Tag::GPSLongitudeRef, "E"),
+            ],
+        );
+        assert_eq!(row(&south_east, "GPS"), Some("-33.86000, 151.21000"));
+    }
+
+    #[test]
+    fn exif_rows_of_a_file_without_exif_are_empty() {
+        let dir = test_dir("no-exif");
+        let path = dir.join("plain.jpg");
+        image::DynamicImage::new_rgb8(4, 4).save(&path).unwrap();
+        assert!(exif_rows(&path).is_empty());
+        assert!(exif_rows(&dir.join("missing.jpg")).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(feature = "turbo")]
+    #[test]
+    fn orientation_from_bytes_accepts_only_one_to_eight() {
+        let jpeg = |orientation: Option<u16>| {
+            let mut bytes = Vec::new();
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut bytes);
+            if let Some(orientation) = orientation {
+                encoder
+                    .set_exif_metadata(exif_block(&[short(Tag::Orientation, orientation)]))
+                    .unwrap();
+            }
+            encoder
+                .write_image(&[0; 4 * 4 * 3], 4, 4, ExtendedColorType::Rgb8)
+                .unwrap();
+            bytes
+        };
+        assert_eq!(orientation_from_bytes(&jpeg(Some(6))), Some(6));
+        assert_eq!(orientation_from_bytes(&jpeg(Some(9))), None);
+        assert_eq!(orientation_from_bytes(&jpeg(None)), None);
+        assert_eq!(orientation_from_bytes(b"not a jpeg"), None);
     }
 
     #[test]

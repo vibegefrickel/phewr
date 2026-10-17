@@ -315,4 +315,34 @@ mod tests {
             Some("mpv could not play c.mkv (exit code 2)")
         );
     }
+
+    #[test]
+    fn a_path_without_a_file_name_names_the_whole_path() {
+        assert_eq!(file_name(Path::new("/")), "/");
+        assert_eq!(file_name(Path::new("/videos/d.mp4")), "d.mp4");
+    }
+
+    #[test]
+    fn system_runner_returns_the_exit_code_of_the_program() {
+        let shell = Path::new("/bin/sh");
+        let args = [OsString::from("-c"), OsString::from("exit 3")];
+        assert_eq!(SystemRunner.run(shell, &args).unwrap(), Some(3));
+        assert!(
+            SystemRunner
+                .run(Path::new("/nonexistent/mpv"), &[])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn system_runner_spawns_a_detached_program() {
+        let shell = Path::new("/bin/sh");
+        let args = [OsString::from("-c"), OsString::from("exit 0")];
+        SystemRunner.spawn(shell, &args).unwrap();
+        assert!(
+            SystemRunner
+                .spawn(Path::new("/nonexistent/mpv"), &[])
+                .is_err()
+        );
+    }
 }

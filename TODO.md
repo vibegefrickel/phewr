@@ -9,6 +9,8 @@
 
 - Slideshow: continue after mpv instead of a stop at the video (decision open)
 - Next and previous video from inside mpv (for example mpv key bindings that run `quit <code>`)
+- Built-in player (`video.rs`, `decode_loop`): a pause after the last packet stops the loop. After the resume, the next pass reads no packet, `got_frame` stays `false` and the thread returns at the end of the clip
+- Built-in player (`video.rs`, `decode_loop`): each pause loses one packet. The `break` on `Pause` leaves the loop before `send_packet` for the packet that `input.packets()` already read
 - Make sure that the mpv hand-off works in Ghostty, Kitty and WezTerm (the worker tested it only in a herdr pane)
 - Modern formats: JPEG XL (jxl-oxide), EXR/HDR/QOI/TGA in the scanner, Live Photo pairing, animated GIF/WebP/APNG/AVIS, RAW through ImageIO
 - HEIC thumbnails: a full check of the 180° rotation and the mirror needs one `#[expect(unsafe_code)]` call into libheif (decision open)

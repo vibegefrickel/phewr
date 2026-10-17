@@ -419,18 +419,201 @@ pub(crate) fn decode_first_frame(
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_aspect, sanitize_fps};
+    use super::{VideoPlayback, decode_first_frame, fit_aspect, is_video, sanitize_fps};
+    use ratatui::layout::Rect;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    /// The longest wait for a frame of the decoder thread.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    /// Give each test its own directory below the temp directory.
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("viewr-video-{name}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Run the ffmpeg program with `args`. `false` means that ffmpeg is missing or failed.
+    fn run_ffmpeg(args: &[&str]) -> bool {
+        ffmpeg::init().unwrap();
+        let status = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(args)
+            .status();
+        if status.as_ref().is_ok_and(std::process::ExitStatus::success) {
+            return true;
+        }
+        println!("note: skipped, because the ffmpeg program is missing or failed: {status:?}");
+        false
+    }
+
+    /// Make a 64x48 clip of `seconds` at 10 frames per second, or `None` without ffmpeg.
+    fn test_clip(dir: &Path, seconds: &str) -> Option<PathBuf> {
+        let path = dir.join("clip.mp4");
+        let path_text = path.to_string_lossy();
+        let args = [
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=10",
+            "-t",
+            seconds,
+            "-c:v",
+            "mpeg4",
+            "-pix_fmt",
+            "yuv420p",
+            &path_text,
+        ];
+        run_ffmpeg(&args).then_some(path)
+    }
+
+    /// Poll until a frame arrives, or fail after [`DEADLINE`].
+    fn wait_for_frame(playback: &mut VideoPlayback) {
+        let start = Instant::now();
+        while !playback.poll_frame() {
+            assert!(start.elapsed() < DEADLINE, "no frame within {DEADLINE:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn invalid_frame_rates_use_the_fallback() {
         for fps in [0.0, -1.0, f64::INFINITY, f64::NAN] {
             assert_eq!(sanitize_fps(fps), 24.0);
         }
+        assert_eq!(sanitize_fps(29.97), 29.97);
     }
 
     #[test]
     fn aspect_ratio_fits_within_the_target() {
         assert_eq!(fit_aspect(1920, 1080, 800, 600), (800, 450));
         assert_eq!(fit_aspect(1080, 1920, 800, 600), (338, 600));
+        assert_eq!(fit_aspect(0, 1080, 800, 600), (800, 600));
+        assert_eq!(fit_aspect(10_000, 1, 10, 10), (10, 1));
+    }
+
+    #[test]
+    fn video_extensions_ignore_the_case() {
+        for name in ["a.mp4", "b.MOV", "c.mkv", "d.avi", "e.webm", "f.M4V"] {
+            assert!(is_video(Path::new(name)), "{name}");
+        }
+        for name in ["a.jpg", "mp4", "clip.mp4.txt", ""] {
+            assert!(!is_video(Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn first_frame_fits_the_target_rectangle() {
+        let dir = test_dir("first-frame");
+        let Some(clip) = test_clip(&dir, "0.5") else {
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        };
+        let frame = decode_first_frame(&clip, Rect::new(0, 0, 4, 3), (8, 16)).unwrap();
+        let tiny = decode_first_frame(&clip, Rect::new(0, 0, 0, 0), (8, 16)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(frame.dimensions(), (32, 24));
+        assert_eq!(tiny.dimensions(), (1, 1));
+    }
+
+    #[test]
+    fn files_without_a_video_stream_give_an_error() {
+        let dir = test_dir("no-stream");
+        let text = dir.join("notes.mp4");
+        std::fs::write(&text, "not a video").unwrap();
+        let rect = Rect::new(0, 0, 4, 3);
+        assert!(decode_first_frame(&text, rect, (8, 16)).is_err());
+        assert!(VideoPlayback::open(&text, rect, (8, 16)).is_err());
+
+        let audio = dir.join("tone.m4a");
+        let audio_text = audio.to_str().unwrap();
+        if run_ffmpeg(&["-f", "lavfi", "-i", "sine=duration=0.2", audio_text]) {
+            let error = decode_first_frame(&audio, rect, (8, 16)).unwrap_err();
+            assert_eq!(error.to_string(), "no video stream");
+            let error = VideoPlayback::open(&audio, rect, (8, 16)).err().unwrap();
+            assert_eq!(error.to_string(), "no video stream found");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Send the stop command and poll until the decoder thread ends, or fail after [`DEADLINE`].
+    fn stop_and_drain(playback: &mut VideoPlayback) {
+        playback.stop();
+        let start = Instant::now();
+        while playback.playing {
+            assert!(start.elapsed() < DEADLINE, "the decoder did not stop");
+            playback.poll_frame();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn player_delivers_a_fitted_frame_and_pauses() {
+        let dir = test_dir("player-pause");
+        let Some(clip) = test_clip(&dir, "0.5") else {
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        };
+        let mut playback = VideoPlayback::open(&clip, Rect::new(0, 0, 8, 6), (8, 16)).unwrap();
+        assert!(playback.playing);
+        assert!((playback.fps - 10.0).abs() < 0.01, "fps: {}", playback.fps);
+        assert!(playback.duration > 0.4, "duration: {}", playback.duration);
+        assert_eq!(playback.frame_interval, Duration::from_millis(100));
+
+        wait_for_frame(&mut playback);
+        let frame = playback.current_frame.as_ref().unwrap();
+        assert_eq!(frame.dimensions(), (64, 48));
+        // A long interval keeps the next assertions free of the scheduler.
+        playback.frame_interval = Duration::from_secs(60);
+        assert!(playback.time_until_next_frame() > Duration::from_secs(59));
+        assert!(
+            !playback.poll_frame(),
+            "the next frame waits for the interval"
+        );
+
+        playback.toggle_pause();
+        assert!(!playback.playing);
+        assert!(!playback.poll_frame());
+        assert_eq!(playback.time_until_next_frame(), Duration::from_millis(250));
+        playback.last_frame_time -= Duration::from_secs(30);
+        playback.toggle_pause();
+        assert!(playback.playing);
+        assert!(
+            playback.time_until_next_frame() > Duration::from_secs(59),
+            "a resume starts the interval again"
+        );
+
+        playback.frame_interval = Duration::ZERO;
+        stop_and_drain(&mut playback);
+        drop(playback);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn player_starts_the_clip_again_at_the_end() {
+        let dir = test_dir("player-loop");
+        let Some(clip) = test_clip(&dir, "0.5") else {
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        };
+        let mut playback = VideoPlayback::open(&clip, Rect::new(0, 0, 8, 6), (8, 16)).unwrap();
+        // Without the interval, the frames arrive as fast as the decoder makes them.
+        playback.frame_interval = Duration::ZERO;
+        wait_for_frame(&mut playback);
+        let mut last_pts = playback.current_pts;
+        let mut looped = false;
+        while !looped {
+            wait_for_frame(&mut playback);
+            looped = playback.current_pts < last_pts;
+            last_pts = playback.current_pts;
+        }
+        stop_and_drain(&mut playback);
+        drop(playback);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

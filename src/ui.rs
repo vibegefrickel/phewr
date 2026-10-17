@@ -844,14 +844,80 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{draw_theme_picker, picker_rect};
-    use crate::app::App;
+    use super::{draw, draw_theme_picker, picker_rect};
+    use crate::app::{App, PendingDelete, ViewMode};
     use crate::image_list::SharedImageList;
+    use crate::picker::PickerState;
     use crate::theme::{NamedTheme, Theme};
+    use image::RgbaImage;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Style};
+    use std::path::PathBuf;
+
+    /// An app with `names` below `/photos`, as if a finished scan had listed them.
+    fn app_with(names: &[&str]) -> App {
+        let mut app = App::new(Theme::fallback(), (8, 16), SharedImageList::new());
+        app.images = names
+            .iter()
+            .map(|name| PathBuf::from("/photos").join(name))
+            .collect();
+        app.filenames = names.iter().map(|name| (*name).to_owned()).collect();
+        app.gallery.filtered_indices = (0..names.len()).collect();
+        app.scan_complete = true;
+        app
+    }
+
+    /// Draw one frame and return the screen as text, one line per row.
+    fn render(app: &mut App, status: Option<&str>, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| draw(frame, app, status)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Fail with the whole screen when `screen` does not contain `needle`.
+    fn assert_shows(screen: &str, needle: &str) {
+        assert!(screen.contains(needle), "missing {needle:?} in:\n{screen}");
+    }
+
+    /// Fail with the whole screen when `screen` contains `needle`.
+    fn assert_hides(screen: &str, needle: &str) {
+        assert!(
+            !screen.contains(needle),
+            "unexpected {needle:?} in:\n{screen}"
+        );
+    }
+
+    /// A delete question for `names` below `/photos`.
+    fn pending(names: &[&str], permanent: bool) -> PendingDelete {
+        PendingDelete {
+            paths: names
+                .iter()
+                .map(|name| PathBuf::from("/photos").join(name))
+                .collect(),
+            from_fullscreen: false,
+            permanent,
+        }
+    }
+
+    /// Give each test its own directory below the temp directory.
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("viewr-ui-{name}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn theme_picker_uses_the_previewed_theme_and_pdfterm_layout() {
@@ -894,5 +960,298 @@ mod tests {
         assert_eq!(buffer[(popup.x, popup.y)].fg, Color::Blue);
         assert_eq!(buffer[(popup.x + 1, popup.y + 2)].symbol(), "▌");
         assert_eq!(buffer[(popup.x + 2, popup.y + 2)].bg, Color::Green);
+    }
+
+    #[test]
+    fn gallery_shows_the_count_the_size_the_position_and_the_hints() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        let size = format!("[{}x{}]", app.gallery.thumb_cols, app.gallery.thumb_rows);
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, &format!(" Gallery [2 images] {size} "));
+        assert_shows(&screen, " Search ");
+        assert_shows(&screen, " a.jpg [1/2] ");
+        assert_shows(&screen, "Enter: open  +/-: size");
+        assert_shows(&screen, "b.jpg");
+
+        app.scan_complete = false;
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, "[2 images, scanning\u{2026}]");
+    }
+
+    #[test]
+    fn an_empty_gallery_shows_the_hints_without_a_position() {
+        let mut app = app_with(&[]);
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Gallery [0 images] ");
+        assert_shows(&screen, "\u{2514} Enter: open");
+        assert_hides(&screen, "[1/");
+    }
+
+    #[test]
+    fn gallery_search_shows_the_query_and_the_matches() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.gallery.search_active = true;
+        app.gallery.search_query = "b".to_owned();
+        app.gallery.filtered_indices = vec![1];
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, "/b\u{2588}  1/2 matches");
+        assert_shows(&screen, " Gallery [1/2 matches] ");
+        assert_shows(&screen, " b.jpg [1/1]  Esc: cancel  Enter: confirm ");
+    }
+
+    #[test]
+    fn gallery_shows_the_selection_count_and_marks_the_label() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.selection.insert(app.images[1].clone());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " 1 selected");
+        assert_shows(&screen, "\u{25cf} b.jpg");
+    }
+
+    #[test]
+    fn gallery_shortens_a_long_label() {
+        let long = format!("{}.jpg", "x".repeat(80));
+        let mut app = app_with(&[long.as_str()]);
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, "xx\u{2026}");
+    }
+
+    #[test]
+    fn gallery_asks_before_a_delete() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.pending_delete = Some(pending(&["a.jpg"], false));
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Move to trash a.jpg?  y: confirm  n/Esc: cancel ");
+
+        app.pending_delete = Some(pending(&["a.jpg", "b.jpg"], true));
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Permanently delete 2 files? ");
+    }
+
+    #[test]
+    fn gallery_shows_the_delete_error_before_the_error() {
+        let mut app = app_with(&["a.jpg"]);
+        app.error = Some("scan failed".to_owned());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Error: scan failed ");
+
+        app.delete_error = Some("no trash".to_owned());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Delete error: no trash ");
+        assert_hides(&screen, "scan failed");
+    }
+
+    #[test]
+    fn gallery_status_note_replaces_the_hints() {
+        let mut app = app_with(&["a.jpg"]);
+        let screen = render(&mut app, Some("theme saved"), 100, 30);
+        assert_shows(&screen, " a.jpg [1/1]  theme saved ");
+        assert_hides(&screen, "Enter: open");
+    }
+
+    #[test]
+    fn fullscreen_shows_the_name_the_position_and_the_size() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.mode = ViewMode::Fullscreen;
+        app.current = 1;
+        app.loaded = Some(RgbaImage::new(30, 20));
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " b.jpg ");
+        assert_shows(&screen, " b.jpg [2/2] 30x20  \u{2190}/\u{2192}: navigate");
+        assert_eq!(app.image_rect, Rect::new(1, 1, 98, 28));
+    }
+
+    #[test]
+    fn fullscreen_shows_the_zoom_and_the_pan_hints() {
+        let mut app = app_with(&["a.jpg"]);
+        app.mode = ViewMode::Fullscreen;
+        app.zoom = 2.0;
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " a.jpg [1/1] 200%  hjkl: pan");
+    }
+
+    #[test]
+    fn fullscreen_shows_the_slideshow_state_and_interval() {
+        let mut app = app_with(&["a.jpg"]);
+        app.mode = ViewMode::Fullscreen;
+        app.start_slideshow();
+        let interval = format!("{:.1}s", app.slideshow_interval.as_secs_f64());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, &format!("\u{25b6} {interval}"));
+        assert_shows(&screen, "space: pause  [/]: interval  s: stop");
+
+        app.slideshow_toggle_pause();
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, "\u{23f8}");
+        assert_shows(&screen, &interval);
+    }
+
+    #[test]
+    fn fullscreen_asks_before_a_delete_and_shows_errors() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.mode = ViewMode::Fullscreen;
+        app.pending_delete = Some(pending(&["a.jpg"], true));
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Permanently delete a.jpg? [y/N] ");
+
+        app.pending_delete = Some(pending(&[], false));
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Move to trash 0 files? [y/N] ");
+
+        app.pending_delete = None;
+        app.error = Some("decode failed".to_owned());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Error: decode failed ");
+
+        app.delete_error = Some("no trash".to_owned());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Delete error: no trash ");
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn video_status_bar_shows_the_time_the_position_and_the_note() {
+        let mut app = app_with(&["clip.mp4", "b.jpg"]);
+        app.mode = ViewMode::Video;
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " clip.mp4 ");
+        assert_shows(&screen, "\u{25b6} clip.mp4 00:00/00:00 [0fps] [1/2] ");
+        assert_shows(&screen, "Space: pause");
+        assert_eq!(app.image_rect, Rect::new(1, 1, 98, 28));
+
+        let screen = render(&mut app, Some("mpv not found"), 100, 30);
+        assert_shows(&screen, " mpv not found ");
+        assert_hides(&screen, "Space: pause");
+
+        app.error = Some("no video stream".to_owned());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Error: no video stream ");
+    }
+
+    #[test]
+    fn info_panel_lists_the_file_rows_of_the_hovered_image() {
+        let mut app = app_with(&["a.jpg"]);
+        app.info_visible = true;
+        let screen = render(&mut app, None, 120, 30);
+        assert_shows(&screen, " Info ");
+        assert_shows(&screen, " i: close ");
+        assert_shows(&screen, "File");
+        assert_shows(&screen, "Name    a.jpg");
+        assert_shows(&screen, "Format  JPG");
+    }
+
+    #[test]
+    fn info_panel_without_an_image_says_so() {
+        let mut app = app_with(&[]);
+        app.info_visible = true;
+        let screen = render(&mut app, None, 120, 30);
+        assert_shows(&screen, "no image selected");
+    }
+
+    #[test]
+    fn info_panel_stays_closed_in_a_narrow_terminal() {
+        let mut app = app_with(&["a.jpg"]);
+        app.info_visible = true;
+        let screen = render(&mut app, None, 50, 30);
+        assert_hides(&screen, " Info ");
+    }
+
+    #[test]
+    fn help_popup_lists_the_keys() {
+        let mut app = app_with(&["a.jpg"]);
+        app.help_visible = true;
+        let screen = render(&mut app, None, 100, 120);
+        assert_shows(&screen, " Help ");
+        assert_shows(&screen, "     h/j/k/l  Navigate grid");
+        assert_shows(&screen, " Directory picker");
+        assert_shows(&screen, " press any key to close");
+    }
+
+    #[test]
+    fn theme_picker_hides_the_help_popup() {
+        let mut app = app_with(&["a.jpg"]);
+        app.help_visible = true;
+        app.open_theme_picker();
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Themes ");
+        assert_shows(&screen, "\u{258c} fallback");
+        assert_shows(&screen, "  j/k  preview   enter  apply");
+        assert_shows(&screen, "1/1");
+        assert_hides(&screen, " Help ");
+    }
+
+    #[test]
+    fn theme_picker_scrolls_to_the_selection() {
+        let mut app = app_with(&[]);
+        let themes = (0..30)
+            .map(|index| NamedTheme {
+                name: format!("theme-{index:02}"),
+                path: None,
+                theme: Theme::fallback(),
+            })
+            .collect();
+        app.install_themes(themes, 0);
+        app.open_theme_picker();
+
+        app.theme_picker_select(20);
+        let screen = render(&mut app, None, 30, 12);
+        let picker = app.theme_picker.as_ref().unwrap();
+        assert_eq!((picker.visible_height, picker.scroll), (6, 15));
+        assert_shows(&screen, "\u{258c} theme-20");
+        assert_hides(&screen, "theme-14");
+
+        app.theme_picker_select(2);
+        let screen = render(&mut app, None, 30, 12);
+        assert_eq!(app.theme_picker.as_ref().unwrap().scroll, 2);
+        assert_shows(&screen, "\u{258c} theme-02");
+    }
+
+    #[test]
+    fn picker_rect_keeps_a_tiny_area() {
+        assert_eq!(picker_rect(Rect::new(0, 0, 4, 4)), Rect::new(0, 0, 4, 4));
+        assert_eq!(picker_rect(Rect::new(0, 0, 0, 0)), Rect::new(0, 0, 1, 1));
+    }
+
+    #[test]
+    fn directory_picker_lists_the_directories_filter_and_error() {
+        let dir = test_dir("picker");
+        std::fs::create_dir(dir.join("alpha")).unwrap();
+        std::fs::create_dir(dir.join("beta")).unwrap();
+        let mut app = app_with(&["a.jpg"]);
+        app.info_visible = true;
+        app.mode = ViewMode::Picker;
+        app.picker = Some(PickerState::new(dir.clone()));
+
+        let width = u16::try_from(dir.as_os_str().len()).unwrap() + 60;
+        let screen = render(&mut app, None, width, 20);
+        assert_shows(&screen, " Filter ");
+        assert_shows(&screen, &format!(" Directory: {} [3] ", dir.display()));
+        assert_shows(&screen, "\u{25b6} ..");
+        assert_shows(&screen, "  alpha/");
+        assert_shows(&screen, "  beta/");
+        assert_shows(&screen, " Enter: choose  /: filter");
+        assert_hides(&screen, " Info ");
+
+        let picker = app.picker.as_mut().unwrap();
+        picker.filter = "bet".to_owned();
+        picker.filter_active = true;
+        picker.rebuild_filter();
+        let screen = render(&mut app, None, width, 20);
+        assert_shows(&screen, "/bet\u{2588}  1/3 matches");
+        assert_shows(&screen, " Esc: cancel  Enter: confirm  Backspace: delete ");
+        assert_shows(&screen, "\u{25b6} beta/");
+
+        let picker = app.picker.as_mut().unwrap();
+        picker.filter_active = false;
+        picker.error = Some("permission denied".to_owned());
+        let screen = render(&mut app, None, width, 20);
+        assert_shows(&screen, " /bet  1/3 matches");
+        assert_shows(&screen, " permission denied ");
+
+        app.picker = None;
+        let screen = render(&mut app, None, width, 20);
+        assert_hides(&screen, " Filter ");
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
