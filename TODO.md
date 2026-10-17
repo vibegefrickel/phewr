@@ -2,7 +2,7 @@
 
 ## Now
 
-- Testing phase: tests for `app.rs` and `main.rs` (the other modules are at 87 to 100%)
+- Testing phase: tests for `app.rs` (58%) and `main.rs` (43%), then `scanner.rs` (71%), `config.rs` (75%) and `theme.rs` (84%). Total line coverage: 76%
 - Use `tempfile` in the tests instead of hand-made directories below `std::env::temp_dir()`
 
 ## Next
@@ -25,6 +25,7 @@
 - Move / copy / rename files (culling workflow)
 - Shuffle order for slideshows
 - Persistent thumbnail size per directory
+- Mouse-based pan and zoom in the fullscreen view
 
 ## Done
 
