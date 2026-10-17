@@ -117,8 +117,10 @@ missing.
 - The synthetic libheif tests encode with the aom (AVIF) and x265 (HEIC) encoder plugins of
   Homebrew's libheif. If a plugin is missing, `just check` fails.
 - A test that writes files uses `tempfile::tempdir()` (`TempDir`) or `tempfile::NamedTempFile`.
-  The directory goes away on drop, also when the test panics. (`main.rs`, `ui.rs` and `video.rs`
-  still use their old temp-dir helpers, see TODO.md.)
+  The directory goes away on drop, also when the test panics.
+- A test app writes the Kitty sequences to a buffer (`GraphicsOutput::Buffer`). Read them with
+  `app.graphics_out.take_bytes()`. A test that needs a config uses `App::new_with_config`, never
+  `App::with_config`.
 - A test never writes to the real state file or the real thumbnail cache. The test-only
   `App::new` points `app.state_file` and `app.disk_cache_dir` below `/dev/null`. A test that
   needs them sets them to temp paths.
@@ -165,6 +167,12 @@ missing.
 - **Built-in player pause:** a pause blocks the decoder thread before the next packet
   (`follow_commands` in `video.rs`). The decoder tests drive `decode_loop` through a frame
   channel without a buffer (`sync_channel(0)`), so no assertion depends on the clock.
+- **Slideshow and videos:** a running slideshow that is not paused plays a video one time. mpv
+  gets `--loop-file=no`, `--keep-open=no`, `--idle=no`, `--loop-playlist=no` and
+  `--input-commands` that bind `q`, `Q` (and `CLOSE_WIN` in a window) to `quit 4`. Exit code 0
+  is the end of the file. Each other exit stops the slideshow on the placeholder. Esc in the
+  built-in player also stops it. `--input-commands` needs mpv 0.38 or later. On macOS, the app
+  quit (Cmd+Q) of a window mpv exits with 0, so a window slideshow continues.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `main.rs`. `App` holds no
   status note. The next key press clears it.
 
@@ -175,7 +183,7 @@ missing.
 - **FFmpeg versions:** `ffmpeg-next` must match the major version of Homebrew's FFmpeg.
   ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
   release binary that links the old `libavcodec.<major>.dylib` does not start.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v2`, the path, the size, the mtime
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v3`, the path, the size, the mtime
   and the target size. Change the version string when the thumbnail output changes.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature

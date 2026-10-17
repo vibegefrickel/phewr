@@ -121,7 +121,9 @@ desc = "Image grid (viewr)"
 viewr gives a video to mpv. All mpv keys work: `Space` pauses, `←` / `→` seek, `f` toggles fullscreen in window mode. `q` or `Ctrl-c` stops mpv. viewr then goes back to the view that opened the video:
 
 - From the gallery (`Enter`), viewr shows the gallery with the cursor on the video.
-- From fullscreen (`←` / `→`, `Home` / `End`), viewr stays on the video and shows "video: press Enter to play". `Enter` plays the video again, and `←` / `→` step on. A slideshow stops at a video.
+- From fullscreen (`←` / `→`, `Home` / `End`), viewr stays on the video and shows "video: press Enter to play". `Enter` plays the video again, and `←` / `→` step on.
+
+In a slideshow, a video plays one time and the slideshow continues. To stop the slideshow, quit mpv with `q` or `Ctrl-c`, or press `Esc` in the built-in player. With the window player, the slideshow waits until the window closes. Use `q` or the close button to stop it, because `Cmd-q` counts as the end of the clip. A paused slideshow plays the video in a loop.
 
 In fullscreen, a status note (for example "clip.mp4 plays in an mpv window") replaces the key hints until the next key press.
 
