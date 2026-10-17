@@ -15,7 +15,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     let (main, info) = split_info(area, app);
     match app.mode {
         ViewMode::Gallery => draw_gallery(frame, app, main, status),
-        ViewMode::Fullscreen => draw_fullscreen(frame, app, main),
+        ViewMode::Fullscreen => draw_fullscreen(frame, app, main, status),
         ViewMode::Picker => draw_picker(frame, app),
         #[cfg(feature = "video")]
         ViewMode::Video => draw_video(frame, app, main, status),
@@ -303,8 +303,9 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
     frame.render_widget(Paragraph::new(lines), list_inner);
 }
 
-fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Option<&str>) {
     let theme = &app.theme;
+    let placeholder = app.shows_video_placeholder();
 
     let filename = app
         .current_path()
@@ -366,6 +367,8 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .unwrap_or_default();
         let hint = if app.slideshow.is_some() {
             " space: pause  [/]: interval  s: stop  i: info  q: quit "
+        } else if placeholder {
+            " Enter: play  \u{2190}/\u{2192}: navigate  i: info  ?: help  q: quit "
         } else if app.zoom > 1.0 {
             " hjkl: pan  +/-: zoom  0: reset  ?: help  q: quit "
         } else {
@@ -381,7 +384,10 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 ),
                 theme.popup_text,
             ),
-            Span::styled(hint, theme.popup_desc),
+            status_note.map_or_else(
+                || Span::styled(hint, theme.popup_desc),
+                |note| Span::styled(format!(" {note} "), theme.popup_text),
+            ),
         ])
     };
 
@@ -396,6 +402,18 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if placeholder {
+        let middle = Rect {
+            y: inner.y + inner.height / 2,
+            height: inner.height.min(1),
+            ..inner
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled("video: press Enter to play", theme.popup_desc))
+                .alignment(Alignment::Center),
+            middle,
+        );
+    }
 
     app.image_rect = inner;
 }

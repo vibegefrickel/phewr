@@ -41,6 +41,14 @@ pub(crate) enum ViewMode {
     Video,
 }
 
+/// The view that opened a video, and so the view that comes back after mpv.
+#[cfg(feature = "video")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VideoReturn {
+    Gallery,
+    Fullscreen,
+}
+
 pub(crate) struct PendingDelete {
     pub paths: Vec<PathBuf>,
     pub from_fullscreen: bool,
@@ -127,6 +135,8 @@ pub(crate) struct App {
 
     #[cfg(feature = "video")]
     pub video: Option<crate::video::VideoPlayback>,
+    #[cfg(feature = "video")]
+    pub video_return: VideoReturn,
 
     // Scanner state
     shared_list: SharedImageList,
@@ -210,6 +220,8 @@ impl App {
             source_target: None,
             #[cfg(feature = "video")]
             video: None,
+            #[cfg(feature = "video")]
+            video_return: VideoReturn::Gallery,
             shared_list,
             known_len: 0,
             scan_complete: false,
@@ -437,7 +449,7 @@ impl App {
         if Instant::now() < show.next_at {
             return;
         }
-        if self.loaded.is_none() {
+        if self.loaded.is_none() && !self.fullscreen_on_video() {
             // Still decoding: check again shortly instead of skipping the slide.
             if let Some(show) = self.slideshow.as_mut() {
                 show.next_at = Instant::now() + Duration::from_millis(100);
@@ -643,6 +655,11 @@ impl App {
 
     #[cfg(feature = "video")]
     pub(crate) fn enter_video(&mut self, idx: usize) {
+        self.video_return = if self.mode == ViewMode::Fullscreen {
+            VideoReturn::Fullscreen
+        } else {
+            VideoReturn::Gallery
+        };
         self.current = idx;
         self.mode = ViewMode::Video;
         self.error = None;
@@ -673,6 +690,44 @@ impl App {
         }
         self.mode = ViewMode::Gallery;
         self.needs_render = true;
+    }
+
+    /// Leave the video for the view that opened it.
+    ///
+    /// The fullscreen view stays on the video and shows a play hint, because the image
+    /// decode cannot read a video. The arrow keys then step on from the video.
+    #[cfg(feature = "video")]
+    pub(crate) fn return_from_video(&mut self) {
+        if self.video_return == VideoReturn::Gallery {
+            self.exit_video();
+            return;
+        }
+        if let Some(v) = self.video.take() {
+            v.stop();
+        }
+        self.mode = ViewMode::Fullscreen;
+        self.loaded = None;
+        self.fullscreen_rx = None;
+        self.fullscreen_target = None;
+        self.reset_zoom_state();
+        self.needs_render = true;
+    }
+
+    /// The image decode cannot read a video, so the fullscreen view must not try it.
+    fn fullscreen_on_video(&self) -> bool {
+        #[cfg(feature = "video")]
+        let is_video = self
+            .images
+            .get(self.current)
+            .is_some_and(|path| crate::video::is_video(path));
+        #[cfg(not(feature = "video"))]
+        let is_video = false;
+        is_video && self.mode == ViewMode::Fullscreen
+    }
+
+    /// The play hint for a video in fullscreen. A failed open shows its error instead.
+    pub(crate) fn shows_video_placeholder(&self) -> bool {
+        self.fullscreen_on_video() && self.error.is_none()
     }
 
     fn start_fullscreen_decode(&mut self, idx: usize, rect: Rect) {
@@ -747,6 +802,9 @@ impl App {
     }
 
     pub(crate) fn zoom_in(&mut self) {
+        if self.fullscreen_on_video() {
+            return;
+        }
         let new = (self.zoom * ZOOM_STEP).min(MAX_ZOOM);
         if new > self.zoom {
             self.zoom = new;
@@ -1102,6 +1160,7 @@ impl App {
         #[cfg(feature = "video")]
         if crate::video::is_video(&self.images[self.current]) {
             self.mode = ViewMode::Video;
+            self.video_return = VideoReturn::Fullscreen;
             self.loaded = None;
             return;
         }
@@ -1190,6 +1249,9 @@ impl App {
     }
 
     pub(crate) fn load_if_needed(&mut self) {
+        if self.fullscreen_on_video() {
+            return;
+        }
         // Zoomed view: crop the full-resolution source around the pan point and
         // resize that crop to fill the viewport.
         if self.zoom > 1.0 {

@@ -2,6 +2,7 @@ use crate::app::{EmbeddedThumbnail, decode_image_with_hint, resize_decoded_to_di
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -9,11 +10,22 @@ use std::sync::mpsc;
 const CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 const PREFETCH_RADIUS: usize = 3;
 
+/// The result of one decode job. `image` is `None` when the decode failed.
+struct Decoded {
+    generation: u64,
+    index: usize,
+    image: Option<RgbaImage>,
+}
+
 pub(crate) struct Prefetcher {
     cache: LruCache<usize, RgbaImage>,
-    rx: mpsc::Receiver<(usize, RgbaImage)>,
-    tx: mpsc::Sender<(usize, RgbaImage)>,
-    pending: std::collections::HashSet<usize>,
+    rx: mpsc::Receiver<Decoded>,
+    tx: mpsc::Sender<Decoded>,
+    pending: HashSet<usize>,
+    /// Indices that did not decode. They stay skipped until the next `invalidate()`.
+    failed: HashSet<usize>,
+    /// Incremented by `invalidate()`, so that results of older jobs are dropped.
+    generation: u64,
     target_hint: Option<(u32, u32)>,
 }
 
@@ -24,7 +36,9 @@ impl Prefetcher {
             cache: LruCache::new(CACHE_CAPACITY),
             rx,
             tx,
-            pending: std::collections::HashSet::new(),
+            pending: HashSet::new(),
+            failed: HashSet::new(),
+            generation: 0,
             target_hint: None,
         }
     }
@@ -38,9 +52,24 @@ impl Prefetcher {
     }
 
     pub(crate) fn poll(&mut self) {
-        while let Ok((idx, img)) = self.rx.try_recv() {
-            self.pending.remove(&idx);
-            self.cache.push(idx, img);
+        while let Ok(decoded) = self.rx.try_recv() {
+            self.accept(decoded);
+        }
+    }
+
+    /// Store one job result, unless an `invalidate()` made its index meaningless.
+    fn accept(&mut self, decoded: Decoded) {
+        if decoded.generation != self.generation {
+            return;
+        }
+        self.pending.remove(&decoded.index);
+        match decoded.image {
+            Some(image) => {
+                self.cache.push(decoded.index, image);
+            }
+            None => {
+                self.failed.insert(decoded.index);
+            }
         }
     }
 
@@ -71,35 +100,56 @@ impl Prefetcher {
     pub(crate) fn invalidate(&mut self) {
         self.cache.clear();
         self.pending.clear();
+        self.failed.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 
     fn ensure_decoding(&mut self, index: usize, images: &[PathBuf]) {
-        if self.cache.contains(&index) || self.pending.contains(&index) {
+        if self.cache.contains(&index)
+            || self.pending.contains(&index)
+            || self.failed.contains(&index)
+        {
             return;
         }
         self.pending.insert(index);
         let tx = self.tx.clone();
         let path = images[index].clone();
         let hint = self.target_hint;
+        let generation = self.generation;
         rayon::spawn(move || {
-            if let Ok(img) = decode_image_with_hint(&path, hint, EmbeddedThumbnail::Deny) {
-                let final_img = if let Some((max_w, max_h)) = hint {
-                    resize_decoded_to_dims(&img, max_w, max_h)
-                } else {
-                    img.to_rgba8()
-                };
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "a closed receiver means that nobody waits for the result"
-                )]
-                let _ = tx.send((index, final_img));
-            }
+            let image = decode_image_with_hint(&path, hint, EmbeddedThumbnail::Deny)
+                .ok()
+                .map(|img| match hint {
+                    Some((max_w, max_h)) => resize_decoded_to_dims(&img, max_w, max_h),
+                    None => img.to_rgba8(),
+                });
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a closed receiver means that nobody waits for the result"
+            )]
+            let _ = tx.send(Decoded {
+                generation,
+                index,
+                image,
+            });
         });
     }
 
     #[cfg(test)]
     pub(crate) fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+
+    /// Wait for one job result, so that a test does not depend on the timing of rayon.
+    #[cfg(test)]
+    fn accept_next(&mut self, timeout: std::time::Duration) -> bool {
+        match self.rx.recv_timeout(timeout) {
+            Ok(decoded) => {
+                self.accept(decoded);
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 
@@ -258,6 +308,71 @@ mod tests {
                     .is_some()
             );
         }
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn prefetch_drops_a_result_that_finishes_after_invalidate() {
+        let dir = synthetic_dir("stale");
+        let paths = vec![save_image(&dir, "0.png", 4, 4)];
+
+        let mut prefetcher = Prefetcher::new();
+        prefetcher.kick_gallery(0, &paths);
+        // The job of the old list is in flight: its result is not polled yet.
+        prefetcher.invalidate();
+        assert!(
+            prefetcher.accept_next(Duration::from_secs(10)),
+            "the stale job did not send its result in time"
+        );
+
+        assert_eq!(prefetcher.pending_count(), 0);
+        assert!(
+            prefetcher
+                .take_resized(0, Rect::default(), (1, 1))
+                .is_none(),
+            "a result of an older generation must not enter the cache"
+        );
+
+        prefetcher.kick_gallery(0, &paths);
+        assert_eq!(prefetcher.pending_count(), 1, "the new list decodes again");
+        wait_until_idle(&mut prefetcher);
+        assert!(
+            prefetcher
+                .take_resized(0, Rect::default(), (1, 1))
+                .is_some()
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn prefetch_remembers_a_failed_decode_until_invalidate() {
+        let dir = synthetic_dir("corrupt");
+        let path = dir.join("0.png");
+        fs::write(&path, b"this is not a PNG file").unwrap();
+        let paths = vec![path];
+
+        let mut prefetcher = Prefetcher::new();
+        prefetcher.kick_gallery(0, &paths);
+        wait_until_idle(&mut prefetcher);
+        assert!(
+            prefetcher
+                .take_resized(0, Rect::default(), (1, 1))
+                .is_none()
+        );
+
+        prefetcher.kick_gallery(0, &paths);
+        assert_eq!(
+            prefetcher.pending_count(),
+            0,
+            "a corrupt file must not decode again on each kick"
+        );
+
+        prefetcher.invalidate();
+        prefetcher.kick_gallery(0, &paths);
+        assert_eq!(prefetcher.pending_count(), 1, "invalidate allows a new try");
+        wait_until_idle(&mut prefetcher);
 
         fs::remove_dir_all(dir).unwrap();
     }

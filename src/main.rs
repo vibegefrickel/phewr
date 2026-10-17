@@ -436,8 +436,9 @@ impl TerminalHandoff for Terminal<CrosstermBackend<io::Stdout>> {
 
 /// Play the current video in mpv when the configuration and PATH allow it.
 ///
-/// After mpv, viewr shows the gallery with the cursor on the video. If mpv does not start,
-/// the built-in player takes over for the rest of the session.
+/// After mpv, viewr goes back to the view that opened the video. The gallery has the cursor
+/// on the video. The fullscreen view stays on the video and shows a play hint. If mpv does
+/// not start, the built-in player takes over for the rest of the session.
 #[cfg(feature = "video")]
 fn hand_off_video(
     app: &mut App,
@@ -461,7 +462,7 @@ fn hand_off_video(
         Ok(note) => {
             state.status = note;
             app.stop_slideshow();
-            app.exit_video();
+            app.return_from_video();
             focus_gallery_on_current(app);
         }
         Err(error) => {
@@ -593,6 +594,10 @@ fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
             app.graphics_delete_all()?;
             app.toggle_info();
         }
+        KeyCode::Enter if app.shows_video_placeholder() => {
+            app.stop_slideshow();
+            app.enter_fullscreen_at(app.current);
+        }
         KeyCode::Char('s') => app.toggle_slideshow(),
         KeyCode::Char(' ') => app.slideshow_toggle_pause(),
         KeyCode::Char('[') => app.slideshow_adjust_interval(-1.0),
@@ -643,7 +648,8 @@ fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
         }
         KeyCode::Esc => {
             app.graphics_delete_all()?;
-            app.exit_video();
+            app.return_from_video();
+            focus_gallery_on_current(app);
         }
         KeyCode::Char('?') => {
             app.graphics_delete_all()?;
@@ -1265,8 +1271,9 @@ mod tests {
     #[cfg(feature = "video")]
     mod video_handoff {
         use super::super::{App, LoopState, SharedImageList, TerminalHandoff, ViewMode};
-        use super::super::{hand_off_video, mpv};
+        use super::super::{hand_off_video, handle_fullscreen_key, handle_video_key, mpv};
         use crate::theme::Theme;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use std::cell::{Cell, RefCell};
         use std::ffi::OsString;
         use std::io;
@@ -1360,6 +1367,27 @@ mod tests {
             app
         }
 
+        /// An app in a running slideshow that steps from a photo onto a video.
+        fn fullscreen_video_app() -> App {
+            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            app.images = vec![
+                PathBuf::from("/videos/a.jpg"),
+                PathBuf::from("/videos/clip.mp4"),
+                PathBuf::from("/videos/b.jpg"),
+            ];
+            app.filenames = vec![
+                "a.jpg".to_owned(),
+                "clip.mp4".to_owned(),
+                "b.jpg".to_owned(),
+            ];
+            app.gallery.filtered_indices = vec![0, 1, 2];
+            app.enter_fullscreen_at(0);
+            app.start_slideshow();
+            app.next();
+            assert_eq!(app.mode, ViewMode::Video);
+            app
+        }
+
         fn state(player: mpv::Player) -> LoopState {
             LoopState {
                 status: None,
@@ -1415,6 +1443,92 @@ mod tests {
             assert!(app.needs_render);
             assert!(!app.graphics_storage_dirty, "no resize, no full redraw");
             assert_eq!(state.status, None);
+        }
+
+        #[test]
+        fn terminal_player_returns_to_the_fullscreen_view_that_opened_the_video() {
+            let mut app = fullscreen_video_app();
+            let mut state = terminal_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 1, "fullscreen stays on the video");
+            assert!(app.shows_video_placeholder());
+            assert!(app.loaded.is_none());
+            assert!(!app.slideshow_running(), "the slideshow stops at the video");
+            assert!(app.needs_render);
+            assert_eq!(state.status, None);
+        }
+
+        #[test]
+        fn enter_on_the_fullscreen_placeholder_plays_the_video_again() {
+            let mut app = fullscreen_video_app();
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+            assert!(!handle_fullscreen_key(&mut app, enter).unwrap());
+            assert_eq!(app.mode, ViewMode::Video);
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            let runs = log
+                .borrow()
+                .iter()
+                .filter(|entry| entry.starts_with("run "))
+                .count();
+            assert_eq!(runs, 2);
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 1);
+        }
+
+        #[test]
+        fn a_video_from_the_gallery_returns_to_the_gallery_after_a_fullscreen_return() {
+            let mut app = fullscreen_video_app();
+            let mut state = terminal_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+
+            app.enter_gallery();
+            app.gallery.cursor = 1;
+            app.enter_fullscreen_selected();
+            assert_eq!(app.mode, ViewMode::Video);
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert_eq!(app.mode, ViewMode::Gallery, "the gallery opened this video");
+            assert_eq!(app.gallery.cursor, 1);
+        }
+
+        #[test]
+        fn esc_in_the_builtin_player_returns_to_the_fullscreen_view() {
+            let mut app = fullscreen_video_app();
+
+            let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+            assert!(!handle_video_key(&mut app, esc).unwrap());
+
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 1);
+            assert!(app.shows_video_placeholder());
+        }
+
+        #[test]
+        fn a_failed_builtin_open_shows_the_error_and_no_play_hint() {
+            let mut app = fullscreen_video_app();
+            app.open_video_if_needed();
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert!(app.error.is_some(), "the video file does not exist");
+
+            assert!(!app.shows_video_placeholder());
+            let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+            assert!(!handle_fullscreen_key(&mut app, enter).unwrap());
+            assert_eq!(
+                app.mode,
+                ViewMode::Fullscreen,
+                "Enter does not retry the open"
+            );
         }
 
         #[test]
@@ -1498,6 +1612,23 @@ mod tests {
                 ]
             );
             assert_eq!(app.mode, ViewMode::Gallery);
+            assert_eq!(
+                state.status.as_deref(),
+                Some("clip.mp4 plays in an mpv window")
+            );
+        }
+
+        #[test]
+        fn window_player_keeps_the_fullscreen_view_on_the_video() {
+            let mut app = fullscreen_video_app();
+            let mut state = state(mpv::Player::Window(PathBuf::from("/bin/mpv")));
+            let (_log, mut terminal, mut runner) = fakes(Ok(None));
+
+            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 1);
+            assert!(app.shows_video_placeholder());
             assert_eq!(
                 state.status.as_deref(),
                 Some("clip.mp4 plays in an mpv window")
