@@ -216,6 +216,11 @@ pub(crate) fn clear_placements_to<W: Write + ?Sized>(out: &mut W) -> io::Result<
     out.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")
 }
 
+/// Delete the image `id` with its placements (`d=I`), so a replaced thumbnail frees its memory.
+pub(crate) fn delete_image_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Result<()> {
+    write!(out, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")
+}
+
 /// Place an already-transmitted image (by ID) at the cursor position. Cheap — no PNG payload.
 /// `C=1` keeps the text cursor fixed so large placements never scroll the grid.
 pub(crate) fn place_by_id_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Result<()> {

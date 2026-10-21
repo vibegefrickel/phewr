@@ -37,6 +37,27 @@ const INFO_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 /// With 4 jobs, each with its share of the cores, the first one comes after one decode.
 const MAX_THUMB_JOBS: usize = 4;
 
+/// The previews of a cold HEIC grid that decode at once. A preview is the embedded 320x240
+/// thumbnail, a few milliseconds each. The sharp decodes wait until every preview is out.
+const MAX_PREVIEW_JOBS: usize = 4;
+
+/// The job that produced a thumbnail result, so that `poll_thumbnails` frees the right slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThumbPhase {
+    Preview,
+    Sharp,
+}
+
+/// The result of a thumbnail job. `image` is `None` when the decode failed, so the slot still
+/// comes free. `sharp` is false for a preview from an embedded thumbnail.
+struct ThumbResult {
+    generation: u32,
+    img_idx: usize,
+    phase: ThumbPhase,
+    image: Option<RgbaImage>,
+    sharp: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ViewMode {
     Gallery,
@@ -156,13 +177,20 @@ pub(crate) struct App {
     filter_cursor: Option<usize>,
 
     // Async thumbnails
-    thumb_tx: mpsc::Sender<(u32, usize, RgbaImage)>,
-    thumb_rx: mpsc::Receiver<(u32, usize, RgbaImage)>,
+    thumb_tx: mpsc::Sender<ThumbResult>,
+    thumb_rx: mpsc::Receiver<ThumbResult>,
     /// The thumbnails that decode right now, at most `MAX_THUMB_JOBS`.
     thumb_loading: HashSet<usize>,
     /// The visible thumbnails that wait for a free job, in the order of the grid.
     thumb_queue: VecDeque<(usize, PathBuf, Rect)>,
+    /// The HEIC previews that decode right now, at most `MAX_PREVIEW_JOBS`.
+    preview_loading: HashSet<usize>,
+    /// The HEIC previews that wait for a free job, in the order of the grid.
+    preview_queue: VecDeque<(usize, PathBuf, Rect)>,
     thumb_generation: u32,
+    /// The Kitty ids of previews that a sharp thumbnail replaced, with their cell. The next
+    /// write of the grid deletes them in the terminal.
+    pub stale_image_ids: Vec<(usize, u32)>,
 
     // Kitty IDs currently transmitted to the terminal — safe to `place_by_id` instead of retransmit.
     pub transmitted_image_ids: HashSet<u32>,
@@ -256,7 +284,10 @@ impl App {
             thumb_rx,
             thumb_loading: HashSet::new(),
             thumb_queue: VecDeque::new(),
+            preview_loading: HashSet::new(),
+            preview_queue: VecDeque::new(),
             thumb_generation: 0,
+            stale_image_ids: Vec::new(),
             transmitted_image_ids: HashSet::new(),
             graphics_storage_dirty: false,
         }
@@ -1303,45 +1334,147 @@ impl App {
         self.thumb_cache.clear();
         self.thumb_loading.clear();
         self.thumb_queue.clear();
+        self.preview_loading.clear();
+        self.preview_queue.clear();
         self.thumb_generation += 1;
     }
 
     /// Drop the waiting thumbnail jobs. A render of the grid queues the visible cells again.
     pub(crate) fn clear_thumb_queue(&mut self) {
         self.thumb_queue.clear();
+        self.preview_queue.clear();
     }
 
+    /// Take the finished thumbnails and start the waiting jobs. Returns the cells with a new
+    /// image, a preview or a sharp one. The sharp jobs wait until every preview is done, so
+    /// that a cold HEIC grid shows all its previews first.
     pub(crate) fn poll_thumbnails(&mut self) -> Vec<usize> {
         let mut new_indices = Vec::new();
-        while let Ok((generation, img_idx, img)) = self.thumb_rx.try_recv() {
-            self.thumb_loading.remove(&img_idx);
-            if generation == self.thumb_generation {
-                self.thumb_cache.insert(img_idx, img);
-                new_indices.push(img_idx);
+        while let Ok(result) = self.thumb_rx.try_recv() {
+            match result.phase {
+                ThumbPhase::Preview => self.preview_loading.remove(&result.img_idx),
+                ThumbPhase::Sharp => self.thumb_loading.remove(&result.img_idx),
+            };
+            if result.generation == self.thumb_generation
+                && let Some(image) = result.image
+                && self.store_thumbnail(result.img_idx, image, result.sharp)
+            {
+                new_indices.push(result.img_idx);
             }
         }
+        while self.preview_loading.len() < MAX_PREVIEW_JOBS
+            && let Some((img_idx, path, rect)) = self.preview_queue.pop_front()
+        {
+            self.start_preview_decode(img_idx, path, rect);
+        }
         while self.thumb_loading.len() < MAX_THUMB_JOBS
-            && let Some((img_idx, path, rect)) = self.thumb_queue.pop_front()
+            && let Some(position) = self
+                .thumb_queue
+                .iter()
+                .position(|job| !self.sharp_job_waits(&job.1))
+            && let Some((img_idx, path, rect)) = self.thumb_queue.remove(position)
         {
             self.start_thumb_decode(img_idx, path, rect);
         }
         new_indices
     }
 
+    /// True while the sharp decode of a libheif file must wait for the previews. The other
+    /// formats have no preview phase and start at once.
+    fn sharp_job_waits(&self, path: &Path) -> bool {
+        has_embedded_preview(path) && self.previews_pending()
+    }
+
+    /// Put a decoded thumbnail into the cache. A sharp image replaces a preview and drops the
+    /// waiting sharp job of the cell. A preview never replaces an image. `false` when the cache
+    /// keeps what it has.
+    pub(crate) fn store_thumbnail(
+        &mut self,
+        img_idx: usize,
+        image: RgbaImage,
+        sharp: bool,
+    ) -> bool {
+        if sharp {
+            if self.thumb_cache.is_sharp(img_idx) {
+                return false;
+            }
+            self.thumb_queue.retain(|job| job.0 != img_idx);
+            if let Some(old_id) = self.thumb_cache.insert(img_idx, image) {
+                self.stale_image_ids.push((img_idx, old_id));
+            }
+            return true;
+        }
+        if self.thumb_cache.contains(img_idx) {
+            return false;
+        }
+        self.thumb_cache.insert_preview(img_idx, image);
+        true
+    }
+
+    fn previews_pending(&self) -> bool {
+        !self.preview_loading.is_empty() || !self.preview_queue.is_empty()
+    }
+
     /// Decode the thumbnail of `img_idx` for the cell `rect`, or queue it while `MAX_THUMB_JOBS`
-    /// run. A thumbnail in the cache, in a job or in the queue starts nothing.
+    /// run. A sharp thumbnail in the cache, in a job or in the queue starts nothing. A HEIC cell
+    /// without an image gets a preview job first.
     pub(crate) fn spawn_thumb_decode(&mut self, img_idx: usize, path: PathBuf, rect: Rect) {
-        if self.thumb_cache.contains(img_idx)
+        if self.thumb_cache.is_sharp(img_idx)
             || self.thumb_loading.contains(&img_idx)
             || self.thumb_queue.iter().any(|job| job.0 == img_idx)
         {
             return;
         }
-        if self.thumb_loading.len() >= MAX_THUMB_JOBS {
+        if self.wants_preview(img_idx, &path) {
+            if self.preview_loading.len() >= MAX_PREVIEW_JOBS {
+                self.preview_queue.push_back((img_idx, path.clone(), rect));
+            } else {
+                self.start_preview_decode(img_idx, path.clone(), rect);
+            }
+        }
+        if self.sharp_job_waits(&path) || self.thumb_loading.len() >= MAX_THUMB_JOBS {
             self.thumb_queue.push_back((img_idx, path, rect));
             return;
         }
         self.start_thumb_decode(img_idx, path, rect);
+    }
+
+    /// True for a file with an embedded preview, when the cell has no image and no preview job.
+    fn wants_preview(&self, img_idx: usize, path: &Path) -> bool {
+        has_embedded_preview(path)
+            && !self.thumb_cache.contains(img_idx)
+            && !self.preview_loading.contains(&img_idx)
+            && !self.preview_queue.iter().any(|job| job.0 == img_idx)
+    }
+
+    /// Phase 1 of a cold HEIC cell: the embedded thumbnail, scaled to the size that the sharp
+    /// image gets. A disk cache hit sends the sharp image instead, so the cell skips the preview.
+    fn start_preview_decode(&mut self, img_idx: usize, path: PathBuf, rect: Rect) {
+        self.preview_loading.insert(img_idx);
+        let tx = self.thumb_tx.clone();
+        let cell_px = self.cell_px;
+        let generation = self.thumb_generation;
+        let cache_dir = self.disk_cache_dir.clone();
+        rayon::spawn(move || {
+            let target_w = u32::from(rect.width) * cell_px.0;
+            let target_h = u32::from(rect.height) * cell_px.1;
+            let (image, sharp) =
+                match try_load_from_disk_cache(&cache_dir, &path, target_w, target_h) {
+                    Some(image) => (Some(image), true),
+                    None => (decode_preview(&path, (target_w, target_h)).ok(), false),
+                };
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a closed receiver means that nobody waits for the result"
+            )]
+            let _ = tx.send(ThumbResult {
+                generation,
+                img_idx,
+                phase: ThumbPhase::Preview,
+                image,
+                sharp,
+            });
+        });
     }
 
     fn start_thumb_decode(&mut self, img_idx: usize, path: PathBuf, rect: Rect) {
@@ -1353,34 +1486,23 @@ impl App {
         rayon::spawn(move || {
             let target_w = u32::from(rect.width) * cell_px.0;
             let target_h = u32::from(rect.height) * cell_px.1;
-
-            if let Some(img) = try_load_from_disk_cache(&cache_dir, &path, target_w, target_h) {
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "a closed receiver means that nobody waits for the result"
-                )]
-                let _ = tx.send((generation, img_idx, img));
-                return;
-            }
-
-            #[cfg(feature = "video")]
-            let res = if crate::video::is_video(&path) {
-                crate::video::decode_first_frame(&path, rect, cell_px)
-            } else {
-                load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Allow)
-            };
-
-            #[cfg(not(feature = "video"))]
-            let res = load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Allow);
-
-            if let Ok(img) = res {
-                try_save_to_disk_cache(&cache_dir, &path, target_w, target_h, &img);
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "a closed receiver means that nobody waits for the result"
-                )]
-                let _ = tx.send((generation, img_idx, img));
-            }
+            let image =
+                try_load_from_disk_cache(&cache_dir, &path, target_w, target_h).or_else(|| {
+                    let image = decode_thumbnail(&path, rect, cell_px).ok()?;
+                    try_save_to_disk_cache(&cache_dir, &path, target_w, target_h, &image);
+                    Some(image)
+                });
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a closed receiver means that nobody waits for the result"
+            )]
+            let _ = tx.send(ThumbResult {
+                generation,
+                img_idx,
+                phase: ThumbPhase::Sharp,
+                image,
+                sharp: true,
+            });
         });
     }
 
@@ -1403,6 +1525,7 @@ impl App {
             || self.source_rx.is_some()
             || !self.thumb_loading.is_empty()
             || !self.thumb_queue.is_empty()
+            || self.previews_pending()
             || self.prefetcher.has_jobs()
             || self.filter_rx.is_some()
             || !self.scan_complete
@@ -1501,6 +1624,40 @@ impl App {
         let dst_h = ((f64::from(crop_h) * eff).round() as u32).max(1).min(vh);
         Some(resize_to_exact(&cropped, dst_w, dst_h))
     }
+}
+
+/// The sharp thumbnail of a grid cell: the first frame of a video, or the fitted image.
+fn decode_thumbnail(path: &Path, rect: Rect, cell_px: (u32, u32)) -> io::Result<RgbaImage> {
+    #[cfg(feature = "video")]
+    if crate::video::is_video(path) {
+        return crate::video::decode_first_frame(path, rect, cell_px);
+    }
+    load_and_resize(path, rect, cell_px, EmbeddedThumbnail::Allow)
+}
+
+/// Only the libheif formats carry an embedded thumbnail that viewr reads as a preview.
+#[cfg(feature = "heic")]
+fn has_embedded_preview(path: &Path) -> bool {
+    decodes_with_libheif(path)
+}
+
+#[cfg(not(feature = "heic"))]
+fn has_embedded_preview(_path: &Path) -> bool {
+    false
+}
+
+/// The preview of a HEIC cell from its embedded thumbnail. Only libheif files have one.
+#[cfg(feature = "heic")]
+fn decode_preview(path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
+    decode_heif_preview(path, target)
+}
+
+#[cfg(not(feature = "heic"))]
+fn decode_preview(_path: &Path, _target: (u32, u32)) -> io::Result<RgbaImage> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "no embedded preview without the heic feature",
+    ))
 }
 
 pub(crate) fn load_and_resize(
@@ -1635,11 +1792,27 @@ pub(crate) fn decodes_with_libheif(path: &Path) -> bool {
 
 #[cfg(feature = "heic")]
 pub(crate) fn libheif_dimensions(path: &Path) -> Option<(u32, u32)> {
-    let name = path.to_str()?;
-    let ctx = libheif_rs::HeifContext::read_from_file(name).ok()?;
+    let ctx = open_heif_context(path).ok()?;
     let handle = ctx.primary_image_handle().ok()?;
     Some((handle.width(), handle.height()))
 }
+
+/// Open `path` for libheif through a buffered stream. `HeifContext::read_from_file` reads and
+/// copies the whole file first, 30 ms to 40 ms for a 24 MP iPhone photo. The stream lets libheif
+/// read the boxes and the one item that it decodes.
+#[cfg(feature = "heic")]
+fn open_heif_context(path: &Path) -> io::Result<libheif_rs::HeifContext<'static>> {
+    let file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    let reader =
+        libheif_rs::StreamReader::new(io::BufReader::with_capacity(HEIF_READ_BUFFER, file), size);
+    libheif_rs::HeifContext::read_from_reader(Box::new(reader))
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// The read buffer of a libheif stream. The image data of a 24 MP photo is a few MB.
+#[cfg(feature = "heic")]
+const HEIF_READ_BUFFER: usize = 1 << 20;
 
 #[cfg(feature = "heic")]
 fn decode_with_libheif(
@@ -1647,13 +1820,10 @@ fn decode_with_libheif(
     target: Option<(u32, u32)>,
     embedded: EmbeddedThumbnail,
 ) -> io::Result<DynamicImage> {
-    use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
+    use libheif_rs::{ColorSpace, LibHeif, RgbChroma};
 
     let invalid = |e: libheif_rs::HeifError| io::Error::new(io::ErrorKind::InvalidData, e);
-    let name = path
-        .to_str()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path is not valid UTF-8"))?;
-    let mut ctx = HeifContext::read_from_file(name).map_err(invalid)?;
+    let mut ctx = open_heif_context(path)?;
     let _slot = LibheifSlot::take(&mut ctx);
     let primary = ctx.primary_image_handle().map_err(invalid)?;
     // An embedded thumbnail (iPhone: 320x240) saves the decode of the full frame.
@@ -1715,28 +1885,85 @@ fn libheif_tile_threads(cores: usize, running: usize) -> u32 {
     u32::try_from(cores / (running + 1)).unwrap_or(1).max(1)
 }
 
-/// Pick the smallest embedded thumbnail that is large enough for `target`, so that the
-/// grid does not decode the full frame. The thumbnail must have the rotation and mirror of the
-/// primary image. A file without a thumbnail does not read the HEIF boxes.
+/// The embedded thumbnails of the primary image with its `irot` and `imir` properties. libheif
+/// applies the properties of the thumbnail item, so a thumbnail with other properties would
+/// show another orientation. A file without a thumbnail does not read the HEIF boxes.
+#[cfg(feature = "heic")]
+fn matching_thumbnails(
+    path: &Path,
+    primary: &libheif_rs::ImageHandle,
+) -> Vec<libheif_rs::ImageHandle> {
+    let mut ids = vec![0; primary.number_of_thumbnails()];
+    let count = primary.thumbnail_ids(&mut ids);
+    ids.truncate(count);
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let Some(items) = decode::heif_boxes::HeifItems::read(path) else {
+        return Vec::new();
+    };
+    ids.into_iter()
+        .filter(|&id| items.thumbnail_matches_primary(id))
+        .filter_map(|id| primary.thumbnail(id).ok())
+        .collect()
+}
+
+/// The smallest embedded thumbnail that covers the fitted primary image, or `None` when the
+/// grid must decode the primary image.
 #[cfg(feature = "heic")]
 fn usable_thumbnail(
     path: &Path,
     primary: &libheif_rs::ImageHandle,
     target: (u32, u32),
 ) -> Option<libheif_rs::ImageHandle> {
-    let mut ids = vec![0; primary.number_of_thumbnails()];
-    let count = primary.thumbnail_ids(&mut ids);
-    ids.truncate(count);
-    if ids.is_empty() {
-        return None;
-    }
-    let items = decode::heif_boxes::HeifItems::read(path)?;
     let primary_size = (primary.width(), primary.height());
-    ids.into_iter()
-        .filter(|&id| items.thumbnail_matches_primary(id))
-        .filter_map(|id| primary.thumbnail(id).ok())
+    matching_thumbnails(path, primary)
+        .into_iter()
         .filter(|thumb| thumbnail_is_usable((thumb.width(), thumb.height()), primary_size, target))
         .min_by_key(|thumb| u64::from(thumb.width()) * u64::from(thumb.height()))
+}
+
+/// The largest embedded thumbnail with the shape and the transform of the primary image. It
+/// may be smaller than the cell, because the preview is only a stand-in for the sharp decode.
+#[cfg(feature = "heic")]
+fn preview_thumbnail(
+    path: &Path,
+    primary: &libheif_rs::ImageHandle,
+) -> Option<libheif_rs::ImageHandle> {
+    let primary_size = (primary.width(), primary.height());
+    matching_thumbnails(path, primary)
+        .into_iter()
+        .filter(|thumb| same_shape((thumb.width(), thumb.height()), primary_size))
+        .max_by_key(|thumb| u64::from(thumb.width()) * u64::from(thumb.height()))
+}
+
+/// Decode the embedded thumbnail of `path` and scale it to the size that the primary image
+/// gets in `target`, so that the sharp decode replaces it in place.
+#[cfg(feature = "heic")]
+pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
+    use libheif_rs::{ColorSpace, LibHeif, RgbChroma};
+
+    let invalid = |e: libheif_rs::HeifError| io::Error::new(io::ErrorKind::InvalidData, e);
+    let mut ctx = open_heif_context(path)?;
+    let _slot = LibheifSlot::take(&mut ctx);
+    let primary = ctx.primary_image_handle().map_err(invalid)?;
+    let thumbnail = preview_thumbnail(path, &primary).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "no embedded thumbnail with the transform of the primary image",
+        )
+    })?;
+    let (dst_w, dst_h) = fit_within((primary.width(), primary.height()), target)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty cell"))?;
+    let image = LibHeif::new()
+        .decode(&thumbnail, ColorSpace::Rgb(RgbChroma::Rgba), None)
+        .map_err(invalid)?;
+    let rgba = heif_image_to_rgba(&image, None)?;
+    Ok(resize_to_exact(
+        &DynamicImage::ImageRgba8(rgba),
+        dst_w,
+        dst_h,
+    ))
 }
 
 /// Accept a thumbnail only if it is at least as large as the primary image fitted into
@@ -1752,8 +1979,13 @@ fn thumbnail_is_usable(thumbnail: (u32, u32), primary: (u32, u32), target: (u32,
         return false;
     };
     let covers = thumbnail.0 >= fitted.0 && thumbnail.1 >= fitted.1;
-    let same_shape = (thumbnail.0 >= thumbnail.1) == (primary.0 >= primary.1);
-    covers && same_shape
+    covers && same_shape(thumbnail, primary)
+}
+
+/// True when both sizes are landscape, or both are portrait or square.
+#[cfg(feature = "heic")]
+fn same_shape(thumbnail: (u32, u32), primary: (u32, u32)) -> bool {
+    (thumbnail.0 >= thumbnail.1) == (primary.0 >= primary.1)
 }
 
 /// The size of `size` fitted into `target` without upscale, rounded down as
@@ -2216,15 +2448,21 @@ mod tests {
             resize_decoded_to_dims, resize_to_exact, test_dir,
         };
         use crate::app::{
-            decodes_with_libheif, fit_within, libheif_dimensions, thumbnail_is_usable,
+            App, decode_heif_preview, decodes_with_libheif, fit_within, libheif_dimensions,
+            thumbnail_is_usable,
         };
         use crate::decode::heif_boxes::HeifItems;
-        use image::GenericImageView;
+        use crate::image_list::SharedImageList;
+        use image::{GenericImageView, RgbaImage};
         use libheif_rs::{
             Channel, ColorSpace, CompressionFormat, EncoderQuality, EncodingOptions, HeifContext,
             Image, ImageOrientation, LibHeif, RgbChroma,
         };
+        use ratatui::layout::Rect;
+        use std::fs;
         use std::path::Path;
+        use std::thread;
+        use std::time::{Duration, Instant};
 
         fn solid_image(width: u32, height: u32, rgb: [u8; 3]) -> Image {
             let mut image = Image::new(width, height, ColorSpace::Rgb(RgbChroma::Rgb)).unwrap();
@@ -2512,6 +2750,132 @@ mod tests {
                 // The shape guard alone accepts each of these thumbnails.
                 assert_close(grid_center(&path), expected);
             }
+        }
+
+        /// An app with the one file `path` in a grid cell of 160x160 px, and a disk cache in
+        /// `cache`. The 256x128 primary image fits as 160x80.
+        fn grid_app(path: &Path, cache: &Path) -> App {
+            let mut app = App::new((8, 16), SharedImageList::new());
+            app.images = vec![path.to_path_buf()];
+            app.filenames = vec!["photo.heic".to_owned()];
+            app.gallery.filtered_indices = vec![0];
+            app.disk_cache_dir = cache.to_path_buf();
+            app.scan_complete = true;
+            app.spawn_thumb_decode(0, path.to_path_buf(), Rect::new(0, 0, 20, 10));
+            app
+        }
+
+        /// Poll until the cell 0 gets a new image, for at most 2 s. Returns the image.
+        fn wait_for_new_image(app: &mut App) -> RgbaImage {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if app.poll_thumbnails() == vec![0] {
+                    return app.thumb_cache.peek(0).unwrap().0.clone();
+                }
+                assert!(Instant::now() < deadline, "no thumbnail arrived");
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        fn rgba_center(image: &RgbaImage) -> [u8; 4] {
+            image.get_pixel(image.width() / 2, image.height() / 2).0
+        }
+
+        #[test]
+        fn heic_grid_shows_the_blue_preview_and_then_the_red_sharp_thumbnail() {
+            let dir = test_dir();
+            let path = dir.path().join("photo.heic");
+            let normal = ImageOrientation::Normal;
+            write_heif(&path, CompressionFormat::Hevc, normal, Some(normal));
+            let cache = dir.path().join("cache");
+            fs::create_dir(&cache).unwrap();
+            let mut app = grid_app(&path, &cache);
+            assert_eq!(app.preview_loading.len(), 1, "the preview starts at once");
+            assert_eq!(
+                app.thumb_queue.len(),
+                1,
+                "the sharp decode waits for the preview"
+            );
+
+            let preview = wait_for_new_image(&mut app);
+            assert!(!app.thumb_cache.is_sharp(0));
+            assert_eq!(
+                preview.dimensions(),
+                (160, 80),
+                "the size of the sharp image"
+            );
+            assert_close(rgba_center(&preview), BLUE);
+            assert_eq!(
+                fs::read_dir(&cache).unwrap().count(),
+                0,
+                "no preview on disk"
+            );
+            let (_, preview_id) = app.thumb_cache.peek(0).unwrap();
+
+            let sharp = wait_for_new_image(&mut app);
+            assert!(app.thumb_cache.is_sharp(0));
+            assert_eq!(sharp.dimensions(), (160, 80));
+            assert_close(rgba_center(&sharp), RED);
+            assert_eq!(
+                fs::read_dir(&cache).unwrap().count(),
+                1,
+                "the sharp image on disk"
+            );
+            assert_eq!(app.stale_image_ids, vec![(0, preview_id)]);
+            assert!(!app.has_pending_work());
+
+            // A warm cell comes from the disk cache and skips the preview.
+            let mut warm = grid_app(&path, &cache);
+            let first = wait_for_new_image(&mut warm);
+            assert!(warm.thumb_cache.is_sharp(0));
+            assert_close(rgba_center(&first), RED);
+            assert!(warm.stale_image_ids.is_empty());
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while warm.has_pending_work() {
+                assert!(Instant::now() < deadline, "the jobs did not finish");
+                assert!(warm.poll_thumbnails().is_empty(), "no second image");
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        #[test]
+        fn heic_thumbnail_with_another_transform_gives_no_preview() {
+            let dir = test_dir();
+            let path = dir.path().join("rotated.heic");
+            write_heif(
+                &path,
+                CompressionFormat::Hevc,
+                ImageOrientation::Rotate90Cw,
+                Some(ImageOrientation::Normal),
+            );
+            let error = decode_heif_preview(&path, (160, 160)).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+            let mut app = grid_app(&path, dir.path());
+            let first = wait_for_new_image(&mut app);
+            assert!(
+                app.thumb_cache.is_sharp(0),
+                "the first image is the sharp one"
+            );
+            assert_eq!(first.dimensions(), (80, 160));
+            assert_close(rgba_center(&first), RED);
+            assert!(app.stale_image_ids.is_empty());
+        }
+
+        #[test]
+        fn heic_preview_keeps_the_rotation_of_the_primary_image() {
+            let dir = test_dir();
+            let path = dir.path().join("rotated.heic");
+            let rotation = ImageOrientation::Rotate90Cw;
+            write_heif(&path, CompressionFormat::Hevc, rotation, Some(rotation));
+
+            let preview = decode_heif_preview(&path, (160, 160)).unwrap();
+            assert_eq!(
+                preview.dimensions(),
+                (80, 160),
+                "portrait like the primary image"
+            );
+            assert_close(rgba_center(&preview), BLUE);
         }
 
         #[test]
@@ -2894,9 +3258,9 @@ mod tests {
     mod state {
         use super::test_dir;
         use crate::app::{
-            App, EmbeddedThumbnail, PendingDelete, Slideshow, ViewMode, get_cache_file_path,
-            load_and_resize, prune_disk_cache, resize_decoded, try_load_from_disk_cache,
-            try_save_to_disk_cache,
+            App, EmbeddedThumbnail, PendingDelete, Slideshow, ThumbPhase, ThumbResult, ViewMode,
+            get_cache_file_path, load_and_resize, prune_disk_cache, resize_decoded,
+            try_load_from_disk_cache, try_save_to_disk_cache,
         };
         use crate::image_list::SharedImageList;
         use image::{DynamicImage, RgbaImage};
@@ -2905,6 +3269,17 @@ mod tests {
         use std::path::{Path, PathBuf};
         use std::thread;
         use std::time::{Duration, Instant, SystemTime};
+
+        /// A thumbnail result as a job sends it.
+        fn result(generation: u32, img_idx: usize, phase: ThumbPhase, sharp: bool) -> ThumbResult {
+            ThumbResult {
+                generation,
+                img_idx,
+                phase,
+                image: Some(RgbaImage::new(1, 1)),
+                sharp,
+            }
+        }
 
         fn app() -> App {
             App::new((8, 16), SharedImageList::new())
@@ -3846,10 +4221,10 @@ mod tests {
             let current = app.thumb_generation;
             // A job of the old generation and a job of the current one, in this order.
             app.thumb_tx
-                .send((current - 1, 0, RgbaImage::new(1, 1)))
+                .send(result(current - 1, 0, ThumbPhase::Sharp, true))
                 .unwrap();
             app.thumb_tx
-                .send((current, 1, RgbaImage::new(1, 1)))
+                .send(result(current, 1, ThumbPhase::Sharp, true))
                 .unwrap();
             app.thumb_loading.insert(0);
 
@@ -3860,6 +4235,103 @@ mod tests {
                 !app.thumb_loading.contains(&0),
                 "a stale result still ends the load"
             );
+        }
+
+        #[test]
+        fn a_preview_of_the_old_zoom_is_dropped_and_a_failed_job_frees_its_slot() {
+            let mut app = app_with(&["a.heic", "b.heic"]);
+            app.scan_complete = true;
+            app.gallery.update_grid(Rect::new(0, 0, 100, 40));
+            let before = app.thumb_generation;
+            app.preview_loading.insert(0);
+            app.thumb_loading.insert(1);
+            app.thumb_zoom_in();
+            let current = app.thumb_generation;
+            assert_ne!(current, before, "a grid zoom starts a new generation");
+            assert!(app.preview_loading.is_empty() && app.thumb_loading.is_empty());
+
+            // The preview of the old zoom, then a preview and a failed sharp decode of the new one.
+            app.thumb_tx
+                .send(result(before, 0, ThumbPhase::Preview, false))
+                .unwrap();
+            app.thumb_tx
+                .send(result(current, 1, ThumbPhase::Preview, false))
+                .unwrap();
+            app.preview_loading.insert(1);
+            app.thumb_loading.insert(1);
+            app.thumb_tx
+                .send(ThumbResult {
+                    generation: current,
+                    img_idx: 1,
+                    phase: ThumbPhase::Sharp,
+                    image: None,
+                    sharp: true,
+                })
+                .unwrap();
+
+            assert_eq!(app.poll_thumbnails(), vec![1]);
+            assert!(!app.thumb_cache.contains(0), "the stale preview is dropped");
+            assert!(app.thumb_cache.contains(1) && !app.thumb_cache.is_sharp(1));
+            assert!(!app.has_pending_work(), "a failed decode frees its slot");
+        }
+
+        #[test]
+        fn only_the_libheif_sharp_jobs_wait_for_the_previews() {
+            let dir = test_dir();
+            let mut app = app_with_files(dir.path(), &["b.png"]);
+            app.images.push(PathBuf::from("a.heic"));
+            app.filenames.push("a.heic".to_owned());
+            app.gallery.filtered_indices.push(1);
+            let rect = Rect::new(0, 0, 1, 1);
+            // A preview job runs. The HEIC cell waits, the PNG cell starts at once.
+            app.preview_loading.insert(1);
+            app.spawn_thumb_decode(1, PathBuf::from("a.heic"), rect);
+            let png = app.images[0].clone();
+            app.spawn_thumb_decode(0, png, rect);
+
+            #[cfg(feature = "heic")]
+            {
+                assert_eq!(app.thumb_queue.len(), 1, "the HEIC sharp job waits");
+                assert!(app.thumb_loading.contains(&0), "the PNG decodes at once");
+                assert_eq!(app.poll_thumbnails(), Vec::<usize>::new());
+                assert_eq!(
+                    app.thumb_queue.len(),
+                    1,
+                    "the poll keeps the HEIC job waiting"
+                );
+            }
+            #[cfg(not(feature = "heic"))]
+            assert_eq!(app.thumb_loading.len(), 2, "without libheif, no job waits");
+        }
+
+        #[test]
+        fn a_sharp_result_replaces_the_preview_and_drops_the_waiting_job() {
+            let mut app = app_with(&["a.heic", "b.heic"]);
+            let rect = Rect::new(0, 0, 1, 1);
+            assert!(app.store_thumbnail(0, RgbaImage::new(1, 1), false));
+            let (_, preview_id) = app.thumb_cache.peek(0).unwrap();
+            app.thumb_queue
+                .push_back((0, PathBuf::from("a.heic"), rect));
+            app.thumb_queue
+                .push_back((1, PathBuf::from("b.heic"), rect));
+
+            assert!(
+                !app.store_thumbnail(0, RgbaImage::new(1, 1), false),
+                "a second preview changes nothing"
+            );
+            assert!(app.store_thumbnail(0, RgbaImage::new(2, 2), true));
+            assert!(app.thumb_cache.is_sharp(0));
+            assert_eq!(app.stale_image_ids, vec![(0, preview_id)]);
+            assert_eq!(
+                app.thumb_queue.len(),
+                1,
+                "the disk cache hit made the job unnecessary"
+            );
+            assert!(
+                !app.store_thumbnail(0, RgbaImage::new(3, 3), true),
+                "a second sharp image changes nothing"
+            );
+            assert_eq!(app.thumb_cache.peek(0).unwrap().0.dimensions(), (2, 2));
         }
 
         #[test]

@@ -141,23 +141,54 @@ fn count_transmissions(bytes: &[u8]) -> usize {
     text.matches("\x1b_Ga=T,").count()
 }
 
-/// The time to the first thumbnail and to the full grid, and the bytes of the Kitty output.
-fn measure_grid(app: &mut App, visible: usize) -> (Duration, Duration, usize) {
+/// The times of a grid fill: the first image on the screen, every cell with an image (a
+/// preview or a sharp one), every cell sharp, and the bytes of the Kitty output.
+struct GridTimes {
+    first: Duration,
+    all_shown: Duration,
+    all_sharp: Duration,
+    bytes: usize,
+}
+
+impl GridTimes {
+    fn report(&self, label: &str) {
+        report(&format!(
+            "grid {label}: first image {}, all cells shown {}, all cells sharp {}, kitty bytes {}",
+            millis(self.first),
+            millis(self.all_shown),
+            millis(self.all_sharp),
+            self.bytes
+        ));
+    }
+}
+
+/// Fill the grid and take the times. A cell counts as shown when its image is in the cache and
+/// the loop has written the pending emits, as the user sees it.
+fn measure_grid(app: &mut App) -> GridTimes {
+    let visible: Vec<usize> = app.gallery.visible_items().map(|(_, idx)| idx).collect();
     let start = Instant::now();
     let mut pending = Vec::new();
     let mut first = None;
-    let mut shown = 0;
+    let mut all_shown = None;
     let mut bytes = 0;
     loop {
         run_pass(app, &mut pending);
         let out = app.graphics_out.take_bytes();
         bytes += out.len();
-        shown += count_transmissions(&out);
-        if shown > 0 && first.is_none() {
+        if first.is_none() && count_transmissions(&out) > 0 {
             first = Some(start.elapsed());
         }
-        if shown >= visible {
-            return (first.unwrap_or_default(), start.elapsed(), bytes);
+        let shown = pending.is_empty() && visible.iter().all(|&idx| app.thumb_cache.contains(idx));
+        if shown && all_shown.is_none() {
+            all_shown = Some(start.elapsed());
+        }
+        if shown && visible.iter().all(|&idx| app.thumb_cache.is_sharp(idx)) {
+            return GridTimes {
+                first: first.unwrap_or_default(),
+                all_shown: all_shown.unwrap_or_default(),
+                all_sharp: start.elapsed(),
+                bytes,
+            };
         }
         assert!(start.elapsed() < LIMIT, "the grid did not fill");
         thread::sleep(next_timeout(app, &pending));
@@ -199,20 +230,10 @@ fn grid_first_thumbnail_and_full_grid() {
         dir.display()
     ));
 
-    let (first, full, bytes) = measure_grid(&mut bench.app, visible);
-    report(&format!(
-        "grid cold: first thumbnail {}, full grid {}, kitty bytes {bytes}",
-        millis(first),
-        millis(full)
-    ));
+    measure_grid(&mut bench.app).report("cold");
 
     bench.app.mark_dirty();
-    let (first, full, bytes) = measure_grid(&mut bench.app, visible);
-    report(&format!(
-        "grid warm (disk cache): first thumbnail {}, full grid {}, kitty bytes {bytes}",
-        millis(first),
-        millis(full)
-    ));
+    measure_grid(&mut bench.app).report("warm (disk cache)");
 }
 
 #[test]
@@ -447,8 +468,57 @@ fn heic_decode_phases() {
         millis(total.saturating_sub(decode))
     ));
 
-    let count = heics.len().min(10);
     let cell_px = (528, 396);
+    let start = Instant::now();
+    let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
+    let primary = ctx.primary_image_handle().unwrap();
+    let read = start.elapsed();
+    let start = Instant::now();
+    let file = std::fs::File::open(path).unwrap();
+    let size = file.metadata().unwrap().len();
+    let reader = libheif_rs::StreamReader::new(std::io::BufReader::new(file), size);
+    let streamed = HeifContext::read_from_reader(Box::new(reader)).unwrap();
+    let streamed_read = start.elapsed();
+    drop(streamed);
+    let start = Instant::now();
+    let items = crate::decode::heif_boxes::HeifItems::read(path);
+    let boxes = start.elapsed();
+    let mut ids = vec![0; primary.number_of_thumbnails()];
+    primary.thumbnail_ids(&mut ids);
+    report(&format!(
+        "heic phases: preview steps: context from file {}, from stream {}, boxes {}",
+        millis(read),
+        millis(streamed_read),
+        millis(boxes)
+    ));
+    match ids.first().and_then(|&id| primary.thumbnail(id).ok()) {
+        Some(thumbnail) => {
+            let matches = items.is_some_and(|items| items.thumbnail_matches_primary(ids[0]));
+            let start = Instant::now();
+            let image = LibHeif::new()
+                .decode(&thumbnail, ColorSpace::Rgb(RgbChroma::Rgba), None)
+                .unwrap();
+            report(&format!(
+                "heic phases: preview steps: thumbnail decode {}x{} {} (matches the primary image: {matches})",
+                image.width(),
+                image.height(),
+                millis(start.elapsed())
+            ));
+        }
+        None => report("heic phases: preview steps: no embedded thumbnail"),
+    }
+    let start = Instant::now();
+    match crate::app::decode_heif_preview(path, cell_px) {
+        Ok(preview) => report(&format!(
+            "heic phases: embedded preview {}x{} in {}",
+            preview.width(),
+            preview.height(),
+            millis(start.elapsed())
+        )),
+        Err(error) => report(&format!("heic phases: no embedded preview ({error})")),
+    }
+
+    let count = heics.len().min(10);
     let start = Instant::now();
     let times: Vec<Duration> = {
         use rayon::prelude::*;

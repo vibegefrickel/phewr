@@ -1190,6 +1190,7 @@ fn emit_new_thumbnails_to(
             continue;
         }
         let cell_rect = app.gallery.cell_rect(vis_idx);
+        delete_stale_images_to(app, out, |cell| cell == img_idx)?;
         if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
             let (image_x, image_y) = gallery_image_origin(app, cell_rect, img);
             queue!(out, cursor::MoveTo(image_x, image_y))?;
@@ -1209,6 +1210,26 @@ fn emit_new_thumbnails_to(
     for id in newly_transmitted {
         app.transmitted_image_ids.insert(id);
     }
+    Ok(())
+}
+
+/// Delete the previews that a sharp thumbnail replaced, for the cells that `select` picks. The
+/// sharp image comes with a new id, so the terminal would keep the preview and its pixels.
+fn delete_stale_images_to(
+    app: &mut App,
+    out: &mut impl Write,
+    select: impl Fn(usize) -> bool,
+) -> io::Result<()> {
+    let mut kept = Vec::new();
+    for (cell, id) in std::mem::take(&mut app.stale_image_ids) {
+        if select(cell) {
+            app.graphics.delete_image_to(out, id)?;
+            app.transmitted_image_ids.remove(&id);
+        } else {
+            kept.push((cell, id));
+        }
+    }
+    app.stale_image_ids = kept;
     Ok(())
 }
 
@@ -1257,10 +1278,12 @@ fn place_gallery_images_to(
     if app.graphics_storage_dirty {
         app.graphics_delete_all_to(out)?;
         app.graphics_storage_dirty = false;
+        app.stale_image_ids.clear();
     } else {
         // Drop visible placements only; keep stored image data so already-transmitted thumbs
         // can be re-placed with a cheap `a=p` instead of a full PNG retransmit.
         app.graphics.clear_placements_to(out)?;
+        delete_stale_images_to(app, out, |_| true)?;
     }
 
     let mut newly_transmitted: Vec<u32> = Vec::new();
@@ -2902,6 +2925,57 @@ mod tests {
             assert!(!text.contains("\x1b_Ga=d"));
             assert_eq!(app.transmitted_image_ids.len(), 2);
             assert!(text.contains("\x1b[3;24H"), "centered in the second cell");
+        }
+
+        #[test]
+        fn a_sharp_thumbnail_deletes_its_preview_before_the_transmit() {
+            let mut app = thumbnail_app(2);
+            app.images.push(PathBuf::from("/photos/2.heic"));
+            app.gallery.filtered_indices.push(2);
+            assert!(app.store_thumbnail(2, RgbaImage::new(4, 4), false));
+            let (_, preview_id) = app.thumb_cache.peek(2).unwrap();
+            let mut out = Vec::new();
+            emit_new_thumbnails_to(&mut app, &[2], &mut out).unwrap();
+            assert!(!text(&out).contains("\x1b_Ga=d"));
+            assert!(app.transmitted_image_ids.contains(&preview_id));
+
+            assert!(app.store_thumbnail(2, RgbaImage::new(4, 4), true));
+            let (_, sharp_id) = app.thumb_cache.peek(2).unwrap();
+            let mut out = Vec::new();
+            emit_new_thumbnails_to(&mut app, &[2], &mut out).unwrap();
+
+            let text = text(&out);
+            let delete = format!("\x1b_Ga=d,d=I,i={preview_id},q=2\x1b\\");
+            assert!(
+                text.find(&delete).unwrap() < text.find(TRANSMIT).unwrap(),
+                "the preview goes before the sharp image comes: {text}"
+            );
+            assert_eq!(text.matches(TRANSMIT).count(), 1);
+            assert!(text.contains(&format!(",i={sharp_id}")));
+            assert!(!app.transmitted_image_ids.contains(&preview_id));
+            assert!(app.transmitted_image_ids.contains(&sharp_id));
+            assert!(app.stale_image_ids.is_empty());
+        }
+
+        #[test]
+        fn a_redraw_of_the_grid_deletes_the_replaced_previews() {
+            let mut app = thumbnail_app(2);
+            app.stale_image_ids.push((5, 99));
+            app.transmitted_image_ids.insert(99);
+            let mut out = Vec::new();
+            place_visible(&mut app, &mut out);
+            assert!(text(&out).contains("\x1b_Ga=d,d=I,i=99,"));
+            assert!(app.stale_image_ids.is_empty());
+            assert!(!app.transmitted_image_ids.contains(&99));
+
+            // A full redraw deletes every image, so the list only empties.
+            app.stale_image_ids.push((5, 98));
+            app.graphics_storage_dirty = true;
+            let mut out = Vec::new();
+            place_visible(&mut app, &mut out);
+            assert!(text(&out).contains(DELETE_ALL));
+            assert!(!text(&out).contains("d=I"));
+            assert!(app.stale_image_ids.is_empty());
         }
 
         #[cfg(feature = "video")]

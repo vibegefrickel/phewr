@@ -236,6 +236,8 @@ pub(crate) struct ThumbnailCache {
 struct CachedThumb {
     image: RgbaImage,
     image_id: u32,
+    /// False for a preview from an embedded thumbnail, which the sharp decode replaces.
+    sharp: bool,
 }
 
 impl ThumbnailCache {
@@ -246,24 +248,44 @@ impl ThumbnailCache {
         }
     }
 
+    /// True when the cell has an image, a preview or a sharp one.
     pub(crate) fn contains(&self, index: usize) -> bool {
         self.cache.contains(&index)
+    }
+
+    /// True when the cell has its final thumbnail, so no decode is necessary.
+    pub(crate) fn is_sharp(&self, index: usize) -> bool {
+        self.cache.peek(&index).is_some_and(|t| t.sharp)
     }
 
     pub(crate) fn peek(&self, index: usize) -> Option<(&RgbaImage, u32)> {
         self.cache.peek(&index).map(|t| (&t.image, t.image_id))
     }
 
-    pub(crate) fn insert(&mut self, index: usize, image: RgbaImage) {
+    /// Store the sharp thumbnail. Returns the Kitty id of the preview that it replaces, so
+    /// that the terminal can delete it.
+    pub(crate) fn insert(&mut self, index: usize, image: RgbaImage) -> Option<u32> {
+        self.push(index, image, true)
+    }
+
+    /// Store a preview. A later `insert` replaces it.
+    pub(crate) fn insert_preview(&mut self, index: usize, image: RgbaImage) {
+        // A cell never has two previews, so there is no id to delete.
+        self.push(index, image, false);
+    }
+
+    fn push(&mut self, index: usize, image: RgbaImage, sharp: bool) -> Option<u32> {
         let id = self.next_id;
         self.next_id += 1;
-        self.cache.push(
-            index,
-            CachedThumb {
-                image,
-                image_id: id,
-            },
-        );
+        let thumb = CachedThumb {
+            image,
+            image_id: id,
+            sharp,
+        };
+        self.cache
+            .push(index, thumb)
+            .filter(|(old_index, _)| *old_index == index)
+            .map(|(_, old)| old.image_id)
     }
 
     pub(crate) fn clear(&mut self) {
@@ -456,5 +478,30 @@ mod tests {
         cache.clear();
         assert!(!cache.contains(0));
         assert!(!cache.contains(1));
+    }
+
+    #[test]
+    fn a_sharp_thumbnail_replaces_the_preview_and_names_its_old_id() {
+        let mut cache = ThumbnailCache::new();
+        let img = image::RgbaImage::new(2, 2);
+        cache.insert_preview(0, img.clone());
+        assert!(cache.contains(0));
+        assert!(!cache.is_sharp(0));
+        let (_, preview_id) = cache.peek(0).unwrap();
+
+        assert_eq!(cache.insert(0, img.clone()), Some(preview_id));
+        assert!(cache.is_sharp(0));
+        let (_, sharp_id) = cache.peek(0).unwrap();
+        assert_ne!(
+            sharp_id, preview_id,
+            "the terminal needs a new id for the new pixels"
+        );
+
+        assert_eq!(
+            cache.insert(1, img),
+            None,
+            "a first sharp image replaces nothing"
+        );
+        assert!(cache.is_sharp(1));
     }
 }

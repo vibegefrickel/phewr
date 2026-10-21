@@ -92,6 +92,7 @@ pub(crate) trait GraphicsBackend {
     fn delete_all_to(&self, out: &mut dyn Write) -> io::Result<()>;
     fn clear_placements_to(&self, out: &mut dyn Write) -> io::Result<()>;
     fn place_by_id_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
+    fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -130,6 +131,10 @@ impl GraphicsBackend for KittyBackend {
 
     fn place_by_id_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
         kitty::place_by_id_to(out, id)
+    }
+
+    fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
+        kitty::delete_image_to(out, id)
     }
 }
 
