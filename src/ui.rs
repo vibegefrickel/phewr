@@ -92,6 +92,7 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 
 fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
+    let has_photos = !app.images.is_empty();
 
     let Some(picker) = app.picker.as_mut() else {
         return;
@@ -143,6 +144,8 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
 
     let hint = if picker.filter_active {
         " Esc: cancel  Enter: confirm  Backspace: delete "
+    } else if has_photos {
+        " Enter: choose  /: filter  ?: help  q: back "
     } else {
         " Enter: choose  /: filter  ?: help  q: quit "
     };
@@ -249,7 +252,7 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
             })
             .unwrap_or_default();
         let hint = if app.slideshow.is_some() {
-            " space: pause  [/]: interval  s/q/Esc: stop  i: info "
+            " space: pause  [/]: interval  s/Esc: stop  q: back  i: info "
         } else if placeholder {
             " Enter: play  \u{2190}/\u{2192}: navigate  i: info  ?: help  q/Esc: back "
         } else if app.zoom > 1.0 {
@@ -333,7 +336,7 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Opt
             status_note.map_or_else(
                 || {
                     Span::styled(
-                        " Space: pause  \u{2190}/\u{2192}: navigate  ?: help  q: quit ",
+                        " Space: pause  \u{2190}/\u{2192}: navigate  ?: help  q: back ",
                         STYLES.key,
                     )
                 },
@@ -667,9 +670,7 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         #[cfg(feature = "video")]
         ("h / l", "Previous / next file"),
         #[cfg(feature = "video")]
-        ("Esc", "Back to gallery"),
-        #[cfg(feature = "video")]
-        ("q", "Quit"),
+        ("q / Esc", "Back to gallery"),
         ("", ""),
         ("", "Directory picker"),
         ("j / k", "Move cursor"),
@@ -678,8 +679,7 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         ("h", "Parent directory"),
         ("g / G", "First / last"),
         ("/", "Filter names"),
-        ("Esc", "Back to gallery"),
-        ("q", "Quit"),
+        ("q / Esc", "Back to gallery"),
     ];
 
     let height = (help_lines.len() as u16 + 4).min(area.height.saturating_sub(2));
@@ -1358,7 +1358,7 @@ mod tests {
         let interval = format!("{:.1}s", app.slideshow_interval.as_secs_f64());
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, &format!("\u{25b6} {interval}"));
-        assert_shows(&screen, "space: pause  [/]: interval  s/q/Esc: stop");
+        assert_shows(&screen, "space: pause  [/]: interval  s/Esc: stop  q: back");
 
         app.slideshow_toggle_pause();
         let screen = render(&mut app, None, 100, 30);

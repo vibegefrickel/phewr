@@ -339,4 +339,16 @@ mod tests {
             "Esc closes the picker over photos"
         );
     }
+
+    #[test]
+    fn gallery_o_then_q_goes_back_over_photos() {
+        let (_temp, root, _child) = synthetic_tree();
+        let mut app = gallery_app(2);
+        app.initial_dir = Some(root);
+
+        char_key(&mut app, 'o');
+        assert!(!char_key(&mut app, 'q'), "q in the picker goes back");
+        assert_eq!(app.mode, ViewMode::Gallery);
+        assert!(char_key(&mut app, 'q'), "q in the grid quits viewr");
+    }
 }

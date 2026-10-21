@@ -12,8 +12,8 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.graphics_delete_all()?;
             app.help_visible = true;
         }
-        // `q` leaves the view like `Esc`, not viewr: the gallery is the way out.
-        KeyCode::Char('q') | KeyCode::Esc if app.slideshow_running() => app.stop_slideshow(),
+        // `Esc` stops a running slideshow first. `q` goes back in one press, because `enter_gallery` ends the slideshow.
+        KeyCode::Esc if app.slideshow_running() => app.stop_slideshow(),
         KeyCode::Char('q') | KeyCode::Esc => {
             app.graphics_delete_all()?;
             app.enter_gallery();
@@ -191,16 +191,13 @@ mod tests {
     }
 
     #[test]
-    fn q_stops_a_running_slideshow_first_like_esc() {
+    fn q_stops_a_running_slideshow_and_goes_back_in_one_press() {
         let mut app = fullscreen_app(2, 0);
         char_key(&mut app, 's');
         assert!(app.slideshow_running());
 
         assert!(!char_key(&mut app, 'q'));
         assert!(!app.slideshow_running());
-        assert_eq!(app.mode, ViewMode::Fullscreen);
-
-        assert!(!char_key(&mut app, 'q'));
         assert_eq!(app.mode, ViewMode::Gallery);
     }
 }

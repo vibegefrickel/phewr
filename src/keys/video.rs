@@ -8,18 +8,17 @@ use std::io;
 
 /// Keys of the video player: pause, navigation, delete.
 ///
-/// Esc stops a running slideshow, like `q` in mpv: the user wants out. A step to another file
+/// `q` and Esc stop a running slideshow and go back: the user wants out. A step to another file
 /// keeps the slideshow and gives that file the full interval, like in the fullscreen view.
 pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     match key.code {
-        KeyCode::Char('q') => return Ok(true),
         KeyCode::Char(' ') => {
             if let Some(ref mut v) = app.video {
                 v.toggle_pause();
                 app.needs_render = true;
             }
         }
-        KeyCode::Esc => {
+        KeyCode::Char('q') | KeyCode::Esc => {
             app.graphics_delete_all()?;
             app.stop_slideshow();
             app.return_from_video();
@@ -131,6 +130,18 @@ mod tests {
         );
         char_key(&mut app, 'n');
 
-        assert!(char_key(&mut app, 'q'));
+        assert!(!char_key(&mut app, 'q'), "q goes back, not out of viewr");
+        assert_ne!(app.mode, ViewMode::Video);
+    }
+
+    #[test]
+    fn q_in_the_player_during_a_slideshow_acts_like_esc() {
+        let mut esc_app = crate::test_support::video::slideshow_video_app();
+        press(&mut esc_app, KeyCode::Esc);
+        let mut q_app = crate::test_support::video::slideshow_video_app();
+        assert!(!char_key(&mut q_app, 'q'));
+
+        assert!(!q_app.slideshow_running());
+        assert_eq!(q_app.mode, esc_app.mode);
     }
 }

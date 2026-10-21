@@ -38,8 +38,9 @@ pub(super) fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
     }
 
     match code {
-        KeyCode::Char('q') => return true,
-        KeyCode::Esc if !app.images.is_empty() => {
+        // Without photos there is no view to go back to, so `q` quits viewr.
+        KeyCode::Char('q') if app.images.is_empty() => return true,
+        KeyCode::Char('q') | KeyCode::Esc if !app.images.is_empty() => {
             app.close_picker();
         }
         KeyCode::Up | KeyCode::Char('k') => {
