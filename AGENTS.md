@@ -147,16 +147,19 @@ missing.
 - `cli.rs`: the clap arguments (`Cli`) and the start directory.
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
   `query_terminal` and the cell pixel size.
-- `run_loop.rs`: `LoopState` (the status note, the mpv player), `run`, the background polls,
+- `run_loop.rs`: `LoopState` (the status note and, with the `video` feature, the `VideoState`), `run`, the background polls,
   `render_images` and `next_timeout`. The status note lives here, not in `App`.
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
   `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `picker.rs`, `video.rs` (feature `video`).
 - `kitty_output.rs`: the Kitty writes per frame: the fullscreen image, the video frame, the
   grid and the new thumbnails. Each `render_*` has a `*_to` twin that writes to any `Write`,
-  so that the tests read the escape sequences.
-- `video_handoff.rs` (feature `video`): the hand-off to mpv in the terminal or in a window,
-  the `TerminalHandoff` trait, the way back after mpv and the steps with `n` and `N`.
+  so that the tests read the escape sequences. `App::with_graphics_out` runs a write against the
+  graphics output.
+- `video_handoff/` (feature `video`): the hand-off to mpv and the steps with `n` and `N`.
+  `mod.rs` holds `VideoState` (the mpv player and the fallback note), the hand-off and the way
+  back. `terminal.rs` holds `TerminalHandoff` and `play_in_terminal`. `window.rs` holds
+  `poll_mpv_window`.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
   construction. One file per topic: `info_panel.rs`, `grid_zoom.rs` (the cell size and the
@@ -201,7 +204,8 @@ missing.
   PNG (SSH) or a temp file (`t=t`). `detect_transfer` probes the terminal at start with `a=q`.
   `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe.
 - `test_support.rs` (test only): the app builders, the key press helpers and the synthetic
-  file writers that the tests of more than one module share.
+  file writers that the tests of more than one module share. `test_support::video` holds
+  `FakeTerminal`, `FakeRunner` and the app builders of the mpv tests.
 - `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
   terminal and read `VIEWR_TEST_DIR`.
 
@@ -227,7 +231,7 @@ missing.
   quit (Cmd+Q) of a window mpv exits with 0, so a window slideshow continues.
 - **mpv steps:** each mpv start gets `--input-commands` with `keybind n "quit 10"` and
   `keybind N "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). `hand_off_videos` in
-  `video_handoff.rs` starts the next video at once, without a draw. `App::step_from_video` keeps
+  `video_handoff/mod.rs` starts the next video at once, without a draw. `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
   file that mpv played, not from the gallery cursor.
 - **Video player default:** `[video] player` defaults to `window` (`VideoPlayer::default`).
@@ -265,7 +269,10 @@ missing.
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
   and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
   (`MAX_PREFETCH_JOBS`) run at once. The other cells wait in a queue in grid order. A failed
-  thumbnail decode sends `None` and frees its slot.
+  thumbnail decode sends `None` and frees its slot. The thumbnail and preview queues are
+  `JobSlots` with an image index per job. A job whose index left the list starts nothing.
+  `decode::spawn_foreground` runs a foreground decode on the thread pool and returns its
+  receiver.
 - **Kitty temp file medium:** the temp file medium wins only when the probe answer is `OK` and
   the terminal deleted the probe file. A terminal with another `TMPDIR` reads the file but keeps
   it, and viewr would leave a 22 MB file per frame. The file name contains
