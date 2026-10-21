@@ -8,6 +8,10 @@
   - mpv in the terminal: the speed and the HDR colors of an iPhone HDR MOV, and `n` / `N` between videos and images.
   - mpv in a window (`[video] player = "window"`) with an HDR clip. The worker could not measure the window mode.
   - The yazi reveal: start viewr with `g v` in yazi, quit, and make sure that the yazi cursor is on the last file. Nobody has proven that `ya emit reveal` reaches a yazi that blocks on `shell --block`.
+- Terminal tests after batch 8 (maintainer), in Ghostty, Kitty and WezTerm:
+  - The grid: no empty lines between the thumbnails, the grid reaches the right and the bottom edge, the blue fill under the cursor and the yellow fill of marked images. The Kitty keys `X=` and `Y=` center each picture to the pixel. If a terminal ignores them, the pictures sit in the top left corner of their cells.
+  - A transparent PNG under the cursor: the blue fill shows through the transparent pixels. If that looks wrong, put each thumbnail on an opaque background, or fill only a frame around the picture.
+  - A portrait folder gets narrow cells and more columns, a landscape folder wide cells.
 
 ## Next
 
@@ -19,7 +23,6 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
   - Dropped: a JPEG preview from the EXIF thumbnail. iPhone JPEGs carry 160x120, which is too blurry for a grid cell.
   - Candidate: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size, so this is low priority.
   - The start status note with the transfer medium stays until the terminal tests are done (decided 2026-10-21). Then remove the three lines after `App::with_config` in `main`.
-  - Switch the resizes to Catmull-Rom (decided 2026-10-21): about 40 percent less resize time on a 24 MP frame, at most 39 of 3 million pixels differ by more than 2 percent from Lanczos3. `resize_options` in `src/app.rs` and the thumbnail cache key are the two places. `just bench` has the measurement.
 - mpv follow-ups after batch 7:
   - Candidate: `--vo-kitty-use-shm=yes` skips the base64 and the pty transfer. Kitty supports shared memory. Ghostty and WezTerm are unknown. A probe like `detect_transfer` can decide.
   - The PQ LUT has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
@@ -28,9 +31,6 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
   - Make sure that JPEG XL decodes correctly: sRGB, Display P3, PQ and an ICC profile (`VIEWR_TEST_JXL`).
   - Make sure that camera RAW decodes correctly, with a portrait photo (`VIEWR_TEST_RAW`).
   - Measure whether `sips -Z` on a RAW uses the embedded preview, and measure the `sips` times with a real RAW.
-- Grid fill (decided 2026-10-21: no justified rows, the grid stays x times y for predictable hjkl movement):
-  - Spread the leftover columns and rows of `update_grid` over the cells, so that the grid fills the screen to the edge.
-  - Pick the cell shape from the aspect ratios of the folder. Read the dimensions from the file header. Assume 3:2 until the header is read. Round to whole cells first.
 - First release: create the Codeberg repository `viewr`, then `just render` and `just release`. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 - Subfolders as entries in the grid (navigate without the picker)
 
@@ -53,6 +53,8 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
   - Add a config key to disable moving thumbnails.
 
 ## Done
+
+- Grid fill (batch 8): no border reserve, a 4 px padding with the Kitty keys `X=` / `Y=`, a background fill for the selected and the marked cells, the remainder columns and rows reach the edges, the cell shape from the median aspect of the first 64 file headers (7 buckets), Catmull-Rom for every resize (24 MP resize 54 ms to 36 ms), thumbnail cache key v5.
 
 - mpv round (batch 7): `--hwdec=auto-copy-safe` and a scale filter in the terminal (4K HDR clip 34 fps to 97 fps), a tone mapping LUT for HLG and PQ in the terminal (8.4 dB to 30.5 dB against the macOS SDR export), `n` / `N` step to the next and previous file from inside mpv, the mpv window shows its exit code, quiet FFmpeg log, the yazi reveal on quit.
 - Two-phase HEIC grid thumbnails (batch 7): the embedded thumbnail shows at once, the sharp decode replaces it. libheif reads through a buffered stream. Cold grid of 40 HEIC files: first image 250 ms to 13 ms, all 24 cells shown after 125 ms, all cells sharp 1882 ms to 1461 ms.
