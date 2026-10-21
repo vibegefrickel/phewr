@@ -92,7 +92,7 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `Ctrl-b` `Ctrl-f`, `PgUp` `PgDn` | Page up / down |
 | `Enter` | Open fullscreen |
 | `s` | Start a slideshow from the cursor |
-| `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows, `Enter` opens the larger view) |
+| `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows, remembered per folder, `Enter` opens the larger view) |
 | `n` | Show or hide filename labels |
 | `i` | Toggle the info panel |
 | `/` | Search. `Enter` applies, `Esc` clears, `Backspace` deletes |
@@ -168,7 +168,7 @@ player = "window"
 
 If mpv is not on PATH, viewr uses the built-in player and shows a note.
 
-When you zoom the grid with `+` / `-`, viewr writes the new size to `~/.local/state/viewr/state.toml`. On the next start, that size wins over `[gallery]`. `0` returns to the configured size and erases the remembered size.
+When you zoom the grid with `+` / `-`, viewr remembers the size for the current folder and as the last size in `~/.local/state/viewr/state.toml`. A folder opens with its own size. A folder without one opens with the last size, or with `[gallery] visible_rows`. `0` returns the current folder to the configured size and erases its entry. viewr keeps the sizes of the last 200 folders.
 
 viewr caches thumbnails in the OS cache directory: `~/Library/Caches/viewr` on macOS, `~/.cache/viewr` on Linux. The cache stays below 512 MB.
 

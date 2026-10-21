@@ -59,7 +59,7 @@ Files at run time:
 
 - Config: `~/.config/viewr/config.toml`, or `$XDG_CONFIG_HOME/viewr/config.toml`. The sections
   are `[gallery]`, `[slideshow]`, `[info]` and `[video]`.
-- State (the remembered thumbnail size): `~/.local/state/viewr/state.toml`.
+- State (the remembered zoom levels): `~/.local/state/viewr/state.toml`.
 - Thumbnail cache: `~/Library/Caches/viewr/`, pruned at 512 MB.
 
 ### Release (maintainer only)
@@ -316,6 +316,11 @@ missing.
   grid is the largest thumbnail size. The fullscreen view is the larger view. The config key
   and the state file clamp to that range on load. A terminal too small for 2 rows keeps the
   rows that fit.
+  The state file holds a global `visible_rows` fallback, a `zoom_counter` and a `[zoom]` table
+  keyed by the canonical folder path. Each `[zoom."/path"]` entry holds `rows` and `order`. The
+  plain form `"/path" = 3` also loads. `+` / `-` save the level for the folder and as the
+  global fallback. `0` resets the folder and removes its entry. The table keeps the 200 most
+  recent folders.
 - **Loading icon:** a grid cell without a thumbnail shows a dim `◌` (image) or `▶` (video) at its
   center (`draw_loading_icon` in `ui.rs`, `App::is_video_at`). The icon is text in the ratatui
   frame, so the thumbnail that Kitty draws above it covers it. It needs no redraw and has no
