@@ -2,22 +2,18 @@
 
 ## Now
 
-- Speed round (see below)
+- Terminal tests after batch 6 (maintainer): start viewr in Ghostty, Kitty and WezTerm. Read the first status note (`Kitty transfer: ...`). Step through HEIC files. Then make sure that `ls $TMPDIR/tty-graphics-protocol-viewr-*` lists nothing. `VIEWR_KITTY_TRANSFER=direct` is the escape hatch. Check the `DarkGray` borders and the dim text on cendre. If the dim text is too dark, change the `dim` role in `src/styles.rs` to ANSI `Gray`.
+- mpv round (see below)
 
 ## Next
 
 The main goal is perceived speed for JPEG, HEIC and PNG.
 
-- Speed round. Measure first on a real iPhone folder, then fix:
-  - Optimize for perceived speed. Keep decode and resize off the UI thread. Show the first thumbnail before the grid is full.
-  - the time to the first thumbnail and to a full grid
-  - the time to open an image in fullscreen
-  - the prefetch hits for the next and the previous image
-  - Give the gallery pre-decode a size hint (terminal size or the last fullscreen box). Today `take_resized` resizes a full-size pre-decode on the UI thread: 70 ms to 100 ms for a 24 MP HEIC.
-  - HEIC fullscreen decode: 260 ms to 285 ms. libheif `decode` takes 188 ms, the resize and the copy take the rest.
-- Kitty transfer: `src/encoder/kitty.rs` sends raw RGBA as base64 through the pty. A Retina fullscreen frame is about 32 MB of text.
-  - Use the transfer medium `t=t` (temp file) or `t=s` (shared memory).
-  - Make sure that Ghostty, Kitty, WezTerm and herdr panes support the medium. Keep the direct transfer as the fallback.
+- Speed round, open items after batch 6 (numbers from `just bench` on 40 HEIC, 24 MP, 10 cores):
+  - The cold HEIC grid is bound by the HEVC decode: about 100 ms per image with all cores, 1.9 s for 24 cells. Candidate: show the embedded 320x240 iPhone thumbnail at once as a preview, then replace it with the sharp decode (two-phase thumbnail job).
+  - Candidate: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size, so this is low priority.
+  - Decide on the start status note with the transfer medium. It helps the terminal tests. Removal: the three lines after `App::with_config` in `main`.
+  - Decide on Catmull-Rom for the resizes: about 40 percent less resize time on a 24 MP frame, no visible difference at Retina density. `resize_options` in `src/app.rs` and the thumbnail cache key are the two places. `just bench` has the measurement.
 - mpv round: the playback in mpv is not stable yet. Collect the problems first.
   - Make sure that the mpv hand-off works in Ghostty, Kitty and WezTerm. The worker tested it only in a herdr pane.
   - Next and previous video from inside mpv (for example mpv key bindings that run `quit <code>`).
@@ -48,7 +44,7 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
 - Chafa preview variant: a fast image and video preview mode that uses the chafa character-art backend instead of the Kitty graphics protocol
   - Goal: give a speed-optimized preview for large galleries and slow formats
   - Chafa output works in any true-color terminal. This is useful for preview on terminals that do not support the Kitty protocol.
-  - Measure the current Kitty decode and transfer times on a real folder first. Then write the chafa plan.
+  - The Kitty decode and transfer times are measured (`just bench`, speed round in Done). Write the chafa plan from these numbers.
   - Use chafa to convert each image and each video frame into terminal symbols and colors.
   - Start with still images. Add video frames after still images work.
   - Add a config key and a CLI flag to pick the backend. Make Kitty the default. Keep Kitty as the fallback.
@@ -73,6 +69,9 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
 
 ## Done
 
+- Speed round (batch 6): the run loop polls every 10 ms while a decode, a prefetch, a filter or the scan runs. The gallery pre-decode gets the fullscreen box as size hint (resize on the UI thread 52 ms to 72 ms, now 0 ms). libheif decodes share the cores, the fullscreen decode takes all of them. At most 4 thumbnail and 2 prefetch decodes run at once, the prefetch follows the step direction and keeps the shown image. On the test folder: HEIC open 525 ms to about 210 ms, cold grid first thumbnail 1013 ms to about 100 ms, warm grid 565 ms to 90 ms.
+- Kitty transfer medium: a temp file (`t=t`) when the terminal answers the probe with `OK` and deletes the probe file, PNG over SSH, direct otherwise. `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe. One fullscreen frame: 29 MB of text, now 199 bytes and a 21.7 MB file.
+- Benchmarks: `src/bench.rs` holds ignored benchmarks on `VIEWR_TEST_DIR`, `just bench [DIR]` runs them.
 - Theme system removed: `src/theme.rs`, the theme catalog, the `t` picker and the `-t` flag are gone. viewr uses the terminal default colors and the 16 ANSI colors (`src/styles.rs`). The config keys `theme` and `theme_catalog` have no effect, an old config still loads.
 - Grid look: a border only around the selected and the marked cells, no spacer line, centered thumbnails, filenames hidden by default (`n` toggles them)
 - Grid zoom: `+`/`-` change the visible rows (default 4), the columns follow the terminal width (minimum 2), the state file saves the zoom level as `[gallery] visible_rows`

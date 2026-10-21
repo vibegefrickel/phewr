@@ -29,6 +29,7 @@ just test [FILTER]   # cargo nextest (falls back to cargo test)
 just test-real [FILTER]  # also the ignored tests that decode real files (VIEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
+just bench [DIR]     # the speed measurements of src/bench.rs on VIEWR_TEST_DIR (default /tmp/viewr-bench)
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | audit | outdated   # the single steps
@@ -163,7 +164,11 @@ missing.
   thumbnails.
 - `mpv.rs` (feature `video`): video playback in mpv. The PATH lookup, the argument lists, the
   exit notes and the `Runner` trait for the process start.
-- `encoder/`: the Kitty graphics protocol (`KittyBackend`).
+- `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
+  PNG (SSH) or a temp file (`t=t`). `detect_transfer` probes the terminal at start with `a=q`.
+  `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe.
+- `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
+  terminal and read `VIEWR_TEST_DIR`.
 
 ## Gotchas
 
@@ -188,6 +193,18 @@ missing.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `main.rs`. `App` holds no
   status note. The next key press clears it.
 
+- **The run loop polls every 10 ms while a background job runs** (`App::has_pending_work`:
+  a decode, a prefetch, a thumbnail, a filter, the scan or thumbnails that wait for their emit),
+  because no event wakes it. Otherwise it waits 250 ms (`next_timeout` in `main.rs`).
+- **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
+  context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
+  and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
+  (`MAX_PREFETCH_JOBS`) run at once. The other cells wait in a queue in grid order.
+- **Kitty temp file medium:** the temp file medium wins only when the probe answer is `OK` and
+  the terminal deleted the probe file. A terminal with another `TMPDIR` reads the file but keeps
+  it, and viewr would leave a 22 MB file per frame. The file name contains
+  `tty-graphics-protocol`, as the protocol requires. A terminal that answers the probe later
+  than 300 ms sends the answer as key presses.
 - **Kitty images are not ratatui widgets.** ratatui draws the frame and the borders. viewr then
   writes the pictures with Kitty escape sequences at the cell positions of the last draw. A
   popup must delete the pictures first (`graphics_delete_all`), because Kitty draws them above

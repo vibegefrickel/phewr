@@ -162,6 +162,10 @@ viewr caches thumbnails in the OS cache directory: `~/Library/Caches/viewr` on m
 
 viewr uses the default foreground and background of the terminal and the 16 ANSI colors. The color scheme of the terminal sets the look of viewr. viewr has no color settings.
 
+### Kitty transfer
+
+At start, viewr asks the terminal whether it reads image data from a temp file. If the terminal answers yes, viewr writes each picture to a file in `$TMPDIR` and sends only the path. Otherwise the pixels go through the terminal as text. The first status note shows the result, for example `Kitty transfer: temp file (t=t)`. The environment variable `VIEWR_KITTY_TRANSFER=direct|png|file` skips the question and forces one medium. Over SSH, viewr sends PNG.
+
 ## Formats
 
 **Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, TGA.
@@ -187,6 +191,7 @@ just              # = just check: fmt --check, clippy -D warnings, nextest, rust
 just fix          # clippy --fix + cargo fmt
 just test         # cargo nextest (falls back to cargo test)
 just coverage     # line coverage summary (cargo-llvm-cov)
+just bench DIR    # speed measurements on a folder of your photos (ignored tests)
 just run          # release build, then the gallery
 just hooks        # install the pre-commit hook (fmt + clippy)
 
