@@ -43,14 +43,14 @@ fn millis(duration: Duration) -> String {
     format!("{:.0} ms", duration.as_secs_f64() * 1000.0)
 }
 
-/// The grid area of the gallery: below the search bar, inside the border.
+/// The grid area of the gallery: the whole terminal above the status row.
 fn grid_rect() -> Rect {
-    Rect::new(1, 4, COLS - 2, ROWS - 5)
+    Rect::new(0, 0, COLS, ROWS - 1)
 }
 
-/// The fullscreen box: the whole terminal inside the border.
+/// The fullscreen box: the whole terminal above the status row.
 fn fullscreen_rect() -> Rect {
-    Rect::new(1, 1, COLS - 2, ROWS - 2)
+    Rect::new(0, 0, COLS, ROWS - 1)
 }
 
 #[cfg(feature = "video")]

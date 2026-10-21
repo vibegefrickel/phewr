@@ -5,6 +5,9 @@ use ratatui::layout::Rect;
 use std::num::NonZeroUsize;
 
 pub(crate) const LABEL_ROWS: u16 = 1;
+/// The gap in terminal cells between two cells and at the edges of the grid. The border of the
+/// selected and the marked cells sits in it.
+pub(crate) const GAP: u16 = 1;
 
 /// Provisional cell size before the first `update_grid` computes the real one.
 const DEFAULT_THUMB_COLS: u16 = 20;
@@ -40,7 +43,7 @@ pub(crate) struct GalleryState {
     pub thumb_cols: u16,
     pub thumb_rows: u16,
     /// The first `extra_cols` columns are one cell wider, and the first `extra_rows` rows one
-    /// cell taller, so that the grid reaches the right and the bottom edge.
+    /// cell taller, so that the grid reaches the right and the bottom edge, minus the edge gap.
     pub extra_cols: u16,
     pub extra_rows: u16,
     /// The width of a cell over its height, in terminal cells, for the column count. It comes
@@ -103,7 +106,7 @@ impl GalleryState {
         Rect::new(0, 0, self.thumb_cols, self.thumb_rows)
     }
 
-    /// Height of one grid row: the thumbnail and the optional label, no spacer.
+    /// Height of one grid row: the thumbnail and the optional label, without the gap.
     pub(crate) fn cell_height_total(&self) -> u16 {
         self.thumb_rows + self.label_rows()
     }
@@ -148,8 +151,8 @@ impl GalleryState {
         if self.grid_rect.is_empty() {
             return usize::from(MAX_VISIBLE_ROWS);
         }
-        let min_cell = usize::from(MIN_THUMB_ROWS + self.label_rows());
-        (self.grid_rect.height as usize / min_cell).max(1)
+        let min_cell = usize::from(MIN_THUMB_ROWS + self.label_rows() + GAP);
+        (usize::from(self.grid_rect.height.saturating_sub(GAP)) / min_cell).max(1)
     }
 
     pub(crate) fn reset_cursor(&mut self) {
@@ -158,34 +161,39 @@ impl GalleryState {
     }
 
     /// Fit `zoom_rows` rows into the terminal: the rows share the height, and the columns
-    /// share the width. The cell shape only picks the column count, then the width fills. The
-    /// remainders of the division go to the first columns and the first rows, one cell each.
+    /// share the width. `n` cells take `n + 1` gaps, one between two cells and one at each
+    /// edge. The cell shape only picks the column count, then the width fills. The remainders
+    /// of the division go to the first columns and the first rows, one cell each.
     pub(crate) fn update_grid(&mut self, grid_rect: Rect) {
         self.grid_rect = grid_rect;
         self.visible_rows = self.zoom_rows.clamp(1, self.max_visible_rows());
         let rows = self.visible_rows as u16;
-        let cell_height = (grid_rect.height / rows).max(MIN_THUMB_ROWS + self.label_rows());
+        let cell_area_height = grid_rect.height.saturating_sub(gaps(rows));
+        let cell_height = (cell_area_height / rows).max(MIN_THUMB_ROWS + self.label_rows());
         self.thumb_rows = cell_height
             .saturating_sub(self.label_rows())
             .clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
-        self.extra_rows = spread(grid_rect.height, self.cell_height_total(), rows);
+        self.extra_rows = spread(cell_area_height, self.cell_height_total(), rows);
         let candidate_cols = (f64::from(self.thumb_rows) * self.cols_per_row).round() as u16;
-        self.grid_cols =
-            (grid_rect.width as usize / usize::from(candidate_cols.max(1))).max(MIN_GRID_COLS);
+        self.grid_cols = (usize::from(grid_rect.width.saturating_sub(GAP))
+            / usize::from(candidate_cols.max(1) + GAP))
+        .max(MIN_GRID_COLS);
         let cols = self.grid_cols as u16;
-        self.thumb_cols = (grid_rect.width / cols).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
-        self.extra_cols = spread(grid_rect.width, self.thumb_cols, cols);
+        let cell_area_width = grid_rect.width.saturating_sub(gaps(cols));
+        self.thumb_cols = (cell_area_width / cols).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
+        self.extra_cols = spread(cell_area_width, self.thumb_cols, cols);
         self.ensure_cursor_visible();
     }
 
-    /// The left edge of the column `col`: the columns before it, plus one cell for each wide one.
+    /// The left edge of the column `col`: the gaps and the columns before it, plus one cell for
+    /// each wide one.
     fn col_x(&self, col: u16) -> u16 {
-        self.grid_rect.x + col * self.thumb_cols + col.min(self.extra_cols)
+        self.grid_rect.x + GAP + col * (self.thumb_cols + GAP) + col.min(self.extra_cols)
     }
 
     /// The top edge of the row `row`, with one cell for each tall row before it.
     fn row_y(&self, row: u16) -> u16 {
-        self.grid_rect.y + row * self.cell_height_total() + row.min(self.extra_rows)
+        self.grid_rect.y + GAP + row * (self.cell_height_total() + GAP) + row.min(self.extra_rows)
     }
 
     pub(crate) fn selected_index(&self) -> Option<usize> {
@@ -274,6 +282,23 @@ impl GalleryState {
             height: self.thumb_rows + u16::from(row < self.extra_rows),
         }
     }
+
+    /// The border of the visible cell `vis_index`: the thumbnail and the label, plus the gap on
+    /// each side. Two neighbor cells share the gap between them.
+    pub(crate) fn border_rect(&self, vis_index: usize) -> Rect {
+        let cell = self.cell_rect(vis_index);
+        Rect {
+            x: cell.x - GAP,
+            y: cell.y - GAP,
+            width: cell.width + 2 * GAP,
+            height: cell.height + self.label_rows() + 2 * GAP,
+        }
+    }
+}
+
+/// The gap cells that `count` cells in a line take: one between two cells and one at each edge.
+fn gaps(count: u16) -> u16 {
+    (count + 1) * GAP
 }
 
 /// How many of the `count` cells get one cell more, so that `count` cells of `base` fill
@@ -352,7 +377,7 @@ impl ThumbnailCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{GalleryState, ThumbnailCache};
+    use super::{GAP, GalleryState, LABEL_ROWS, ThumbnailCache};
     use ratatui::layout::Rect;
 
     #[test]
@@ -382,7 +407,8 @@ mod tests {
     #[test]
     fn filename_toggle_moves_a_row_from_the_thumbnails_to_the_labels() {
         let mut gallery = GalleryState::with_zoom_rows(12, 4);
-        gallery.update_grid(Rect::new(0, 0, 75, 20));
+        // 20 rows for the cells, after the 5 gap rows of 4 rows.
+        gallery.update_grid(Rect::new(0, 0, 75, 25));
         assert!(!gallery.show_filenames);
         assert_eq!(gallery.cell_height_total(), 5);
         assert_eq!(gallery.thumb_rows, 5);
@@ -399,14 +425,14 @@ mod tests {
         let mut gallery = GalleryState::with_zoom_rows(50, 4);
         gallery.update_grid(Rect::new(0, 0, 100, 40));
         assert_eq!(gallery.grid_cols, 3);
-        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (33, 10));
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (32, 8));
 
         assert!(gallery.thumb_zoom_in());
         assert_eq!(gallery.zoom_rows, 3);
-        assert!(gallery.thumb_rows > 10);
+        assert!(gallery.thumb_rows > 8);
 
         assert!(gallery.thumb_zoom_out());
-        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (33, 10));
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (32, 8));
 
         for _ in 0..40 {
             gallery.thumb_zoom_in();
@@ -417,7 +443,10 @@ mod tests {
         for _ in 0..40 {
             gallery.thumb_zoom_out();
         }
-        assert_eq!(gallery.zoom_rows, 13, "40 rows at 3 rows minimum each");
+        assert_eq!(
+            gallery.zoom_rows, 9,
+            "40 rows: 1 edge gap, then 3 rows and 1 gap each"
+        );
         assert!(!gallery.thumb_zoom_out());
 
         assert!(gallery.reset_zoom());
@@ -497,47 +526,116 @@ mod tests {
     #[test]
     fn visible_items_and_cell_rect_match_geometry() {
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
-        gallery.update_grid(Rect::new(0, 0, 100, 20));
+        gallery.update_grid(Rect::new(0, 0, 101, 22));
         gallery.scroll_offset = 1;
 
         let items: Vec<_> = gallery.visible_items().collect();
         assert_eq!(items.len(), gallery.visible_rows * gallery.grid_cols);
 
         let first = gallery.cell_rect(0);
-        assert_eq!(first.x, gallery.grid_rect.x);
-        assert_eq!(first.y, gallery.grid_rect.y);
+        assert_eq!(first.x, gallery.grid_rect.x + GAP);
+        assert_eq!(first.y, gallery.grid_rect.y + GAP);
         assert_eq!(
             first.width,
             gallery.thumb_cols + 1,
             "the first column is wide"
         );
-        assert_eq!(first.height, gallery.thumb_rows);
+        assert_eq!(
+            first.height,
+            gallery.thumb_rows + 1,
+            "the first row is tall"
+        );
 
         let last_col = gallery.grid_cols - 1;
         let last = gallery.cell_rect(last_col);
         assert_eq!(last.width, gallery.thumb_cols);
-        assert_eq!(last.right(), gallery.grid_rect.right());
+        assert_eq!(last.right() + GAP, gallery.grid_rect.right());
+    }
+
+    #[test]
+    fn the_gaps_sit_between_the_cells_and_at_the_edges() {
+        for (width, height, labels) in [(101, 22, false), (157, 41, true), (80, 30, false)] {
+            let mut gallery = GalleryState::with_zoom_rows(100, 3);
+            gallery.show_filenames = labels;
+            let grid = Rect::new(2, 3, width, height);
+            gallery.update_grid(grid);
+            let cols = gallery.grid_cols;
+            let rows = gallery.visible_rows;
+
+            let row: Vec<Rect> = (0..cols).map(|col| gallery.cell_rect(col)).collect();
+            assert_eq!(row[0].x, grid.x + 1, "the left edge gap");
+            for pair in row.windows(2) {
+                assert_eq!(pair[1].x, pair[0].right() + 1, "1 gap column between cells");
+            }
+            assert_eq!(
+                row[cols - 1].right() + 1,
+                grid.right(),
+                "the right edge gap"
+            );
+            let cell_columns: u16 = row.iter().map(|cell| cell.width).sum();
+            assert_eq!(
+                usize::from(width - cell_columns),
+                cols + 1,
+                "n + 1 gap columns"
+            );
+
+            let column: Vec<Rect> = (0..rows).map(|r| gallery.border_rect(r * cols)).collect();
+            assert_eq!(column[0].y, grid.y, "the top edge gap holds the border");
+            for pair in column.windows(2) {
+                assert_eq!(pair[1].y + 1, pair[0].bottom(), "two rows share 1 gap row");
+            }
+            assert_eq!(
+                column[rows - 1].bottom(),
+                grid.bottom(),
+                "the bottom edge gap"
+            );
+            let cell_rows: u16 = column.iter().map(|border| border.height - 2).sum();
+            assert_eq!(usize::from(height - cell_rows), rows + 1, "n + 1 gap rows");
+        }
+    }
+
+    #[test]
+    fn the_border_takes_the_gaps_around_the_cell_and_the_label() {
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.update_grid(Rect::new(0, 0, 101, 22));
+        assert_eq!(gallery.cell_rect(0), Rect::new(1, 1, 33, 10));
+        assert_eq!(gallery.border_rect(0), Rect::new(0, 0, 35, 12));
+        assert_eq!(
+            gallery.border_rect(1).x,
+            gallery.border_rect(0).right() - 1,
+            "two neighbors share the gap column"
+        );
+
+        gallery.show_filenames = true;
+        gallery.update_grid(Rect::new(0, 0, 101, 22));
+        let cell = gallery.cell_rect(0);
+        let border = gallery.border_rect(0);
+        assert_eq!(
+            border.bottom(),
+            cell.bottom() + LABEL_ROWS + 1,
+            "the label is inside"
+        );
     }
 
     #[test]
     fn the_remainders_go_to_the_first_columns_and_rows() {
-        // 3 columns of 33 cells leave 1 cell; 2 rows of 10 rows leave 1 row.
+        // 97 cell columns: 3 columns of 32 leave 1. 19 cell rows: 2 rows of 9 leave 1.
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
-        gallery.update_grid(Rect::new(5, 7, 100, 21));
-        assert_eq!((gallery.grid_cols, gallery.thumb_cols), (3, 33));
+        gallery.update_grid(Rect::new(5, 7, 101, 22));
+        assert_eq!((gallery.grid_cols, gallery.thumb_cols), (3, 32));
         assert_eq!((gallery.extra_cols, gallery.extra_rows), (1, 1));
 
         let cells: Vec<Rect> = (0..6).map(|index| gallery.cell_rect(index)).collect();
-        assert_eq!(cells[0], Rect::new(5, 7, 34, 11));
-        assert_eq!(cells[1], Rect::new(39, 7, 33, 11));
-        assert_eq!(cells[2], Rect::new(72, 7, 33, 11));
-        assert_eq!(cells[3], Rect::new(5, 18, 34, 10));
-        assert_eq!(cells[5], Rect::new(72, 18, 33, 10));
-        assert_eq!(cells[2].right(), gallery.grid_rect.right());
-        assert_eq!(cells[5].bottom(), gallery.grid_rect.bottom());
+        assert_eq!(cells[0], Rect::new(6, 8, 33, 10));
+        assert_eq!(cells[1], Rect::new(40, 8, 32, 10));
+        assert_eq!(cells[2], Rect::new(73, 8, 32, 10));
+        assert_eq!(cells[3], Rect::new(6, 19, 33, 9));
+        assert_eq!(cells[5], Rect::new(73, 19, 32, 9));
+        assert_eq!(cells[2].right() + 1, gallery.grid_rect.right());
+        assert_eq!(cells[5].bottom() + 1, gallery.grid_rect.bottom());
 
         // The thumbnails of a wide column are decoded for the base size.
-        assert_eq!(gallery.thumb_box(), Rect::new(0, 0, 33, 10));
+        assert_eq!(gallery.thumb_box(), Rect::new(0, 0, 32, 9));
 
         // A clamped cell size cannot fill the width, so nothing spreads.
         gallery.update_grid(Rect::new(0, 0, 12, 21));
@@ -549,41 +647,48 @@ mod tests {
     fn the_labels_sit_below_the_tall_rows() {
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
         gallery.show_filenames = true;
-        gallery.update_grid(Rect::new(0, 0, 100, 23));
+        gallery.update_grid(Rect::new(0, 0, 100, 26));
         assert_eq!((gallery.thumb_rows, gallery.cell_height_total()), (10, 11));
         assert_eq!(gallery.extra_rows, 1);
 
         let first = gallery.cell_rect(0);
         let second_row = gallery.cell_rect(3);
         assert_eq!(first.height, 11);
-        assert_eq!(second_row.y, 12, "11 rows of thumbnail and 1 row of label");
+        assert_eq!(
+            second_row.y, 14,
+            "1 gap, 11 rows of thumbnail, 1 row of label and 1 gap"
+        );
         assert_eq!(second_row.height, 10);
-        assert_eq!(second_row.bottom() + 1, gallery.grid_rect.bottom());
+        assert_eq!(
+            second_row.bottom() + LABEL_ROWS + 1,
+            gallery.grid_rect.bottom()
+        );
     }
 
     #[test]
     fn the_cursor_moves_over_cells_of_different_widths() {
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
-        gallery.update_grid(Rect::new(0, 0, 100, 21));
+        gallery.update_grid(Rect::new(0, 0, 101, 22));
         assert_eq!(gallery.extra_cols, 1);
 
         let widths: Vec<u16> = (0..3).map(|col| gallery.cell_rect(col).width).collect();
-        assert_eq!(widths, [34, 33, 33]);
+        assert_eq!(widths, [33, 32, 32]);
         gallery.move_right();
         gallery.move_right();
         gallery.move_down();
         assert_eq!(gallery.selected_index(), Some(5));
-        assert_eq!(gallery.cell_rect(5), Rect::new(67, 11, 33, 10));
+        assert_eq!(gallery.cell_rect(5), Rect::new(68, 12, 32, 9));
         gallery.move_left();
         gallery.move_left();
         assert_eq!(gallery.selected_index(), Some(3));
-        assert_eq!(gallery.cell_rect(3).width, 34);
+        assert_eq!(gallery.cell_rect(3).width, 33);
     }
 
     #[test]
     fn the_cell_shape_follows_the_photos_and_the_cell_pixels() {
         let mut gallery = GalleryState::with_zoom_rows(50, 2);
-        let rect = Rect::new(0, 0, 120, 20);
+        // 124 columns after the left edge gap; each column takes its width plus 1 gap.
+        let rect = Rect::new(0, 0, 125, 23);
         gallery.update_grid(rect);
         assert_eq!(
             gallery.grid_cols, 4,
@@ -592,7 +697,7 @@ mod tests {
 
         // A portrait folder on 8x16 px cells: 3:4 photos are 15 columns wide.
         assert!(gallery.set_cell_shape(0.75, (8, 16)));
-        assert_eq!(gallery.grid_cols, 8);
+        assert_eq!(gallery.grid_cols, 7);
         assert!(
             !gallery.set_cell_shape(0.75, (8, 16)),
             "the same shape changes nothing"

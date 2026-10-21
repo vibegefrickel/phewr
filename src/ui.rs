@@ -3,11 +3,17 @@ use crate::gallery::LABEL_ROWS;
 use crate::styles::STYLES;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 
 /// Preferred width of the info panel, including its border.
 const INFO_PANEL_WIDTH: u16 = 42;
+/// The status row at the bottom of the gallery, the fullscreen view and the video view.
+const STATUS_ROWS: u16 = 1;
+/// The icon of a grid cell whose image thumbnail is not decoded yet.
+const IMAGE_LOADING_ICON: &str = "\u{25cc}";
+/// The icon of a grid cell whose video thumbnail is not decoded yet.
+const VIDEO_LOADING_ICON: &str = "\u{25b6}";
 
 /// Draw the whole frame. `status` is a one-line note of the run loop, in place of the key hints.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
@@ -268,17 +274,8 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
         ])
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(STYLES.border)
-        .title(Line::from(Span::styled(
-            format!(" {filename} "),
-            STYLES.title,
-        )))
-        .title_bottom(bottom_line);
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = content_area(area);
+    frame.render_widget(Paragraph::new(bottom_line), status_area(area));
     if placeholder {
         let middle = Rect {
             y: inner.y + inner.height / 2,
@@ -345,103 +342,24 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Opt
         ])
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(STYLES.border)
-        .title(Line::from(Span::styled(
-            format!(" {filename} "),
-            STYLES.title,
-        )))
-        .title_bottom(bottom_line);
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    app.image_rect = inner;
+    frame.render_widget(Paragraph::new(bottom_line), status_area(area));
+    app.image_rect = content_area(area);
 }
 
 fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
-    let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
-    let search_rect = chunks[0];
-    let gallery_area = chunks[1];
-    draw_search_bar(frame, app, search_rect);
-
-    // The title shows the fitted cell size, so the grid layout runs first.
-    let gallery_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(STYLES.border);
-    let grid_rect = gallery_block.inner(gallery_area);
+    let grid_rect = content_area(area);
     app.gallery.update_grid(grid_rect);
-
     let filtered_count = app.gallery.filtered_indices.len();
-    let total = app.images.len();
-    let scanning = if app.is_scanning() {
-        ", scanning\u{2026}"
-    } else {
-        ""
-    };
-    let thumb_size = format!("{}x{}", app.gallery.thumb_cols, app.gallery.thumb_rows);
-    let gallery_title = if app.gallery.search_query.is_empty() {
-        format!(" Gallery [{total} images{scanning}] [{thumb_size}] ")
-    } else {
-        format!(" Gallery [{filtered_count}/{total} matches{scanning}] [{thumb_size}] ")
-    };
-
-    let bottom_line = gallery_bottom_line(app, filtered_count, status);
-
-    let gallery_block = gallery_block
-        .title(Line::from(Span::styled(gallery_title, STYLES.title)))
-        .title_bottom(bottom_line);
-    frame.render_widget(gallery_block, gallery_area);
-
+    frame.render_widget(
+        Paragraph::new(gallery_status_line(app, filtered_count, status)),
+        status_area(area),
+    );
     draw_thumbnail_cells(frame, app, grid_rect);
 }
 
-/// The search line above the grid: the query while typing, else the selection count.
-fn draw_search_bar(frame: &mut Frame<'_>, app: &App, search_rect: Rect) {
-    let search_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(STYLES.border)
-        .title(Line::from(Span::styled(" Search ", STYLES.title)));
-
-    let search_inner = search_block.inner(search_rect);
-    frame.render_widget(search_block, search_rect);
-
-    if app.gallery.search_active {
-        let match_count = app.gallery.filtered_indices.len();
-        let total = app.images.len();
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("/{}\u{2588}", app.gallery.search_query),
-                    STYLES.text,
-                ),
-                Span::styled(format!("  {match_count}/{total} matches"), STYLES.dim),
-            ])),
-            search_inner,
-        );
-    } else if !app.selection.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(" {} selected", app.selection.len()),
-                STYLES.dim,
-            ))),
-            search_inner,
-        );
-    } else {
-        frame.render_widget(Paragraph::new(""), search_inner);
-    }
-}
-
-/// The bottom border of the grid: a delete question, an error, or name, position and hints.
-fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -> Line<'static> {
-    let selected_name = app
-        .gallery
-        .selected_index()
-        .and_then(|i| app.images[i].file_name())
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
+/// The status row of the gallery: a delete question, an error, the search query while typing,
+/// or name, position, selection count, scan note and hints.
+fn gallery_status_line(app: &App, filtered_count: usize, status: Option<&str>) -> Line<'static> {
     if let Some(pending) = &app.pending_delete {
         let action = if pending.permanent {
             "Permanently delete"
@@ -457,109 +375,107 @@ fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -
         } else {
             format!(" {action} {} files? ", pending.paths.len())
         };
-        Line::from(vec![
+        return Line::from(vec![
             Span::styled(prompt, STYLES.error),
             Span::styled(" y: confirm  n/Esc: cancel ", STYLES.key),
-        ])
-    } else if let Some(err) = &app.delete_error {
-        Line::from(Span::styled(format!(" Delete error: {err} "), STYLES.error))
-    } else if let Some(err) = &app.error {
-        Line::from(Span::styled(format!(" Error: {err} "), STYLES.error))
-    } else {
-        let hint = if app.gallery.search_active {
-            Span::styled(" Esc: cancel  Enter: confirm ", STYLES.key)
-        } else if let Some(status) = status {
-            Span::styled(format!(" {status} "), STYLES.text)
-        } else {
+        ]);
+    }
+    if let Some(err) = &app.delete_error {
+        return Line::from(Span::styled(format!(" Delete error: {err} "), STYLES.error));
+    }
+    if let Some(err) = &app.error {
+        return Line::from(Span::styled(format!(" Error: {err} "), STYLES.error));
+    }
+
+    let mut spans = if app.gallery.search_active {
+        vec![
             Span::styled(
-                " Enter: open  +/-: zoom  n: names  i: info  /: search  ?: help  q: quit ",
-                STYLES.key,
-            )
-        };
-        if filtered_count == 0 {
-            Line::from(hint)
-        } else {
-            Line::from(vec![
-                Span::styled(
-                    format!(
-                        " {} [{}/{}] ",
-                        selected_name,
-                        app.gallery.cursor + 1,
-                        filtered_count,
-                    ),
-                    STYLES.text,
-                ),
-                hint,
-            ])
-        }
+                format!(" /{}\u{2588}", app.gallery.search_query),
+                STYLES.text,
+            ),
+            Span::styled(
+                format!("  {filtered_count}/{} matches ", app.images.len()),
+                STYLES.dim,
+            ),
+        ]
+    } else {
+        selected_position(app, filtered_count)
+    };
+    if !app.selection.is_empty() {
+        spans.push(Span::styled(
+            format!(" {} selected ", app.selection.len()),
+            STYLES.marked,
+        ));
+    }
+    if app.is_scanning() {
+        spans.push(Span::styled(" scanning\u{2026} ", STYLES.dim));
+    }
+    spans.push(if app.gallery.search_active {
+        Span::styled(" Esc: cancel  Enter: confirm ", STYLES.key)
+    } else if let Some(status) = status {
+        Span::styled(format!(" {status} "), STYLES.text)
+    } else {
+        Span::styled(
+            " Enter: open  +/-: zoom  n: names  i: info  /: search  ?: help  q: quit ",
+            STYLES.key,
+        )
+    });
+    Line::from(spans)
+}
+
+/// The name and the position of the selected image. Empty when the filter matches nothing.
+fn selected_position(app: &App, filtered_count: usize) -> Vec<Span<'static>> {
+    let Some(index) = app.gallery.selected_index() else {
+        return Vec::new();
+    };
+    let name = app.images[index]
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    vec![Span::styled(
+        format!(" {name} [{}/{filtered_count}] ", app.gallery.cursor + 1),
+        STYLES.text,
+    )]
+}
+
+/// The rows above the status row. The grid and the image use all of them, without a frame.
+pub(crate) fn content_area(area: Rect) -> Rect {
+    Rect {
+        height: area.height.saturating_sub(STATUS_ROWS),
+        ..area
     }
 }
 
-/// One cell per visible thumbnail, with an optional filename label; Kitty draws the pictures.
-/// The selected cell and the marked cells get a background color, which shows in the gap
-/// around the picture. The selected style wins.
+/// The status row at the bottom of `area`.
+fn status_area(area: Rect) -> Rect {
+    Rect {
+        y: area.y + content_area(area).height,
+        height: area.height.min(STATUS_ROWS),
+        ..area
+    }
+}
+
+/// One cell per visible thumbnail, with an optional filename label. Kitty draws the pictures.
+/// The marked cells get a plain border and the selected cell a thick border, in the gaps around
+/// the cell. The selected border comes last, so it wins on a gap that two cells share.
 fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     app.gallery.update_grid(grid_rect);
+    let first_visible = app.gallery.scroll_offset * app.gallery.grid_cols;
+    let mut selected_border = None;
 
     for (vis_idx, img_idx) in app.gallery.visible_items().collect::<Vec<_>>() {
-        let cell = app.gallery.cell_rect(vis_idx).intersection(grid_rect);
-        let (cell_x, cell_y) = (cell.x, cell.y);
-        let thumb_cols = cell.width;
-        let thumb_rows = cell.height;
-
-        let is_selected =
-            vis_idx + app.gallery.scroll_offset * app.gallery.grid_cols == app.gallery.cursor;
+        let is_selected = vis_idx + first_visible == app.gallery.cursor;
         let is_marked = app.is_marked(img_idx);
-
-        let fill_style = if is_selected {
-            Some(STYLES.cursor_cell)
+        let border = app.gallery.border_rect(vis_idx);
+        if is_selected {
+            selected_border = Some(border);
         } else if is_marked {
-            Some(STYLES.marked)
-        } else {
-            None
-        };
-        if let Some(fill_style) = fill_style {
-            let fill_rect = Rect {
-                height: cell.height + LABEL_ROWS * u16::from(app.gallery.show_filenames),
-                ..cell
-            }
-            .intersection(grid_rect);
-            frame.buffer_mut().set_style(fill_rect, fill_style);
+            draw_cell_border(frame, BorderType::Plain, STYLES.marked, border, grid_rect);
         }
-
-        if !app.gallery.show_filenames {
-            continue;
+        if !app.thumb_cache.contains(img_idx) {
+            draw_loading_icon(frame, app, vis_idx, img_idx, grid_rect);
         }
-
-        let raw_filename = app.images[img_idx]
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let prefix_len = if is_marked { 2 } else { 0 };
-        let max_label = (thumb_cols as usize).saturating_sub(2 + prefix_len);
-        let trimmed = if raw_filename.chars().count() > max_label {
-            let head: String = raw_filename
-                .chars()
-                .take(max_label.saturating_sub(1))
-                .collect();
-            format!("{head}\u{2026}")
-        } else {
-            raw_filename
-        };
-        let filename = if is_marked {
-            format!("\u{25cf} {trimmed}")
-        } else {
-            trimmed
-        };
-
-        let label_y = cell_y + thumb_rows;
-        if label_y < grid_rect.bottom() {
-            let label_rect = Rect {
-                x: cell_x,
-                y: label_y,
-                width: thumb_cols.min(grid_rect.right().saturating_sub(cell_x)),
-                height: LABEL_ROWS,
-            };
+        if app.gallery.show_filenames {
             let label_style = if is_selected {
                 STYLES.cursor_cell
             } else if is_marked {
@@ -567,14 +483,123 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
             } else {
                 STYLES.text
             };
-            frame.render_widget(
-                Paragraph::new(filename)
-                    .style(label_style)
-                    .alignment(Alignment::Center),
-                label_rect,
-            );
+            draw_label(frame, app, vis_idx, img_idx, label_style, grid_rect);
         }
     }
+
+    if let Some(border) = selected_border {
+        draw_cell_border(
+            frame,
+            BorderType::Thick,
+            STYLES.cursor_cell,
+            border,
+            grid_rect,
+        );
+    }
+}
+
+/// A dim icon in the center of a cell without a thumbnail. Kitty draws the thumbnail above the
+/// text, so the icon needs no redraw when the thumbnail arrives.
+fn draw_loading_icon(
+    frame: &mut Frame<'_>,
+    app: &App,
+    vis_idx: usize,
+    img_idx: usize,
+    grid_rect: Rect,
+) {
+    let cell = app.gallery.cell_rect(vis_idx);
+    let center = Position::new(cell.x + cell.width / 2, cell.y + cell.height / 2);
+    if !grid_rect.contains(center) {
+        return;
+    }
+    let icon = if app.is_video_at(img_idx) {
+        VIDEO_LOADING_ICON
+    } else {
+        IMAGE_LOADING_ICON
+    };
+    frame
+        .buffer_mut()
+        .set_string(center.x, center.y, icon, STYLES.dim);
+}
+
+/// A line border without a fill, so the label and the cells inside keep their own styles. A
+/// side outside `grid_rect` is left out, so a cut cell does not look closed at the clip edge.
+fn draw_cell_border(
+    frame: &mut Frame<'_>,
+    border_type: BorderType,
+    style: Style,
+    border: Rect,
+    grid_rect: Rect,
+) {
+    let visible = border.intersection(grid_rect);
+    let mut sides = Borders::ALL;
+    if visible.x > border.x {
+        sides.remove(Borders::LEFT);
+    }
+    if visible.y > border.y {
+        sides.remove(Borders::TOP);
+    }
+    if visible.right() < border.right() {
+        sides.remove(Borders::RIGHT);
+    }
+    if visible.bottom() < border.bottom() {
+        sides.remove(Borders::BOTTOM);
+    }
+    frame.render_widget(
+        Block::default()
+            .borders(sides)
+            .border_type(border_type)
+            .border_style(style),
+        visible,
+    );
+}
+
+/// The filename below the thumbnail of the visible cell `vis_idx`, cut to the cell width.
+fn draw_label(
+    frame: &mut Frame<'_>,
+    app: &App,
+    vis_idx: usize,
+    img_idx: usize,
+    style: Style,
+    grid_rect: Rect,
+) {
+    let cell = app.gallery.cell_rect(vis_idx).intersection(grid_rect);
+    let label_y = cell.y + cell.height;
+    if label_y >= grid_rect.bottom() {
+        return;
+    }
+    let is_marked = app.is_marked(img_idx);
+    let raw_filename = app.images[img_idx]
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let prefix_len = if is_marked { 2 } else { 0 };
+    let max_label = usize::from(cell.width).saturating_sub(2 + prefix_len);
+    let trimmed = if raw_filename.chars().count() > max_label {
+        let head: String = raw_filename
+            .chars()
+            .take(max_label.saturating_sub(1))
+            .collect();
+        format!("{head}\u{2026}")
+    } else {
+        raw_filename
+    };
+    let filename = if is_marked {
+        format!("\u{25cf} {trimmed}")
+    } else {
+        trimmed
+    };
+    let label_rect = Rect {
+        y: label_y,
+        height: LABEL_ROWS,
+        ..cell
+    };
+    frame.render_widget(
+        Paragraph::new(filename)
+            .style(style)
+            .alignment(Alignment::Center),
+        label_rect,
+    );
 }
 
 fn draw_help_popup(frame: &mut Frame<'_>) {
@@ -767,19 +792,72 @@ mod tests {
     }
 
     /// Fail when a cell sets a background, so the terminal background shows everywhere.
-    /// Fail when a cell sets a background color. Inside `grid`, the fill of the selected and
-    /// the marked cells (blue and yellow) is allowed.
-    fn assert_terminal_background(buffer: &Buffer, grid: Option<Rect>) {
+    fn assert_terminal_background(buffer: &Buffer) {
         let area = buffer.area;
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
                 let bg = buffer[(x, y)].bg;
-                let in_grid = grid.is_some_and(|grid| grid.contains((x, y).into()));
-                let allowed =
-                    bg == Color::Reset || (in_grid && matches!(bg, Color::Blue | Color::Yellow));
-                assert!(allowed, "cell ({x}, {y}) sets the background {bg:?}");
+                assert_eq!(bg, Color::Reset, "cell ({x}, {y}) sets the background");
             }
         }
+    }
+
+    /// Fail when the cell at `(x, y)` does not show `symbol` in the ANSI color `fg` with
+    /// `modifier`.
+    fn assert_symbol(
+        buffer: &Buffer,
+        (x, y): (u16, u16),
+        symbol: &str,
+        fg: Color,
+        modifier: Modifier,
+    ) {
+        let cell = &buffer[(x, y)];
+        assert_eq!(
+            (cell.symbol(), cell.fg, cell.modifier),
+            (symbol, fg, modifier),
+            "cell ({x}, {y})"
+        );
+    }
+
+    /// Fail when `border` is not a line border of `symbols` (top left, top right, bottom left,
+    /// bottom right, horizontal, vertical) in `fg` with `modifier`.
+    fn assert_border(
+        buffer: &Buffer,
+        border: Rect,
+        symbols: [&str; 6],
+        fg: Color,
+        modifier: Modifier,
+    ) {
+        let [
+            top_left,
+            top_right,
+            bottom_left,
+            bottom_right,
+            horizontal,
+            vertical,
+        ] = symbols;
+        let (left, top) = (border.x, border.y);
+        let (right, bottom) = (border.right() - 1, border.bottom() - 1);
+        assert_symbol(buffer, (left, top), top_left, fg, modifier);
+        assert_symbol(buffer, (right, top), top_right, fg, modifier);
+        assert_symbol(buffer, (left, bottom), bottom_left, fg, modifier);
+        assert_symbol(buffer, (right, bottom), bottom_right, fg, modifier);
+        assert_symbol(buffer, (left + 1, top), horizontal, fg, modifier);
+        assert_symbol(buffer, (left + 1, bottom), horizontal, fg, modifier);
+        assert_symbol(buffer, (left, top + 1), vertical, fg, modifier);
+        assert_symbol(buffer, (right, top + 1), vertical, fg, modifier);
+    }
+
+    const THICK: [&str; 6] = [
+        "\u{250f}", "\u{2513}", "\u{2517}", "\u{251b}", "\u{2501}", "\u{2503}",
+    ];
+    const PLAIN: [&str; 6] = [
+        "\u{250c}", "\u{2510}", "\u{2514}", "\u{2518}", "\u{2500}", "\u{2502}",
+    ];
+
+    /// The last row of the screen: the status row.
+    fn status_row(screen: &str) -> &str {
+        screen.lines().last().unwrap_or_default()
     }
 
     /// Fail when the cell does not carry the ANSI colors `fg` on `bg` and `modifier`.
@@ -790,6 +868,11 @@ mod tests {
     /// Fail when the cell does not carry the terminal foreground and `modifier`.
     fn assert_default_fg(cell: &Cell, modifier: Modifier) {
         assert_eq!((cell.fg, cell.modifier), (Color::Reset, modifier));
+    }
+
+    /// Fail when the cell does not carry the ANSI color `fg` in bold.
+    fn assert_ansi_bold(cell: &Cell, fg: Color) {
+        assert_eq!((cell.fg, cell.modifier), (fg, Modifier::BOLD));
     }
 
     /// Fail when the cell does not carry the ANSI color `fg` without a modifier.
@@ -823,20 +906,18 @@ mod tests {
     }
 
     #[test]
-    fn gallery_shows_the_count_the_size_the_position_and_the_hints() {
+    fn gallery_status_row_shows_the_position_and_the_hints() {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
         app.gallery.show_filenames = true;
         let screen = render(&mut app, None, 100, 30);
-        let size = format!("[{}x{}]", app.gallery.thumb_cols, app.gallery.thumb_rows);
-        assert_shows(&screen, &format!(" Gallery [2 images] {size} "));
-        assert_shows(&screen, " Search ");
-        assert_shows(&screen, " a.jpg [1/2] ");
-        assert_shows(&screen, "Enter: open  +/-: zoom");
+        assert!(
+            status_row(&screen).starts_with(" a.jpg [1/2]  Enter: open  +/-: zoom"),
+            "{screen}"
+        );
         assert_shows(&screen, "b.jpg");
-
-        app.scan_complete = false;
-        let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, "[2 images, scanning\u{2026}]");
+        assert_hides(&screen, "Gallery");
+        assert_hides(&screen, "Search");
+        assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 29), "no frame");
     }
 
     #[test]
@@ -855,8 +936,7 @@ mod tests {
     fn an_empty_gallery_shows_the_hints_without_a_position() {
         let mut app = app_with(&[]);
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, " Gallery [0 images] ");
-        assert_shows(&screen, "\u{2514} Enter: open");
+        assert!(status_row(&screen).starts_with(" Enter: open"), "{screen}");
         assert_hides(&screen, "[1/");
     }
 
@@ -867,9 +947,16 @@ mod tests {
         app.gallery.search_query = "b".to_owned();
         app.gallery.filtered_indices = vec![1];
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, "/b\u{2588}  1/2 matches");
-        assert_shows(&screen, " Gallery [1/2 matches] ");
-        assert_shows(&screen, " b.jpg [1/1]  Esc: cancel  Enter: confirm ");
+        assert!(
+            status_row(&screen)
+                .starts_with(" /b\u{2588}  1/2 matches  Esc: cancel  Enter: confirm "),
+            "{screen}"
+        );
+
+        // After Enter, the filter stays and the position counts the matches.
+        app.gallery.search_active = false;
+        let screen = render(&mut app, None, 100, 30);
+        assert!(status_row(&screen).starts_with(" b.jpg [1/1] "), "{screen}");
     }
 
     #[test]
@@ -878,51 +965,291 @@ mod tests {
         app.gallery.show_filenames = true;
         app.selection.insert(app.images[1].clone());
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, " 1 selected");
+        assert!(
+            status_row(&screen).starts_with(" a.jpg [1/2]  1 selected  Enter: open"),
+            "{screen}"
+        );
         assert_shows(&screen, "\u{25cf} b.jpg");
     }
 
     #[test]
-    fn gallery_fills_only_the_selected_and_the_marked_cells() {
+    fn gallery_status_row_holds_the_search_the_selection_and_the_scan() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.scan_complete = false;
+        let screen = render(&mut app, None, 100, 30);
+        assert!(
+            status_row(&screen).starts_with(" a.jpg [1/2]  scanning\u{2026}  Enter: open"),
+            "{screen}"
+        );
+
+        app.selection.insert(app.images[0].clone());
+        app.gallery.search_active = true;
+        app.gallery.search_query = "a".to_owned();
+        app.gallery.filtered_indices = vec![0];
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let screen = screen_rows(&buffer).join("\n");
+        assert!(
+            status_row(&screen).starts_with(
+                " /a\u{2588}  1/2 matches  1 selected  scanning\u{2026}  Esc: cancel  Enter: confirm "
+            ),
+            "{screen}"
+        );
+        assert_default_fg(cell_of(&buffer, "/a\u{2588}"), Modifier::empty());
+        assert_ansi(cell_of(&buffer, "1/2 matches"), Color::DarkGray);
+        assert_ansi(cell_of(&buffer, "1 selected"), Color::Yellow);
+        assert_ansi(cell_of(&buffer, "scanning"), Color::DarkGray);
+        assert_ansi(cell_of(&buffer, "Esc: cancel"), Color::Cyan);
+    }
+
+    #[test]
+    fn gallery_draws_a_thick_border_around_the_selected_cell() {
         let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
         let buffer = render_buffer(&mut app, None, 100, 30);
+        let screen = screen_rows(&buffer).join("\n");
+        let border = app.gallery.border_rect(0);
         assert_eq!(
-            screen_rows(&buffer).join("\n").matches('\u{250c}').count(),
-            2,
-            "search bar + gallery block, no cell border"
+            (border.x, border.y),
+            (0, 0),
+            "the edge gaps hold the border"
         );
-        let cursor = app.gallery.cell_rect(0);
-        let second = app.gallery.cell_rect(1);
-        let third = app.gallery.cell_rect(2);
+        assert_border(&buffer, border, THICK, Color::Blue, Modifier::BOLD);
+        assert_eq!(screen.matches('\u{250f}').count(), 1, "one thick border");
         assert_eq!(
-            (cursor.x, cursor.y),
-            (1, 4),
-            "inside the search bar and the border"
+            screen.matches('\u{250c}').count(),
+            0,
+            "no frame, no plain border"
         );
-        assert_eq!(buffer[(cursor.x, cursor.y)].bg, Color::Blue);
-        assert_eq!(
-            buffer[(cursor.right() - 1, cursor.bottom() - 1)].bg,
-            Color::Blue
-        );
-        assert_eq!(buffer[(cursor.right(), cursor.y)].bg, Color::Reset);
-        assert_eq!(buffer[(cursor.x, cursor.bottom())].bg, Color::Reset);
-        assert_eq!(buffer[(second.x, second.y)].bg, Color::Reset);
 
+        // The thumbnail area stays empty for Kitty, and the other cells get no border.
+        let cell = app.gallery.cell_rect(0);
+        assert_symbol(
+            &buffer,
+            (cell.x, cell.y),
+            " ",
+            Color::Reset,
+            Modifier::empty(),
+        );
+        let second = app.gallery.border_rect(1);
+        assert_symbol(
+            &buffer,
+            (second.right() - 1, second.y),
+            " ",
+            Color::Reset,
+            Modifier::empty(),
+        );
+        assert_terminal_background(&buffer);
+    }
+
+    #[test]
+    fn gallery_draws_a_yellow_plain_border_around_each_marked_cell() {
+        let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
         app.selection.insert(app.images[2].clone());
         let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_eq!(buffer[(third.x, third.y)].bg, Color::Yellow);
-        assert_eq!(
-            buffer[(third.right() - 1, third.bottom() - 1)].bg,
-            Color::Yellow
-        );
-        assert_eq!(buffer[(second.x, second.y)].bg, Color::Reset);
+        let marked = app.gallery.border_rect(2);
+        assert_border(&buffer, marked, PLAIN, Color::Yellow, Modifier::empty());
+        assert_terminal_background(&buffer);
 
-        // The fill covers the label row too.
-        app.gallery.show_filenames = true;
+        // A marked neighbor shares the gap column with the cursor. The cursor border wins.
+        app.selection.clear();
+        app.selection.insert(app.images[1].clone());
         let buffer = render_buffer(&mut app, None, 100, 30);
-        let cursor = app.gallery.cell_rect(0);
-        assert_eq!(buffer[(cursor.x, cursor.bottom())].bg, Color::Blue);
-        assert_eq!(buffer[(cursor.x, cursor.bottom() + 1)].bg, Color::Reset);
+        let cursor = app.gallery.border_rect(0);
+        let neighbor = app.gallery.border_rect(1);
+        assert_eq!(neighbor.x, cursor.right() - 1, "one shared gap column");
+        assert_border(&buffer, cursor, THICK, Color::Blue, Modifier::BOLD);
+        assert_symbol(
+            &buffer,
+            (neighbor.right() - 1, neighbor.y),
+            "\u{2510}",
+            Color::Yellow,
+            Modifier::empty(),
+        );
+        assert_symbol(
+            &buffer,
+            (neighbor.x + 1, neighbor.y),
+            "\u{2500}",
+            Color::Yellow,
+            Modifier::empty(),
+        );
+
+        // On a marked cell under the cursor, the cursor border wins.
+        app.selection.insert(app.images[0].clone());
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_border(&buffer, cursor, THICK, Color::Blue, Modifier::BOLD);
+    }
+
+    #[test]
+    fn gallery_borders_reach_the_grid_edges_and_hold_the_label() {
+        let names: Vec<String> = (0..40).map(|index| format!("{index:02}.jpg")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut app = app_with(&names);
+        app.gallery.show_filenames = true;
+        render_buffer(&mut app, None, 100, 30);
+        let last = app.gallery.visible_rows * app.gallery.grid_cols - 1;
+        app.gallery.cursor = last;
+        app.selection.insert(app.images[0].clone());
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let grid = app.gallery.grid_rect;
+
+        let border = app.gallery.border_rect(last);
+        assert_eq!(border.right(), grid.right(), "the right edge gap");
+        assert_eq!(border.bottom(), grid.bottom(), "the bottom edge gap");
+        assert_border(&buffer, border, THICK, Color::Blue, Modifier::BOLD);
+        let cell = app.gallery.cell_rect(last);
+        assert_eq!(
+            cell.bottom() + 1,
+            border.bottom() - 1,
+            "the label row sits inside"
+        );
+        assert_fill(
+            &buffer[(cell.x + 1, cell.bottom())],
+            Color::Blue,
+            Color::Reset,
+            Modifier::BOLD,
+        );
+
+        let marked = app.gallery.border_rect(0);
+        assert_eq!(
+            (marked.x, marked.y),
+            (grid.x, grid.y),
+            "the top left edge gaps"
+        );
+        assert_border(&buffer, marked, PLAIN, Color::Yellow, Modifier::empty());
+        let first = app.gallery.cell_rect(0);
+        assert_symbol(
+            &buffer,
+            (marked.x, first.bottom()),
+            "\u{2502}",
+            Color::Yellow,
+            Modifier::empty(),
+        );
+        assert_symbol(
+            &buffer,
+            (marked.x, first.bottom() + 1),
+            "\u{2514}",
+            Color::Yellow,
+            Modifier::empty(),
+        );
+
+        // The status row below the grid stays text.
+        let screen = screen_rows(&buffer).join("\n");
+        assert!(
+            status_row(&screen)
+                .starts_with(&format!(" {last:02}.jpg [{}/40]  1 selected", last + 1)),
+            "{screen}"
+        );
+        assert_terminal_background(&buffer);
+    }
+
+    /// The center cell of the thumbnail area of the visible cell `vis_index`.
+    fn cell_center(app: &App, vis_index: usize) -> (u16, u16) {
+        let cell = app.gallery.cell_rect(vis_index);
+        (cell.x + cell.width / 2, cell.y + cell.height / 2)
+    }
+
+    #[test]
+    fn an_empty_image_cell_shows_a_dim_loading_icon_at_its_center() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.thumb_cache.insert(1, RgbaImage::new(4, 4));
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let screen = screen_rows(&buffer).join("\n");
+        let center = cell_center(&app, 0);
+        assert_symbol(
+            &buffer,
+            center,
+            "\u{25cc}",
+            Color::DarkGray,
+            Modifier::empty(),
+        );
+        assert_eq!(
+            screen.matches('\u{25cc}').count(),
+            1,
+            "the cached cell has no icon"
+        );
+        let cached = cell_center(&app, 1);
+        assert_symbol(&buffer, cached, " ", Color::Reset, Modifier::empty());
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn an_empty_video_cell_shows_a_dim_play_icon_at_its_center() {
+        let mut app = app_with(&["a.jpg", "clip.mp4"]);
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let center = cell_center(&app, 1);
+        assert_symbol(
+            &buffer,
+            center,
+            "\u{25b6}",
+            Color::DarkGray,
+            Modifier::empty(),
+        );
+        assert_symbol(
+            &buffer,
+            cell_center(&app, 0),
+            "\u{25cc}",
+            Color::DarkGray,
+            Modifier::empty(),
+        );
+    }
+
+    #[test]
+    fn a_cut_cell_gets_no_side_at_the_clip_edge() {
+        // 15 columns: the cell width clamps to 8, so the second cell overflows the grid.
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.gallery.cursor = 1;
+        app.selection.insert(app.images[0].clone());
+        let buffer = render_buffer(&mut app, None, 15, 8);
+        let grid = app.gallery.grid_rect;
+        let border = app.gallery.border_rect(1);
+        assert!(border.right() > grid.right(), "the cell overflows");
+
+        let (left, top, bottom) = (border.x, border.y, border.bottom() - 1);
+        let edge = grid.right() - 1;
+        assert_symbol(
+            &buffer,
+            (left, top),
+            "\u{250f}",
+            Color::Blue,
+            Modifier::BOLD,
+        );
+        assert_symbol(
+            &buffer,
+            (left, bottom),
+            "\u{2517}",
+            Color::Blue,
+            Modifier::BOLD,
+        );
+        assert_symbol(
+            &buffer,
+            (edge, top),
+            "\u{2501}",
+            Color::Blue,
+            Modifier::BOLD,
+        );
+        assert_symbol(
+            &buffer,
+            (edge, bottom),
+            "\u{2501}",
+            Color::Blue,
+            Modifier::BOLD,
+        );
+        assert_symbol(
+            &buffer,
+            (edge, top + 1),
+            " ",
+            Color::Reset,
+            Modifier::empty(),
+        );
+
+        // The marked cell fits, so its border stays closed.
+        let marked = app.gallery.border_rect(0);
+        assert_symbol(
+            &buffer,
+            (marked.x, marked.y),
+            "\u{250c}",
+            Color::Yellow,
+            Modifier::empty(),
+        );
     }
 
     #[test]
@@ -931,58 +1258,19 @@ mod tests {
         app.gallery.show_filenames = true;
         app.selection.insert(app.images[1].clone());
         let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_terminal_background(&buffer, Some(app.gallery.grid_rect));
+        assert_terminal_background(&buffer);
 
-        // The grid starts inside the search bar (3 rows) and the gallery border.
-        let (left, top) = (1, 4);
-        assert_fill(
-            &buffer[(left, top)],
-            Color::White,
-            Color::Blue,
-            Modifier::BOLD,
-        );
-        let marked = app.gallery.cell_rect(1);
-        assert_fill(
-            &buffer[(marked.x, top)],
-            Color::Black,
-            Color::Yellow,
-            Modifier::empty(),
-        );
-
-        assert_fill(
-            cell_of(&buffer, "a.jpg"),
-            Color::White,
-            Color::Blue,
-            Modifier::BOLD,
-        );
-        assert_fill(
-            cell_of(&buffer, "\u{25cf} b.jpg"),
-            Color::Black,
-            Color::Yellow,
-            Modifier::empty(),
-        );
+        assert_ansi_bold(cell_of(&buffer, "a.jpg"), Color::Blue);
+        assert_ansi(cell_of(&buffer, "\u{25cf} b.jpg"), Color::Yellow);
         assert_default_fg(cell_of(&buffer, "c.jpg"), Modifier::empty());
-        assert_eq!(cell_of(&buffer, "c.jpg").bg, Color::Reset);
-        assert_ansi(&buffer[(0, 0)], Color::DarkGray);
-        assert_default_fg(cell_of(&buffer, "Gallery ["), Modifier::BOLD);
-        assert_ansi(cell_of(&buffer, "1 selected"), Color::DarkGray);
+        assert_default_fg(cell_of(&buffer, "a.jpg ["), Modifier::empty());
+        assert_ansi(cell_of(&buffer, "1 selected"), Color::Yellow);
         assert_ansi(cell_of(&buffer, "Enter: open"), Color::Cyan);
 
-        // On a marked cell under the cursor, the cursor style wins for the fill and the label.
+        // On a marked cell under the cursor, the cursor style wins for the label.
         app.selection.insert(app.images[0].clone());
         let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_fill(
-            &buffer[(left, top)],
-            Color::White,
-            Color::Blue,
-            Modifier::BOLD,
-        );
-        assert_fill(
-            cell_of(&buffer, "\u{25cf} a.jpg"),
-            Color::White,
-            Color::Blue,
-            Modifier::BOLD,
-        );
+        assert_ansi_bold(cell_of(&buffer, "\u{25cf} a.jpg"), Color::Blue);
 
         app.error = Some("scan failed".to_owned());
         let buffer = render_buffer(&mut app, None, 100, 30);
@@ -1038,9 +1326,20 @@ mod tests {
         app.current = 1;
         app.loaded = Some(RgbaImage::new(30, 20));
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, " b.jpg ");
-        assert_shows(&screen, " b.jpg [2/2] 30x20  \u{2190}/\u{2192}: navigate");
-        assert_eq!(app.image_rect, Rect::new(1, 1, 98, 28));
+        assert!(
+            status_row(&screen).starts_with(" b.jpg [2/2] 30x20  \u{2190}/\u{2192}: navigate"),
+            "{screen}"
+        );
+        assert_eq!(
+            app.image_rect,
+            Rect::new(0, 0, 100, 29),
+            "no frame, 1 status row"
+        );
+        assert_eq!(
+            screen.matches(" b.jpg ").count(),
+            1,
+            "the name only in the status row"
+        );
     }
 
     #[test]
@@ -1095,10 +1394,10 @@ mod tests {
         let mut app = app_with(&["a.jpg"]);
         app.mode = ViewMode::Fullscreen;
         let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_terminal_background(&buffer, None);
-        assert_ansi(&buffer[(0, 0)], Color::DarkGray);
-        assert_default_fg(cell_of(&buffer, "a.jpg "), Modifier::BOLD);
-        assert_default_fg(cell_of(&buffer, "a.jpg ["), Modifier::empty());
+        assert_terminal_background(&buffer);
+        assert_symbol(&buffer, (0, 0), " ", Color::Reset, Modifier::empty());
+        assert_symbol(&buffer, (0, 29), " ", Color::Reset, Modifier::empty());
+        assert_symbol(&buffer, (1, 29), "a", Color::Reset, Modifier::empty());
         assert_ansi(cell_of(&buffer, "\u{2190}/\u{2192}: navigate"), Color::Cyan);
 
         app.pending_delete = Some(pending(&["a.jpg"], false));
@@ -1112,10 +1411,16 @@ mod tests {
         let mut app = app_with(&["clip.mp4", "b.jpg"]);
         app.mode = ViewMode::Video;
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, " clip.mp4 ");
-        assert_shows(&screen, "\u{25b6} clip.mp4 00:00/00:00 [0fps] [1/2] ");
+        assert!(
+            status_row(&screen).starts_with(" \u{25b6} clip.mp4 00:00/00:00 [0fps] [1/2] "),
+            "{screen}"
+        );
         assert_shows(&screen, "Space: pause");
-        assert_eq!(app.image_rect, Rect::new(1, 1, 98, 28));
+        assert_eq!(
+            app.image_rect,
+            Rect::new(0, 0, 100, 29),
+            "no frame, 1 status row"
+        );
 
         let screen = render(&mut app, Some("mpv not found"), 100, 30);
         assert_shows(&screen, " mpv not found ");
@@ -1138,7 +1443,7 @@ mod tests {
         assert_shows(&screen, "Format  JPG");
 
         let buffer = render_buffer(&mut app, None, 120, 30);
-        assert_terminal_background(&buffer, Some(app.gallery.grid_rect));
+        assert_terminal_background(&buffer);
         assert_default_fg(cell_of(&buffer, "Info "), Modifier::BOLD);
         assert_ansi(cell_of(&buffer, "i: close"), Color::Cyan);
         assert_default_fg(cell_of(&buffer, "File"), Modifier::BOLD);
@@ -1173,7 +1478,7 @@ mod tests {
         assert_shows(&screen, " press any key to close");
 
         let buffer = render_buffer(&mut app, None, 100, 120);
-        assert_terminal_background(&buffer, Some(app.gallery.grid_rect));
+        assert_terminal_background(&buffer);
         assert_default_fg(cell_of(&buffer, "Help "), Modifier::BOLD);
         assert_default_fg(cell_of(&buffer, "Gallery   "), Modifier::BOLD);
         assert_ansi(cell_of(&buffer, "h/j/k/l"), Color::Cyan);
@@ -1202,7 +1507,7 @@ mod tests {
         assert_shows(&screen, " Enter: choose  /: filter");
         assert_hides(&screen, " Info ");
         let buffer = render_buffer(&mut app, None, width, 20);
-        assert_terminal_background(&buffer, None);
+        assert_terminal_background(&buffer);
         assert_default_fg(cell_of(&buffer, "\u{25b6} .."), Modifier::REVERSED);
         assert_default_fg(cell_of(&buffer, "alpha/"), Modifier::empty());
         assert_ansi(cell_of(&buffer, "Enter: choose"), Color::Cyan);

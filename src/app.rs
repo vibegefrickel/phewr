@@ -44,9 +44,9 @@ const MAX_PREVIEW_JOBS: usize = 4;
 /// The files whose headers decide the cell shape of the grid: the first screen, or the first
 /// files of a large folder.
 const SHAPE_SAMPLE: usize = 64;
-/// The version in the disk cache key. Change it when the thumbnail output changes. v5: the
-/// thumbnail box is the cell minus the padding.
-const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v5";
+/// The version in the disk cache key. Change it when the thumbnail output changes. v6: the
+/// thumbnail box is the whole cell, without padding.
+const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v6";
 
 /// The job that produced a thumbnail result, so that `poll_thumbnails` frees the right slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -999,14 +999,22 @@ impl App {
 
     /// The image decode cannot read a video, so the fullscreen view must not try it.
     fn fullscreen_on_video(&self) -> bool {
-        #[cfg(feature = "video")]
-        let is_video = self
-            .images
-            .get(self.current)
-            .is_some_and(|path| crate::video::is_video(path));
-        #[cfg(not(feature = "video"))]
-        let is_video = false;
-        is_video && self.mode == ViewMode::Fullscreen
+        self.is_video_at(self.current) && self.mode == ViewMode::Fullscreen
+    }
+
+    /// True when the image `index` is a video, for the placeholder and the loading icon.
+    #[cfg(feature = "video")]
+    pub(crate) fn is_video_at(&self, index: usize) -> bool {
+        self.images
+            .get(index)
+            .is_some_and(|path| crate::video::is_video(path))
+    }
+
+    /// Without the `video` feature, the scan lists no videos.
+    #[cfg(not(feature = "video"))]
+    #[expect(clippy::unused_self, reason = "the same signature as the video build")]
+    pub(crate) fn is_video_at(&self, _index: usize) -> bool {
+        false
     }
 
     /// The play hint for a video in fullscreen. A failed open shows its error instead.
@@ -1796,17 +1804,12 @@ impl App {
     }
 }
 
-/// The gap in pixels between a thumbnail and the edge of its cell. The background color of the
-/// selected cell shows in the gap, because Kitty draws the pictures above the text.
-pub(crate) const THUMB_PADDING_PX: u32 = 4;
-
-/// The pixel box of a thumbnail in the cell `rect`: the cell size minus the padding on each side.
+/// The pixel box of a thumbnail in the cell `rect`: the whole cell. The gaps of the grid lie
+/// outside the cell, so the picture needs no padding.
 pub(crate) fn thumb_target_px(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
-    let width = u32::from(rect.width) * cell_px.0;
-    let height = u32::from(rect.height) * cell_px.1;
     (
-        width.saturating_sub(2 * THUMB_PADDING_PX).max(1),
-        height.saturating_sub(2 * THUMB_PADDING_PX).max(1),
+        (u32::from(rect.width) * cell_px.0).max(1),
+        (u32::from(rect.height) * cell_px.1).max(1),
     )
 }
 
@@ -2949,7 +2952,7 @@ mod tests {
         }
 
         /// An app with the one file `path` in a grid cell of 160x160 px, so a thumbnail box of
-        /// 152x152 px, and a disk cache in `cache`. The 256x128 primary image fits as 152x76.
+        /// 160x160 px, and a disk cache in `cache`. The 256x128 primary image fits as 160x80.
         fn grid_app(path: &Path, cache: &Path) -> App {
             let mut app = App::new((8, 16), SharedImageList::new());
             app.images = vec![path.to_path_buf()];
@@ -2997,7 +3000,7 @@ mod tests {
             assert!(!app.thumb_cache.is_sharp(0));
             assert_eq!(
                 preview.dimensions(),
-                (152, 76),
+                (160, 80),
                 "the size of the sharp image"
             );
             assert_close(rgba_center(&preview), BLUE);
@@ -3010,7 +3013,7 @@ mod tests {
 
             let sharp = wait_for_new_image(&mut app);
             assert!(app.thumb_cache.is_sharp(0));
-            assert_eq!(sharp.dimensions(), (152, 76));
+            assert_eq!(sharp.dimensions(), (160, 80));
             assert_close(rgba_center(&sharp), RED);
             assert_eq!(
                 fs::read_dir(&cache).unwrap().count(),
@@ -3053,7 +3056,7 @@ mod tests {
                 app.thumb_cache.is_sharp(0),
                 "the first image is the sharp one"
             );
-            assert_eq!(first.dimensions(), (76, 152));
+            assert_eq!(first.dimensions(), (80, 160));
             assert_close(rgba_center(&first), RED);
             assert!(app.stale_image_ids.is_empty());
         }
@@ -3450,8 +3453,8 @@ mod tests {
         assert_ne!(first, changed);
         assert_eq!(
             super::THUMBNAIL_CACHE_VERSION,
-            "viewr-thumbnail-v5",
-            "the padded thumbnail box needs a new cache generation"
+            "viewr-thumbnail-v6",
+            "the thumbnail box without padding needs a new cache generation"
         );
     }
 
@@ -4318,7 +4321,7 @@ mod tests {
             let cache = dir.path().join("cache");
             let mut app = app_with_files(dir.path(), &["a.png"]);
             app.disk_cache_dir = cache.clone();
-            // 3x2 cells of 8x16 px, minus the padding: a box of 16x24 px.
+            // 3x2 cells of 8x16 px: a box of 24x32 px.
             let rect = Rect::new(0, 0, 3, 2);
             let path = app.images[0].clone();
 
@@ -4332,7 +4335,7 @@ mod tests {
             });
             assert_eq!(arrived, vec![0]);
             assert!(app.thumb_cache.contains(0));
-            let cached = get_cache_file_path(&cache, &path, 16, 24).unwrap();
+            let cached = get_cache_file_path(&cache, &path, 24, 32).unwrap();
             assert!(cached.is_file());
             app.spawn_thumb_decode(0, path.clone(), rect);
             assert!(

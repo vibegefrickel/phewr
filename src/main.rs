@@ -408,12 +408,10 @@ fn draw_ui(frame: &mut Frame<'_>, app: &mut App, state: &LoopState) {
     app.fullscreen_box = fullscreen_box(frame.area(), app);
 }
 
-/// The box of the fullscreen image in `area`: next to the info panel, inside the border.
+/// The box of the fullscreen image in `area`: next to the info panel, above the status row.
 fn fullscreen_box(area: Rect, app: &App) -> Rect {
     let (main, _info) = ui::split_info(area, app);
-    ratatui::widgets::Block::default()
-        .borders(ratatui::widgets::Borders::ALL)
-        .inner(main)
+    ui::content_area(main)
 }
 
 /// Take the results of the background work: the scan, the filter, the decodes and the clock.
@@ -1400,8 +1398,8 @@ struct ImageOrigin {
     offset: (u32, u32),
 }
 
-/// Center the fitted thumbnail in its grid cell, to the pixel. The thumbnail is smaller than
-/// the cell by at least the padding, so the offset stays inside the first cell.
+/// Center the fitted thumbnail in its grid cell, to the pixel. The thumbnail is never larger
+/// than the cell, so the offset stays inside the first cell.
 fn gallery_image_origin(app: &App, cell_rect: Rect, img: &RgbaImage) -> ImageOrigin {
     let (cell_width, cell_height) = (app.cell_px.0.max(1), app.cell_px.1.max(1));
     let gap_x = (u32::from(cell_rect.width) * cell_width).saturating_sub(img.width()) / 2;
@@ -2632,7 +2630,7 @@ mod tests {
                 .collect();
             app.gallery.filtered_indices = (0..count).collect();
             app.gallery.zoom_rows = 2;
-            // 3:2 cells of 12 rows are 36 columns wide: 3 columns of 40 cells.
+            // 3:2 cells of 10 rows are 30 columns wide: 3 columns of 38 cells and 4 gap columns.
             app.gallery.update_grid(Rect::new(0, 0, 120, 24));
             app.scan_complete = true;
             app.needs_render = false;
@@ -3063,9 +3061,12 @@ mod tests {
             for _ in 0..40 {
                 char_key(&mut app, '-');
             }
-            assert_eq!(app.gallery.zoom_rows, 8, "24 rows at 3 rows minimum each");
+            assert_eq!(
+                app.gallery.zoom_rows, 5,
+                "24 rows: 1 edge gap, then 3 rows and 1 gap each"
+            );
             char_key(&mut app, '-');
-            assert_eq!(app.gallery.zoom_rows, 8);
+            assert_eq!(app.gallery.zoom_rows, 5);
         }
 
         #[test]
@@ -3341,7 +3342,8 @@ mod tests {
                 .map(|index| PathBuf::from(format!("/photos/{index}.jpg")))
                 .collect();
             app.gallery.filtered_indices = (0..count).collect();
-            app.gallery.update_grid(Rect::new(0, 0, 100, 24));
+            // 4 rows of 6 and 5 columns of 20, with 5 and 6 gaps.
+            app.gallery.update_grid(Rect::new(0, 0, 106, 29));
             for index in 0..count {
                 app.thumb_cache.insert(index, RgbaImage::new(4, 4));
             }
@@ -3418,10 +3420,11 @@ mod tests {
 
             place_visible(&mut app, &mut out);
 
-            // 4x4 px in 160x96 px: a gap of 78 px (9 cells and 6 px) and 46 px (2 rows and 14 px).
+            // 4x4 px in 160x96 px: a gap of 78 px (9 cells and 6 px) and 46 px (2 rows and 14 px),
+            // after the edge gap of 1 cell.
             let first = text(&out);
             assert!(
-                first.contains("\x1b[3;10H"),
+                first.contains("\x1b[4;11H"),
                 "the cell of the origin: {first}"
             );
             assert!(first.contains(",X=6,Y=14,"), "the pixel offset: {first}");
@@ -3433,18 +3436,22 @@ mod tests {
         }
 
         #[test]
-        fn a_thumbnail_as_large_as_its_box_starts_at_the_padding() {
+        fn a_thumbnail_as_large_as_its_box_fills_its_cell() {
             let mut app = thumbnail_app(1);
             let (width, height) = crate::app::thumb_target_px(app.gallery.thumb_box(), (8, 16));
-            assert_eq!((width, height), (152, 88));
+            assert_eq!((width, height), (160, 96), "the whole cell, no padding");
             app.thumb_cache.insert(0, RgbaImage::new(width, height));
             let mut out = Vec::new();
 
             place_visible(&mut app, &mut out);
 
             let text = text(&out);
-            assert!(text.contains("\x1b[1;1H"), "the first cell: {text}");
-            assert!(text.contains(",X=4,Y=4,"), "the padding: {text}");
+            assert!(
+                text.contains("\x1b[2;2H"),
+                "the first cell after the gaps: {text}"
+            );
+            assert!(!text.contains(",X="), "no pixel offset: {text}");
+            assert!(!text.contains(",Y="), "no pixel offset: {text}");
         }
 
         #[test]
@@ -3471,7 +3478,7 @@ mod tests {
             assert_eq!(text.matches(TRANSMIT).count(), 2);
             assert!(!text.contains("\x1b_Ga=d"));
             assert_eq!(app.transmitted_image_ids.len(), 2);
-            assert!(text.contains("\x1b[3;30H"), "centered in the second cell");
+            assert!(text.contains("\x1b[4;32H"), "centered in the second cell");
         }
 
         #[test]
