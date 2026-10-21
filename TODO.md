@@ -12,27 +12,17 @@
   - The grid: no empty lines between the thumbnails, the grid reaches the right and the bottom edge, the blue fill under the cursor and the yellow fill of marked images. The Kitty keys `X=` and `Y=` center each picture to the pixel. If a terminal ignores them, the pictures sit in the top left corner of their cells.
   - A transparent PNG under the cursor: the blue fill shows through the transparent pixels. If that looks wrong, put each thumbnail on an opaque background, or fill only a frame around the picture.
   - A portrait folder gets narrow cells and more columns, a landscape folder wide cells.
+- Terminal tests after batch 10 (maintainer), in Ghostty and in herdr: `just install`, then `viewr /tmp/viewr-bench`. No picture overlaps a border or the gap row, landscapes keep their shape at every zoom level from 2 to 12 rows, no black cells after a long scroll up and down, the HEIC previews come first and the empty JPG and MOV cells fill early.
 
 ## Next
 
-- Bug, inside herdr only (plain Ghostty is correct): grid pictures overflow their cells by a few pixels downward, and landscape pictures look squeezed at zoom levels with 3 or more rows. Cause, confirmed in the herdr 0.9.5 and Ghostty 1.3.1 sources (2026-10-21): viewr centers each thumbnail with a cell origin plus `X=` / `Y=` (`gallery_image_origin`). herdr computes `c = ceil((w + X) / cw)` and `r = ceil((h + Y) / ch)` and relays `a=p,c=,r=,X=,Y=` to the host. Ghostty then scales the picture to exactly `c x r` cells and draws it from the offset. viewr's cell size is correct in herdr (18 x 43 px, also by `CSI 16 t`).
-  - Fix: pad each grid thumbnail with transparent pixels to the `thumb_box` size (whole cells, content pixel-centered inside), place it at a whole-cell origin, and send no `X=` / `Y=`. Pad when the picture goes into the in-memory cache, not in the disk cache. Cost: a landscape thumbnail at zoom 5 grows from 513 KB to 926 KB of raw RGBA. With the temp file medium, that is only a larger local file.
-  - Also file a herdr issue: herdr should not add `c=` / `r=` when the guest sent none, or it should fold the offset in like the host does.
-- Bug, also in plain Ghostty: the filename toggle `n` makes `thumb_rows` one row smaller, but it does not call `mark_dirty` / `forget_thumbnails`. Cached thumbnails for the taller box stay, and they overflow into the label row by up to one row.
-- Latent: `cell_px` is read only at start, and TIOCGWINSZ includes Ghostty's window padding (2258 px / 52 rows = 43.42). Ask `CSI 16 t` at start and on each resize, and keep the division as the fallback.
-- Bug: black grid cells, mostly inside herdr. A scroll makes them appear. Analysis (2026-10-21), plain Ghostty shows no black cells:
-  - `ThumbnailCache::push` (`src/gallery.rs`) drops the id of an evicted entry without `d=I`, so the terminal storage grows. At its limit (320 MB by default) the terminal evicts unplaced images. A redraw sends `d=a` and then `a=p,q=2` by id, so an evicted image stays black without an error. herdr stores each image twice (its Ghostty core and the host), so it reaches the limit sooner.
-  - Fix: send `d=I` on eviction, keep a byte budget, send `a=T` instead of `a=p` when the terminal can have dropped the image.
-  - The cache capacity (200) must be at least twice the visible cell count, and `peek` does not promote visible cells.
-  - `cell_px` is read only at start. Read it again on `Event::Resize` and clamp the `X=` / `Y=` offsets below the cell size.
-  - Wrap `place_gallery_images_to` and `emit_new_thumbnails_to` in a synchronized update, like the fullscreen output.
-  - In herdr, a late answer to the `a=q` probe arrives as keys (`_`, `G`, `i`, `=`). Drop such input after the probe.
-  - Test: a fake terminal that parses the Kitty sequences of `GraphicsOutput::Buffer` and applies a storage limit.
+- Follow-ups after the Kitty output fixes (batch 10):
+  - The Kitty bytes of a cold grid rose by 28 percent under the direct transfer (44.9 MB to 57.3 MB, 36 cells), because the padding to the full box doubles a landscape picture in a portrait box. A follow-up can pad to whole cells only and keep the no-offset rule, with the content centered to within half a cell. With the temp file medium in local Ghostty, the cost is only a larger file write.
+  - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.
+
 The main goal is perceived speed for JPEG, HEIC and PNG.
 
 - Speed round, open items after batch 6 (numbers from `just bench` on 40 HEIC, 24 MP, 10 cores):
-  - Candidate: send the HEIC preview at its native 320x240 size with a Kitty placement that scales (`c=`, `r=`). A cold grid sends 45.8 MB today instead of 22.9 MB, because each cell gets two full-size images. This matters most over SSH (PNG medium).
-  - Thumbnail queue order: start the cells that show nothing yet (JPEG, PNG, HEIC without a preview) before the HEIC sharp decodes, which only replace a preview. Measured on 2026-10-21, cold grid, 24 cells: 40 PNG all shown 155 ms, 40 JPG 137 ms, 40 HEIC previews 125 ms, but a mixed folder (40 HEIC, 9 PNG, 2 JPG) needs 206 ms until all cells show something, because the PNG and JPEG cells wait behind HEIC sharp decodes.
   - Dropped: a JPEG preview from the EXIF thumbnail. iPhone JPEGs carry 160x120, which is too blurry for a grid cell.
   - Candidate: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size, so this is low priority.
   - The start status note with the transfer medium stays until the terminal tests are done (decided 2026-10-21). Then remove the three lines after `App::with_config` in `main`.
@@ -67,6 +57,9 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
 
 ## Done
 
+- Kitty output fixes (batch 10): thumbnails padded to whole cells, no `X=` / `Y=` (fixes the herdr overlap and the squeezed landscapes), `d=I` for evicted images and a 128 MB terminal budget (fixes the black cells), a 512 MB in-memory cache limit, `CSI 16 t` for the cell size, the filename toggle decodes again, late probe answers are dropped, empty cells decode first, the HEIC preview goes out at native size, grid zoom 2 to 12 rows.
+- Refactor (batch 9): `main.rs` and `app.rs` split into 30 modules, then the repeating patterns removed.
+- Video in a fullscreen mpv window by default, grid gaps with line borders, loading icons, no frames and no search bar (batch 8b).
 - Grid fill (batch 8): no border reserve, a 4 px padding with the Kitty keys `X=` / `Y=`, a background fill for the selected and the marked cells, the remainder columns and rows reach the edges, the cell shape from the median aspect of the first 64 file headers (7 buckets), Catmull-Rom for every resize (24 MP resize 54 ms to 36 ms), thumbnail cache key v5.
 - mpv round (batch 7): `--hwdec=auto-copy-safe` and a scale filter in the terminal (4K HDR clip 34 fps to 97 fps), a tone mapping LUT for HLG and PQ in the terminal (8.4 dB to 30.5 dB against the macOS SDR export), `n` / `N` step to the next and previous file from inside mpv, the mpv window shows its exit code, quiet FFmpeg log, the yazi reveal on quit.
 - Two-phase HEIC grid thumbnails (batch 7): the embedded thumbnail shows at once, the sharp decode replaces it. libheif reads through a buffered stream. Cold grid of 40 HEIC files: first image 250 ms to 13 ms, all 24 cells shown after 125 ms, all cells sharp 1882 ms to 1461 ms.
