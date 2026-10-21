@@ -355,6 +355,8 @@ pub(crate) fn window_args(video: &Path, playback: Playback) -> Vec<OsString> {
     let mut args: Vec<OsString> = [
         "--no-terminal",
         "--force-window=immediate",
+        "--fs",
+        "--native-fs=no",
         "--hwdec=auto-safe",
     ]
     .into_iter()
@@ -595,6 +597,8 @@ mod tests {
             [
                 "--no-terminal",
                 "--force-window=immediate",
+                "--fs",
+                "--native-fs=no",
                 "--hwdec=auto-safe",
                 "--loop-file=inf",
                 &format!("--input-commands={STEP_BINDINGS}"),
@@ -632,6 +636,8 @@ mod tests {
             [
                 "--no-terminal",
                 "--force-window=immediate",
+                "--fs",
+                "--native-fs=no",
                 "--hwdec=auto-safe",
                 "--loop-file=no",
                 "--keep-open=no",

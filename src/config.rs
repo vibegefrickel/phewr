@@ -32,9 +32,9 @@ pub(crate) struct Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum VideoPlayer {
     /// mpv draws into this terminal with `--vo=kitty`.
-    #[default]
     Terminal,
-    /// mpv opens a window of its own, and viewr keeps running.
+    /// mpv opens a fullscreen window of its own, and viewr keeps running.
+    #[default]
     Window,
     /// The built-in player of viewr (`video.rs`).
     Builtin,
@@ -237,6 +237,7 @@ mod tests {
             &root.path().join("state.toml"),
         );
         assert_eq!(config, Config::default());
+        assert_eq!(config.video_player, VideoPlayer::Window);
     }
 
     #[test]
@@ -298,7 +299,7 @@ mod tests {
             ("window", VideoPlayer::Window),
             ("builtin", VideoPlayer::Builtin),
             (" Window ", VideoPlayer::Window),
-            ("vlc", VideoPlayer::Terminal),
+            ("vlc", VideoPlayer::Window),
         ] {
             std::fs::write(
                 &config_path,

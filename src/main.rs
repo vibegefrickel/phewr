@@ -2132,7 +2132,7 @@ mod tests {
                 *log.borrow(),
                 [
                     "spawn (cooked) /bin/mpv --no-terminal --force-window=immediate \
-                     --hwdec=auto-safe --loop-file=inf \
+                     --fs --native-fs=no --hwdec=auto-safe --loop-file=inf \
                      --input-commands=keybind n \"quit 10\",keybind N \"quit 11\" \
                      -- /videos/clip.mp4"
                 ]
