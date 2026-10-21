@@ -92,7 +92,7 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `Ctrl-b` `Ctrl-f`, `PgUp` `PgDn` | Page up / down |
 | `Enter` | Open fullscreen |
 | `s` | Start a slideshow from the cursor |
-| `+` `-` `0` | Larger / smaller / default thumbnails |
+| `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows, `Enter` opens the larger view) |
 | `n` | Show or hide filename labels |
 | `i` | Toggle the info panel |
 | `/` | Search. `Enter` applies, `Esc` clears, `Backspace` deletes |
@@ -100,6 +100,8 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `a` `A` | Select all / clear selection |
 
 The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. The grid separates the thumbnails with 1-cell gaps. A thick blue border marks the thumbnail under the cursor. A thin yellow border marks each selected image (`Space`). A cell shows a dim ◌ (image) or ▶ (video) while its thumbnail loads.
+
+The grid also works under a multiplexer that relays Kitty graphics, such as herdr. The filename toggle and a font size change decode the thumbnails again.
 
 There is no search bar and no frame. A status row at the bottom shows the name and the position of the selected image, the search query and the match count while you search with `/`, the number of selected images, `scanning…` while the scan runs, and the key hints. In the fullscreen view, the image uses the whole terminal above the status row, and the filename shows in the status row.
 | `d` `D` | Trash / permanently delete, with confirm |
@@ -146,7 +148,7 @@ viewr reads `~/.config/viewr/config.toml`. If `XDG_CONFIG_HOME` is set, viewr re
 
 ```toml
 [gallery]
-visible_rows = 4     # thumbnail rows in the grid (the zoom level, 1 to 32), the columns fill the width
+visible_rows = 4     # thumbnail rows in the grid (the zoom level, 2 to 12), the columns fill the width
 
 [slideshow]
 interval = 3.0       # seconds per slide

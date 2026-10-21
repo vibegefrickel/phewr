@@ -268,7 +268,8 @@ missing.
 - **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
   and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
-  (`MAX_PREFETCH_JOBS`) run at once. The other cells wait in a queue in grid order. A failed
+  (`MAX_PREFETCH_JOBS`) run at once. The other cells wait in a queue in grid order, but
+  `next_sharp_job` starts the cells that show nothing before the HEIC sharp jobs. A failed
   thumbnail decode sends `None` and frees its slot. The thumbnail and preview queues are
   `JobSlots` with an image index per job. A job whose index left the list starts nothing.
   `decode::spawn_foreground` runs a foreground decode on the thread pool and returns its
@@ -285,13 +286,33 @@ missing.
 - **Grid gaps and borders:** the cells of the grid have 1-cell gaps (`GAP` in `gallery.rs`). A
   line of n cells takes n + 1 gaps: one between two neighbors and one at each edge.
   `update_grid` subtracts the gaps first and gives the remainder to the first columns and rows.
-  A thumbnail uses its whole cell, without padding. viewr centers it to the pixel with the Kitty
-  keys `X=` and `Y=` (`DisplayOptions::offset`). The selected cell gets a thick border
+  The decode job pads every grid picture with transparent pixels to the pixel size of the base
+  cell (`pad_for_grid` in `app/thumbnails.rs`), with the content centered inside. The picture
+  starts at a whole cell and goes out with `c=` and `r=` of the base cell and no `X=` / `Y=`.
+  herdr relays a pixel offset as a stretched picture, and a rounded cell size cannot push a
+  padded picture into the gap. The selected cell gets a thick border
   (`BorderType::Thick`, `STYLES.cursor_cell`) in the gaps around the cell and its label
   (`GalleryState::border_rect`). Each marked cell gets a plain yellow border (`STYLES.marked`).
   Neighbors share the gap line. The selected border is drawn last, so it wins. A border that the
   grid edge cuts stays open at that edge. No cell has a background fill. Every thumbnail is
   decoded for the base cell size, so a wider column only has a larger margin.
+- **Terminal storage:** `TerminalImages` in `kitty_output.rs` tracks the images that the
+  terminal stores, with their bytes. The grid deletes evicted and replaced ids with `a=d,d=I`
+  and trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB). Ghostty evicts
+  unplaced images at 320 MB, and herdr stores each image twice. A trimmed cell sends its
+  picture again with `a=T`. The in-memory cache holds `max(200, 2 * visible cells)` entries
+  and at most `THUMB_CACHE_BYTE_LIMIT` (512 MB) of padded pixels. It never evicts a visible
+  cell. The grid writes run in a synchronized update.
+- **Cell size:** `query_cell_pixel_size` asks with `CSI 16 t`, because TIOCGWINSZ includes the
+  window padding of Ghostty (2258 px / 52 rows = 43.42 px). If the terminal answered at
+  start, the run loop asks again after each resize. The read takes every byte of the tty, so
+  a key typed in that millisecond is lost.
+- **Late probe answer:** `LateAnswerFilter` in `keys/mod.rs` drops the key events of a Kitty
+  probe answer that comes after `PROBE_TIMEOUT`, from Alt+`_` to Alt+`\`.
+- **Grid zoom:** the grid shows 2 to 12 rows (`MIN_VISIBLE_ROWS`, `MAX_VISIBLE_ROWS`). A 2x2
+  grid is the largest thumbnail size. The fullscreen view is the larger view. The config key
+  and the state file clamp to that range on load. A terminal too small for 2 rows keeps the
+  rows that fit.
 - **Loading icon:** a grid cell without a thumbnail shows a dim `◌` (image) or `▶` (video) at its
   center (`draw_loading_icon` in `ui.rs`, `App::is_video_at`). The icon is text in the ratatui
   frame, so the thumbnail that Kitty draws above it covers it. It needs no redraw and has no
@@ -316,7 +337,8 @@ missing.
 - **Embedded HEIC thumbnails:** a cold HEIC cell decodes in two phases. Phase 1 decodes the
   embedded thumbnail (iPhone: 320x240) and shows it as a preview (`start_preview_decode`, at most
   `MAX_PREVIEW_JOBS`). The thumbnail must have the same `irot` and `imir` as the primary image.
-  `decode/heif_boxes.rs` reads them. viewr scales the preview to the size of the sharp image.
+  `decode/heif_boxes.rs` reads them. The preview goes out at its own resolution, padded to the
+  shape of the box, and the terminal scales it to the box of the sharp picture with `c=` / `r=`.
   Phase 2 is the sharp decode through `MAX_THUMB_JOBS`. The sharp jobs of libheif files wait
   until every preview is out (`sharp_job_waits`). Other formats start at once. A preview never
   goes into the disk cache, and a disk cache hit skips the preview. The sharp image gets a new
