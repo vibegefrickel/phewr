@@ -59,15 +59,16 @@ impl Write for GraphicsOutput {
     }
 }
 
-/// The default places the picture at the cursor, without an id and without a pixel offset.
+/// The default places the picture at the cursor, without an id and at its pixel size.
+///
+/// There is no pixel offset (`X=`, `Y=`): a relaying multiplexer such as herdr turns an offset
+/// into a stretched picture, so every picture starts at a cell border.
 #[derive(Debug, Default)]
 pub(crate) struct DisplayOptions {
     pub id: Option<u32>,
-    pub cols: Option<u16>,
-    pub rows: Option<u16>,
-    /// The pixel offset inside the first cell (`X=` and `Y=`), so that a picture can start
-    /// between two cell borders.
-    pub offset: (u32, u32),
+    /// The cell box (`c=`, `r=`) that the terminal scales the picture to. `None` keeps the
+    /// pixel size.
+    pub cell_box: Option<(u16, u16)>,
 }
 
 /// How the pixels reach the terminal.
@@ -96,7 +97,12 @@ pub(crate) trait GraphicsBackend {
     ) -> io::Result<()>;
     fn delete_all_to(&self, out: &mut dyn Write) -> io::Result<()>;
     fn clear_placements_to(&self, out: &mut dyn Write) -> io::Result<()>;
-    fn place_by_id_to(&self, out: &mut dyn Write, id: u32, offset: (u32, u32)) -> io::Result<()>;
+    fn place_by_id_to(
+        &self,
+        out: &mut dyn Write,
+        id: u32,
+        cell_box: Option<(u16, u16)>,
+    ) -> io::Result<()>;
     fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
 }
 
@@ -134,8 +140,13 @@ impl GraphicsBackend for KittyBackend {
         kitty::clear_placements_to(out)
     }
 
-    fn place_by_id_to(&self, out: &mut dyn Write, id: u32, offset: (u32, u32)) -> io::Result<()> {
-        kitty::place_by_id_to(out, id, offset)
+    fn place_by_id_to(
+        &self,
+        out: &mut dyn Write,
+        id: u32,
+        cell_box: Option<(u16, u16)>,
+    ) -> io::Result<()> {
+        kitty::place_by_id_to(out, id, cell_box)
     }
 
     fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
@@ -175,15 +186,13 @@ mod tests {
                 &image,
                 &DisplayOptions {
                     id: Some(7),
-                    cols: Some(5),
-                    rows: Some(3),
-                    offset: (0, 0),
+                    cell_box: Some((5, 3)),
                 },
             )
             .unwrap();
         backend.delete_all_to(&mut out).unwrap();
         backend.clear_placements_to(&mut out).unwrap();
-        backend.place_by_id_to(&mut out, 9, (0, 0)).unwrap();
+        backend.place_by_id_to(&mut out, 9, None).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(",i=7,"));

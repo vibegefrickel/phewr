@@ -70,8 +70,7 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             app.thumb_zoom_reset();
         }
         KeyCode::Char('n') => {
-            app.gallery.toggle_filenames();
-            app.needs_render = true;
+            app.toggle_filenames();
         }
         KeyCode::Left | KeyCode::Char('h') => {
             app.gallery.move_left();
@@ -272,16 +271,16 @@ mod tests {
         assert_eq!(app.gallery.thumb_rows, compact_thumbs);
     }
 
-    /// The zoom keys stop at one row and at the most rows that fit the terminal.
+    /// The zoom keys stop at two rows and at the most rows that fit the terminal.
     #[test]
     fn gallery_zoom_keys_stop_at_the_limits() {
         let mut app = gallery_app(2);
         for _ in 0..40 {
             char_key(&mut app, '+');
         }
-        assert_eq!(app.gallery.zoom_rows, 1);
+        assert_eq!(app.gallery.zoom_rows, 2);
         char_key(&mut app, '+');
-        assert_eq!(app.gallery.zoom_rows, 1);
+        assert_eq!(app.gallery.zoom_rows, 2);
 
         for _ in 0..40 {
             char_key(&mut app, '-');

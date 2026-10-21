@@ -2,12 +2,13 @@
 
 use crate::app::{App, ViewMode};
 use crate::config::Config;
-use crate::keys::handle_event;
+use crate::keys::{LateAnswerFilter, handle_event};
 #[cfg(feature = "video")]
 use crate::kitty_output::render_video_frame;
 use crate::kitty_output::{emit_new_thumbnails, render_fullscreen_image, render_gallery_images};
 #[cfg(feature = "video")]
 use crate::mpv;
+use crate::terminal::query_cell_pixel_size;
 use crate::ui;
 #[cfg(feature = "video")]
 use crate::video_handoff::{VideoState, hand_off_videos, poll_mpv_window};
@@ -28,6 +29,10 @@ pub(crate) const WINDOW_POLL: Duration = Duration::from_millis(100);
 pub(crate) struct LoopState {
     /// A one-line note for the status bar. The next key press clears it.
     pub(crate) status: Option<String>,
+    /// Drops the answer of a terminal that answered the Kitty probe too late.
+    pub(crate) late_answers: LateAnswerFilter,
+    /// True when the terminal answered the cell size query at start, so a resize asks again.
+    pub(crate) cell_size_from_terminal: bool,
     #[cfg(feature = "video")]
     pub(crate) video: VideoState,
 }
@@ -44,6 +49,8 @@ impl LoopState {
     pub(crate) fn new(config: &Config) -> Self {
         Self {
             status: None,
+            late_answers: LateAnswerFilter::default(),
+            cell_size_from_terminal: false,
             #[cfg(feature = "video")]
             video: VideoState::new(config),
         }
@@ -61,8 +68,18 @@ pub(crate) fn run(
         // 1. Drain all buffered input first so navigation is never blocked
         while event::poll(Duration::ZERO)? {
             let event = event::read()?;
+            if state.late_answers.swallows(&event) {
+                continue;
+            }
             if matches!(event, Event::Key(_)) {
                 state.status = None;
+            }
+            if matches!(event, Event::Resize(..)) && state.cell_size_from_terminal {
+                // A new font gives new cells. The thumbnails follow. A terminal that answered
+                // at start answers again at once, so the loop never waits for the timeout.
+                if let Some(cell_px) = query_cell_pixel_size() {
+                    app.set_cell_px(cell_px);
+                }
             }
             if handle_event(app, &event)? {
                 return Ok(());

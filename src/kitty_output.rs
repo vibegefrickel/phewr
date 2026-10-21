@@ -4,7 +4,9 @@ use crate::app::App;
 use crate::encoder::{self, GraphicsBackend};
 use crossterm::{cursor, queue};
 use image::RgbaImage;
+use lru::LruCache;
 use ratatui::prelude::*;
+use std::collections::HashSet;
 use std::io::{self, Write};
 
 pub(crate) fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
@@ -75,53 +77,145 @@ fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
     out.flush()
 }
 
+/// The bytes of RGBA pixels that viewr leaves in the storage of the terminal, at most. Ghostty
+/// evicts images at 320 MB, and herdr stores each image twice, so the budget stays well below
+/// half of that. Above the budget, the grid deletes its oldest images that no cell shows.
+pub(crate) const TERMINAL_IMAGE_BUDGET: usize = 128 * 1024 * 1024;
+
+/// The images that viewr transmitted and the terminal still stores, newest last, with their
+/// pixel bytes. A stored image can be placed again by its id (`a=p`) instead of a transmit.
+pub(crate) struct TerminalImages {
+    stored: LruCache<u32, usize>,
+    bytes: usize,
+    /// The bytes that the stored images may take. A test sets a small one.
+    pub(crate) budget: usize,
+}
+
+impl TerminalImages {
+    pub(crate) fn new() -> Self {
+        Self {
+            stored: LruCache::unbounded(),
+            bytes: 0,
+            budget: TERMINAL_IMAGE_BUDGET,
+        }
+    }
+
+    /// Record a transmitted image of `bytes` pixel bytes as the newest one.
+    pub(crate) fn insert(&mut self, id: u32, bytes: usize) {
+        self.remove(id);
+        self.stored.put(id, bytes);
+        self.bytes += bytes;
+    }
+
+    pub(crate) fn remove(&mut self, id: u32) {
+        if let Some(bytes) = self.stored.pop(&id) {
+            self.bytes -= bytes;
+        }
+    }
+
+    pub(crate) fn contains(&self, id: u32) -> bool {
+        self.stored.contains(&id)
+    }
+
+    /// Make `id` the newest image, because a cell shows it again.
+    pub(crate) fn touch(&mut self, id: u32) {
+        self.stored.promote(&id);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.stored.clear();
+        self.bytes = 0;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.stored.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.stored.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// The oldest ids that must go so that the rest fits the budget. The ids in `keep` stay,
+    /// because a cell shows them. They are the newest ones, so the search stops at the first.
+    fn over_budget(&mut self, keep: &HashSet<u32>) -> Vec<u32> {
+        let mut dropped = Vec::new();
+        while self.bytes > self.budget {
+            let Some((&id, _)) = self.stored.peek_lru() else {
+                break;
+            };
+            if keep.contains(&id) {
+                break;
+            }
+            self.remove(id);
+            dropped.push(id);
+        }
+        dropped
+    }
+}
+
 pub(crate) fn emit_new_thumbnails(app: &mut App, new_indices: &[usize]) -> io::Result<()> {
     app.with_graphics_out(|app, out| emit_new_thumbnails_to(app, new_indices, out))
 }
 
-/// Write the new thumbnails to `out`, so that the tests can read the escape sequences.
+/// Write the new thumbnails to `out`, so that the tests can read the escape sequences. The
+/// synchronized update swaps the preview for the sharp image without a blank cell between.
 fn emit_new_thumbnails_to(
     app: &mut App,
     new_indices: &[usize],
     out: &mut impl Write,
 ) -> io::Result<()> {
-    let mut newly_transmitted: Vec<u32> = Vec::new();
+    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+
+    queue!(out, BeginSynchronizedUpdate)?;
+    delete_evicted_images_to(app, out)?;
+    let mut shown = HashSet::new();
     for (vis_idx, position) in app.gallery.visible_range().enumerate() {
         let img_idx = app.gallery.filtered_indices[position];
+        if let Some((_, id)) = app.thumb_cache.peek(img_idx) {
+            shown.insert(id);
+        }
         if !new_indices.contains(&img_idx) {
             continue;
         }
         delete_stale_images_to(app, out, |cell| cell == img_idx)?;
-        if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
-            transmit_thumbnail(app, out, vis_idx, img, id)?;
-            newly_transmitted.push(id);
-        }
+        transmit_cell(app, out, vis_idx, img_idx)?;
     }
-    out.flush()?;
-    app.transmitted_image_ids.extend(newly_transmitted);
-    Ok(())
+    trim_to_budget(app, out, &shown)?;
+    queue!(out, EndSynchronizedUpdate)?;
+    out.flush()
 }
 
-/// Send the thumbnail `img` with the Kitty id `id` into the visible cell `vis_idx`. The caller
-/// records the id after the flush, because `img` borrows the cache of `app`.
-fn transmit_thumbnail(
-    app: &App,
+/// Transmit the thumbnail of the cell `img_idx` into the visible cell `vis_idx`, and record its
+/// id and its bytes. A cell without a thumbnail writes nothing.
+fn transmit_cell(
+    app: &mut App,
     out: &mut impl Write,
     vis_idx: usize,
-    img: &RgbaImage,
-    id: u32,
+    img_idx: usize,
 ) -> io::Result<()> {
-    let origin = gallery_image_origin(app, app.gallery.cell_rect(vis_idx), img);
-    queue!(out, cursor::MoveTo(origin.cell.0, origin.cell.1))?;
+    let Some((img, id)) = app.thumb_cache.peek(img_idx) else {
+        return Ok(());
+    };
+    let bytes = img.as_raw().len();
+    let (origin, cell_box) = grid_placement(app, vis_idx);
+    queue!(out, cursor::MoveTo(origin.0, origin.1))?;
     app.graphics.transmit(
         out,
         img,
         &encoder::DisplayOptions {
             id: Some(id),
-            offset: origin.offset,
-            ..encoder::DisplayOptions::default()
+            cell_box,
         },
-    )
+    )?;
+    app.terminal_images.insert(id, bytes);
+    Ok(())
 }
 
 /// Delete the previews that a sharp thumbnail replaced, for the cells that `select` picks. The
@@ -134,8 +228,7 @@ fn delete_stale_images_to(
     let mut kept = Vec::new();
     for (cell, id) in std::mem::take(&mut app.stale_image_ids) {
         if select(cell) {
-            app.graphics.delete_image_to(out, id)?;
-            app.transmitted_image_ids.remove(&id);
+            delete_image_to(app, out, id)?;
         } else {
             kept.push((cell, id));
         }
@@ -144,24 +237,48 @@ fn delete_stale_images_to(
     Ok(())
 }
 
-/// Where a thumbnail starts: the cell of the grid and the pixel offset inside that cell.
-struct ImageOrigin {
-    cell: (u16, u16),
-    offset: (u32, u32),
+/// Delete the images of the thumbnails that the cache dropped. Their cells show nothing, and
+/// a cell that comes back gets a new decode and a new id.
+fn delete_evicted_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
+    for id in app.thumb_cache.take_evicted_ids() {
+        delete_image_to(app, out, id)?;
+    }
+    Ok(())
 }
 
-/// Center the fitted thumbnail in its grid cell, to the pixel. The thumbnail is never larger
-/// than the cell, so the offset stays inside the first cell.
-fn gallery_image_origin(app: &App, cell_rect: Rect, img: &RgbaImage) -> ImageOrigin {
-    let (cell_width, cell_height) = (app.cell_px.0.max(1), app.cell_px.1.max(1));
-    let gap_x = (u32::from(cell_rect.width) * cell_width).saturating_sub(img.width()) / 2;
-    let gap_y = (u32::from(cell_rect.height) * cell_height).saturating_sub(img.height()) / 2;
-    let cell_x = cell_rect.x + u16::try_from(gap_x / cell_width).unwrap_or(u16::MAX);
-    let cell_y = cell_rect.y + u16::try_from(gap_y / cell_height).unwrap_or(u16::MAX);
-    ImageOrigin {
-        cell: (cell_x, cell_y),
-        offset: (gap_x % cell_width, gap_y % cell_height),
+/// Delete the oldest images that no visible cell shows, until the stored bytes fit the budget.
+/// A cell that shows one of them later transmits its thumbnail again from the cache.
+fn trim_to_budget(app: &mut App, out: &mut impl Write, shown: &HashSet<u32>) -> io::Result<()> {
+    for id in app.terminal_images.over_budget(shown) {
+        app.graphics.delete_image_to(out, id)?;
     }
+    Ok(())
+}
+
+/// Delete the image `id` in the terminal, if viewr transmitted it, and forget it.
+fn delete_image_to(app: &mut App, out: &mut impl Write, id: u32) -> io::Result<()> {
+    if app.terminal_images.contains(id) {
+        app.graphics.delete_image_to(out, id)?;
+        app.terminal_images.remove(id);
+    }
+    Ok(())
+}
+
+/// Where the thumbnail of the visible cell `vis_idx` goes: the whole cell in the middle of its
+/// grid cell, and the base cell box that the terminal scales it to.
+///
+/// Every grid picture has the shape of the box: a sharp thumbnail is padded to its pixel size,
+/// a preview has its own size. `c=` and `r=` fit both to the same cells. A sharp picture of
+/// the exact size scales 1:1, and one off by a pixel, after a rounded cell size, stays in its
+/// cells. No picture needs a pixel offset, which a relaying multiplexer gets wrong.
+fn grid_placement(app: &App, vis_idx: usize) -> ((u16, u16), Option<(u16, u16)>) {
+    let cell = app.gallery.cell_rect(vis_idx);
+    let (cols, rows) = (app.gallery.thumb_cols, app.gallery.thumb_rows);
+    let origin = (
+        cell.x + cell.width.saturating_sub(cols) / 2,
+        cell.y + cell.height.saturating_sub(rows) / 2,
+    );
+    (origin, Some((cols, rows)))
 }
 
 pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
@@ -169,6 +286,13 @@ pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
     // first screen waits for the cell shape, so that no cell decodes for two sizes.
     app.clear_thumb_queue();
     app.request_cell_shape();
+    app.thumb_cache.fit_capacity(app.gallery.visible_cells());
+    app.thumb_cache
+        .set_visible(app.gallery.visible_items().map(|(_, index)| index));
+    for position in app.gallery.visible_range() {
+        app.thumb_cache
+            .touch(app.gallery.filtered_indices[position]);
+    }
     if !app.cell_shape_pending() {
         for position in app.gallery.visible_range() {
             let img_idx = app.gallery.filtered_indices[position];
@@ -179,45 +303,56 @@ pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
     app.with_graphics_out(place_gallery_images_to)
 }
 
-/// Write the visible thumbnails to `out`, so that the tests can read the escape sequences.
+/// Write the visible thumbnails to `out`, so that the tests can read the escape sequences. The
+/// synchronized update swaps the old screen for the new one without a blank grid between.
 fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
+    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+
+    queue!(out, BeginSynchronizedUpdate)?;
     if app.graphics_storage_dirty {
         app.graphics_delete_all_to(out)?;
         app.graphics_storage_dirty = false;
         app.stale_image_ids.clear();
+        app.thumb_cache.take_evicted_ids();
     } else {
         // Drop visible placements only; keep stored image data so already-transmitted thumbs
         // can be re-placed with a cheap `a=p` instead of a full PNG retransmit.
         app.graphics.clear_placements_to(out)?;
         delete_stale_images_to(app, out, |_| true)?;
+        delete_evicted_images_to(app, out)?;
     }
 
-    let mut newly_transmitted: Vec<u32> = Vec::new();
+    let mut shown = HashSet::new();
     for (vis_idx, position) in app.gallery.visible_range().enumerate() {
         let img_idx = app.gallery.filtered_indices[position];
-        let Some((img, id)) = app.thumb_cache.peek(img_idx) else {
+        let Some((_, id)) = app.thumb_cache.peek(img_idx) else {
             continue;
         };
-        if app.transmitted_image_ids.contains(&id) {
-            let origin = gallery_image_origin(app, app.gallery.cell_rect(vis_idx), img);
-            queue!(out, cursor::MoveTo(origin.cell.0, origin.cell.1))?;
-            app.graphics.place_by_id_to(out, id, origin.offset)?;
+        shown.insert(id);
+        if app.terminal_images.contains(id) {
+            let (origin, cell_box) = grid_placement(app, vis_idx);
+            queue!(out, cursor::MoveTo(origin.0, origin.1))?;
+            app.graphics.place_by_id_to(out, id, cell_box)?;
+            app.terminal_images.touch(id);
         } else {
-            transmit_thumbnail(app, out, vis_idx, img, id)?;
-            newly_transmitted.push(id);
+            transmit_cell(app, out, vis_idx, img_idx)?;
         }
     }
-
-    out.flush()?;
-    app.transmitted_image_ids.extend(newly_transmitted);
-    Ok(())
+    trim_to_budget(app, out, &shown)?;
+    queue!(out, EndSynchronizedUpdate)?;
+    out.flush()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{emit_new_thumbnails_to, place_gallery_images_to, render_fullscreen_image_to};
+    use super::{
+        TerminalImages, emit_new_thumbnails_to, place_gallery_images_to,
+        render_fullscreen_image_to, render_gallery_images,
+    };
     use crate::app::App;
+    use crate::app::thumbnails::pad_for_grid;
     use crate::image_list::SharedImageList;
+    use crate::test_support::kitty::FakeTerminal;
     use crate::test_support::text;
     use image::RgbaImage;
     use ratatui::layout::Rect;
@@ -227,21 +362,41 @@ mod tests {
     const PLACE: &str = "\x1b_Ga=p,";
     const DELETE_ALL: &str = "\x1b_Ga=d,d=A,";
     const CLEAR_PLACEMENTS: &str = "\x1b_Ga=d,d=a,";
+    const BEGIN_SYNC: &str = "\x1b[?2026h";
+    const END_SYNC: &str = "\x1b[?2026l";
+    /// The pixel box of a cell of `thumbnail_app`: 20x6 cells of 8x16 px.
+    const BOX_PX: (u32, u32) = (160, 96);
+    const BOX_BYTES: usize = 160 * 96 * 4;
 
-    /// A gallery of `count` photos with a decoded thumbnail for each, so no decode starts.
-    /// The cells are 20x6 cells of 8x16 px, so 160x96 px.
-    fn thumbnail_app(count: usize) -> App {
+    /// A gallery of `count` photos without thumbnails. The cells are 20x6 cells of 8x16 px, so
+    /// 160x96 px, in 5 columns and 4 rows.
+    fn grid_app(count: usize) -> App {
         let mut app = App::new((8, 16), SharedImageList::new());
         app.images = (0..count)
             .map(|index| PathBuf::from(format!("/photos/{index}.jpg")))
             .collect();
+        app.filenames = (0..count).map(|index| format!("{index}.jpg")).collect();
         app.gallery.filtered_indices = (0..count).collect();
+        app.gallery.zoom_rows = 4;
         // 4 rows of 6 and 5 columns of 20, with 5 and 6 gaps.
         app.gallery.update_grid(Rect::new(0, 0, 106, 29));
+        app.scan_complete = true;
+        app
+    }
+
+    /// `grid_app` with a padded sharp thumbnail for each cell, so no decode starts.
+    fn thumbnail_app(count: usize) -> App {
+        let mut app = grid_app(count);
         for index in 0..count {
-            app.thumb_cache.insert(index, RgbaImage::new(4, 4));
+            app.thumb_cache.insert(index, sharp_thumbnail(4, 4));
         }
         app
+    }
+
+    /// A sharp thumbnail of `width` x `height` opaque pixels, padded to the box.
+    fn sharp_thumbnail(width: u32, height: u32) -> RgbaImage {
+        let image = RgbaImage::from_pixel(width, height, image::Rgba([9, 9, 9, 255]));
+        pad_for_grid(image, BOX_PX, true)
     }
 
     /// The write half of `render_gallery_images`, for the visible cells of the grid.
@@ -254,18 +409,20 @@ mod tests {
         let mut app = App::new((8, 16), SharedImageList::new());
         app.loaded = Some(RgbaImage::new(16, 32));
         app.image_rect = Rect::new(2, 1, 10, 10);
-        app.transmitted_image_ids.insert(7);
+        app.terminal_images.insert(7, 4);
         let mut out = Vec::new();
 
         render_fullscreen_image_to(&mut app, &mut out).unwrap();
 
         let text = text(&out);
-        assert!(text.starts_with("\x1b[?2026h"));
-        assert!(text.ends_with("\x1b[?2026l"));
+        assert!(text.starts_with(BEGIN_SYNC));
+        assert!(text.ends_with(END_SYNC));
         assert!(text.contains(DELETE_ALL));
         assert!(text.contains("\x1b[6;7H"), "2 by 2 cells in the middle");
         assert!(text.contains(TRANSMIT));
-        assert!(app.transmitted_image_ids.is_empty());
+        assert!(!text.contains(",X="), "no pixel offset: {text}");
+        assert!(!text.contains(",Y="), "no pixel offset: {text}");
+        assert!(app.terminal_images.is_empty());
     }
 
     #[test]
@@ -281,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_transmits_once_and_then_places_by_id() {
+    fn gallery_transmits_once_and_then_places_by_id_in_a_synchronized_update() {
         let mut app = thumbnail_app(3);
         app.graphics_storage_dirty = true;
         let mut out = Vec::new();
@@ -289,52 +446,64 @@ mod tests {
         place_visible(&mut app, &mut out);
 
         let first = text(&out);
+        assert!(first.starts_with(BEGIN_SYNC));
+        assert!(first.ends_with(END_SYNC));
         assert!(first.contains(DELETE_ALL));
         assert_eq!(first.matches(TRANSMIT).count(), 3);
         assert!(!first.contains(PLACE));
-        assert_eq!(app.transmitted_image_ids.len(), 3);
+        assert_eq!(app.terminal_images.len(), 3);
+        assert_eq!(app.terminal_images.bytes(), 3 * BOX_BYTES);
         assert!(!app.graphics_storage_dirty);
 
         out.clear();
         place_visible(&mut app, &mut out);
 
         let second = text(&out);
-        assert!(second.starts_with(CLEAR_PLACEMENTS));
+        assert!(second.starts_with(BEGIN_SYNC));
+        assert!(
+            second
+                .strip_prefix(BEGIN_SYNC)
+                .is_some_and(|rest| rest.starts_with(CLEAR_PLACEMENTS))
+        );
+        assert!(second.ends_with(END_SYNC));
         assert!(!second.contains(DELETE_ALL));
         assert!(!second.contains(TRANSMIT));
         assert_eq!(second.matches(PLACE).count(), 3);
     }
 
     #[test]
-    fn gallery_centers_each_thumbnail_to_the_pixel() {
+    fn a_grid_picture_starts_at_a_cell_border_without_a_pixel_offset() {
         let mut app = thumbnail_app(1);
         assert_eq!((app.gallery.thumb_cols, app.gallery.thumb_rows), (20, 6));
         let mut out = Vec::new();
 
         place_visible(&mut app, &mut out);
 
-        // 4x4 px in 160x96 px: a gap of 78 px (9 cells and 6 px) and 46 px (2 rows and 14 px),
-        // after the edge gap of 1 cell.
         let first = text(&out);
         assert!(
-            first.contains("\x1b[4;11H"),
-            "the cell of the origin: {first}"
+            first.contains("\x1b[2;2H"),
+            "the first cell after the edge gaps: {first}"
         );
-        assert!(first.contains(",X=6,Y=14,"), "the pixel offset: {first}");
+        assert!(first.contains(",s=160,v=96,"), "the padded box: {first}");
+        assert!(!first.contains(",X="), "no pixel offset: {first}");
+        assert!(!first.contains(",Y="), "no pixel offset: {first}");
+        assert!(
+            first.contains(",i=1,c=20,r=6,"),
+            "the cell box, so a rounded cell size cannot push it into the gap: {first}"
+        );
 
-        app.transmitted_image_ids.insert(1);
         out.clear();
         place_visible(&mut app, &mut out);
-        assert!(text(&out).contains("\x1b_Ga=p,q=2,C=1,i=1,X=6,Y=14\x1b\\"));
+        assert!(text(&out).contains("\x1b_Ga=p,q=2,C=1,i=1,c=20,r=6\x1b\\"));
     }
 
     #[test]
-    fn a_thumbnail_as_large_as_its_box_fills_its_cell() {
-        let mut app = thumbnail_app(1);
-        let (width, height) =
-            crate::app::thumbnails::thumb_target_px(app.gallery.thumb_box(), (8, 16));
-        assert_eq!((width, height), (160, 96), "the whole cell, no padding");
-        app.thumb_cache.insert(0, RgbaImage::new(width, height));
+    fn a_wide_or_tall_cell_centers_the_picture_in_whole_cells() {
+        let mut app = thumbnail_app(6);
+        // 108 columns: 102 for 5 columns leave 2 wide columns. 31 rows: 26 for 4 rows leave 2.
+        app.gallery.update_grid(Rect::new(0, 0, 108, 31));
+        assert_eq!((app.gallery.extra_cols, app.gallery.extra_rows), (2, 2));
+        assert_eq!(app.gallery.cell_rect(0), Rect::new(1, 1, 21, 7));
         let mut out = Vec::new();
 
         place_visible(&mut app, &mut out);
@@ -342,10 +511,50 @@ mod tests {
         let text = text(&out);
         assert!(
             text.contains("\x1b[2;2H"),
-            "the first cell after the gaps: {text}"
+            "a 1-cell rest leaves it top left"
         );
-        assert!(!text.contains(",X="), "no pixel offset: {text}");
-        assert!(!text.contains(",Y="), "no pixel offset: {text}");
+        assert!(
+            text.contains("\x1b[2;24H"),
+            "the second wide column: {text}"
+        );
+        assert!(text.contains("\x1b[2;46H"), "the first base column: {text}");
+        assert!(text.contains("\x1b[10;2H"), "the second tall row: {text}");
+        assert!(!text.contains(",X=") && !text.contains(",Y="));
+        assert_eq!(text.matches(",s=160,v=96,").count(), 6, "the base size");
+    }
+
+    fn text_of(out: &[u8]) -> String {
+        text(out)
+    }
+
+    #[test]
+    fn a_preview_is_scaled_to_the_cell_box_by_the_terminal() {
+        let mut app = grid_app(1);
+        // A 40x30 preview in a 160x96 box: padded to 40x24? No: to the box shape, 40x24 is too
+        // small for 30 rows, so 50x30.
+        let preview = pad_for_grid(RgbaImage::new(40, 30), BOX_PX, false);
+        assert_eq!(preview.dimensions(), (50, 30));
+        assert!(app.store_thumbnail(0, preview, false));
+        let mut out = Vec::new();
+
+        emit_new_thumbnails_to(&mut app, &[0], &mut out).unwrap();
+
+        let text = text(&out);
+        assert!(text.contains(",s=50,v=30,i=1,c=20,r=6,"), "{text}");
+        assert!(!text.contains(",X=") && !text.contains(",Y="));
+
+        out.clear();
+        place_visible(&mut app, &mut out);
+        assert!(text_of(&out).contains("\x1b_Ga=p,q=2,C=1,i=1,c=20,r=6\x1b\\"));
+
+        // The sharp image takes the same origin without a scale.
+        assert!(app.store_thumbnail(0, sharp_thumbnail(160, 80), true));
+        out.clear();
+        emit_new_thumbnails_to(&mut app, &[0], &mut out).unwrap();
+        let text = text_of(&out);
+        assert!(text.contains("\x1b_Ga=d,d=I,i=1,q=2\x1b\\"));
+        assert!(text.contains("\x1b[2;2H"), "the same origin: {text}");
+        assert!(text.contains(",s=160,v=96,i=2,c=20,r=6,m="), "{text}");
     }
 
     #[test]
@@ -358,21 +567,22 @@ mod tests {
         place_visible(&mut app, &mut out);
 
         assert_eq!(text(&out).matches(TRANSMIT).count(), 2);
-        assert_eq!(app.transmitted_image_ids.len(), 2);
+        assert_eq!(app.terminal_images.len(), 2);
     }
 
     #[test]
-    fn new_thumbnails_go_out_without_a_delete() {
+    fn new_thumbnails_go_out_in_a_synchronized_update_without_a_delete() {
         let mut app = thumbnail_app(3);
         let mut out = Vec::new();
 
         emit_new_thumbnails_to(&mut app, &[1, 2, 5], &mut out).unwrap();
 
         let text = text(&out);
+        assert!(text.starts_with(BEGIN_SYNC) && text.ends_with(END_SYNC));
         assert_eq!(text.matches(TRANSMIT).count(), 2);
         assert!(!text.contains("\x1b_Ga=d"));
-        assert_eq!(app.transmitted_image_ids.len(), 2);
-        assert!(text.contains("\x1b[4;32H"), "centered in the second cell");
+        assert_eq!(app.terminal_images.len(), 2);
+        assert!(text.contains("\x1b[2;23H"), "the second cell: {text}");
     }
 
     #[test]
@@ -385,7 +595,7 @@ mod tests {
         let mut out = Vec::new();
         emit_new_thumbnails_to(&mut app, &[2], &mut out).unwrap();
         assert!(!text(&out).contains("\x1b_Ga=d"));
-        assert!(app.transmitted_image_ids.contains(&preview_id));
+        assert!(app.terminal_images.contains(preview_id));
 
         assert!(app.store_thumbnail(2, RgbaImage::new(4, 4), true));
         let (_, sharp_id) = app.thumb_cache.peek(2).unwrap();
@@ -400,8 +610,8 @@ mod tests {
         );
         assert_eq!(text.matches(TRANSMIT).count(), 1);
         assert!(text.contains(&format!(",i={sharp_id}")));
-        assert!(!app.transmitted_image_ids.contains(&preview_id));
-        assert!(app.transmitted_image_ids.contains(&sharp_id));
+        assert!(!app.terminal_images.contains(preview_id));
+        assert!(app.terminal_images.contains(sharp_id));
         assert!(app.stale_image_ids.is_empty());
     }
 
@@ -409,12 +619,12 @@ mod tests {
     fn a_redraw_of_the_grid_deletes_the_replaced_previews() {
         let mut app = thumbnail_app(2);
         app.stale_image_ids.push((5, 99));
-        app.transmitted_image_ids.insert(99);
+        app.terminal_images.insert(99, 16);
         let mut out = Vec::new();
         place_visible(&mut app, &mut out);
         assert!(text(&out).contains("\x1b_Ga=d,d=I,i=99,"));
         assert!(app.stale_image_ids.is_empty());
-        assert!(!app.transmitted_image_ids.contains(&99));
+        assert!(!app.terminal_images.contains(99));
 
         // A full redraw deletes every image, so the list only empties.
         app.stale_image_ids.push((5, 98));
@@ -424,6 +634,180 @@ mod tests {
         assert!(text(&out).contains(DELETE_ALL));
         assert!(!text(&out).contains("d=I"));
         assert!(app.stale_image_ids.is_empty());
+    }
+
+    #[test]
+    fn an_evicted_thumbnail_is_deleted_in_the_terminal() {
+        let mut app = thumbnail_app(2);
+        let mut out = Vec::new();
+        place_visible(&mut app, &mut out);
+        let (_, old_id) = app.thumb_cache.peek(0).unwrap();
+        assert!(app.terminal_images.contains(old_id));
+
+        // The cache drops the cell 0 when it shrinks to the smallest capacity it has.
+        for index in 2..=app.thumb_cache.capacity() {
+            app.thumb_cache.insert(index, RgbaImage::new(1, 1));
+        }
+        assert!(!app.thumb_cache.contains(0));
+        out.clear();
+        place_visible(&mut app, &mut out);
+        assert!(
+            text(&out).contains(&format!("\x1b_Ga=d,d=I,i={old_id},q=2\x1b\\")),
+            "{}",
+            text(&out)
+        );
+        assert!(!app.terminal_images.contains(old_id));
+
+        // A never transmitted id needs no delete.
+        app.thumb_cache.insert(1, RgbaImage::new(1, 1));
+        app.thumb_cache.insert(1, RgbaImage::new(1, 1));
+        out.clear();
+        emit_new_thumbnails_to(&mut app, &[], &mut out).unwrap();
+        assert!(!text(&out).contains("d=I"));
+    }
+
+    #[test]
+    fn the_terminal_images_count_their_bytes_newest_last() {
+        let mut images = TerminalImages::new();
+        assert_eq!(images.budget, super::TERMINAL_IMAGE_BUDGET);
+        images.budget = 10;
+        images.insert(1, 4);
+        images.insert(2, 4);
+        images.insert(3, 4);
+        assert_eq!((images.len(), images.bytes()), (3, 12));
+        images.touch(1);
+        let keep = std::collections::HashSet::from([3]);
+        assert_eq!(
+            images.over_budget(&keep),
+            vec![2],
+            "the oldest one that no cell shows"
+        );
+        assert_eq!(images.bytes(), 8);
+        images.insert(1, 6);
+        assert_eq!(
+            (images.len(), images.bytes()),
+            (2, 10),
+            "a second insert replaces"
+        );
+        images.remove(9);
+        images.clear();
+        assert!(images.is_empty() && images.bytes() == 0);
+    }
+
+    #[test]
+    fn the_grid_trims_the_old_images_above_the_budget_but_never_a_visible_one() {
+        let mut app = thumbnail_app(40);
+        app.terminal_images.budget = 25 * BOX_BYTES;
+        let mut out = Vec::new();
+        place_visible(&mut app, &mut out);
+        assert_eq!(app.terminal_images.len(), 20);
+        assert!(!text(&out).contains("d=I"));
+
+        // The second page: 40 images are over the budget, so the 15 oldest of page 1 go.
+        app.gallery.move_to_last();
+        assert_eq!(app.gallery.visible_range(), 20..40);
+        out.clear();
+        place_visible(&mut app, &mut out);
+        assert_eq!(text(&out).matches("\x1b_Ga=d,d=I,").count(), 15);
+        assert_eq!(app.terminal_images.len(), 25);
+        for index in 20..40 {
+            let (_, id) = app.thumb_cache.peek(index).unwrap();
+            assert!(app.terminal_images.contains(id), "cell {index} stays");
+        }
+
+        // Back on page 1, the 15 trimmed cells transmit again, the 5 kept ones place by id.
+        app.gallery.move_to_first();
+        out.clear();
+        place_visible(&mut app, &mut out);
+        let text = text(&out);
+        assert_eq!(text.matches(TRANSMIT).count(), 15);
+        assert_eq!(text.matches(PLACE).count(), 5);
+        assert_eq!(app.terminal_images.len(), 25);
+    }
+
+    /// Scroll `pages` down and up through `app` on `terminal`: each page gets its thumbnails,
+    /// as the decodes deliver them, and the grid writes go into the fake terminal.
+    fn scroll_through(app: &mut App, terminal: &mut FakeTerminal, pages: usize) {
+        for step in 0..2 * pages {
+            render_gallery_images(app).unwrap();
+            terminal.feed(&app.graphics_out.take_bytes());
+            let fresh: Vec<usize> = app
+                .gallery
+                .visible_items()
+                .map(|(_, index)| index)
+                .filter(|&index| !app.thumb_cache.contains(index))
+                .collect();
+            for &index in &fresh {
+                assert!(app.store_thumbnail(index, sharp_thumbnail(8, 8), true));
+            }
+            let mut out = Vec::new();
+            emit_new_thumbnails_to(app, &fresh, &mut out).unwrap();
+            terminal.feed(&out);
+            assert!(terminal.black_cells.is_empty(), "step {step}");
+            for (_, index) in app.gallery.visible_items() {
+                let (_, id) = app.thumb_cache.peek(index).unwrap();
+                assert!(
+                    terminal
+                        .placements
+                        .iter()
+                        .any(|placement| placement.id == id),
+                    "step {step}: the cell {index} shows nothing"
+                );
+            }
+            assert_eq!(terminal.synchronized_depth, 0);
+            if step + 1 < pages {
+                app.gallery.move_page_down();
+            } else {
+                app.gallery.move_page_up();
+            }
+        }
+    }
+
+    #[test]
+    fn scrolling_a_long_folder_up_and_down_leaves_no_black_cell() {
+        let pages = 10;
+        let mut app = grid_app(20 * pages);
+        app.terminal_images.budget = 40 * BOX_BYTES;
+        let mut terminal = FakeTerminal::with_limit(60 * BOX_BYTES);
+
+        scroll_through(&mut app, &mut terminal, pages);
+
+        assert!(terminal.stored_bytes() <= 40 * BOX_BYTES);
+        assert!(app.thumb_cache.capacity() >= 40);
+    }
+
+    #[test]
+    fn without_the_budget_the_terminal_drops_the_images_of_the_first_pages() {
+        let pages = 10;
+        let mut app = grid_app(20 * pages);
+        app.terminal_images.budget = usize::MAX;
+        let mut terminal = FakeTerminal::with_limit(60 * BOX_BYTES);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scroll_through(&mut app, &mut terminal, pages);
+        }));
+
+        assert!(
+            result.is_err(),
+            "the fake terminal evicts, so a cell goes black"
+        );
+    }
+
+    #[test]
+    fn the_cache_capacity_follows_the_grid() {
+        let mut app = thumbnail_app(1);
+        assert_eq!(app.thumb_cache.capacity(), 200);
+        app.gallery.zoom_rows = 12;
+        app.gallery.update_grid(Rect::new(0, 0, 1000, 300));
+        assert!(
+            app.gallery.visible_cells() > 100,
+            "{}",
+            app.gallery.visible_cells()
+        );
+
+        render_gallery_images(&mut app).unwrap();
+
+        assert_eq!(app.thumb_cache.capacity(), 2 * app.gallery.visible_cells());
     }
 
     #[cfg(feature = "video")]

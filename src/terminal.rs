@@ -96,6 +96,21 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 /// The answer must not reach crossterm, which would read it as key presses. The function runs
 /// before the first `event::poll`, reads the tty itself and stops at the string terminator.
 pub(crate) fn query_terminal(sequence: &[u8]) -> Option<Vec<u8>> {
+    query_terminal_until(sequence, |answer| {
+        answer
+            .windows(2)
+            .position(|pair| pair == b"\x1b\\")
+            .map(|end| end + 2)
+    })
+}
+
+/// Send `sequence` to the terminal and read until `end` finds the length of the complete
+/// answer, or `None` after `PROBE_TIMEOUT`.
+///
+/// The read takes every byte that the tty holds, so a key pressed before the answer is lost.
+/// The caller asks only when the user does not type: at start, and after a resize when the
+/// terminal answered at start, so no timeout can block the loop.
+fn query_terminal_until(sequence: &[u8], end: impl Fn(&[u8]) -> Option<usize>) -> Option<Vec<u8>> {
     use rustix::event::{PollFd, PollFlags};
     use std::io::Read;
 
@@ -122,15 +137,49 @@ pub(crate) fn query_terminal(sequence: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
         answer.extend_from_slice(&buf[..count]);
-        if let Some(end) = answer.windows(2).position(|pair| pair == b"\x1b\\") {
-            answer.truncate(end + 2);
+        if let Some(length) = end(&answer) {
+            answer.truncate(length);
             return Some(answer);
         }
     }
 }
 
-pub(crate) fn query_cell_pixel_size() -> (u32, u32) {
+/// The pixel size of one cell, as the terminal answers `CSI 16 t`. `None` when the terminal
+/// does not answer in time, or with something else.
+///
+/// The window size (TIOCGWINSZ) includes the window padding of Ghostty, so its division gives
+/// a cell that is a fraction too tall, and a grid of 50 rows drifts by a cell. The terminal
+/// answers the query with its real cell size.
+pub(crate) fn query_cell_pixel_size() -> Option<(u32, u32)> {
+    query_terminal_until(CELL_SIZE_QUERY, cell_size_report_end)
+        .as_deref()
+        .and_then(parse_cell_size_report)
+}
+
+/// The cell size from the window size divided by the cell count, when the terminal does not
+/// answer the query.
+pub(crate) fn window_cell_pixel_size() -> (u32, u32) {
     crossterm::terminal::window_size().map_or((8, 16), |ws| cell_pixel_size(&ws))
+}
+
+/// `CSI 16 t` asks for the pixel size of a cell. The answer is `CSI 6 ; height ; width t`.
+const CELL_SIZE_QUERY: &[u8] = b"\x1b[16t";
+
+/// The length of the answer to `CELL_SIZE_QUERY` in `answer`, once its final `t` is there.
+fn cell_size_report_end(answer: &[u8]) -> Option<usize> {
+    let start = answer.windows(3).position(|bytes| bytes == b"\x1b[6")?;
+    let length = answer[start..].iter().position(|&byte| byte == b't')?;
+    Some(start + length + 1)
+}
+
+/// The cell size in `CSI 6 ; height ; width t`. `None` for any other answer or a zero size.
+fn parse_cell_size_report(answer: &[u8]) -> Option<(u32, u32)> {
+    let text = std::str::from_utf8(answer).ok()?;
+    let (_, report) = text.split_once("\x1b[6;")?;
+    let (fields, _) = report.split_once('t')?;
+    let (height, width) = fields.split_once(';')?;
+    let (width, height) = (width.parse::<u32>().ok()?, height.parse::<u32>().ok()?);
+    (width > 0 && height > 0).then_some((width, height))
 }
 
 /// The pixel size of one cell from a window size report, so that the tests need no terminal.
@@ -156,14 +205,36 @@ fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{cell_pixel_size, query_cell_pixel_size};
+    use super::{CELL_SIZE_QUERY, cell_pixel_size, cell_size_report_end, parse_cell_size_report};
     use crossterm::terminal::WindowSize;
 
     #[test]
-    fn the_cell_size_is_never_zero() {
-        let (width, height) = query_cell_pixel_size();
+    fn the_cell_size_query_and_its_answer_follow_xterm() {
+        assert_eq!(CELL_SIZE_QUERY, b"\x1b[16t");
+        // Ghostty and herdr answer 18x43 px cells like this.
+        assert_eq!(parse_cell_size_report(b"\x1b[6;43;18t"), Some((18, 43)));
+        assert_eq!(
+            parse_cell_size_report(b"\x1b[I\x1b[6;43;18t"),
+            Some((18, 43)),
+            "a focus report before the answer"
+        );
+    }
 
-        assert!(width >= 1 && height >= 1);
+    #[test]
+    fn a_strange_or_empty_answer_gives_no_cell_size() {
+        assert_eq!(parse_cell_size_report(b""), None);
+        assert_eq!(parse_cell_size_report(b"\x1b[0n"), None);
+        assert_eq!(parse_cell_size_report(b"\x1b[6;0;18t"), None);
+        assert_eq!(parse_cell_size_report(b"\x1b[6;43t"), None);
+        assert_eq!(parse_cell_size_report(b"\x1b[6;x;18t"), None);
+    }
+
+    #[test]
+    fn the_read_stops_at_the_final_t_of_the_report() {
+        assert_eq!(cell_size_report_end(b"\x1b[6;43;18t"), Some(10));
+        assert_eq!(cell_size_report_end(b"\x1b[6;43;18tj"), Some(10));
+        assert_eq!(cell_size_report_end(b"\x1b[6;43;1"), None);
+        assert_eq!(cell_size_report_end(b"tt"), None);
     }
 
     fn window(columns: u16, rows: u16, width: u16, height: u16) -> WindowSize {

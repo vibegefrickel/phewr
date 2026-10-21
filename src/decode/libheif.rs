@@ -1,6 +1,6 @@
 //! The libheif route: HEIC, HEIF and AVIF, the embedded thumbnails and the core share.
 
-use super::resize::{resize_rgba, resize_to_exact, scaled_down_size};
+use super::resize::{resize_rgba, scaled_down_size};
 use super::{EmbeddedThumbnail, FOREGROUND};
 use crate::decode;
 use crate::scanner;
@@ -139,8 +139,9 @@ fn preview_thumbnail(
         .max_by_key(|thumb| u64::from(thumb.width()) * u64::from(thumb.height()))
 }
 
-/// Decode the embedded thumbnail of `path` and scale it to the size that the primary image
-/// gets in `target`, so that the sharp decode replaces it in place.
+/// Decode the embedded thumbnail of `path` at its own resolution, at most the size that the
+/// primary image gets in `target`. The grid pads it to the shape of the cell and lets the
+/// terminal scale it, so a cold cell sends a few kilobytes instead of a full-size image.
 pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
     use libheif_rs::{ColorSpace, LibHeif, RgbChroma};
 
@@ -154,17 +155,12 @@ pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result
             "no embedded thumbnail with the transform of the primary image",
         )
     })?;
-    let (dst_w, dst_h) = fit_within((primary.width(), primary.height()), target)
+    let sharp_size = fit_within((primary.width(), primary.height()), target)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty cell"))?;
     let image = LibHeif::new()
         .decode(&thumbnail, ColorSpace::Rgb(RgbChroma::Rgba), None)
         .map_err(invalid)?;
-    let rgba = heif_image_to_rgba(&image, None)?;
-    Ok(resize_to_exact(
-        &DynamicImage::ImageRgba8(rgba),
-        dst_w,
-        dst_h,
-    ))
+    heif_image_to_rgba(&image, Some(sharp_size))
 }
 
 /// Accept a thumbnail only if it is at least as large as the primary image fitted into

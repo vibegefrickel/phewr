@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 
 /// The grid shows this many thumbnail rows until the user zooms.
 pub(crate) const DEFAULT_VISIBLE_ROWS: u16 = 4;
-pub(crate) const MIN_VISIBLE_ROWS: u16 = 1;
-pub(crate) const MAX_VISIBLE_ROWS: u16 = 32;
+/// The largest thumbnails: a 2x2 grid. A larger view is the fullscreen preview.
+pub(crate) const MIN_VISIBLE_ROWS: u16 = 2;
+pub(crate) const MAX_VISIBLE_ROWS: u16 = 12;
 pub(crate) const DEFAULT_SLIDESHOW_INTERVAL: f64 = 3.0;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -145,6 +146,7 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
         config.visible_rows = rows;
     }
 
+    // The config key and the saved state both land in the range of the zoom keys.
     config.visible_rows = config
         .visible_rows
         .clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS);
@@ -316,7 +318,8 @@ mod tests {
     fn an_out_of_range_zoom_is_clamped() {
         let root = test_root();
         let config_path = root.path().join("config.toml");
-        for (value, expected) in [(0, MIN_VISIBLE_ROWS), (999, MAX_VISIBLE_ROWS)] {
+        assert_eq!((MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS), (2, 12));
+        for (value, expected) in [(0, 2), (1, 2), (13, 12), (999, 12)] {
             std::fs::write(&config_path, format!("[gallery]\nvisible_rows = {value}\n")).unwrap();
             let config = load_at(&config_path, &root.path().join("state.toml"));
             assert_eq!(config.visible_rows, expected, "visible_rows = {value}");

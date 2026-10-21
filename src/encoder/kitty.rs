@@ -49,25 +49,15 @@ pub(crate) fn transmit_to<W: Write + ?Sized>(
 fn header_keys(img: &RgbaImage, opts: &DisplayOptions, format: u32) -> String {
     let (w, h) = img.dimensions();
     let id_part = opts.id.map(|id| format!(",i={id}")).unwrap_or_default();
-    let cols_part = opts.cols.map(|c| format!(",c={c}")).unwrap_or_default();
-    let rows_part = opts.rows.map(|r| format!(",r={r}")).unwrap_or_default();
-    let offset_part = offset_keys(opts.offset);
-    format!("a=T,q=2,C=1,f={format},s={w},v={h}{id_part}{cols_part}{rows_part}{offset_part}")
+    let box_part = cell_box_keys(opts.cell_box);
+    format!("a=T,q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}")
 }
 
-/// The `X=` and `Y=` keys for a pixel offset inside the first cell. A zero offset needs no key.
-fn offset_keys((x, y): (u32, u32)) -> String {
-    let x_part = if x > 0 {
-        format!(",X={x}")
-    } else {
-        String::new()
-    };
-    let y_part = if y > 0 {
-        format!(",Y={y}")
-    } else {
-        String::new()
-    };
-    format!("{x_part}{y_part}")
+/// The `c=` and `r=` keys of the cell box that the terminal scales the picture to.
+fn cell_box_keys(cell_box: Option<(u16, u16)>) -> String {
+    cell_box
+        .map(|(cols, rows)| format!(",c={cols},r={rows}"))
+        .unwrap_or_default()
 }
 
 /// The base64 payload in chunks of 4096 bytes through the pty.
@@ -237,15 +227,19 @@ pub(crate) fn delete_image_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Re
     write!(out, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")
 }
 
-/// Place an already-transmitted image (by ID) at the cursor position, `offset` pixels into the
-/// cell. Cheap — no PNG payload. `C=1` keeps the text cursor fixed so large placements never
-/// scroll the grid.
+/// Place an already-transmitted image (by ID) at the cursor position, scaled to `cell_box` if
+/// there is one. Cheap — no PNG payload. `C=1` keeps the text cursor fixed so large placements
+/// never scroll the grid.
 pub(crate) fn place_by_id_to<W: Write + ?Sized>(
     out: &mut W,
     id: u32,
-    offset: (u32, u32),
+    cell_box: Option<(u16, u16)>,
 ) -> io::Result<()> {
-    write!(out, "\x1b_Ga=p,q=2,C=1,i={id}{}\x1b\\", offset_keys(offset))
+    write!(
+        out,
+        "\x1b_Ga=p,q=2,C=1,i={id}{}\x1b\\",
+        cell_box_keys(cell_box)
+    )
 }
 
 #[cfg(test)]
@@ -262,12 +256,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn options(id: Option<u32>) -> DisplayOptions {
-        DisplayOptions {
-            id,
-            cols: None,
-            rows: None,
-            offset: (0, 0),
-        }
+        DisplayOptions { id, cell_box: None }
     }
 
     fn transmit(image: &RgbaImage, opts: &DisplayOptions, transfer: Transfer) -> String {
@@ -281,7 +270,7 @@ mod tests {
         let mut output = Vec::new();
         delete_all_to(&mut output).unwrap();
         clear_placements_to(&mut output).unwrap();
-        place_by_id_to(&mut output, 42, (0, 0)).unwrap();
+        place_by_id_to(&mut output, 42, None).unwrap();
         assert_eq!(
             output,
             b"\x1b_Ga=d,d=A,q=2\x1b\\\x1b_Ga=d,d=a,q=2\x1b\\\x1b_Ga=p,q=2,C=1,i=42\x1b\\"
@@ -303,34 +292,17 @@ mod tests {
             &RgbaImage::new(2, 3),
             &DisplayOptions {
                 id: None,
-                cols: Some(4),
-                rows: Some(2),
-                offset: (0, 0),
+                cell_box: Some((4, 2)),
             },
             Transfer::Direct,
         );
         assert!(encoded.contains(",c=4,r=2,"));
         assert!(!encoded.contains(",X="));
         assert!(!encoded.contains(",Y="));
-    }
-
-    #[test]
-    fn a_pixel_offset_goes_out_as_x_and_y_keys() {
-        let encoded = transmit(
-            &RgbaImage::new(2, 3),
-            &DisplayOptions {
-                id: Some(3),
-                cols: None,
-                rows: None,
-                offset: (4, 5),
-            },
-            Transfer::Direct,
-        );
-        assert!(encoded.starts_with("\x1b_Ga=T,q=2,C=1,f=32,s=2,v=3,i=3,X=4,Y=5,m=0;"));
 
         let mut output = Vec::new();
-        place_by_id_to(&mut output, 42, (0, 7)).unwrap();
-        assert_eq!(output, b"\x1b_Ga=p,q=2,C=1,i=42,Y=7\x1b\\");
+        place_by_id_to(&mut output, 42, Some((4, 2))).unwrap();
+        assert_eq!(output, b"\x1b_Ga=p,q=2,C=1,i=42,c=4,r=2\x1b\\");
     }
 
     #[test]

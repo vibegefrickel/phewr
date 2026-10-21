@@ -1,7 +1,8 @@
-use crate::config::MAX_VISIBLE_ROWS;
+use crate::config::{MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::ops::Range;
 
@@ -50,6 +51,8 @@ pub(crate) struct GalleryState {
     /// The width of a cell over its height, in terminal cells, for the column count. It comes
     /// from the photos of the folder and the pixel size of a cell.
     cols_per_row: f64,
+    /// The width over the height of the photos of the folder, behind `cols_per_row`.
+    image_aspect: f64,
     /// Zoom level the grid returns to on reset (from config).
     default_zoom_rows: usize,
 }
@@ -62,7 +65,8 @@ impl GalleryState {
     }
 
     pub(crate) fn with_zoom_rows(image_count: usize, zoom_rows: usize) -> Self {
-        let zoom_rows = zoom_rows.clamp(1, usize::from(MAX_VISIBLE_ROWS));
+        let zoom_rows =
+            zoom_rows.clamp(usize::from(MIN_VISIBLE_ROWS), usize::from(MAX_VISIBLE_ROWS));
         Self {
             filtered_indices: (0..image_count).collect(),
             cursor: 0,
@@ -79,6 +83,7 @@ impl GalleryState {
             extra_cols: 0,
             extra_rows: 0,
             cols_per_row: DEFAULT_IMAGE_ASPECT * DEFAULT_CELL_RATIO,
+            image_aspect: DEFAULT_IMAGE_ASPECT,
             default_zoom_rows: zoom_rows,
         }
     }
@@ -97,9 +102,15 @@ impl GalleryState {
             DEFAULT_IMAGE_ASPECT
         };
         let before = (self.grid_cols, self.thumb_cols, self.extra_cols);
+        self.image_aspect = aspect;
         self.cols_per_row = aspect * cell_ratio;
         self.update_grid(self.grid_rect);
         before != (self.grid_cols, self.thumb_cols, self.extra_cols)
+    }
+
+    /// The photo shape of the folder that the last `set_cell_shape` took.
+    pub(crate) fn image_aspect(&self) -> f64 {
+        self.image_aspect
     }
 
     /// The box that every thumbnail is decoded for: the base cell size.
@@ -138,7 +149,7 @@ impl GalleryState {
     }
 
     fn set_zoom_rows(&mut self, rows: usize) -> bool {
-        let rows = rows.clamp(1, self.max_visible_rows());
+        let rows = rows.clamp(self.min_visible_rows(), self.max_visible_rows());
         if rows == self.zoom_rows {
             return false;
         }
@@ -147,13 +158,22 @@ impl GalleryState {
         true
     }
 
-    /// The rows that fit the terminal at the smallest thumbnail height.
+    /// The rows that fit the terminal at the smallest thumbnail height, at most
+    /// `MAX_VISIBLE_ROWS`.
     fn max_visible_rows(&self) -> usize {
+        let most = usize::from(MAX_VISIBLE_ROWS);
         if self.grid_rect.is_empty() {
-            return usize::from(MAX_VISIBLE_ROWS);
+            return most;
         }
         let min_cell = usize::from(MIN_THUMB_ROWS + self.label_rows() + GAP);
-        (usize::from(self.grid_rect.height.saturating_sub(GAP)) / min_cell).max(1)
+        (usize::from(self.grid_rect.height.saturating_sub(GAP)) / min_cell)
+            .max(1)
+            .min(most)
+    }
+
+    /// `MIN_VISIBLE_ROWS`, or fewer rows in a terminal that is too small for them.
+    fn min_visible_rows(&self) -> usize {
+        usize::from(MIN_VISIBLE_ROWS).min(self.max_visible_rows())
     }
 
     pub(crate) fn reset_cursor(&mut self) {
@@ -167,7 +187,9 @@ impl GalleryState {
     /// of the division go to the first columns and the first rows, one cell each.
     pub(crate) fn update_grid(&mut self, grid_rect: Rect) {
         self.grid_rect = grid_rect;
-        self.visible_rows = self.zoom_rows.clamp(1, self.max_visible_rows());
+        self.visible_rows = self
+            .zoom_rows
+            .clamp(self.min_visible_rows(), self.max_visible_rows());
         let rows = self.visible_rows as u16;
         let cell_area_height = grid_rect.height.saturating_sub(gaps(rows));
         let cell_height = (cell_area_height / rows).max(MIN_THUMB_ROWS + self.label_rows());
@@ -263,6 +285,11 @@ impl GalleryState {
         self.move_cursor_to(last);
     }
 
+    /// The cells of one screen, filled or empty.
+    pub(crate) fn visible_cells(&self) -> usize {
+        self.visible_rows * self.grid_cols
+    }
+
     /// The positions in `filtered_indices` that the screen shows. A range borrows nothing, so
     /// a caller can change the app while it walks the cells.
     pub(crate) fn visible_range(&self) -> Range<usize> {
@@ -315,11 +342,34 @@ fn spread(total: u16, base: u16, count: u16) -> u16 {
     if rest < count { rest } else { 0 }
 }
 
-const THUMB_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(200).unwrap();
+/// The least number of thumbnails that the in-memory cache keeps. The capacity grows to two
+/// times the visible cell count, so the inserts of one screen never evict a visible cell.
+const THUMB_CACHE_MIN_CAPACITY: usize = 200;
+
+/// The cache capacity for `visible_cells`: two screens, at least the minimum.
+fn thumb_cache_capacity(visible_cells: usize) -> NonZeroUsize {
+    let capacity = visible_cells
+        .saturating_mul(2)
+        .max(THUMB_CACHE_MIN_CAPACITY);
+    NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN)
+}
+
+/// The bytes of padded pixels that the in-memory cache holds, at most. Above it, the oldest
+/// thumbnails that no visible cell shows go, like a count eviction.
+pub(crate) const THUMB_CACHE_BYTE_LIMIT: usize = 512 * 1024 * 1024;
 
 pub(crate) struct ThumbnailCache {
     cache: LruCache<usize, CachedThumb>,
     next_id: u32,
+    /// The Kitty ids of the thumbnails that the cache dropped. The next write of the grid
+    /// deletes them in the terminal, so its storage does not grow without end.
+    evicted_ids: Vec<u32>,
+    /// The padded pixel bytes of every entry.
+    bytes: usize,
+    /// The bytes that the entries may take. A test sets a small one.
+    pub(crate) byte_limit: usize,
+    /// The cells on the screen. The byte limit never evicts them.
+    visible: HashSet<usize>,
 }
 
 struct CachedThumb {
@@ -332,9 +382,45 @@ struct CachedThumb {
 impl ThumbnailCache {
     pub(crate) fn new() -> Self {
         Self {
-            cache: LruCache::new(THUMB_CACHE_CAPACITY),
+            cache: LruCache::new(thumb_cache_capacity(0)),
             next_id: 1,
+            evicted_ids: Vec::new(),
+            bytes: 0,
+            byte_limit: THUMB_CACHE_BYTE_LIMIT,
+            visible: HashSet::new(),
         }
+    }
+
+    /// The padded pixel bytes of every entry.
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// Name the cells of the screen. The grid calls this before its inserts, so that the byte
+    /// limit evicts only the cells of other screens.
+    pub(crate) fn set_visible(&mut self, indices: impl IntoIterator<Item = usize>) {
+        self.visible = indices.into_iter().collect();
+    }
+
+    /// Make room for two screens of `visible_cells`, at least `THUMB_CACHE_MIN_CAPACITY`. A
+    /// smaller grid drops the oldest thumbnails and names their ids for the delete.
+    pub(crate) fn fit_capacity(&mut self, visible_cells: usize) {
+        let capacity = thumb_cache_capacity(visible_cells);
+        if capacity == self.cache.cap() {
+            return;
+        }
+        while self.cache.len() > capacity.get() {
+            if let Some((_, old)) = self.cache.pop_lru() {
+                self.forget(&old);
+            }
+        }
+        self.cache.resize(capacity);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.cache.cap().get()
     }
 
     /// True when the cell has an image, a preview or a sharp one.
@@ -347,8 +433,15 @@ impl ThumbnailCache {
         self.cache.peek(&index).is_some_and(|t| t.sharp)
     }
 
+    /// The image and the Kitty id of a cell, without a change of the eviction order.
     pub(crate) fn peek(&self, index: usize) -> Option<(&RgbaImage, u32)> {
         self.cache.peek(&index).map(|t| (&t.image, t.image_id))
+    }
+
+    /// Make the cell the newest entry. The grid touches each visible cell before its inserts,
+    /// so the inserts of one screen evict only the cells of older screens.
+    pub(crate) fn touch(&mut self, index: usize) {
+        self.cache.promote(&index);
     }
 
     /// Store the sharp thumbnail. Returns the Kitty id of the preview that it replaces, so
@@ -366,19 +459,59 @@ impl ThumbnailCache {
     fn push(&mut self, index: usize, image: RgbaImage, sharp: bool) -> Option<u32> {
         let id = self.next_id;
         self.next_id += 1;
+        self.bytes += image.as_raw().len();
         let thumb = CachedThumb {
             image,
             image_id: id,
             sharp,
         };
-        self.cache
-            .push(index, thumb)
-            .filter(|(old_index, _)| *old_index == index)
-            .map(|(_, old)| old.image_id)
+        let replaced = self.cache.push(index, thumb).and_then(|(old_index, old)| {
+            self.bytes -= old.image.as_raw().len();
+            if old_index == index {
+                return Some(old.image_id);
+            }
+            self.evicted_ids.push(old.image_id);
+            None
+        });
+        self.trim_to_byte_limit();
+        replaced
     }
 
+    /// Drop the oldest entries that no visible cell shows, until the bytes fit the limit.
+    fn trim_to_byte_limit(&mut self) {
+        while self.bytes > self.byte_limit {
+            let Some(&index) = self
+                .cache
+                .iter()
+                .rev()
+                .map(|(index, _)| index)
+                .find(|index| !self.visible.contains(index))
+            else {
+                return;
+            };
+            if let Some(old) = self.cache.pop(&index) {
+                self.forget(&old);
+            }
+        }
+    }
+
+    /// Take the bytes and the id of an entry that left the cache. The terminal deletes the id.
+    fn forget(&mut self, old: &CachedThumb) {
+        self.bytes -= old.image.as_raw().len();
+        self.evicted_ids.push(old.image_id);
+    }
+
+    /// The ids that left the cache since the last take. The caller deletes them in the terminal.
+    pub(crate) fn take_evicted_ids(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.evicted_ids)
+    }
+
+    /// Drop every thumbnail. The caller deletes all images in the terminal, so the evicted ids
+    /// need no single delete.
     pub(crate) fn clear(&mut self) {
         self.cache.clear();
+        self.evicted_ids.clear();
+        self.bytes = 0;
     }
 }
 
@@ -444,8 +577,9 @@ mod tests {
         for _ in 0..40 {
             gallery.thumb_zoom_in();
         }
-        assert_eq!(gallery.zoom_rows, 1);
+        assert_eq!(gallery.zoom_rows, 2, "a 2x2 grid is the largest size");
         assert!(!gallery.thumb_zoom_in());
+        assert_eq!(gallery.visible_rows, 2);
 
         for _ in 0..40 {
             gallery.thumb_zoom_out();
@@ -456,6 +590,22 @@ mod tests {
         );
         assert!(!gallery.thumb_zoom_out());
 
+        // A tall terminal stops at 12 rows.
+        gallery.update_grid(Rect::new(0, 0, 100, 200));
+        for _ in 0..40 {
+            gallery.thumb_zoom_out();
+        }
+        assert_eq!(gallery.zoom_rows, 12);
+        assert_eq!(gallery.visible_rows, 12);
+
+        // A terminal with room for one row keeps that row.
+        gallery.update_grid(Rect::new(0, 0, 100, 6));
+        assert_eq!(gallery.visible_rows, 1);
+        assert!(gallery.thumb_zoom_in(), "from 12 to the 1 row that fits");
+        assert_eq!(gallery.zoom_rows, 1);
+        assert!(!gallery.thumb_zoom_in());
+
+        gallery.update_grid(Rect::new(0, 0, 100, 40));
         assert!(gallery.reset_zoom());
         assert_eq!(gallery.zoom_rows, 4);
         assert!(!gallery.reset_zoom());
@@ -722,6 +872,87 @@ mod tests {
         assert!(gallery.set_cell_shape(0.75, (8, 16)));
         assert!(gallery.set_cell_shape(f64::NAN, (0, 0)));
         assert_eq!(gallery.grid_cols, 4);
+    }
+
+    #[test]
+    fn the_cache_names_the_ids_it_drops_and_grows_with_the_grid() {
+        let mut cache = ThumbnailCache::new();
+        assert_eq!(cache.capacity(), 200);
+        for index in 0..201 {
+            cache.insert(index, image::RgbaImage::new(1, 1));
+        }
+        assert!(!cache.contains(0), "the oldest cell went");
+        assert_eq!(
+            cache.take_evicted_ids(),
+            vec![1],
+            "its id goes to the terminal"
+        );
+        assert!(cache.take_evicted_ids().is_empty(), "one take");
+
+        // A touched cell is the newest one, so the next insert drops another.
+        cache.touch(1);
+        cache.insert(300, image::RgbaImage::new(1, 1));
+        assert!(cache.contains(1));
+        assert!(!cache.contains(2));
+
+        // A grid of 150 cells needs 300 entries. A small grid shrinks the cache again and
+        // drops the oldest entries.
+        cache.fit_capacity(150);
+        assert_eq!(cache.capacity(), 300);
+        cache.fit_capacity(10);
+        assert_eq!(cache.capacity(), 200);
+        cache.fit_capacity(10);
+        assert_eq!(cache.take_evicted_ids().len(), 1, "200 entries stay of 201");
+        assert_eq!(cache.cache.len(), 200);
+
+        // A replaced preview is no eviction. A clear forgets the ids, the delete-all covers them.
+        cache.insert_preview(400, image::RgbaImage::new(1, 1));
+        cache.take_evicted_ids();
+        assert!(cache.insert(400, image::RgbaImage::new(1, 1)).is_some());
+        assert!(cache.take_evicted_ids().is_empty());
+        cache.insert(401, image::RgbaImage::new(1, 1));
+        cache.clear();
+        assert!(cache.take_evicted_ids().is_empty());
+    }
+
+    #[test]
+    fn the_byte_limit_drops_the_oldest_entries_that_no_visible_cell_shows() {
+        let mut cache = ThumbnailCache::new();
+        assert_eq!(cache.byte_limit, 512 * 1024 * 1024);
+        // 2x2 RGBA is 16 bytes. Four entries fit.
+        cache.byte_limit = 64;
+        for index in 0..4 {
+            cache.insert(index, image::RgbaImage::new(2, 2));
+        }
+        assert_eq!(cache.bytes(), 64);
+        assert!(cache.take_evicted_ids().is_empty());
+
+        cache.set_visible([0, 1]);
+        cache.insert(4, image::RgbaImage::new(2, 2));
+        assert!(
+            !cache.contains(2),
+            "the oldest cell that is not on the screen"
+        );
+        assert!(cache.contains(0) && cache.contains(1));
+        assert_eq!(cache.take_evicted_ids(), vec![3]);
+        assert_eq!(cache.bytes(), 64);
+
+        // A replaced preview counts only once. A larger image drops two entries.
+        cache.insert_preview(5, image::RgbaImage::new(1, 1));
+        cache.take_evicted_ids();
+        cache.insert(5, image::RgbaImage::new(2, 2));
+        assert_eq!(cache.bytes(), 64);
+        cache.insert(6, image::RgbaImage::new(4, 2));
+        assert_eq!(cache.bytes(), 64);
+        assert_eq!(cache.take_evicted_ids().len(), 2);
+
+        // When only visible cells are left, the cache keeps them above the limit.
+        cache.set_visible(0..10);
+        cache.insert(7, image::RgbaImage::new(2, 2));
+        assert!(cache.bytes() > 64);
+        assert!(cache.take_evicted_ids().is_empty());
+        cache.clear();
+        assert_eq!(cache.bytes(), 0);
     }
 
     #[test]

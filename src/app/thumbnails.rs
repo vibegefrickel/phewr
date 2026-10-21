@@ -130,16 +130,24 @@ impl App {
             self.start_thumb_job(ThumbPhase::Preview, job);
         }
         while self.thumb_jobs.has_free_slot()
-            && let Some(position) = self
-                .thumb_jobs
-                .waiting
-                .iter()
-                .position(|job| !self.waiting_job_holds(job))
+            && let Some(position) = self.next_sharp_job()
             && let Some(job) = self.thumb_jobs.waiting.remove(position)
         {
             self.start_thumb_job(ThumbPhase::Sharp, job);
         }
         new_indices
+    }
+
+    /// The position of the next sharp job in the queue: the first one of a cell that shows
+    /// nothing yet, before the first one that only replaces a preview. A mixed folder then
+    /// shows every cell before the slow HEIC decodes start.
+    fn next_sharp_job(&self) -> Option<usize> {
+        let ready = |job: &ThumbJob| !self.waiting_job_holds(job);
+        let waiting = &self.thumb_jobs.waiting;
+        waiting
+            .iter()
+            .position(|job| ready(job) && !self.thumb_cache.contains(job.index))
+            .or_else(|| waiting.iter().position(ready))
     }
 
     fn slots_of(&mut self, phase: ThumbPhase) -> &mut JobSlots {
@@ -226,9 +234,9 @@ impl App {
     }
 
     /// Decode `job` on the thread pool. The preview phase of a cold HEIC cell takes the embedded
-    /// thumbnail, scaled to the size that the sharp image gets. A disk cache hit sends the
-    /// sharp image instead, so the cell skips the preview. The sharp phase decodes the file and
-    /// writes the result into the disk cache.
+    /// thumbnail at its own size. A disk cache hit sends the sharp image instead, so the cell
+    /// skips the preview. The sharp phase decodes the file and writes the result into the disk
+    /// cache. The job pads the result for the grid, so the UI thread copies no pixels.
     /// A job that waited across a list change has no file any more and starts nothing.
     fn start_thumb_job(&mut self, phase: ThumbPhase, job: ThumbJob) {
         let Some(path) = self.images.get(job.index).cloned() else {
@@ -244,6 +252,7 @@ impl App {
                 ThumbPhase::Preview => preview_or_cached(&cache_dir, &path, target),
                 ThumbPhase::Sharp => (sharp_thumbnail(&cache_dir, &path, target), true),
             };
+            let image = image.map(|image| pad_for_grid(image, target, sharp));
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
@@ -281,12 +290,53 @@ fn preview_or_cached(
 }
 
 /// The pixel box of a thumbnail in the cell `rect`: the whole cell. The gaps of the grid lie
-/// outside the cell, so the picture needs no padding.
+/// outside the cell.
 pub(crate) fn thumb_target_px(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
     (
         (u32::from(rect.width) * cell_px.0).max(1),
         (u32::from(rect.height) * cell_px.1).max(1),
     )
+}
+
+/// Pad a decoded thumbnail with transparent pixels, so that it starts at a cell border without
+/// a pixel offset. A sharp image gets the whole box `target`. A preview keeps its own
+/// resolution and gets the shape of the box, so the terminal scales it to the box without a
+/// change of its shape. The decode job runs this, after the unpadded disk cache write.
+pub(crate) fn pad_for_grid(image: RgbaImage, target: (u32, u32), sharp: bool) -> RgbaImage {
+    let canvas = if sharp {
+        target
+    } else {
+        box_shaped_canvas(image.dimensions(), target)
+    };
+    pad_centered(image, canvas)
+}
+
+/// The smallest canvas with the shape of `target` that holds `size`. The rounding up changes
+/// the shape by less than one pixel.
+fn box_shaped_canvas(size: (u32, u32), target: (u32, u32)) -> (u32, u32) {
+    let (width, height) = (f64::from(size.0), f64::from(size.1));
+    let (box_w, box_h) = (f64::from(target.0.max(1)), f64::from(target.1.max(1)));
+    let scale = (width / box_w).max(height / box_h);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the canvas is at most the box, which came from u32 values"
+    )]
+    let canvas = ((scale * box_w).ceil() as u32, (scale * box_h).ceil() as u32);
+    (canvas.0.max(size.0), canvas.1.max(size.1))
+}
+
+/// `image` in the middle of a transparent canvas of `canvas` pixels. An image of the canvas
+/// size is returned as it is.
+fn pad_centered(image: RgbaImage, canvas: (u32, u32)) -> RgbaImage {
+    if image.dimensions() == canvas {
+        return image;
+    }
+    let mut padded = RgbaImage::new(canvas.0, canvas.1);
+    let x = i64::from(canvas.0.saturating_sub(image.width()) / 2);
+    let y = i64::from(canvas.1.saturating_sub(image.height()) / 2);
+    image::imageops::overlay(&mut padded, &image, x, y);
+    padded
 }
 
 /// The sharp thumbnail of a grid cell: the first frame of a video, or the fitted image.
@@ -329,8 +379,8 @@ mod tests {
     use crate::app::App;
     use crate::test_support::{app_with, app_with_files, test_dir, wait_until};
 
-    use super::{ThumbJob, ThumbPhase, ThumbResult};
-    use crate::app::disk_cache::get_cache_file_path;
+    use super::{ThumbJob, ThumbPhase, ThumbResult, pad_for_grid};
+    use crate::app::disk_cache::{get_cache_file_path, try_load_from_disk_cache};
     use crate::decode::libheif::decode_heif_preview;
     use crate::image_list::SharedImageList;
     use crate::test_support::write_heif;
@@ -420,7 +470,17 @@ mod tests {
             arrived.extend(fresh.poll_thumbnails());
             !arrived.is_empty()
         });
-        assert_eq!(fresh.thumb_cache.peek(0).unwrap().0.dimensions(), (8, 8));
+        assert_eq!(
+            fresh.thumb_cache.peek(0).unwrap().0.dimensions(),
+            (24, 32),
+            "the 8x8 image padded to the box"
+        );
+        let on_disk = try_load_from_disk_cache(&fresh.disk_cache_dir, &path, (24, 32)).unwrap();
+        assert_eq!(
+            on_disk.dimensions(),
+            (8, 8),
+            "the disk cache stays unpadded"
+        );
     }
 
     #[test]
@@ -618,10 +678,11 @@ mod tests {
         assert!(!app.thumb_cache.is_sharp(0));
         assert_eq!(
             preview.dimensions(),
-            (160, 80),
-            "the size of the sharp image"
+            (64, 64),
+            "the 64x32 thumbnail, padded to the square shape of the box"
         );
         assert_close(rgba_center(&preview), BLUE);
+        assert_eq!(preview.get_pixel(32, 2).0[3], 0, "transparent padding");
         assert_eq!(
             fs::read_dir(&cache).unwrap().count(),
             0,
@@ -631,8 +692,9 @@ mod tests {
 
         let sharp = wait_for_new_image(&mut app);
         assert!(app.thumb_cache.is_sharp(0));
-        assert_eq!(sharp.dimensions(), (160, 80));
+        assert_eq!(sharp.dimensions(), (160, 160), "the whole box");
         assert_close(rgba_center(&sharp), RED);
+        assert_eq!(sharp.get_pixel(80, 10).0[3], 0, "transparent padding");
         assert_eq!(
             fs::read_dir(&cache).unwrap().count(),
             1,
@@ -674,8 +736,9 @@ mod tests {
             app.thumb_cache.is_sharp(0),
             "the first image is the sharp one"
         );
-        assert_eq!(first.dimensions(), (80, 160));
+        assert_eq!(first.dimensions(), (160, 160), "80x160 padded to the box");
         assert_close(rgba_center(&first), RED);
+        assert_eq!(first.get_pixel(10, 80).0[3], 0, "transparent padding");
         assert!(app.stale_image_ids.is_empty());
     }
 
@@ -689,9 +752,85 @@ mod tests {
         let preview = decode_heif_preview(&path, (160, 160)).unwrap();
         assert_eq!(
             preview.dimensions(),
-            (80, 160),
-            "portrait like the primary image"
+            (32, 64),
+            "portrait like the primary image, at its own size"
         );
         assert_close(rgba_center(&preview), BLUE);
+
+        // A box smaller than the thumbnail scales it down to the size of the sharp image.
+        let small = decode_heif_preview(&path, (40, 40)).unwrap();
+        assert_eq!(small.dimensions(), (20, 40));
+    }
+
+    #[test]
+    fn a_sharp_thumbnail_is_padded_to_the_box_with_the_content_in_the_middle() {
+        let red = image::Rgba([255, 0, 0, 255]);
+        let clear = image::Rgba([0, 0, 0, 0]);
+        // A landscape in a 100x60 box: 10 px of padding above and below.
+        let landscape = pad_for_grid(RgbaImage::from_pixel(100, 40, red), (100, 60), true);
+        assert_eq!(landscape.dimensions(), (100, 60));
+        assert_eq!(*landscape.get_pixel(50, 9), clear);
+        assert_eq!(*landscape.get_pixel(50, 10), red);
+        assert_eq!(*landscape.get_pixel(50, 49), red);
+        assert_eq!(*landscape.get_pixel(50, 50), clear);
+
+        // A portrait: 30 px of padding left and right, the odd pixel goes to the right.
+        let portrait = pad_for_grid(RgbaImage::from_pixel(39, 60, red), (100, 60), true);
+        assert_eq!(portrait.dimensions(), (100, 60));
+        assert_eq!(*portrait.get_pixel(29, 30), clear);
+        assert_eq!(*portrait.get_pixel(30, 30), red);
+        assert_eq!(*portrait.get_pixel(68, 30), red);
+        assert_eq!(*portrait.get_pixel(69, 30), clear);
+
+        // An image of the box size is not copied.
+        let full = pad_for_grid(RgbaImage::from_pixel(100, 60, red), (100, 60), true);
+        assert_eq!(*full.get_pixel(0, 0), red);
+    }
+
+    #[test]
+    fn a_preview_is_padded_to_the_shape_of_the_box_at_its_own_size() {
+        let red = image::Rgba([255, 0, 0, 255]);
+        // A 4:3 preview for a 5:3 box: the width grows to 5/3 of the height.
+        let preview = pad_for_grid(RgbaImage::from_pixel(40, 30, red), (100, 60), false);
+        assert_eq!(preview.dimensions(), (50, 30));
+        assert_eq!(preview.get_pixel(4, 15).0[3], 0);
+        assert_eq!(*preview.get_pixel(5, 15), red);
+        assert_eq!(*preview.get_pixel(44, 15), red);
+        assert_eq!(preview.get_pixel(45, 15).0[3], 0);
+
+        // A wider preview grows in height. The rounding never cuts the image.
+        let wide = pad_for_grid(RgbaImage::from_pixel(50, 20, red), (100, 60), false);
+        assert_eq!(wide.dimensions(), (50, 30));
+        let odd = pad_for_grid(RgbaImage::from_pixel(33, 21, red), (160, 96), false);
+        assert!(odd.width() >= 33 && odd.height() >= 21);
+        let shape = f64::from(odd.width()) / f64::from(odd.height());
+        assert!((shape - 160.0 / 96.0).abs() < 0.05, "{shape}");
+    }
+
+    #[test]
+    fn the_queue_starts_the_empty_cells_before_the_heic_sharp_decodes() {
+        let mut app = app_with(&["a.heic", "b.jpg", "c.heic", "d.png"]);
+        let rect = Rect::new(0, 0, 1, 1);
+        // The HEIC cells have their previews; the sharp jobs wait in grid order.
+        assert!(app.store_thumbnail(0, RgbaImage::new(1, 1), false));
+        assert!(app.store_thumbnail(2, RgbaImage::new(1, 1), false));
+        for index in 0..4 {
+            app.thumb_jobs.waiting.push_back(ThumbJob { index, rect });
+        }
+        app.thumb_jobs.running.extend(10..13);
+
+        assert_eq!(app.next_sharp_job(), Some(1), "b.jpg shows nothing yet");
+        app.thumb_jobs.waiting.remove(1);
+        assert_eq!(app.next_sharp_job(), Some(2), "d.png, now at position 2");
+        app.thumb_jobs.waiting.remove(2);
+        assert_eq!(
+            app.next_sharp_job(),
+            Some(0),
+            "then the HEIC cells in grid order"
+        );
+
+        // A HEIC cell whose preview is still on its way holds its place in the queue.
+        app.preview_jobs.running.insert(2);
+        assert_eq!(app.next_sharp_job(), None, "every HEIC sharp job waits");
     }
 }

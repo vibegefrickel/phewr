@@ -24,6 +24,25 @@ impl App {
         }
     }
 
+    /// Show or hide the filename labels. The label row makes the thumbnails one row smaller, so
+    /// every cached one is stale, as after a zoom change.
+    pub(crate) fn toggle_filenames(&mut self) {
+        self.gallery.toggle_filenames();
+        self.mark_dirty();
+    }
+
+    /// The pixel size of a terminal cell changed, after a resize or a font change. The cell
+    /// shape and every thumbnail depend on it.
+    pub(crate) fn set_cell_px(&mut self, cell_px: (u32, u32)) {
+        if cell_px == self.cell_px {
+            return;
+        }
+        self.cell_px = cell_px;
+        self.gallery
+            .set_cell_shape(self.gallery.image_aspect(), cell_px);
+        self.mark_dirty();
+    }
+
     fn after_grid_zoom_change(&mut self, remember: bool) {
         if remember {
             let rows = u16::try_from(self.gallery.zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS);
@@ -37,7 +56,7 @@ impl App {
 #[cfg(test)]
 mod tests {
 
-    use crate::test_support::{app_with, test_dir};
+    use crate::test_support::{app_with, char_key, gallery_app, test_dir};
 
     use std::fs;
 
@@ -68,6 +87,40 @@ mod tests {
         // A reset at the default level only removes the state file.
         app.thumb_zoom_reset();
         assert!(!app.state_file.exists());
+    }
+
+    #[test]
+    fn the_filename_toggle_forgets_the_thumbnails_of_the_taller_box() {
+        let mut app = gallery_app(3);
+        app.thumb_cache.insert(0, image::RgbaImage::new(1, 1));
+        let rows_before = app.gallery.thumb_rows;
+
+        char_key(&mut app, 'n');
+
+        assert!(app.gallery.show_filenames);
+        assert_eq!(app.gallery.thumb_rows, rows_before - 1);
+        assert!(!app.thumb_cache.contains(0), "the taller picture is stale");
+        assert!(app.graphics_storage_dirty);
+        assert!(app.needs_render);
+    }
+
+    #[test]
+    fn a_new_cell_size_forgets_the_thumbnails_and_the_same_one_changes_nothing() {
+        let mut app = gallery_app(3);
+        app.thumb_cache.insert(0, image::RgbaImage::new(1, 1));
+        app.graphics_storage_dirty = false;
+        let cols_before = app.gallery.grid_cols;
+
+        app.set_cell_px((8, 16));
+        assert!(app.thumb_cache.contains(0), "the same size changes nothing");
+        assert!(!app.graphics_storage_dirty);
+
+        // Twice as wide cells: a photo takes half the columns, so the grid gets more of them.
+        app.set_cell_px((16, 16));
+        assert_eq!(app.cell_px, (16, 16));
+        assert!(!app.thumb_cache.contains(0));
+        assert!(app.graphics_storage_dirty);
+        assert!(app.gallery.grid_cols > cols_before);
     }
 
     #[test]

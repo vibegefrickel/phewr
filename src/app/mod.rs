@@ -23,6 +23,7 @@ use crate::encoder::{GraphicsBackend, GraphicsOutput, KittyBackend};
 use crate::gallery::{GalleryState, ThumbnailCache};
 use crate::image_list::SharedImageList;
 use crate::info::ImageInfo;
+use crate::kitty_output::TerminalImages;
 use crate::picker::PickerState;
 use crate::prefetch::Prefetcher;
 use disk_cache::default_disk_cache_dir;
@@ -154,8 +155,9 @@ pub(crate) struct App {
     /// write of the grid deletes them in the terminal.
     pub stale_image_ids: Vec<(usize, u32)>,
 
-    // Kitty IDs currently transmitted to the terminal — safe to `place_by_id` instead of retransmit.
-    pub transmitted_image_ids: HashSet<u32>,
+    /// The images that the terminal stores, so a cell can place one by its id instead of a
+    /// transmit. The grid keeps their bytes below a budget.
+    pub terminal_images: TerminalImages,
     /// True when the LRU thumb cache was invalidated but backend storage has not been cleared yet.
     /// Consumed by `render_gallery_images` to issue a full `d=A` at the next redraw.
     pub graphics_storage_dirty: bool,
@@ -252,7 +254,7 @@ impl App {
             preview_jobs: Self::preview_slots(),
             thumb_generation: 0,
             stale_image_ids: Vec::new(),
-            transmitted_image_ids: HashSet::new(),
+            terminal_images: TerminalImages::new(),
             graphics_storage_dirty: false,
         }
     }
@@ -277,7 +279,7 @@ impl App {
 
     pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         self.graphics.delete_all_to(out)?;
-        self.transmitted_image_ids.clear();
+        self.terminal_images.clear();
         Ok(())
     }
 
@@ -325,19 +327,20 @@ mod tests {
     #[test]
     fn graphics_delete_all_forgets_the_transmitted_ids() {
         let mut app = app();
-        app.transmitted_image_ids.insert(7);
+        app.terminal_images.insert(7, 16);
         let mut out = Vec::new();
         app.graphics_delete_all_to(&mut out).unwrap();
         assert!(!out.is_empty());
-        assert!(app.transmitted_image_ids.is_empty());
+        assert!(app.terminal_images.is_empty());
 
-        app.transmitted_image_ids.insert(8);
+        app.terminal_images.insert(8, 16);
         app.graphics_delete_all().unwrap();
         assert_eq!(
             app.graphics_out.take_bytes(),
             out,
             "the test buffer, not stdout"
         );
-        assert!(app.transmitted_image_ids.is_empty());
+        assert!(app.terminal_images.is_empty());
+        assert_eq!(app.terminal_images.bytes(), 0);
     }
 }

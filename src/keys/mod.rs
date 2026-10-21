@@ -7,13 +7,64 @@ pub(crate) mod picker;
 pub(crate) mod video;
 
 use crate::app::{App, DeleteMode, ViewMode};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use fullscreen::handle_fullscreen_key;
 use gallery::{handle_gallery_key, handle_search_key};
 use picker::handle_picker_key;
 use std::io;
 #[cfg(feature = "video")]
 use video::handle_video_key;
+
+/// Drops the answer to the Kitty probe of `detect_transfer` when it comes after the timeout.
+///
+/// A late answer reaches crossterm, which reads `ESC _ G i=31 ; OK ESC \\` as the keys Alt+`_`,
+/// `G`, `i`, `=`, ... and Alt+`\\`. Those keys would zoom, jump and open the info panel. The
+/// filter swallows the keys from Alt+`_` to Alt+`\\`, when the probe got no answer in time.
+/// Nothing in viewr uses Alt+`_`, and a key that does not fit an answer ends the swallow.
+#[derive(Debug, Default)]
+pub(crate) struct LateAnswerFilter {
+    armed: bool,
+    inside: bool,
+}
+
+impl LateAnswerFilter {
+    /// `armed` when the probe went out and no answer came back in time.
+    pub(crate) fn new(armed: bool) -> Self {
+        Self {
+            armed,
+            inside: false,
+        }
+    }
+
+    /// True when `event` belongs to the late answer and the loop must drop it.
+    pub(crate) fn swallows(&mut self, event: &Event) -> bool {
+        if !self.armed {
+            return false;
+        }
+        let Event::Key(key) = event else {
+            return false;
+        };
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Char('_') if alt && !self.inside => {
+                self.inside = true;
+                true
+            }
+            KeyCode::Char('\\') if alt && self.inside => {
+                self.inside = false;
+                self.armed = false;
+                true
+            }
+            KeyCode::Char(c) if self.inside && !alt && c.is_ascii() && !c.is_ascii_control() => {
+                true
+            }
+            _ => {
+                self.inside = false;
+                false
+            }
+        }
+    }
+}
 
 pub(crate) fn handle_event(app: &mut App, event: &Event) -> io::Result<bool> {
     match event {
@@ -85,7 +136,7 @@ fn delete_key(app: &mut App, code: KeyCode) {
 
 #[cfg(test)]
 mod tests {
-    use super::handle_event;
+    use super::{LateAnswerFilter, handle_event};
     use crate::app::{DeleteMode, ViewMode};
     use crate::test_support::{char_key, fullscreen_app, gallery_app, press};
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -102,6 +153,77 @@ mod tests {
 
         assert!(app.graphics_storage_dirty);
         assert!(app.needs_render);
+    }
+
+    /// The key events that crossterm makes of a late probe answer.
+    fn late_answer_keys(answer: &str) -> Vec<Event> {
+        let mut keys = Vec::new();
+        let mut alt = false;
+        for c in answer.chars() {
+            if c == '\x1b' {
+                alt = true;
+                continue;
+            }
+            let mut modifiers = if alt {
+                KeyModifiers::ALT
+            } else {
+                KeyModifiers::NONE
+            };
+            if c.is_ascii_uppercase() {
+                modifiers |= KeyModifiers::SHIFT;
+            }
+            keys.push(Event::Key(KeyEvent::new(KeyCode::Char(c), modifiers)));
+            alt = false;
+        }
+        keys
+    }
+
+    #[test]
+    fn an_armed_filter_drops_the_late_probe_answer_and_keeps_the_keys_around_it() {
+        let mut filter = LateAnswerFilter::new(true);
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert!(!filter.swallows(&j), "a key before the answer");
+
+        for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\") {
+            assert!(filter.swallows(&key), "{key:?}");
+        }
+        assert!(!filter.swallows(&j), "a key after the answer");
+        let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
+        assert!(
+            !filter.swallows(&alt_underscore),
+            "one answer at most, then every key passes"
+        );
+    }
+
+    #[test]
+    fn an_error_answer_with_a_message_is_dropped_too() {
+        let mut filter = LateAnswerFilter::new(true);
+        for key in late_answer_keys("\x1b_Gi=31;EBADF:could not open file\x1b\\") {
+            assert!(filter.swallows(&key), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_key_that_fits_no_answer_ends_the_swallow() {
+        let mut filter = LateAnswerFilter::new(true);
+        let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
+        assert!(filter.swallows(&alt_underscore));
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!filter.swallows(&enter), "Enter is a real key");
+        let g = Event::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        assert!(!filter.swallows(&g), "the swallow ended with Enter");
+        assert!(!filter.swallows(&Event::Resize(80, 24)));
+    }
+
+    #[test]
+    fn a_filter_without_a_late_answer_passes_every_key() {
+        let mut filter = LateAnswerFilter::default();
+        for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\") {
+            assert!(!filter.swallows(&key), "{key:?}");
+        }
+        let mut filter = LateAnswerFilter::new(false);
+        let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
+        assert!(!filter.swallows(&alt_underscore));
     }
 
     #[test]
@@ -122,11 +244,11 @@ mod tests {
     fn key_handlers_write_the_kitty_sequences_to_the_app_output() {
         const DELETE_ALL: &[u8] = b"\x1b_Ga=d,d=A,q=2\x1b\\";
         let mut app = gallery_app(3);
-        app.transmitted_image_ids.insert(5);
+        app.terminal_images.insert(5, 16);
 
         char_key(&mut app, '?');
         assert_eq!(app.graphics_out.take_bytes(), DELETE_ALL);
-        assert!(app.transmitted_image_ids.is_empty());
+        assert!(app.terminal_images.is_empty());
         char_key(&mut app, 'x');
         assert!(
             app.graphics_out.take_bytes().is_empty(),
