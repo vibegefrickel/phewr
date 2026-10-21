@@ -1,6 +1,5 @@
-use crate::app::{
-    EmbeddedThumbnail, decode_image_with_hint, fit_rgba_within, resize_decoded_to_dims,
-};
+use crate::decode::resize::{fit_rgba_within, resize_decoded_to_dims};
+use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;

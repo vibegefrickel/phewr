@@ -85,7 +85,7 @@ fn invalid(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Er
 #[cfg(test)]
 mod tests {
     use super::{decode, dimensions};
-    use crate::app::{EmbeddedThumbnail, decode_image_with_hint};
+    use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
 
     #[test]
     fn a_broken_file_reports_an_error() {
@@ -109,8 +109,9 @@ mod tests {
             decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
         assert_eq!(dimensions(path), Some((full.width(), full.height())));
         let rect = ratatui::layout::Rect::new(0, 0, 10, 10);
-        let thumb = crate::app::load_and_resize(path, rect, (20, 20), EmbeddedThumbnail::Allow)
-            .expect("grid decode");
+        let thumb =
+            crate::decode::resize::load_and_resize(path, rect, (20, 20), EmbeddedThumbnail::Allow)
+                .expect("grid decode");
         assert!(thumb.width() <= 200 && thumb.height() <= 200);
         let info = crate::info::load(path);
         assert!(

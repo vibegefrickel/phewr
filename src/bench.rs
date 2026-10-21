@@ -9,8 +9,9 @@
 use crate::app::{App, ViewMode};
 use crate::encoder::{KittyBackend, Transfer};
 use crate::image_list::SharedImageList;
+use crate::kitty_output::render_fullscreen_image_to;
+use crate::run_loop::{next_timeout, poll_background, render_images};
 use crate::scanner;
-use crate::{next_timeout, poll_background, render_fullscreen_image_to, render_images};
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -473,7 +474,7 @@ fn kitty_payload_of_a_fullscreen_frame() {
 #[test]
 #[ignore = "reads the folder VIEWR_TEST_DIR"]
 fn heic_decode_phases() {
-    use crate::app::{EmbeddedThumbnail, decode_image_with_hint};
+    use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 
     let Some(dir) = test_dir() else {
@@ -588,7 +589,7 @@ fn heic_decode_phases() {
         None => report("heic phases: preview steps: no embedded thumbnail"),
     }
     let start = Instant::now();
-    match crate::app::decode_heif_preview(path, cell_px) {
+    match crate::decode::libheif::decode_heif_preview(path, cell_px) {
         Ok(preview) => report(&format!(
             "heic phases: embedded preview {}x{} in {}",
             preview.width(),

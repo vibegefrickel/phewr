@@ -11,7 +11,8 @@
 //! sips draws them again at the requested size, so they fill the box and the zoom gets a large
 //! copy. A PDF page has a transparent background, so the route puts it on white paper.
 
-use crate::app::{decode_upright, scaled_down_size};
+use crate::decode::raster::decode_upright;
+use crate::decode::resize::scaled_down_size;
 use image::{DynamicImage, ImageReader, Rgba};
 use std::ffi::OsStr;
 use std::io;
@@ -179,7 +180,8 @@ mod tests {
         SIPS, VECTOR_ZOOM_SIDE, argument_path, covering_side, decode, dimensions, enlarged_side,
         parse_size,
     };
-    use crate::app::{EmbeddedThumbnail, decode_image_with_hint, load_and_resize};
+    use crate::decode::resize::load_and_resize;
+    use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb, RgbImage};
     use ratatui::layout::Rect;
     use std::path::{Path, PathBuf};

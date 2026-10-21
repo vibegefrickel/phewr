@@ -64,7 +64,7 @@ pub(crate) fn aspect_of(path: &Path) -> Option<f64> {
 /// The size after the EXIF orientation or the HEIF rotation.
 fn shown_size(path: &Path) -> Option<(u32, u32)> {
     #[cfg(feature = "heic")]
-    if crate::app::decodes_with_libheif(path) {
+    if crate::decode::libheif::decodes_with_libheif(path) {
         return crate::decode::heif_boxes::HeifItems::read(path)?.primary_size();
     }
     match Route::for_path(path) {

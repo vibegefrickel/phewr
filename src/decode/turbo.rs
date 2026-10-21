@@ -1,0 +1,89 @@
+//! The libjpeg-turbo decode with its DCT scaling.
+
+use crate::info;
+use image::metadata::Orientation;
+use image::{DynamicImage, RgbaImage};
+use std::io;
+use std::path::Path;
+
+pub(super) fn is_jpeg(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "jpg" | "jpeg"))
+}
+
+fn pick_scaling_factor(
+    orig_w: usize,
+    orig_h: usize,
+    target_w: u32,
+    target_h: u32,
+) -> turbojpeg::ScalingFactor {
+    let candidates = [
+        turbojpeg::ScalingFactor::ONE_EIGHTH,
+        turbojpeg::ScalingFactor::ONE_QUARTER,
+        turbojpeg::ScalingFactor::ONE_HALF,
+        turbojpeg::ScalingFactor::ONE,
+    ];
+    let tw = target_w as usize;
+    let th = target_h as usize;
+    for &sf in &candidates {
+        let sw = sf.scale(orig_w);
+        let sh = sf.scale(orig_h);
+        if sw >= tw && sh >= th {
+            return sf;
+        }
+    }
+    turbojpeg::ScalingFactor::ONE
+}
+
+pub(super) fn decode_jpeg_turbo(
+    path: &Path,
+    target: Option<(u32, u32)>,
+) -> io::Result<DynamicImage> {
+    let data = std::fs::read(path)?;
+    let mut decompressor = turbojpeg::Decompressor::new()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let header = decompressor
+        .read_header(&data)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let scaling = match target {
+        Some((tw, th)) if tw > 0 && th > 0 && !header.is_lossless => {
+            pick_scaling_factor(header.width, header.height, tw, th)
+        }
+        _ => turbojpeg::ScalingFactor::ONE,
+    };
+
+    if scaling != turbojpeg::ScalingFactor::ONE {
+        decompressor
+            .set_scaling_factor(scaling)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    }
+
+    let scaled = header.scaled(scaling);
+    let pitch = scaled.width * 4;
+    let mut image = turbojpeg::Image {
+        pixels: vec![0u8; scaled.height * pitch],
+        width: scaled.width,
+        pitch,
+        height: scaled.height,
+        format: turbojpeg::PixelFormat::RGBA,
+    };
+
+    decompressor
+        .decompress(&data, image.as_deref_mut())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let w = image.width as u32;
+    let h = image.height as u32;
+    let mut img = RgbaImage::from_raw(w, h, image.pixels)
+        .map(DynamicImage::ImageRgba8)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid image dimensions"))?;
+    // libjpeg-turbo ignores the EXIF orientation, so phone photos need it here.
+    if let Some(orientation) = info::orientation_from_bytes(&data).and_then(Orientation::from_exif)
+    {
+        img.apply_orientation(orientation);
+    }
+    Ok(img)
+}

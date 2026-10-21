@@ -1,0 +1,65 @@
+//! The `image` route, with libjpeg-turbo for JPEG, and the EXIF orientation.
+
+#[cfg(feature = "turbo")]
+use super::turbo::{decode_jpeg_turbo, is_jpeg};
+use crate::decode;
+use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageReader};
+use std::io;
+use std::path::Path;
+
+pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicImage> {
+    // libjpeg-turbo is the fast path, but it rejects some JPEG variants the
+    // pure-Rust decoder accepts (and vice versa), so a turbo failure falls
+    // through to `image` rather than aborting. Remember turbo's error so that if
+    // the fallback also fails we can report *both* reasons instead of only the
+    // fallback's — otherwise a genuine turbo diagnosis is lost.
+    #[cfg(not(feature = "turbo"))]
+    let _ = target;
+    #[cfg(feature = "turbo")]
+    let turbo_error = if is_jpeg(path) {
+        match decode_jpeg_turbo(path, target) {
+            Ok(img) => return Ok(img),
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
+
+    let reader = ImageReader::open(path)
+        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?
+        .with_guessed_format()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    match decode_upright(reader) {
+        Ok(img) => Ok(img),
+        Err(fallback_error) => {
+            #[cfg(feature = "turbo")]
+            if let Some(turbo_error) = turbo_error {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "failed to decode image (libjpeg-turbo: {turbo_error}; image: {fallback_error})"
+                    ),
+                ));
+            }
+            Err(io::Error::new(io::ErrorKind::InvalidData, fallback_error))
+        }
+    }
+}
+
+/// Decode with `image` and apply the EXIF orientation that its decoder reads (JPEG, PNG,
+/// TIFF, WebP), so that phone photos show upright. A float image (EXR, HDR) is tone-mapped to
+/// 8 bit.
+pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
+    reader: ImageReader<R>,
+) -> image::ImageResult<DynamicImage> {
+    let mut decoder = reader.into_decoder()?;
+    // A broken EXIF block must not stop the decode of the pixels.
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    // The same allocation limit as `ImageReader::decode`.
+    image::Limits::default().reserve(decoder.total_bytes())?;
+    let mut img = DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    Ok(decode::tonemap::to_display(img))
+}

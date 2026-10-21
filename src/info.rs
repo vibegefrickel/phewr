@@ -82,8 +82,8 @@ pub(crate) fn human_size(bytes: u64) -> String {
 
 fn dimensions(path: &Path) -> Option<(u32, u32)> {
     #[cfg(feature = "heic")]
-    if crate::app::decodes_with_libheif(path) {
-        return crate::app::libheif_dimensions(path);
+    if decode::libheif::decodes_with_libheif(path) {
+        return decode::libheif::libheif_dimensions(path);
     }
     match Route::for_path(path) {
         // `open` takes the format from the extension first: TGA has no magic bytes.
