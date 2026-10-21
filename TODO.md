@@ -15,10 +15,11 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
 
 - Speed round, open items after batch 6 (numbers from `just bench` on 40 HEIC, 24 MP, 10 cores):
   - Candidate: send the HEIC preview at its native 320x240 size with a Kitty placement that scales (`c=`, `r=`). A cold grid sends 45.8 MB today instead of 22.9 MB, because each cell gets two full-size images. This matters most over SSH (PNG medium).
-  - Candidate: a JPEG preview from the EXIF thumbnail or a DCT-scaled libjpeg-turbo decode. The JPEG grid is fast already, so this is low priority.
+  - Thumbnail queue order: start the cells that show nothing yet (JPEG, PNG, HEIC without a preview) before the HEIC sharp decodes, which only replace a preview. Measured on 2026-10-21, cold grid, 24 cells: 40 PNG all shown 155 ms, 40 JPG 137 ms, 40 HEIC previews 125 ms, but a mixed folder (40 HEIC, 9 PNG, 2 JPG) needs 206 ms until all cells show something, because the PNG and JPEG cells wait behind HEIC sharp decodes.
+  - Dropped: a JPEG preview from the EXIF thumbnail. iPhone JPEGs carry 160x120, which is too blurry for a grid cell.
   - Candidate: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size, so this is low priority.
   - The start status note with the transfer medium stays until the terminal tests are done (decided 2026-10-21). Then remove the three lines after `App::with_config` in `main`.
-  - Decide on Catmull-Rom for the resizes: about 40 percent less resize time on a 24 MP frame. Compare the pairs in `/tmp/viewr-resize-compare` (ImageMagick `Lanczos` and `Catrom`, 49 to 55 dB PSNR on 3 iPhone photos). `resize_options` in `src/app.rs` and the thumbnail cache key are the two places. `just bench` has the measurement.
+  - Switch the resizes to Catmull-Rom (decided 2026-10-21): about 40 percent less resize time on a 24 MP frame, at most 39 of 3 million pixels differ by more than 2 percent from Lanczos3. `resize_options` in `src/app.rs` and the thumbnail cache key are the two places. `just bench` has the measurement.
 - mpv follow-ups after batch 7:
   - Candidate: `--vo-kitty-use-shm=yes` skips the base64 and the pty transfer. Kitty supports shared memory. Ghostty and WezTerm are unknown. A probe like `detect_transfer` can decide.
   - The PQ LUT has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
@@ -42,28 +43,11 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
 - Mouse-based pan and zoom in the fullscreen view
 - Window slideshow: read the `end-file` reason through the mpv IPC socket, so that Cmd+Q stops the slideshow
 
-- Chafa preview variant: a fast image and video preview mode that uses the chafa character-art backend instead of the Kitty graphics protocol
-  - Goal: give a speed-optimized preview for large galleries and slow formats
-  - Chafa output works in any true-color terminal. This is useful for preview on terminals that do not support the Kitty protocol.
-  - The Kitty decode and transfer times are measured (`just bench`, speed round in Done). Write the chafa plan from these numbers.
-  - Use chafa to convert each image and each video frame into terminal symbols and colors.
-  - Start with still images. Add video frames after still images work.
-  - Add a config key and a CLI flag to pick the backend. Make Kitty the default. Keep Kitty as the fallback.
-  - Decide between the `chafa` binary and the chafa library. Build a prototype before you change the encoder.
-  - Add a `ChafaBackend` in `encoder/` next to `KittyBackend`. Make the UI show the text output as a ratatui widget.
-  - Cache the chafa output for thumbnails so the UI does not regenerate it each frame.
-  - For video, extract frames with FFmpeg at a low rate. Run chafa on each frame. Do not use mpv for this mode.
-  - Test the backend with synthetic images and videos. Write the output to a buffer, not to the real terminal.
-  - Use chafa as a fast preview for HDR iPhone video. Chafa can avoid the mpv tone-mapping and Kitty transfer overhead.
-  - Test `ffmpeg -f rawvideo -pix_fmt rgb24` piped into `chafa -f kitty` for iPhone MOV files.
-  - Compare the speed and the color quality of chafa against mpv `--vo=kitty` on iPhone HDR video.
-
 - Moving thumbnails: the selected grid cell plays a short loop for GIF, WebP, APNG, AVIF and video files when the cell is active
   - Extract 12 frames with FFmpeg for each animated file. Space the frames evenly across the video duration. You can also sample the first 4 seconds.
   - Loop the 12 frames over 4 seconds. Set the gap between frames to 333 ms.
   - Use the Kitty animation protocol for terminal-driven looping. Upload frames with `a=f`. Start the loop with `a=a,s=3,v=1`.
   - Test the animation support in Ghostty, Kitty and WezTerm. Fall back to a static thumbnail when the terminal does not support animation.
-  - For the chafa backend, convert each frame with chafa and cycle the output client-side.
   - Decode the frames in a background thread. Cache the frame data so the UI can replay the loop without redecoding.
   - Stop the animation and remove the image when the cursor leaves the cell.
   - Add a config key to disable moving thumbnails.
