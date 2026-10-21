@@ -118,7 +118,8 @@ missing.
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module.
 - Tests that need a real file are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
-  `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW` or `VIEWR_TEST_PSD`.
+  `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW`, `VIEWR_TEST_PSD`,
+  `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`.
   `just test-real` runs them. A test without its variable skips with a note.
 - The `sips` tests run `/usr/bin/sips` to write synthetic PSD and PDF files.
 - The synthetic libheif tests encode with the aom (AVIF) and x265 (HEIC) encoder plugins of
@@ -162,8 +163,10 @@ missing.
 - `config.rs`: `config.toml` and the state file.
 - `video.rs` (feature `video`): the built-in FFmpeg player in a thread, and first-frame
   thumbnails.
-- `mpv.rs` (feature `video`): video playback in mpv. The PATH lookup, the argument lists, the
-  exit notes and the `Runner` trait for the process start.
+- `mpv.rs` (feature `video`): video playback in mpv. The argument lists, the exit notes, the
+  step exit codes, the HDR probe and tone mapping LUT, and the `Runner` trait for the process
+  start. The PATH lookup `find_on_path` is in `main.rs`, because the yazi reveal needs it
+  without the `video` feature.
 - `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `detect_transfer` probes the terminal at start with `a=q`.
   `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe.
@@ -190,6 +193,31 @@ missing.
   is the end of the file. Each other exit stops the slideshow on the placeholder. Esc in the
   built-in player also stops it. `--input-commands` needs mpv 0.38 or later. On macOS, the app
   quit (Cmd+Q) of a window mpv exits with 0, so a window slideshow continues.
+- **mpv steps:** each mpv start gets `--input-commands` with `keybind n "quit 10"` and
+  `keybind N "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). `hand_off_videos` in
+  `main.rs` starts the next video at once, without a draw. `App::step_from_video` keeps
+  `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
+  file that mpv played, not from the gallery cursor.
+- **mpv window:** viewr follows each mpv window until it exits (`App::poll_video_window`). The
+  run loop polls every 100 ms (`WINDOW_POLL`) while a window plays. A step in viewr away from
+  the file of the window forgets the window.
+- **mpv speed:** the terminal start gets `--hwdec=auto-copy-safe` and a scale filter that fits
+  each frame to the terminal before the rotation. The size comes from the terminal size at the
+  start of mpv, so a larger terminal during playback gives a soft picture. The window start gets
+  `--hwdec=auto-safe`. The filters go through `--vf-pre`, so the filters of a user `mpv.conf`
+  stay.
+- **HDR in the terminal:** `--tone-mapping` and `--target-colorspace-hint` have no effect on
+  `--vo=kitty`, because only the GPU outputs read them. `mpv::hdr_of` reads the transfer curve
+  with FFmpeg before each terminal start. For HLG and PQ, viewr writes a 3D LUT
+  (`tonemap-hlg-v2.cube`, `tonemap-pq-v2.cube`) into the thumbnail cache directory, or into
+  `$TMPDIR/viewr` if the cache path holds filter graph syntax. If the LUT output changes, change
+  the version in the file names. `SDR_WHITE_NITS = 500` matches the macOS SDR export on three
+  iPhone clips. The PQ LUT has no test on a real PQ file.
+- **FFmpeg log:** `main` sets the FFmpeg log level to `Quiet` directly after `ffmpeg::init()`, so
+  no libav warning reaches the screen of the TUI.
+- **yazi reveal:** `reveal_in_yazi` in `main.rs` runs after `TerminalSession::restore`, only when
+  `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
+  that does not answer cannot hold viewr. Tests pass a closure and never start `ya`.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `main.rs`. `App` holds no
   status note. The next key press clears it.
 

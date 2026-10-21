@@ -79,6 +79,8 @@ run  = "shell --block -- viewr ."
 desc = "Image grid (viewr)"
 ```
 
+When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `ya emit reveal <path>` for this. If `YAZI_ID` is not set or `ya` is not on PATH, nothing happens.
+
 ## Controls
 
 ### Gallery
@@ -123,6 +125,10 @@ viewr gives a video to mpv. All mpv keys work: `Space` pauses, `←` / `→` see
 
 - From the gallery (`Enter`), viewr shows the gallery with the cursor on the video.
 - From fullscreen (`←` / `→`, `Home` / `End`), viewr stays on the video and shows "video: press Enter to play". `Enter` plays the video again, and `←` / `→` step on.
+
+In mpv, `n` plays the next file of the list and `N` (Shift-n) the previous file. viewr starts mpv at once for a video and shows an image in fullscreen. These keys need mpv 0.38 or later.
+
+In the terminal, viewr starts mpv with `--vo=kitty --profile=sw-fast --hwdec=auto-copy-safe` and a scale filter that fits each frame to the terminal before the rotation. A 4K iPhone video plays about three times faster with this filter. The Kitty output of mpv cannot tone map HDR video. For HLG and PQ videos (iPhone HDR, Dolby Vision 8.4, HDR10), viewr writes a tone mapping LUT into the cache directory, and mpv applies it. The colors are close to the SDR export of macOS. The mpv window gets `--hwdec=auto-safe` and does its own HDR tone mapping on the GPU. The filters of your `mpv.conf` stay active.
 
 In a slideshow, a video plays one time and the slideshow continues. To stop the slideshow, quit mpv with `q` or `Ctrl-c`, or press `Esc` in the built-in player. With the window player, the slideshow waits until the window closes. Use `q` or the close button to stop it, because `Cmd-q` counts as the end of the clip. A paused slideshow plays the video in a loop.
 
