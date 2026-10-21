@@ -14,7 +14,8 @@ use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageReader, RgbaImage};
 use lru::LruCache;
 use ratatui::layout::Rect;
-use std::collections::HashSet;
+use std::cell::Cell;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,10 @@ const SLIDESHOW_INTERVAL_STEP: f64 = 0.5;
 const MIN_SLIDESHOW_INTERVAL: f64 = 0.5;
 const MAX_SLIDESHOW_INTERVAL: f64 = 600.0;
 const INFO_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+/// The thumbnail decodes that run at once. 24 parallel decodes of 24 MP HEIC frames held
+/// 2 GB of pixels and ran 40 libheif threads on 10 cores, so the first thumbnail took 1 s.
+/// With 4 jobs, each with its share of the cores, the first one comes after one decode.
+const MAX_THUMB_JOBS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ViewMode {
@@ -111,6 +116,9 @@ pub(crate) struct App {
     pub error: Option<String>,
     pub needs_render: bool,
     pub image_rect: Rect,
+    /// The box that a fullscreen image gets in the current terminal. The draw of each frame sets
+    /// it, also in the gallery, so that the pre-decode of the hovered cell has the exact size.
+    pub fullscreen_box: Rect,
     pub help_visible: bool,
     loaded_for_rect: Rect,
 
@@ -150,7 +158,10 @@ pub(crate) struct App {
     // Async thumbnails
     thumb_tx: mpsc::Sender<(u32, usize, RgbaImage)>,
     thumb_rx: mpsc::Receiver<(u32, usize, RgbaImage)>,
+    /// The thumbnails that decode right now, at most `MAX_THUMB_JOBS`.
     thumb_loading: HashSet<usize>,
+    /// The visible thumbnails that wait for a free job, in the order of the grid.
+    thumb_queue: VecDeque<(usize, PathBuf, Rect)>,
     thumb_generation: u32,
 
     // Kitty IDs currently transmitted to the terminal — safe to `place_by_id` instead of retransmit.
@@ -193,7 +204,7 @@ impl App {
             filenames: Vec::new(),
             mode: ViewMode::Gallery,
             cell_px,
-            graphics: KittyBackend,
+            graphics: KittyBackend::default(),
             graphics_out: GraphicsOutput::Stdout,
             info_visible: config.info_panel,
             info_cache: LruCache::new(INFO_CACHE_CAPACITY),
@@ -217,6 +228,7 @@ impl App {
             error: None,
             needs_render: true,
             image_rect: Rect::default(),
+            fullscreen_box: Rect::default(),
             help_visible: false,
             loaded_for_rect: Rect::default(),
             fullscreen_rx: None,
@@ -243,6 +255,7 @@ impl App {
             thumb_tx,
             thumb_rx,
             thumb_loading: HashSet::new(),
+            thumb_queue: VecDeque::new(),
             thumb_generation: 0,
             transmitted_image_ids: HashSet::new(),
             graphics_storage_dirty: false,
@@ -555,9 +568,7 @@ impl App {
         self.shared_list
             .replace_all(self.images.clone(), self.filenames.clone());
         self.known_len = self.images.len();
-        self.thumb_cache.clear();
-        self.thumb_loading.clear();
-        self.thumb_generation += 1;
+        self.forget_thumbnails();
         self.prefetcher.invalidate();
         self.graphics_storage_dirty = true;
         self.loaded = None;
@@ -810,7 +821,8 @@ impl App {
         let path = self.images[idx].clone();
         let cell_px = self.cell_px;
         rayon::spawn(move || {
-            let result = load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Deny);
+            let result =
+                foreground(|| load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Deny));
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
@@ -925,7 +937,9 @@ impl App {
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
             )]
-            let _ = tx.send(decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny));
+            let _ = tx.send(foreground(|| {
+                decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny)
+            }));
         });
     }
 
@@ -1089,9 +1103,7 @@ impl App {
             self.filter_cursor = Some(cursor_target);
         }
 
-        self.thumb_cache.clear();
-        self.thumb_loading.clear();
-        self.thumb_generation += 1;
+        self.forget_thumbnails();
         self.prefetcher.invalidate();
         self.graphics_storage_dirty = true;
         self.fullscreen_rx = None;
@@ -1195,9 +1207,7 @@ impl App {
         self.filter_rx = None;
 
         self.current = 0;
-        self.thumb_cache.clear();
-        self.thumb_loading.clear();
-        self.thumb_generation += 1;
+        self.forget_thumbnails();
         self.prefetcher.invalidate();
         self.graphics_storage_dirty = true;
         self.fullscreen_rx = None;
@@ -1250,6 +1260,14 @@ impl App {
             self.video_window = None;
         }
 
+        // The image on the screen goes back to the prefetch cache, so that a step back is free.
+        if self.zoom <= 1.0
+            && self.loaded_for_rect == self.image_rect
+            && let Some(shown) = self.loaded.take()
+        {
+            self.prefetcher
+                .store(self.current, shown, self.image_rect, self.cell_px);
+        }
         self.current = target;
         self.error = None;
         self.needs_render = true;
@@ -1266,6 +1284,8 @@ impl App {
         }
 
         self.mode = ViewMode::Fullscreen;
+        // A prefetch result that arrived since the last pass of the loop counts as a hit.
+        self.prefetcher.poll();
         if let Some(img) = self
             .prefetcher
             .take_resized(self.current, self.image_rect, self.cell_px)
@@ -1278,6 +1298,19 @@ impl App {
         }
     }
 
+    /// Drop every thumbnail and every job, so that a new list or a new size starts clean.
+    fn forget_thumbnails(&mut self) {
+        self.thumb_cache.clear();
+        self.thumb_loading.clear();
+        self.thumb_queue.clear();
+        self.thumb_generation += 1;
+    }
+
+    /// Drop the waiting thumbnail jobs. A render of the grid queues the visible cells again.
+    pub(crate) fn clear_thumb_queue(&mut self) {
+        self.thumb_queue.clear();
+    }
+
     pub(crate) fn poll_thumbnails(&mut self) -> Vec<usize> {
         let mut new_indices = Vec::new();
         while let Ok((generation, img_idx, img)) = self.thumb_rx.try_recv() {
@@ -1287,13 +1320,31 @@ impl App {
                 new_indices.push(img_idx);
             }
         }
+        while self.thumb_loading.len() < MAX_THUMB_JOBS
+            && let Some((img_idx, path, rect)) = self.thumb_queue.pop_front()
+        {
+            self.start_thumb_decode(img_idx, path, rect);
+        }
         new_indices
     }
 
+    /// Decode the thumbnail of `img_idx` for the cell `rect`, or queue it while `MAX_THUMB_JOBS`
+    /// run. A thumbnail in the cache, in a job or in the queue starts nothing.
     pub(crate) fn spawn_thumb_decode(&mut self, img_idx: usize, path: PathBuf, rect: Rect) {
-        if self.thumb_cache.contains(img_idx) || self.thumb_loading.contains(&img_idx) {
+        if self.thumb_cache.contains(img_idx)
+            || self.thumb_loading.contains(&img_idx)
+            || self.thumb_queue.iter().any(|job| job.0 == img_idx)
+        {
             return;
         }
+        if self.thumb_loading.len() >= MAX_THUMB_JOBS {
+            self.thumb_queue.push_back((img_idx, path, rect));
+            return;
+        }
+        self.start_thumb_decode(img_idx, path, rect);
+    }
+
+    fn start_thumb_decode(&mut self, img_idx: usize, path: PathBuf, rect: Rect) {
         self.thumb_loading.insert(img_idx);
         let tx = self.thumb_tx.clone();
         let cell_px = self.cell_px;
@@ -1333,17 +1384,33 @@ impl App {
         });
     }
 
+    /// Decode the hovered cell at the size of the fullscreen box, so that Enter shows it at
+    /// once. Without the hint, the decode came back at full size and `take_resized` scaled a
+    /// 24 MP frame on the UI thread (50 ms to 70 ms).
     pub(crate) fn pre_decode_hovered(&mut self) {
         if let Some(idx) = self.gallery.selected_index() {
+            self.prefetcher
+                .set_target_hint(self.fullscreen_box, self.cell_px);
             self.prefetcher.kick_gallery(idx, &self.images);
         }
     }
 
+    /// True while a background job runs or waits: a decode for the view, a prefetch, a
+    /// thumbnail, a filter, or the scan. The loop then looks for results every few milliseconds.
+    /// The prefetch counts, because only `Prefetcher::poll` starts its waiting jobs.
+    pub(crate) fn has_pending_work(&self) -> bool {
+        self.fullscreen_rx.is_some()
+            || self.source_rx.is_some()
+            || !self.thumb_loading.is_empty()
+            || !self.thumb_queue.is_empty()
+            || self.prefetcher.has_jobs()
+            || self.filter_rx.is_some()
+            || !self.scan_complete
+    }
+
     pub(crate) fn mark_dirty(&mut self) {
         self.loaded = None;
-        self.thumb_cache.clear();
-        self.thumb_loading.clear();
-        self.thumb_generation += 1;
+        self.forget_thumbnails();
         self.prefetcher.invalidate();
         self.graphics_storage_dirty = true;
         self.needs_render = true;
@@ -1586,7 +1653,8 @@ fn decode_with_libheif(
     let name = path
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path is not valid UTF-8"))?;
-    let ctx = HeifContext::read_from_file(name).map_err(invalid)?;
+    let mut ctx = HeifContext::read_from_file(name).map_err(invalid)?;
+    let _slot = LibheifSlot::take(&mut ctx);
     let primary = ctx.primary_image_handle().map_err(invalid)?;
     // An embedded thumbnail (iPhone: 320x240) saves the decode of the full frame.
     let handle = target
@@ -1597,6 +1665,54 @@ fn decode_with_libheif(
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
         .map_err(invalid)?;
     heif_image_to_rgba(&image, target).map(DynamicImage::ImageRgba8)
+}
+
+thread_local! {
+    /// True while the thread decodes the image that the user waits for.
+    static FOREGROUND: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `work` as the decode that the user waits for: the fullscreen image or the zoom source.
+/// A libheif decode inside takes all cores. The thumbnails and the prefetch share them.
+pub(crate) fn foreground<T>(work: impl FnOnce() -> T) -> T {
+    let before = FOREGROUND.replace(true);
+    let result = work();
+    FOREGROUND.set(before);
+    result
+}
+
+#[cfg(feature = "heic")]
+static LIBHEIF_DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// One running libheif decode. It gives the context its share of the cores on `take`, and it
+/// returns the share on drop, also after an error.
+#[cfg(feature = "heic")]
+struct LibheifSlot;
+
+#[cfg(feature = "heic")]
+impl LibheifSlot {
+    fn take(ctx: &mut libheif_rs::HeifContext<'_>) -> Self {
+        let running = LIBHEIF_DECODES.fetch_add(1, Ordering::Relaxed);
+        let cores = std::thread::available_parallelism().map_or(4, NonZeroUsize::get);
+        let share = if FOREGROUND.get() { 0 } else { running };
+        ctx.set_max_decoding_threads(libheif_tile_threads(cores, share));
+        Self
+    }
+}
+
+#[cfg(feature = "heic")]
+impl Drop for LibheifSlot {
+    fn drop(&mut self) {
+        LIBHEIF_DECODES.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// The tile threads of one libheif decode: all cores for a single decode and for a foreground
+/// decode, a share when the grid decodes several files at once. With the default of 4 threads,
+/// 10 grid decodes ran 40 threads on 10 cores, and each decode took twice as long.
+#[cfg(feature = "heic")]
+fn libheif_tile_threads(cores: usize, running: usize) -> u32 {
+    u32::try_from(cores / (running + 1)).unwrap_or(1).max(1)
 }
 
 /// Pick the smallest embedded thumbnail that is large enough for `target`, so that the
@@ -2191,6 +2307,16 @@ mod tests {
                 .to_rgba8()
                 .get_pixel(image.width() / 2, image.height() / 2)
                 .0
+        }
+
+        #[test]
+        fn tile_threads_share_the_cores_between_the_running_decodes() {
+            use crate::app::libheif_tile_threads;
+            assert_eq!(libheif_tile_threads(10, 0), 10);
+            assert_eq!(libheif_tile_threads(10, 1), 5);
+            assert_eq!(libheif_tile_threads(10, 3), 2);
+            assert_eq!(libheif_tile_threads(10, 20), 1);
+            assert_eq!(libheif_tile_threads(1, 0), 1);
         }
 
         #[test]
@@ -3647,6 +3773,70 @@ mod tests {
                 !arrived.is_empty()
             });
             assert_eq!(fresh.thumb_cache.peek(0).unwrap().0.dimensions(), (8, 8));
+        }
+
+        #[test]
+        fn a_foreground_decode_marks_its_thread_for_the_duration() {
+            use crate::app::{FOREGROUND, foreground};
+            assert!(!FOREGROUND.get());
+            let inside = foreground(|| {
+                let outer = FOREGROUND.get();
+                let nested = foreground(|| FOREGROUND.get());
+                (outer, nested, FOREGROUND.get())
+            });
+            assert_eq!(
+                inside,
+                (true, true, true),
+                "the flag stays after a nested call"
+            );
+            assert!(!FOREGROUND.get(), "the flag goes back after the work");
+        }
+
+        #[test]
+        fn at_most_four_thumbnails_decode_at_once_and_the_rest_wait() {
+            let dir = test_dir();
+            let names = ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"];
+            let mut app = app_with_files(dir.path(), &names);
+            app.scan_complete = true;
+            let rect = Rect::new(0, 0, 1, 1);
+            assert!(!app.has_pending_work());
+
+            for index in 0..names.len() {
+                let path = app.images[index].clone();
+                app.spawn_thumb_decode(index, path, rect);
+            }
+            assert_eq!(app.thumb_loading.len(), 4, "four jobs run");
+            assert_eq!(app.thumb_queue.len(), 2, "two jobs wait");
+            assert!(app.has_pending_work());
+            // A second request for a waiting thumbnail queues nothing.
+            let path = app.images[5].clone();
+            app.spawn_thumb_decode(5, path, rect);
+            assert_eq!(app.thumb_queue.len(), 2);
+
+            let mut arrived = Vec::new();
+            wait_until(|| {
+                arrived.extend(app.poll_thumbnails());
+                arrived.len() == names.len()
+            });
+            arrived.sort_unstable();
+            assert_eq!(arrived, (0..names.len()).collect::<Vec<_>>());
+            assert!(app.thumb_loading.is_empty() && app.thumb_queue.is_empty());
+            assert!(!app.has_pending_work());
+
+            // A new render of the grid drops the waiting jobs, the running ones finish.
+            app.mark_dirty();
+            for index in 0..names.len() {
+                let path = app.images[index].clone();
+                app.spawn_thumb_decode(index, path, rect);
+            }
+            app.clear_thumb_queue();
+            assert_eq!(app.thumb_loading.len(), 4);
+            assert!(app.thumb_queue.is_empty());
+            let mut arrived = Vec::new();
+            wait_until(|| {
+                arrived.extend(app.poll_thumbnails());
+                arrived.len() == 4
+            });
         }
 
         #[test]

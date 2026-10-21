@@ -138,6 +138,8 @@ lru = "0.18"
 nucleo-matcher = "0.3"
 ratatui = "0.30"
 rayon = "1.12"
+# `poll` on the tty for the answer of the Kitty probe. crossterm uses the same version.
+rustix = { version = "1", features = ["event"] }
 serde = { version = "1", features = ["derive"] }
 # The temp TIFF of the `sips` route.
 tempfile = { version = "3.27", optional = true }

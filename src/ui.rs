@@ -30,7 +30,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
 
 /// Reserve the right-hand column for the info panel when it is open.
 /// The picker never shows it, and very narrow terminals keep the full width.
-fn split_info(area: Rect, app: &App) -> (Rect, Option<Rect>) {
+pub(crate) fn split_info(area: Rect, app: &App) -> (Rect, Option<Rect>) {
     if !app.info_visible || app.mode == ViewMode::Picker {
         return (area, None);
     }

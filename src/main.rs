@@ -1,4 +1,6 @@
 mod app;
+#[cfg(test)]
+mod bench;
 mod config;
 mod decode;
 mod encoder;
@@ -96,7 +98,7 @@ impl TerminalSession {
         self.restored = true;
 
         let backend = self.terminal.backend_mut();
-        let mut first_error = encoder::KittyBackend
+        let mut first_error = encoder::KittyBackend::default()
             .delete_all_to(backend)
             .and_then(|()| Write::flush(backend))
             .err();
@@ -203,7 +205,20 @@ fn main() -> io::Result<()> {
     let mut session = TerminalSession::enter()?;
 
     let cell_px = query_cell_pixel_size();
+    let transfer = encoder::kitty::detect_transfer(
+        std::env::var(encoder::kitty::TRANSFER_OVERRIDE)
+            .ok()
+            .as_deref(),
+        encoder::kitty::is_ssh(),
+        query_terminal,
+    );
     let mut app = App::with_config(cell_px, shared_list, &config);
+    app.graphics = encoder::KittyBackend::new(transfer);
+    // The first status note tells which medium the probe found. The first key clears it.
+    state.status = Some(format!(
+        "Kitty transfer: {}",
+        encoder::kitty::describe(transfer)
+    ));
     app.initial_dir = Some(initial_dir);
     app.slideshow_autostart = cli.slideshow;
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
@@ -227,6 +242,13 @@ fn initial_dir_from_paths(paths: &[PathBuf]) -> PathBuf {
 }
 
 /// The state of the run loop that `App` does not hold.
+/// The wait of the loop while a background result is on its way.
+const BUSY_POLL: Duration = Duration::from_millis(10);
+/// The wait of the loop when nothing runs in the background.
+const IDLE_POLL: Duration = Duration::from_millis(250);
+/// How long the start waits for the answer of the terminal to the Kitty probe.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+
 struct LoopState {
     /// A one-line note for the status bar. The next key press clears it.
     status: Option<String>,
@@ -282,21 +304,7 @@ fn run(
         }
 
         // 2. Poll background tasks
-        app.refresh_from_scanner();
-        app.maybe_autostart_slideshow();
-        app.poll_filter();
-        app.poll_fullscreen();
-        app.poll_source();
-        app.prefetcher.poll();
-        pending_emits.extend(app.poll_thumbnails());
-        app.slideshow_tick();
-
-        #[cfg(feature = "video")]
-        if let Some(ref mut v) = app.video
-            && v.poll_frame()
-        {
-            app.needs_render = true;
-        }
+        poll_background(app, &mut pending_emits);
 
         // mpv takes the video before the draw, so that the gallery comes back in this pass.
         #[cfg(feature = "video")]
@@ -313,68 +321,118 @@ fn run(
         }
 
         // 3. Draw UI chrome (always fast — ratatui only)
-        terminal.draw(|frame| ui::draw(frame, app, state.status.as_deref()))?;
+        terminal.draw(|frame| draw_ui(frame, app, state))?;
 
         // 4. Render Kitty images
-        if app.mode == ViewMode::Picker {
-            app.needs_render = false;
-            pending_emits.clear();
-        } else if app.needs_render && !app.images.is_empty() {
-            #[cfg(feature = "video")]
-            let is_video = matches!(app.mode, ViewMode::Video);
-            #[cfg(not(feature = "video"))]
-            let is_video = false;
-
-            match app.mode {
-                ViewMode::Fullscreen => {
-                    app.load_if_needed();
-                    render_fullscreen_image(app)?;
-                    app.prefetcher.set_target_hint(app.image_rect, app.cell_px);
-                    app.prefetcher.kick(app.current, &app.images);
-                }
-                ViewMode::Gallery => {
-                    render_gallery_images(app)?;
-                }
-                ViewMode::Picker => {}
-                #[cfg(feature = "video")]
-                ViewMode::Video => {
-                    app.open_video_if_needed();
-                    render_video_frame(app)?;
-                }
-            }
-            app.needs_render = false;
-            pending_emits.clear();
-            if !is_video {
-                terminal.draw(|frame| ui::draw(frame, app, state.status.as_deref()))?;
-            }
-        } else if !pending_emits.is_empty() && app.mode == ViewMode::Gallery {
-            let count = pending_emits.len().min(4);
-            let batch: Vec<usize> = pending_emits.drain(..count).collect();
-            emit_new_thumbnails(app, &batch)?;
+        if render_images(app, &mut pending_emits)? {
+            terminal.draw(|frame| draw_ui(frame, app, state))?;
         }
 
         // 5. Wait for next event (shorter timeout when thumbnails are pending)
-        let mut timeout = {
-            #[cfg(feature = "video")]
-            if let Some(v) = &app.video {
-                v.time_until_next_frame()
-            } else if pending_emits.is_empty() {
-                Duration::from_millis(250)
-            } else {
-                Duration::from_millis(50)
-            }
-            #[cfg(not(feature = "video"))]
-            if pending_emits.is_empty() {
-                Duration::from_millis(250)
-            } else {
-                Duration::from_millis(50)
-            }
-        };
-        if let Some(remaining) = app.slideshow_timeout() {
-            timeout = timeout.min(remaining);
-        }
-        event::poll(timeout)?;
+        event::poll(next_timeout(app, &pending_emits))?;
     }
+}
+
+/// Draw the chrome and remember the fullscreen box, so that the gallery pre-decode knows the size.
+fn draw_ui(frame: &mut Frame<'_>, app: &mut App, state: &LoopState) {
+    ui::draw(frame, app, state.status.as_deref());
+    app.fullscreen_box = fullscreen_box(frame.area(), app);
+}
+
+/// The box of the fullscreen image in `area`: next to the info panel, inside the border.
+fn fullscreen_box(area: Rect, app: &App) -> Rect {
+    let (main, _info) = ui::split_info(area, app);
+    ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .inner(main)
+}
+
+/// Take the results of the background work: the scan, the filter, the decodes and the clock.
+fn poll_background(app: &mut App, pending_emits: &mut Vec<usize>) {
+    app.refresh_from_scanner();
+    app.maybe_autostart_slideshow();
+    app.poll_filter();
+    app.poll_fullscreen();
+    app.poll_source();
+    app.prefetcher.poll();
+    pending_emits.extend(app.poll_thumbnails());
+    app.slideshow_tick();
+
+    #[cfg(feature = "video")]
+    if let Some(ref mut v) = app.video
+        && v.poll_frame()
+    {
+        app.needs_render = true;
+    }
+}
+
+/// Write the Kitty images of the view. `true` means that the chrome needs a second draw,
+/// because the pictures of a full render cover the text.
+fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io::Result<bool> {
+    if app.mode == ViewMode::Picker {
+        app.needs_render = false;
+        pending_emits.clear();
+    } else if app.needs_render && !app.images.is_empty() {
+        #[cfg(feature = "video")]
+        let is_video = matches!(app.mode, ViewMode::Video);
+        #[cfg(not(feature = "video"))]
+        let is_video = false;
+
+        match app.mode {
+            ViewMode::Fullscreen => {
+                app.load_if_needed();
+                render_fullscreen_image(app)?;
+                // The neighbors wait until the image is on the screen, so that their decodes
+                // do not take the cores from the one that the user waits for.
+                if app.loaded.is_some() {
+                    app.prefetcher.set_target_hint(app.image_rect, app.cell_px);
+                    app.prefetcher.kick(app.current, &app.images);
+                }
+            }
+            ViewMode::Gallery => {
+                render_gallery_images(app)?;
+            }
+            ViewMode::Picker => {}
+            #[cfg(feature = "video")]
+            ViewMode::Video => {
+                app.open_video_if_needed();
+                render_video_frame(app)?;
+            }
+        }
+        app.needs_render = false;
+        pending_emits.clear();
+        return Ok(!is_video);
+    } else if !pending_emits.is_empty() && app.mode == ViewMode::Gallery {
+        let count = pending_emits.len().min(4);
+        let batch: Vec<usize> = pending_emits.drain(..count).collect();
+        emit_new_thumbnails(app, &batch)?;
+    }
+    Ok(false)
+}
+
+/// How long the loop waits for the next event.
+///
+/// No event wakes the loop when a decode finishes, so the wait is the latency of every
+/// background result. While a result is on its way, or thumbnails wait for their emit, the
+/// loop looks every 10 ms. Otherwise it looks every 250 ms.
+fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
+    let busy = app.has_pending_work() || !pending_emits.is_empty();
+    let mut timeout = {
+        #[cfg(feature = "video")]
+        if let Some(v) = &app.video {
+            v.time_until_next_frame()
+        } else if busy {
+            BUSY_POLL
+        } else {
+            IDLE_POLL
+        }
+        #[cfg(not(feature = "video"))]
+        if busy { BUSY_POLL } else { IDLE_POLL }
+    };
+    if let Some(remaining) = app.slideshow_timeout() {
+        timeout = timeout.min(remaining);
+    }
+    timeout
 }
 
 /// Gives the terminal to mpv and takes it back. The tests use a fake.
@@ -968,6 +1026,45 @@ fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
     false
 }
 
+/// Send `sequence` to the terminal and return its answer, or `None` after `PROBE_TIMEOUT`.
+///
+/// The answer must not reach crossterm, which would read it as key presses. The function runs
+/// before the first `event::poll`, reads the tty itself and stops at the string terminator.
+fn query_terminal(sequence: &[u8]) -> Option<Vec<u8>> {
+    use rustix::event::{PollFd, PollFlags};
+    use std::io::Read;
+    use std::time::Instant;
+
+    let mut tty = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()?;
+    tty.write_all(sequence).ok()?;
+    tty.flush().ok()?;
+
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let mut answer = Vec::new();
+    loop {
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        let timeout = rustix::event::Timespec::try_from(remaining).ok()?;
+        let mut fds = [PollFd::new(&tty, PollFlags::IN)];
+        if rustix::event::poll(&mut fds, Some(&timeout)).ok()? == 0 {
+            return None;
+        }
+        let mut buf = [0_u8; 256];
+        let count = tty.read(&mut buf).ok()?;
+        if count == 0 {
+            return None;
+        }
+        answer.extend_from_slice(&buf[..count]);
+        if let Some(end) = answer.windows(2).position(|pair| pair == b"\x1b\\") {
+            answer.truncate(end + 2);
+            return Some(answer);
+        }
+    }
+}
+
 fn query_cell_pixel_size() -> (u32, u32) {
     crossterm::terminal::window_size().map_or((8, 16), |ws| cell_pixel_size(&ws))
 }
@@ -1139,6 +1236,8 @@ fn gallery_image_origin(app: &App, cell_rect: Rect, img: &RgbaImage) -> (u16, u1
 fn render_gallery_images(app: &mut App) -> io::Result<()> {
     let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
 
+    // The cells that left the screen need no decode. The visible ones queue again below.
+    app.clear_thumb_queue();
     for &(vis_idx, img_idx) in &visible {
         let cell_rect = app.gallery.cell_rect(vis_idx);
         let path = app.images[img_idx].clone();

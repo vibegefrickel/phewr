@@ -4,13 +4,16 @@ use crate::app::{
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 const CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 const PREFETCH_RADIUS: usize = 3;
+/// The prefetch decodes that run at once. The nearest neighbors come first, and a decode that
+/// the user waits for keeps most of the cores.
+const MAX_PREFETCH_JOBS: usize = 2;
 
 /// The result of one decode job. `image` is `None` when the decode failed.
 struct Decoded {
@@ -43,12 +46,20 @@ pub(crate) struct Prefetcher {
     cache: LruCache<usize, Prefetched>,
     rx: mpsc::Receiver<Decoded>,
     tx: mpsc::Sender<Decoded>,
+    /// The indices that decode right now, at most `MAX_PREFETCH_JOBS`.
     pending: HashSet<usize>,
+    /// The indices that wait for a free job, nearest first.
+    queue: VecDeque<(usize, PathBuf)>,
     /// Indices that did not decode. They stay skipped until the next `invalidate()`.
     failed: HashSet<usize>,
     /// Incremented by `invalidate()`, so that results of older jobs are dropped.
     generation: u64,
     target_hint: Option<(u32, u32)>,
+    /// The position of the last `kick`, so that the next one knows the direction.
+    last_current: Option<usize>,
+    /// The direction of the last step: `Some(true)` is forward. A kick at the same position
+    /// (a redraw) keeps it.
+    last_direction: Option<bool>,
 }
 
 impl Prefetcher {
@@ -59,9 +70,12 @@ impl Prefetcher {
             rx,
             tx,
             pending: HashSet::new(),
+            queue: VecDeque::new(),
             failed: HashSet::new(),
             generation: 0,
             target_hint: None,
+            last_current: None,
+            last_direction: None,
         }
     }
 
@@ -76,6 +90,16 @@ impl Prefetcher {
     pub(crate) fn poll(&mut self) {
         while let Ok(decoded) = self.rx.try_recv() {
             self.accept(decoded);
+        }
+        self.start_queued();
+    }
+
+    /// Fill the free jobs from the queue.
+    fn start_queued(&mut self) {
+        while self.pending.len() < MAX_PREFETCH_JOBS
+            && let Some((index, path)) = self.queue.pop_front()
+        {
+            self.start_decoding(index, path);
         }
     }
 
@@ -111,24 +135,49 @@ impl Prefetcher {
         self.cache.pop(&index)?.fit_into(max)
     }
 
+    /// Queue the neighbors of `current`. After a step, the neighbors in the direction of the
+    /// step come first, nearest first. The queue of an older position goes.
     pub(crate) fn kick(&mut self, current: usize, images: &[PathBuf]) {
-        for offset in 1..=PREFETCH_RADIUS {
-            if current + offset < images.len() {
-                self.ensure_decoding(current + offset, images);
-            }
-            if current >= offset {
-                self.ensure_decoding(current - offset, images);
-            }
+        self.queue.clear();
+        if self.last_current != Some(current) {
+            self.last_direction = self.last_current.map(|last| current > last);
+            self.last_current = Some(current);
+        }
+        for index in neighbor_order(current, images.len(), self.last_direction) {
+            self.ensure_decoding(index, images);
         }
     }
 
+    /// Keep the image of `index` that the screen showed, so that a step back needs no decode.
+    pub(crate) fn store(
+        &mut self,
+        index: usize,
+        image: RgbaImage,
+        rect: Rect,
+        cell_px: (u32, u32),
+    ) {
+        let target = (
+            u32::from(rect.width) * cell_px.0,
+            u32::from(rect.height) * cell_px.1,
+        );
+        self.cache.push(
+            index,
+            Prefetched {
+                image,
+                target: Some(target),
+            },
+        );
+    }
+
     pub(crate) fn kick_gallery(&mut self, index: usize, images: &[PathBuf]) {
+        self.queue.clear();
         self.ensure_decoding(index, images);
     }
 
     pub(crate) fn invalidate(&mut self) {
         self.cache.clear();
         self.pending.clear();
+        self.queue.clear();
         self.failed.clear();
         self.generation = self.generation.wrapping_add(1);
     }
@@ -137,12 +186,20 @@ impl Prefetcher {
         if self.cache.contains(&index)
             || self.pending.contains(&index)
             || self.failed.contains(&index)
+            || self.queue.iter().any(|job| job.0 == index)
         {
             return;
         }
+        if self.pending.len() >= MAX_PREFETCH_JOBS {
+            self.queue.push_back((index, images[index].clone()));
+            return;
+        }
+        self.start_decoding(index, images[index].clone());
+    }
+
+    fn start_decoding(&mut self, index: usize, path: PathBuf) {
         self.pending.insert(index);
         let tx = self.tx.clone();
-        let path = images[index].clone();
         let hint = self.target_hint;
         let generation = self.generation;
         rayon::spawn(move || {
@@ -167,8 +224,19 @@ impl Prefetcher {
         });
     }
 
+    /// True while a job runs or waits.
+    pub(crate) fn has_jobs(&self) -> bool {
+        !self.pending.is_empty() || !self.queue.is_empty()
+    }
+
+    /// The jobs that run or wait.
     #[cfg(test)]
     pub(crate) fn pending_count(&self) -> usize {
+        self.pending.len() + self.queue.len()
+    }
+
+    #[cfg(test)]
+    fn running_count(&self) -> usize {
         self.pending.len()
     }
 
@@ -182,6 +250,24 @@ impl Prefetcher {
             }
             Err(_) => false,
         }
+    }
+}
+
+/// The neighbors of `current` within `PREFETCH_RADIUS` and `len`. `Some(true)` is a step
+/// forward: the next images first, then the previous ones. `None` alternates.
+fn neighbor_order(current: usize, len: usize, direction: Option<bool>) -> Vec<usize> {
+    let next = (1..=PREFETCH_RADIUS)
+        .map(|offset| current + offset)
+        .filter(|&index| index < len);
+    let previous = (1..=PREFETCH_RADIUS).filter_map(|offset| current.checked_sub(offset));
+    match direction {
+        Some(true) => next.chain(previous).collect(),
+        Some(false) => previous.chain(next).collect(),
+        None => (1..=PREFETCH_RADIUS)
+            .flat_map(|offset| [Some(current + offset), current.checked_sub(offset)])
+            .flatten()
+            .filter(|&index| index < len)
+            .collect(),
     }
 }
 
@@ -406,6 +492,113 @@ mod tests {
             .take_resized(0, Rect::new(0, 0, 2, 2), (8, 8))
             .expect("image should be cached");
         assert_eq!(img.dimensions(), (16, 8));
+    }
+
+    #[test]
+    fn the_neighbor_order_follows_the_direction_of_the_step() {
+        use super::neighbor_order;
+        assert_eq!(neighbor_order(4, 9, None), vec![5, 3, 6, 2, 7, 1]);
+        assert_eq!(neighbor_order(4, 9, Some(true)), vec![5, 6, 7, 3, 2, 1]);
+        assert_eq!(neighbor_order(4, 9, Some(false)), vec![3, 2, 1, 5, 6, 7]);
+        assert_eq!(neighbor_order(0, 2, None), vec![1]);
+        assert_eq!(neighbor_order(1, 2, Some(true)), vec![0]);
+        assert!(neighbor_order(0, 1, Some(false)).is_empty());
+    }
+
+    #[test]
+    fn a_step_forward_queues_the_next_images_first() {
+        let (_temp, dir) = synthetic_dir();
+        let paths: Vec<_> = (0..12)
+            .map(|i| save_image(&dir, &format!("{i}.png"), 4, 4))
+            .collect();
+
+        let mut prefetcher = Prefetcher::new();
+        prefetcher.kick(4, &paths);
+        assert_eq!(prefetcher.running_count(), 2, "5 and 3 run");
+
+        // Only `poll` frees a job, so the next kicks queue everything that does not run.
+        prefetcher.kick(5, &paths);
+        let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
+        assert_eq!(
+            waiting,
+            vec![6, 7, 8, 4, 2],
+            "forward: the next images first"
+        );
+
+        prefetcher.kick(4, &paths);
+        let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
+        assert_eq!(waiting, vec![2, 1, 6, 7], "back: the previous images first");
+
+        // A redraw kicks the same position again and keeps the direction of the step.
+        prefetcher.kick(4, &paths);
+        let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
+        assert_eq!(
+            waiting,
+            vec![2, 1, 6, 7],
+            "the same position keeps the order"
+        );
+        assert!(prefetcher.has_jobs());
+        wait_until_idle(&mut prefetcher);
+        assert!(!prefetcher.has_jobs());
+    }
+
+    #[test]
+    fn a_stored_image_comes_back_for_its_box() {
+        let mut prefetcher = Prefetcher::new();
+        let rect = Rect::new(0, 0, 4, 2);
+        prefetcher.store(3, RgbaImage::new(16, 8), rect, (4, 4));
+        assert!(
+            prefetcher
+                .take_resized(3, Rect::new(0, 0, 8, 4), (4, 4))
+                .is_none(),
+            "a larger box needs a new decode"
+        );
+        prefetcher.store(3, RgbaImage::new(16, 8), rect, (4, 4));
+        let image = prefetcher.take_resized(3, rect, (4, 4)).unwrap();
+        assert_eq!(image.dimensions(), (16, 8));
+        assert!(prefetcher.take_resized(3, rect, (4, 4)).is_none());
+    }
+
+    #[test]
+    fn at_most_two_prefetch_jobs_run_and_the_rest_wait_nearest_first() {
+        let (_temp, dir) = synthetic_dir();
+        let paths: Vec<_> = (0..9)
+            .map(|i| save_image(&dir, &format!("{i}.png"), 4, 4))
+            .collect();
+
+        let mut prefetcher = Prefetcher::new();
+        prefetcher.kick(4, &paths);
+        assert_eq!(
+            prefetcher.running_count(),
+            2,
+            "the two nearest neighbors decode"
+        );
+        assert_eq!(prefetcher.pending_count(), 6);
+        let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
+        assert_eq!(waiting, vec![6, 2, 7, 1], "the others wait, nearest first");
+
+        // A second kick at the same position changes nothing.
+        prefetcher.kick(4, &paths);
+        assert_eq!(prefetcher.pending_count(), 6);
+
+        wait_until_idle(&mut prefetcher);
+        for i in [1, 2, 3, 5, 6, 7] {
+            assert!(
+                prefetcher
+                    .take_resized(i, Rect::default(), (1, 1))
+                    .is_some(),
+                "neighbor {i} should be cached"
+            );
+        }
+
+        // A kick at another position drops the queue of the old one.
+        let mut prefetcher = Prefetcher::new();
+        prefetcher.kick(4, &paths);
+        prefetcher.kick_gallery(8, &paths);
+        let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
+        assert_eq!(waiting, vec![8]);
+        assert_eq!(prefetcher.running_count(), 2);
+        wait_until_idle(&mut prefetcher);
     }
 
     #[test]

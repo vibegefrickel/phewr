@@ -65,6 +65,23 @@ pub(crate) struct DisplayOptions {
     pub rows: Option<u16>,
 }
 
+/// How the pixels reach the terminal.
+///
+/// A Retina fullscreen frame is about 22 MB of RGBA. As base64 through the pty, that is 29 MB
+/// of text that the terminal parses and decodes. A temp file on the same machine carries the
+/// pixels with a sequence of about 100 bytes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Transfer {
+    /// Raw RGBA as base64 through the pty (`t=d`, `f=32`). Every Kitty terminal reads it.
+    #[default]
+    Direct,
+    /// A PNG as base64 through the pty (`f=100`): the smallest payload for a connection over SSH.
+    Png,
+    /// Raw RGBA in a temp file that the terminal reads and deletes (`t=t`). The terminal must
+    /// run on this machine, and `kitty::detect_transfer` must have found its support.
+    TempFile,
+}
+
 pub(crate) trait GraphicsBackend {
     fn transmit(
         &self,
@@ -78,7 +95,20 @@ pub(crate) trait GraphicsBackend {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct KittyBackend;
+pub(crate) struct KittyBackend {
+    transfer: Transfer,
+}
+
+impl KittyBackend {
+    pub(crate) fn new(transfer: Transfer) -> Self {
+        Self { transfer }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transfer(self) -> Transfer {
+        self.transfer
+    }
+}
 
 impl GraphicsBackend for KittyBackend {
     fn transmit(
@@ -87,7 +117,7 @@ impl GraphicsBackend for KittyBackend {
         image: &RgbaImage,
         options: &DisplayOptions,
     ) -> io::Result<()> {
-        kitty::encode_png_to(out, image, options)
+        kitty::transmit_to(out, image, options, self.transfer)
     }
 
     fn delete_all_to(&self, out: &mut dyn Write) -> io::Result<()> {
@@ -105,7 +135,7 @@ impl GraphicsBackend for KittyBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{DisplayOptions, GraphicsBackend, GraphicsOutput, KittyBackend};
+    use super::{DisplayOptions, GraphicsBackend, GraphicsOutput, KittyBackend, Transfer};
     use image::RgbaImage;
     use std::io::Write;
 
@@ -113,7 +143,7 @@ mod tests {
     fn the_test_buffer_collects_the_bytes_until_a_take() {
         let mut out = GraphicsOutput::buffer();
         let mut copy = out.clone();
-        KittyBackend.delete_all_to(&mut out).unwrap();
+        KittyBackend::default().delete_all_to(&mut out).unwrap();
         copy.write_all(b"!").unwrap();
         copy.flush().unwrap();
 
@@ -124,7 +154,8 @@ mod tests {
 
     #[test]
     fn kitty_backend_delegates_through_trait() {
-        let backend = KittyBackend;
+        let backend = KittyBackend::default();
+        assert_eq!(backend.transfer(), Transfer::Direct);
         let image = RgbaImage::new(2, 2);
         let mut out = Vec::new();
 
@@ -149,5 +180,12 @@ mod tests {
         assert!(text.contains("\x1b_Ga=d,d=A,q=2\x1b\\"));
         assert!(text.contains("\x1b_Ga=d,d=a,q=2\x1b\\"));
         assert!(text.contains("\x1b_Ga=p,q=2,C=1,i=9\x1b\\"));
+    }
+
+    #[test]
+    fn a_backend_keeps_its_transfer() {
+        let backend = KittyBackend::new(Transfer::TempFile);
+        assert_eq!(backend.transfer(), Transfer::TempFile);
+        assert_eq!(KittyBackend::new(Transfer::Png).transfer(), Transfer::Png);
     }
 }

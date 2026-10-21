@@ -41,6 +41,11 @@ test *ARGS:
 test-real *FILTER:
     cargo test --release -- --include-ignored --show-output {{FILTER}}
 
+# The speed measurements of src/bench.rs on a real folder (grid, fullscreen open, prefetch,
+# Kitty payload). DIR holds the test images, for example a copy of an iPhone folder.
+bench DIR="/tmp/viewr-bench":
+    VIEWR_TEST_DIR={{DIR}} cargo test --release bench:: -- --ignored --nocapture --test-threads=1 2>&1 | grep -E 'bench [a-z]|^error|panicked|test result' | sed -E 's/^test [^ ]+ \.\.\. //'
+
 # Line coverage summary per file (needs cargo-llvm-cov: `brew install cargo-llvm-cov`).
 coverage:
     cargo llvm-cov --release --all-targets --summary-only
