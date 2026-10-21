@@ -8,8 +8,7 @@ use ratatui::prelude::*;
 use std::io::{self, Write};
 
 pub(crate) fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
-    let mut out = app.graphics_out.clone();
-    render_fullscreen_image_to(app, &mut out)
+    app.with_graphics_out(render_fullscreen_image_to)
 }
 
 /// Write the fullscreen image to `out`, so that the tests can read the escape sequences.
@@ -23,38 +22,32 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
     app.graphics_delete_all_to(out)?;
 
     if let Some(img) = &app.loaded {
-        let (cpw, cph) = app.cell_px;
-        let img_cols = img.width().div_ceil(cpw);
-        let img_rows = img.height().div_ceil(cph);
-        let offset_x =
-            app.image_rect.x + (app.image_rect.width.saturating_sub(img_cols as u16)) / 2;
-        let offset_y =
-            app.image_rect.y + (app.image_rect.height.saturating_sub(img_rows as u16)) / 2;
-
-        queue!(out, cursor::MoveTo(offset_x, offset_y))?;
-        app.graphics.transmit(
-            out,
-            img,
-            &encoder::DisplayOptions {
-                id: None,
-                cols: None,
-                rows: None,
-                offset: (0, 0),
-            },
-        )?;
+        let (column, row) = centered_cell(app.image_rect, app.cell_px, img);
+        queue!(out, cursor::MoveTo(column, row))?;
+        app.graphics
+            .transmit(out, img, &encoder::DisplayOptions::default())?;
     }
 
     queue!(out, EndSynchronizedUpdate)?;
     out.flush()
 }
 
+/// The cell where `img` starts when it sits in the middle of `rect`, in whole cells.
+fn centered_cell(rect: Rect, cell_px: (u32, u32), img: &RgbaImage) -> (u16, u16) {
+    let cols = u16::try_from(img.width().div_ceil(cell_px.0)).unwrap_or(u16::MAX);
+    let rows = u16::try_from(img.height().div_ceil(cell_px.1)).unwrap_or(u16::MAX);
+    (
+        rect.x + rect.width.saturating_sub(cols) / 2,
+        rect.y + rect.height.saturating_sub(rows) / 2,
+    )
+}
+
 #[cfg(feature = "video")]
 const VIDEO_IMAGE_ID: u32 = 900;
 
 #[cfg(feature = "video")]
-pub(crate) fn render_video_frame(app: &App) -> io::Result<()> {
-    let mut out = app.graphics_out.clone();
-    render_video_frame_to(app, &mut out)
+pub(crate) fn render_video_frame(app: &mut App) -> io::Result<()> {
+    app.with_graphics_out(|app, out| render_video_frame_to(app, out))
 }
 
 /// Write the current video frame to `out`, so that the tests can read the escape sequences.
@@ -65,24 +58,15 @@ fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
     if let Some(v) = &app.video
         && let Some(img) = &v.current_frame
     {
-        let (cpw, cph) = app.cell_px;
-        let img_cols = img.width().div_ceil(cpw);
-        let img_rows = img.height().div_ceil(cph);
-        let offset_x =
-            app.image_rect.x + (app.image_rect.width.saturating_sub(img_cols as u16)) / 2;
-        let offset_y =
-            app.image_rect.y + (app.image_rect.height.saturating_sub(img_rows as u16)) / 2;
-
+        let (column, row) = centered_cell(app.image_rect, app.cell_px, img);
         queue!(out, BeginSynchronizedUpdate)?;
-        queue!(out, cursor::MoveTo(offset_x, offset_y))?;
+        queue!(out, cursor::MoveTo(column, row))?;
         app.graphics.transmit(
             out,
             img,
             &encoder::DisplayOptions {
                 id: Some(VIDEO_IMAGE_ID),
-                cols: None,
-                rows: None,
-                offset: (0, 0),
+                ..encoder::DisplayOptions::default()
             },
         )?;
         queue!(out, EndSynchronizedUpdate)?;
@@ -92,8 +76,7 @@ fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
 }
 
 pub(crate) fn emit_new_thumbnails(app: &mut App, new_indices: &[usize]) -> io::Result<()> {
-    let mut out = app.graphics_out.clone();
-    emit_new_thumbnails_to(app, new_indices, &mut out)
+    app.with_graphics_out(|app, out| emit_new_thumbnails_to(app, new_indices, out))
 }
 
 /// Write the new thumbnails to `out`, so that the tests can read the escape sequences.
@@ -102,35 +85,43 @@ fn emit_new_thumbnails_to(
     new_indices: &[usize],
     out: &mut impl Write,
 ) -> io::Result<()> {
-    let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
     let mut newly_transmitted: Vec<u32> = Vec::new();
-    for (vis_idx, img_idx) in visible {
+    for (vis_idx, position) in app.gallery.visible_range().enumerate() {
+        let img_idx = app.gallery.filtered_indices[position];
         if !new_indices.contains(&img_idx) {
             continue;
         }
-        let cell_rect = app.gallery.cell_rect(vis_idx);
         delete_stale_images_to(app, out, |cell| cell == img_idx)?;
         if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
-            let origin = gallery_image_origin(app, cell_rect, img);
-            queue!(out, cursor::MoveTo(origin.cell.0, origin.cell.1))?;
-            app.graphics.transmit(
-                out,
-                img,
-                &encoder::DisplayOptions {
-                    id: Some(id),
-                    cols: None,
-                    rows: None,
-                    offset: origin.offset,
-                },
-            )?;
+            transmit_thumbnail(app, out, vis_idx, img, id)?;
             newly_transmitted.push(id);
         }
     }
     out.flush()?;
-    for id in newly_transmitted {
-        app.transmitted_image_ids.insert(id);
-    }
+    app.transmitted_image_ids.extend(newly_transmitted);
     Ok(())
+}
+
+/// Send the thumbnail `img` with the Kitty id `id` into the visible cell `vis_idx`. The caller
+/// records the id after the flush, because `img` borrows the cache of `app`.
+fn transmit_thumbnail(
+    app: &App,
+    out: &mut impl Write,
+    vis_idx: usize,
+    img: &RgbaImage,
+    id: u32,
+) -> io::Result<()> {
+    let origin = gallery_image_origin(app, app.gallery.cell_rect(vis_idx), img);
+    queue!(out, cursor::MoveTo(origin.cell.0, origin.cell.1))?;
+    app.graphics.transmit(
+        out,
+        img,
+        &encoder::DisplayOptions {
+            id: Some(id),
+            offset: origin.offset,
+            ..encoder::DisplayOptions::default()
+        },
+    )
 }
 
 /// Delete the previews that a sharp thumbnail replaced, for the cells that `select` picks. The
@@ -174,29 +165,22 @@ fn gallery_image_origin(app: &App, cell_rect: Rect, img: &RgbaImage) -> ImageOri
 }
 
 pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
-    let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
-
     // The cells that left the screen need no decode. The visible ones queue again below. The
     // first screen waits for the cell shape, so that no cell decodes for two sizes.
     app.clear_thumb_queue();
     app.request_cell_shape();
     if !app.cell_shape_pending() {
-        for &(_, img_idx) in &visible {
-            let path = app.images[img_idx].clone();
-            app.spawn_thumb_decode(img_idx, path, app.gallery.thumb_box());
+        for position in app.gallery.visible_range() {
+            let img_idx = app.gallery.filtered_indices[position];
+            app.spawn_thumb_decode(img_idx, app.gallery.thumb_box());
         }
     }
 
-    let mut out = app.graphics_out.clone();
-    place_gallery_images_to(app, &visible, &mut out)
+    app.with_graphics_out(place_gallery_images_to)
 }
 
-/// Write the `visible` thumbnails to `out`, so that the tests can read the escape sequences.
-fn place_gallery_images_to(
-    app: &mut App,
-    visible: &[(usize, usize)],
-    out: &mut impl Write,
-) -> io::Result<()> {
+/// Write the visible thumbnails to `out`, so that the tests can read the escape sequences.
+fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
     if app.graphics_storage_dirty {
         app.graphics_delete_all_to(out)?;
         app.graphics_storage_dirty = false;
@@ -209,33 +193,23 @@ fn place_gallery_images_to(
     }
 
     let mut newly_transmitted: Vec<u32> = Vec::new();
-    for &(vis_idx, img_idx) in visible {
-        let cell_rect = app.gallery.cell_rect(vis_idx);
-        if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
-            let origin = gallery_image_origin(app, cell_rect, img);
+    for (vis_idx, position) in app.gallery.visible_range().enumerate() {
+        let img_idx = app.gallery.filtered_indices[position];
+        let Some((img, id)) = app.thumb_cache.peek(img_idx) else {
+            continue;
+        };
+        if app.transmitted_image_ids.contains(&id) {
+            let origin = gallery_image_origin(app, app.gallery.cell_rect(vis_idx), img);
             queue!(out, cursor::MoveTo(origin.cell.0, origin.cell.1))?;
-            if app.transmitted_image_ids.contains(&id) {
-                app.graphics.place_by_id_to(out, id, origin.offset)?;
-            } else {
-                app.graphics.transmit(
-                    out,
-                    img,
-                    &encoder::DisplayOptions {
-                        id: Some(id),
-                        cols: None,
-                        rows: None,
-                        offset: origin.offset,
-                    },
-                )?;
-                newly_transmitted.push(id);
-            }
+            app.graphics.place_by_id_to(out, id, origin.offset)?;
+        } else {
+            transmit_thumbnail(app, out, vis_idx, img, id)?;
+            newly_transmitted.push(id);
         }
     }
 
     out.flush()?;
-    for id in newly_transmitted {
-        app.transmitted_image_ids.insert(id);
-    }
+    app.transmitted_image_ids.extend(newly_transmitted);
     Ok(())
 }
 
@@ -272,8 +246,7 @@ mod tests {
 
     /// The write half of `render_gallery_images`, for the visible cells of the grid.
     fn place_visible(app: &mut App, out: &mut Vec<u8>) {
-        let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
-        place_gallery_images_to(app, &visible, out).unwrap();
+        place_gallery_images_to(app, out).unwrap();
     }
 
     #[test]

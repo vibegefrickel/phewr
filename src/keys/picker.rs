@@ -1,7 +1,7 @@
 //! The keys of the directory picker.
 
 use crate::app::App;
-use crate::picker;
+use crate::picker::PickerState;
 use crossterm::event::KeyCode;
 
 pub(super) fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
@@ -43,43 +43,25 @@ pub(super) fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
             app.close_picker();
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(p) = app.picker.as_mut() {
-                p.move_up();
-                app.needs_render = true;
-            }
+            with_picker(app, PickerState::move_up);
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(p) = app.picker.as_mut() {
-                p.move_down();
-                app.needs_render = true;
-            }
+            with_picker(app, PickerState::move_down);
         }
         KeyCode::Home | KeyCode::Char('g') => {
-            if let Some(p) = app.picker.as_mut() {
-                p.move_first();
-                app.needs_render = true;
-            }
+            with_picker(app, PickerState::move_first);
         }
         KeyCode::End | KeyCode::Char('G') => {
-            if let Some(p) = app.picker.as_mut() {
-                p.move_last();
-                app.needs_render = true;
-            }
+            with_picker(app, PickerState::move_last);
         }
         KeyCode::PageUp => {
-            if let Some(p) = app.picker.as_mut() {
-                p.move_page_up(10);
-                app.needs_render = true;
-            }
+            with_picker(app, |picker| picker.move_page_up(10));
         }
         KeyCode::PageDown => {
-            if let Some(p) = app.picker.as_mut() {
-                p.move_page_down(10);
-                app.needs_render = true;
-            }
+            with_picker(app, |picker| picker.move_page_down(10));
         }
         KeyCode::Left | KeyCode::Char('h') => {
-            let target = app.picker.as_mut().and_then(picker::PickerState::ascend);
+            let target = app.picker.as_mut().and_then(PickerState::ascend);
             if let Some(t) = target {
                 app.switch_to_dir(&t);
             }
@@ -108,12 +90,11 @@ pub(super) fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
             }
         }
         KeyCode::Char('/') => {
-            if let Some(p) = app.picker.as_mut() {
-                p.filter_active = true;
-                p.filter.clear();
-                p.rebuild_filter();
-                app.needs_render = true;
-            }
+            with_picker(app, |picker| {
+                picker.filter_active = true;
+                picker.filter.clear();
+                picker.rebuild_filter();
+            });
         }
         KeyCode::Char('?') => {
             app.help_visible = true;
@@ -122,6 +103,14 @@ pub(super) fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
         _ => {}
     }
     false
+}
+
+/// Change the picker with `change` and draw it again. Without a picker, nothing happens.
+fn with_picker(app: &mut App, change: impl FnOnce(&mut PickerState)) {
+    if let Some(picker) = app.picker.as_mut() {
+        change(picker);
+        app.needs_render = true;
+    }
 }
 
 #[cfg(test)]

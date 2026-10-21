@@ -12,35 +12,28 @@ impl App {
         self.needs_render = true;
     }
 
-    /// The file that yazi reveals when viewr quits: the fullscreen file, or the gallery cursor.
-    pub(crate) fn reveal_path(&self) -> Option<&Path> {
-        let index = match self.mode {
-            ViewMode::Gallery | ViewMode::Picker => self.gallery.selected_index()?,
-            ViewMode::Fullscreen => self.current,
+    /// The image that the view is on: the fullscreen file, or the gallery cursor.
+    fn view_index(&self) -> Option<usize> {
+        match self.mode {
+            ViewMode::Gallery | ViewMode::Picker => self.gallery.selected_index(),
+            ViewMode::Fullscreen => Some(self.current),
             #[cfg(feature = "video")]
-            ViewMode::Video => self.current,
-        };
-        self.images.get(index).map(PathBuf::as_path)
+            ViewMode::Video => Some(self.current),
+        }
     }
 
-    /// Path the info panel describes: the fullscreen image, or the hovered thumbnail.
-    #[cfg_attr(
-        not(feature = "video"),
-        expect(
-            clippy::match_wildcard_for_single_variants,
-            reason = "the wildcard also covers ViewMode::Video when the feature is on"
-        )
-    )]
+    /// The file that yazi reveals when viewr quits: the fullscreen file, or the gallery cursor.
+    pub(crate) fn reveal_path(&self) -> Option<&Path> {
+        self.images.get(self.view_index()?).map(PathBuf::as_path)
+    }
+
+    /// Path the info panel describes: the fullscreen image, or the hovered thumbnail. The
+    /// picker covers the grid, so it shows no info.
     pub(crate) fn info_path(&self) -> Option<PathBuf> {
-        match self.mode {
-            ViewMode::Gallery => self
-                .gallery
-                .selected_index()
-                .and_then(|idx| self.images.get(idx))
-                .cloned(),
-            ViewMode::Picker => None,
-            _ => self.images.get(self.current).cloned(),
+        if self.mode == ViewMode::Picker {
+            return None;
         }
+        self.images.get(self.view_index()?).cloned()
     }
 
     /// Metadata for `path`, read on first use and cached for the session.

@@ -3,6 +3,7 @@ use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::num::NonZeroUsize;
+use std::ops::Range;
 
 pub(crate) const LABEL_ROWS: u16 = 1;
 /// The gap in terminal cells between two cells and at the edges of the grid. The border of the
@@ -262,13 +263,19 @@ impl GalleryState {
         self.move_cursor_to(last);
     }
 
-    pub(crate) fn visible_items(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+    /// The positions in `filtered_indices` that the screen shows. A range borrows nothing, so
+    /// a caller can change the app while it walks the cells.
+    pub(crate) fn visible_range(&self) -> Range<usize> {
         let start = self.scroll_offset * self.grid_cols;
         let count = self.visible_rows * self.grid_cols;
-        self.filtered_indices[start..self.filtered_indices.len().min(start + count)]
-            .iter()
+        start..self.filtered_indices.len().min(start + count)
+    }
+
+    /// The visible cells as (cell position, image index).
+    pub(crate) fn visible_items(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.visible_range()
             .enumerate()
-            .map(move |(vis, &img_idx)| (vis, img_idx))
+            .map(|(vis, position)| (vis, self.filtered_indices[position]))
     }
 
     /// The thumbnail area of the visible cell `vis_index`, without the label row.

@@ -192,3 +192,225 @@ pub(crate) fn write_heif(
     }
     ctx.write_to_file(path.to_str().unwrap()).unwrap();
 }
+
+/// The fakes and the app builders of the mpv hand-off tests. No test starts a real mpv.
+#[cfg(feature = "video")]
+pub(crate) mod video {
+    use crate::app::{App, ViewMode};
+    use crate::image_list::SharedImageList;
+    use crate::mpv;
+    use crate::run_loop::LoopState;
+    use crate::video_handoff::{TerminalHandoff, VideoState};
+    use std::cell::{Cell, RefCell};
+    use std::ffi::OsString;
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+    use std::sync::mpsc;
+
+    pub(crate) type Log = Rc<RefCell<Vec<String>>>;
+
+    /// A terminal that records each step. `raw` is the raw mode that the runner sees.
+    pub(crate) struct FakeTerminal {
+        pub(crate) log: Log,
+        pub(crate) raw: Rc<Cell<bool>>,
+        pub(crate) fail_suspend: bool,
+        pub(crate) resized: bool,
+    }
+
+    impl TerminalHandoff for FakeTerminal {
+        fn geometry(&self, _cell_px: (u32, u32)) -> Option<mpv::Geometry> {
+            None
+        }
+
+        fn longest_side(&self, _cell_px: (u32, u32)) -> u32 {
+            1600
+        }
+
+        fn suspend(&mut self, _app: &mut App) -> io::Result<()> {
+            self.log.borrow_mut().push("suspend".to_owned());
+            if self.fail_suspend {
+                return Err(io::Error::other("broken pipe"));
+            }
+            Ok(())
+        }
+
+        fn ensure_raw_mode(&mut self) -> io::Result<()> {
+            self.log.borrow_mut().push("raw mode".to_owned());
+            self.raw.set(true);
+            Ok(())
+        }
+
+        fn resume(&mut self, _app: &mut App) -> io::Result<()> {
+            self.log.borrow_mut().push("resume".to_owned());
+            Ok(())
+        }
+
+        fn discard_input(&mut self) -> io::Result<bool> {
+            self.log.borrow_mut().push("discard input".to_owned());
+            Ok(self.resized)
+        }
+    }
+
+    /// Records each start; `exit` is the exit code of mpv or the error of the start.
+    /// `window` sends the exit code of the last window, so that the test closes it.
+    /// `exits` holds the exit codes of the next runs in the terminal; `exit` comes after.
+    pub(crate) struct FakeRunner {
+        pub(crate) log: Log,
+        pub(crate) raw: Rc<Cell<bool>>,
+        pub(crate) exit: Result<Option<i32>, io::ErrorKind>,
+        pub(crate) exits: Vec<Option<i32>>,
+        pub(crate) window: Option<mpsc::Sender<Option<i32>>>,
+    }
+
+    impl FakeRunner {
+        fn record(&self, verb: &str, program: &Path, args: &[OsString]) -> io::Result<()> {
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            let mode = if self.raw.get() { "raw" } else { "cooked" };
+            self.log.borrow_mut().push(format!(
+                "{verb} ({mode}) {} {}",
+                program.display(),
+                args.join(" ")
+            ));
+            self.exit.map(drop).map_err(io::Error::from)
+        }
+    }
+
+    impl mpv::Runner for FakeRunner {
+        fn run(&mut self, program: &Path, args: &[OsString]) -> io::Result<Option<i32>> {
+            self.record("run", program, args)?;
+            if !self.exits.is_empty() {
+                return Ok(self.exits.remove(0));
+            }
+            Ok(self.exit?)
+        }
+
+        fn spawn(
+            &mut self,
+            program: &Path,
+            args: &[OsString],
+        ) -> io::Result<mpsc::Receiver<Option<i32>>> {
+            self.record("spawn", program, args)?;
+            let (exit_tx, exit_rx) = mpsc::channel();
+            self.window = Some(exit_tx);
+            Ok(exit_rx)
+        }
+    }
+
+    /// An app with a photo and a video, in video mode for the video.
+    pub(crate) fn video_app() -> App {
+        let mut app = App::new((8, 16), SharedImageList::new());
+        app.images = vec![
+            PathBuf::from("/videos/a.jpg"),
+            PathBuf::from("/videos/clip.mp4"),
+        ];
+        app.filenames = vec!["a.jpg".to_owned(), "clip.mp4".to_owned()];
+        app.gallery.filtered_indices = vec![0, 1];
+        app.enter_video(1);
+        app
+    }
+
+    /// An app in the fullscreen view that steps from a photo onto a video.
+    pub(crate) fn fullscreen_video_app() -> App {
+        fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], false)
+    }
+
+    /// An app in a running slideshow that steps from a photo onto a video.
+    pub(crate) fn slideshow_video_app() -> App {
+        fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], true)
+    }
+
+    /// An app with `names` below `/videos` that steps from the first file onto the second,
+    /// a video, in the fullscreen view. `slideshow` starts a slideshow on the first file.
+    pub(crate) fn fullscreen_app_on_video(names: &[&str], slideshow: bool) -> App {
+        let mut app = App::new((8, 16), SharedImageList::new());
+        app.images = names
+            .iter()
+            .map(|name| Path::new("/videos").join(name))
+            .collect();
+        app.filenames = names.iter().map(|name| (*name).to_owned()).collect();
+        app.gallery.filtered_indices = (0..names.len()).collect();
+        app.enter_fullscreen_at(0);
+        if slideshow {
+            app.start_slideshow();
+        }
+        app.next();
+        assert_eq!(app.mode, ViewMode::Video);
+        app
+    }
+
+    pub(crate) fn state(player: mpv::Player) -> LoopState {
+        LoopState {
+            status: None,
+            video: VideoState {
+                player,
+                fallback_note: None,
+            },
+        }
+    }
+
+    /// The fakes start in cooked mode, so the log shows that the hand-off turns raw mode on.
+    pub(crate) fn fakes(
+        exit: Result<Option<i32>, io::ErrorKind>,
+    ) -> (Log, FakeTerminal, FakeRunner) {
+        let log = Log::default();
+        let raw = Rc::new(Cell::new(false));
+        let terminal = FakeTerminal {
+            log: Rc::clone(&log),
+            raw: Rc::clone(&raw),
+            fail_suspend: false,
+            resized: false,
+        };
+        let runner = FakeRunner {
+            log: Rc::clone(&log),
+            raw,
+            exit,
+            exits: Vec::new(),
+            window: None,
+        };
+        (log, terminal, runner)
+    }
+
+    pub(crate) fn terminal_state() -> LoopState {
+        state(mpv::Player::Terminal(PathBuf::from("/bin/mpv")))
+    }
+
+    pub(crate) fn window_state() -> LoopState {
+        state(mpv::Player::Window(PathBuf::from("/bin/mpv")))
+    }
+
+    /// The arguments of the last mpv start in `log`.
+    pub(crate) fn last_start(log: &Log) -> String {
+        log.borrow()
+            .iter()
+            .rev()
+            .find(|entry| entry.starts_with("run ") || entry.starts_with("spawn "))
+            .cloned()
+            .unwrap()
+    }
+
+    /// An app with `names` below `/videos` in the gallery, in the video view of `index`.
+    pub(crate) fn gallery_app_on_video(names: &[&str], index: usize) -> App {
+        let mut app = App::new((8, 16), SharedImageList::new());
+        app.images = names
+            .iter()
+            .map(|name| Path::new("/videos").join(name))
+            .collect();
+        app.filenames = names.iter().map(|name| (*name).to_owned()).collect();
+        app.gallery.filtered_indices = (0..names.len()).collect();
+        app.enter_video(index);
+        app
+    }
+
+    /// The mpv starts in `log`.
+    pub(crate) fn starts(log: &Log) -> Vec<String> {
+        log.borrow()
+            .iter()
+            .filter(|entry| entry.starts_with("run ") || entry.starts_with("spawn "))
+            .cloned()
+            .collect()
+    }
+}

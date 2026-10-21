@@ -180,10 +180,9 @@ mod tests {
         SIPS, VECTOR_ZOOM_SIDE, argument_path, covering_side, decode, dimensions, enlarged_side,
         parse_size,
     };
-    use crate::decode::resize::load_and_resize;
+    use crate::decode::resize::load_and_resize_px;
     use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb, RgbImage};
-    use ratatui::layout::Rect;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -296,13 +295,7 @@ mod tests {
             assert_eq!(small.dimensions(), (32, 16), "{embedded:?}");
             assert_red_left_blue_right(&small);
         }
-        let fullscreen = load_and_resize(
-            &path,
-            Rect::new(0, 0, 4, 4),
-            (8, 8),
-            EmbeddedThumbnail::Deny,
-        )
-        .unwrap();
+        let fullscreen = load_and_resize_px(&path, (32, 32), EmbeddedThumbnail::Deny).unwrap();
         assert_eq!(fullscreen.dimensions(), (32, 16));
         // A box larger than the image does not enlarge it.
         let large = decode(&path, Some((200, 200))).unwrap();

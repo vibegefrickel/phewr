@@ -4,10 +4,17 @@ use super::{App, ViewMode};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+/// Where a deleted file goes: `d` asks for the trash, `D` for the permanent delete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeleteMode {
+    Trash,
+    Permanent,
+}
+
 pub(crate) struct PendingDelete {
     pub paths: Vec<PathBuf>,
     pub from_fullscreen: bool,
-    pub permanent: bool,
+    pub mode: DeleteMode,
 }
 
 impl App {
@@ -15,9 +22,9 @@ impl App {
         let Some(idx) = self.gallery.selected_index() else {
             return;
         };
-        let path = self.images[idx].clone();
-        if !self.selection.remove(&path) {
-            self.selection.insert(path);
+        let path = &self.images[idx];
+        if !self.selection.remove(path) {
+            self.selection.insert(path.clone());
         }
     }
 
@@ -37,7 +44,7 @@ impl App {
             .is_some_and(|p| self.selection.contains(p))
     }
 
-    pub(crate) fn begin_delete(&mut self, permanent: bool) {
+    pub(crate) fn begin_delete(&mut self, mode: DeleteMode) {
         let from_fullscreen = matches!(self.mode, ViewMode::Fullscreen);
         #[cfg(feature = "video")]
         let from_fullscreen = from_fullscreen || matches!(self.mode, ViewMode::Video);
@@ -78,7 +85,7 @@ impl App {
         self.pending_delete = Some(PendingDelete {
             paths,
             from_fullscreen,
-            permanent,
+            mode,
         });
         self.delete_error = None;
     }
@@ -95,10 +102,9 @@ impl App {
         let mut removed: HashSet<PathBuf> = HashSet::new();
         let mut errors: Vec<String> = Vec::new();
         for p in &pending.paths {
-            let result = if pending.permanent {
-                std::fs::remove_file(p).map_err(|error| error.to_string())
-            } else {
-                trash::delete(p).map_err(|error| error.to_string())
+            let result = match pending.mode {
+                DeleteMode::Permanent => std::fs::remove_file(p).map_err(|error| error.to_string()),
+                DeleteMode::Trash => trash::delete(p).map_err(|error| error.to_string()),
             };
             match result {
                 Ok(()) => {
@@ -204,12 +210,10 @@ impl App {
 #[cfg(test)]
 mod tests {
 
+    use super::{DeleteMode, PendingDelete};
     use crate::app::ViewMode;
     use crate::test_support::{app_with, app_with_files, test_dir, wait_until};
-
     use std::path::{Path, PathBuf};
-
-    use crate::app::PendingDelete;
 
     #[test]
     fn selection_marks_and_clears() {
@@ -234,7 +238,7 @@ mod tests {
     #[test]
     fn begin_delete_picks_the_paths_of_the_view() {
         let mut app = app_with(&[]);
-        app.begin_delete(false);
+        app.begin_delete(DeleteMode::Trash);
         assert!(
             app.pending_delete.is_none(),
             "an empty grid deletes nothing"
@@ -243,27 +247,28 @@ mod tests {
         let mut app = app_with(&["a.png", "b.png", "c.png"]);
         app.gallery.cursor = 1;
         app.delete_error = Some("old".to_owned());
-        app.begin_delete(false);
+        app.begin_delete(DeleteMode::Trash);
         let pending = app.pending_delete.take().unwrap();
         assert_eq!(pending.paths, vec![PathBuf::from("b.png")]);
-        assert!(!pending.from_fullscreen && !pending.permanent);
+        assert!(!pending.from_fullscreen);
+        assert_eq!(pending.mode, DeleteMode::Trash);
         assert!(app.delete_error.is_none());
 
         // Marked files go in grid order.
         app.selection.insert(PathBuf::from("c.png"));
         app.selection.insert(PathBuf::from("a.png"));
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         let pending = app.pending_delete.take().unwrap();
         assert_eq!(
             pending.paths,
             vec![PathBuf::from("a.png"), PathBuf::from("c.png")]
         );
-        assert!(pending.permanent);
+        assert_eq!(pending.mode, DeleteMode::Permanent);
 
         // Marked files outside the filter still go.
         app.gallery.filtered_indices = vec![1];
         app.selection.remove(Path::new("a.png"));
-        app.begin_delete(false);
+        app.begin_delete(DeleteMode::Trash);
         assert_eq!(
             app.pending_delete.take().unwrap().paths,
             vec![PathBuf::from("c.png")]
@@ -271,17 +276,17 @@ mod tests {
 
         app.mode = ViewMode::Fullscreen;
         app.current = 2;
-        app.begin_delete(false);
+        app.begin_delete(DeleteMode::Trash);
         let pending = app.pending_delete.take().unwrap();
         assert_eq!(pending.paths, vec![PathBuf::from("c.png")]);
         assert!(pending.from_fullscreen);
 
         app.current = 7;
-        app.begin_delete(false);
+        app.begin_delete(DeleteMode::Trash);
         assert!(app.pending_delete.is_none());
 
         app.current = 0;
-        app.begin_delete(false);
+        app.begin_delete(DeleteMode::Trash);
         app.cancel_delete();
         assert!(app.pending_delete.is_none());
     }
@@ -298,7 +303,7 @@ mod tests {
         app.gallery.cursor = 2;
         app.current = 2;
         app.selection.insert(removed.clone());
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
 
         assert!(!removed.exists());
@@ -323,7 +328,7 @@ mod tests {
 
         // In the middle, the next image moves up into the place of the cursor.
         app.gallery.cursor = 1;
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
         assert_eq!(app.filenames, ["a.png", "c.png", "d.png", "e.png"]);
         assert_eq!(app.gallery.cursor, 1);
@@ -332,7 +337,7 @@ mod tests {
         // At the end, the cursor goes to the new last image and the grid scrolls to it.
         app.gallery.cursor = 3;
         app.gallery.scroll_offset = 1;
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
         assert_eq!(app.filenames, ["a.png", "c.png", "d.png"]);
         assert_eq!(app.gallery.cursor, 2);
@@ -341,7 +346,7 @@ mod tests {
         // A selection before the cursor: the cursor stays on its image.
         app.selection.insert(app.images[0].clone());
         app.selection.insert(app.images[1].clone());
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
         assert_eq!(app.filenames, ["d.png"]);
         assert_eq!(app.gallery.cursor, 0);
@@ -356,7 +361,7 @@ mod tests {
         app.pending_delete = Some(PendingDelete {
             paths: vec![missing.clone()],
             from_fullscreen: false,
-            permanent: true,
+            mode: DeleteMode::Permanent,
         });
         app.confirm_delete();
         let error = app.delete_error.clone().unwrap();
@@ -367,7 +372,7 @@ mod tests {
         app.pending_delete = Some(PendingDelete {
             paths: vec![missing.clone()],
             from_fullscreen: false,
-            permanent: false,
+            mode: DeleteMode::Trash,
         });
         app.confirm_delete();
         assert!(app.delete_error.as_ref().unwrap().contains("gone.png"));
@@ -377,7 +382,7 @@ mod tests {
         app.pending_delete = Some(PendingDelete {
             paths: vec![first.clone(), missing],
             from_fullscreen: false,
-            permanent: true,
+            mode: DeleteMode::Permanent,
         });
         app.confirm_delete();
         assert!(!first.exists());
@@ -391,13 +396,13 @@ mod tests {
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
         app.enter_fullscreen_at(0);
         app.start_slideshow();
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
         assert_eq!(app.mode, ViewMode::Fullscreen);
         assert_eq!(app.filenames, ["b.png"]);
         assert_eq!(app.current, 0);
 
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
         assert!(app.images.is_empty());
         assert_eq!(app.mode, ViewMode::Gallery);
@@ -409,7 +414,7 @@ mod tests {
     fn confirm_delete_in_the_grid_keeps_the_current_index_valid() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png"]);
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
         assert!(app.images.is_empty());
         assert_eq!(app.current, 0);
@@ -423,7 +428,7 @@ mod tests {
         app.gallery.search_query = "ap".to_owned();
         app.gallery.filtered_indices = vec![0, 2];
         app.gallery.cursor = 1;
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
         assert_eq!(app.filenames, ["apple.png", "berry.png"]);
         wait_until(|| {
@@ -442,7 +447,7 @@ mod tests {
         app.gallery.search_query = "ap".to_owned();
         app.gallery.filtered_indices = vec![0, 1, 2];
         app.gallery.cursor = 1;
-        app.begin_delete(true);
+        app.begin_delete(DeleteMode::Permanent);
         app.confirm_delete();
         wait_until(|| {
             app.poll_filter();

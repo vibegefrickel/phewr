@@ -24,6 +24,7 @@ use raster::decode_raster;
 use std::cell::Cell;
 use std::io;
 use std::path::Path;
+use std::sync::mpsc;
 
 /// The decoder of a file outside libheif. libheif has its own check (`decodes_with_libheif`),
 /// because the info panel uses it too.
@@ -115,6 +116,22 @@ pub(crate) fn foreground<T>(work: impl FnOnce() -> T) -> T {
     let result = work();
     FOREGROUND.set(before);
     result
+}
+
+/// Run `work` as a foreground decode on the thread pool. The receiver gets the result once. A
+/// dropped receiver means that the view moved on, and the result goes nowhere.
+pub(crate) fn spawn_foreground<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> mpsc::Receiver<T> {
+    let (tx, rx) = mpsc::channel();
+    rayon::spawn(move || {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a closed receiver means that nobody waits for the result"
+        )]
+        let _ = tx.send(foreground(work));
+    });
+    rx
 }
 
 #[cfg(test)]
@@ -297,11 +314,10 @@ mod tests {
     /// QOI, TGA, EXR and HDR: the `image` crate writes a synthetic file of each, and the grid
     /// and the fullscreen decode open it.
     mod formats {
-        use crate::decode::resize::load_and_resize;
+        use crate::decode::resize::load_and_resize_px;
         use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
         use crate::test_support::{BLUE, RED, assert_close, test_dir};
         use image::{ImageEncoder, Rgb, RgbImage};
-        use ratatui::layout::Rect;
         use std::fs::File;
         use std::path::Path;
 
@@ -315,13 +331,7 @@ mod tests {
                 "{}",
                 path.display()
             );
-            let grid = load_and_resize(
-                path,
-                Rect::new(0, 0, 2, 2),
-                (8, 8),
-                EmbeddedThumbnail::Allow,
-            )
-            .unwrap();
+            let grid = load_and_resize_px(path, (16, 16), EmbeddedThumbnail::Allow).unwrap();
             assert_eq!(grid.dimensions(), (16, 8), "{}", path.display());
             let rgba = full.to_rgba8();
             (rgba.get_pixel(4, 8).0, rgba.get_pixel(28, 8).0)

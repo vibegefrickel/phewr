@@ -1,7 +1,7 @@
 //! The event loop: input, the background polls, the draw, the Kitty writes and the wait.
 
 use crate::app::{App, ViewMode};
-use crate::config;
+use crate::config::Config;
 use crate::keys::handle_event;
 #[cfg(feature = "video")]
 use crate::kitty_output::render_video_frame;
@@ -10,9 +10,7 @@ use crate::kitty_output::{emit_new_thumbnails, render_fullscreen_image, render_g
 use crate::mpv;
 use crate::ui;
 #[cfg(feature = "video")]
-use crate::video_handoff::{hand_off_videos, poll_mpv_window};
-#[cfg(feature = "video")]
-use crate::yazi::find_on_path;
+use crate::video_handoff::{VideoState, hand_off_videos, poll_mpv_window};
 use crossterm::event::{self, Event};
 use ratatui::prelude::*;
 use std::io;
@@ -30,34 +28,24 @@ pub(crate) const WINDOW_POLL: Duration = Duration::from_millis(100);
 pub(crate) struct LoopState {
     /// A one-line note for the status bar. The next key press clears it.
     pub(crate) status: Option<String>,
-    /// The video player after the PATH lookup for mpv.
     #[cfg(feature = "video")]
-    pub(crate) player: mpv::Player,
-    /// The note that tells why the built-in player plays instead of mpv.
-    #[cfg(feature = "video")]
-    pub(crate) fallback_note: Option<String>,
+    pub(crate) video: VideoState,
 }
 
 impl LoopState {
-    /// Without the video feature, the config holds nothing for the run loop.
-    #[cfg(not(feature = "video"))]
-    pub(crate) fn new(_config: &config::Config) -> Self {
-        Self { status: None }
-    }
-
-    /// Look up mpv once at the start, so that a missing mpv does not cost a terminal hand-off.
-    #[cfg(feature = "video")]
-    pub(crate) fn new(config: &config::Config) -> Self {
-        let player = mpv::resolve(
-            config.video_player,
-            find_on_path("mpv", std::env::var_os("PATH").as_deref()),
-        );
+    /// The video player comes from the config. Without the video feature, nothing reads it.
+    #[cfg_attr(
+        not(feature = "video"),
+        expect(
+            unused_variables,
+            reason = "only the video player reads the config here"
+        )
+    )]
+    pub(crate) fn new(config: &Config) -> Self {
         Self {
             status: None,
-            fallback_note: (player == mpv::Player::Builtin
-                && config.video_player != config::VideoPlayer::Builtin)
-                .then(|| mpv::MISSING_NOTE.to_owned()),
-            player,
+            #[cfg(feature = "video")]
+            video: VideoState::new(config),
         }
     }
 }
@@ -234,9 +222,9 @@ mod tests {
         assert_eq!(state.status, None);
         #[cfg(feature = "video")]
         {
-            assert_eq!(state.player, crate::mpv::Player::Builtin);
+            assert_eq!(state.video.player, crate::mpv::Player::Builtin);
             assert_eq!(
-                state.fallback_note, None,
+                state.video.fallback_note, None,
                 "the user chose the built-in player"
             );
         }

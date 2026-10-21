@@ -2,9 +2,8 @@
 
 use super::App;
 use crate::decode::resize::resize_to_exact;
-use crate::decode::{EmbeddedThumbnail, decode_image_with_hint, foreground};
+use crate::decode::{EmbeddedThumbnail, decode_image_with_hint, spawn_foreground};
 use image::RgbaImage;
-use std::sync::mpsc;
 
 /// Multiplier applied on each zoom step.
 const ZOOM_STEP: f64 = 1.25;
@@ -79,19 +78,11 @@ impl App {
     }
 
     pub(super) fn start_source_decode(&mut self, idx: usize) {
-        let (tx, rx) = mpsc::channel();
-        self.source_rx = Some(rx);
         self.source_target = Some(idx);
         let path = self.images[idx].clone();
-        rayon::spawn(move || {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "a closed receiver means that nobody waits for the result"
-            )]
-            let _ = tx.send(foreground(|| {
-                decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny)
-            }));
-        });
+        self.source_rx = Some(spawn_foreground(move || {
+            decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny)
+        }));
     }
 
     /// Receive an async full-resolution source decode for zooming.

@@ -1,5 +1,6 @@
 //! The keys of the built-in video player.
 
+use super::{delete_key, step_key};
 use crate::app::App;
 use crate::video_handoff::focus_gallery_on_current;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -28,29 +29,15 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
             app.graphics_delete_all()?;
             app.help_visible = true;
         }
-        KeyCode::Left | KeyCode::Char('h') => {
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Home
+        | KeyCode::End
+        | KeyCode::Char('h' | 'l') => {
             app.graphics_delete_all()?;
-            app.prev();
-            app.slideshow_touch();
+            step_key(app, key.code);
         }
-        KeyCode::Right | KeyCode::Char('l') => {
-            app.graphics_delete_all()?;
-            app.next();
-            app.slideshow_touch();
-        }
-        KeyCode::Home => {
-            app.graphics_delete_all()?;
-            app.first();
-            app.slideshow_touch();
-        }
-        KeyCode::End => {
-            app.graphics_delete_all()?;
-            app.last();
-            app.slideshow_touch();
-        }
-        KeyCode::Char('d' | 'D') => {
-            app.begin_delete(matches!(key.code, KeyCode::Char('D')));
-        }
+        KeyCode::Char('d' | 'D') => delete_key(app, key.code),
         _ => {}
     }
     Ok(false)
@@ -58,7 +45,7 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{App, ViewMode};
+    use crate::app::{App, DeleteMode, ViewMode};
     use crate::test_support::{char_key, gallery_app, press};
     use crossterm::event::KeyCode;
     use std::path::PathBuf;
@@ -131,13 +118,17 @@ mod tests {
         char_key(&mut app, 'd');
         let pending = app.pending_delete.as_ref().unwrap();
         assert_eq!(pending.paths, [PathBuf::from("/videos/clip.mp4")]);
-        assert!(pending.from_fullscreen && !pending.permanent);
+        assert!(pending.from_fullscreen);
+        assert_eq!(pending.mode, DeleteMode::Trash);
         press(&mut app, KeyCode::Esc);
         assert!(app.pending_delete.is_none());
         assert_eq!(app.mode, ViewMode::Video, "Esc only cancels the question");
 
         char_key(&mut app, 'D');
-        assert!(app.pending_delete.as_ref().unwrap().permanent);
+        assert_eq!(
+            app.pending_delete.as_ref().unwrap().mode,
+            DeleteMode::Permanent
+        );
         char_key(&mut app, 'n');
 
         assert!(char_key(&mut app, 'q'));

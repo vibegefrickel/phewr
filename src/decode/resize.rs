@@ -3,20 +3,8 @@
 use super::{EmbeddedThumbnail, decode_image_with_hint};
 use fast_image_resize as fir;
 use image::{DynamicImage, RgbaImage};
-use ratatui::layout::Rect;
 use std::io;
 use std::path::Path;
-
-pub(crate) fn load_and_resize(
-    path: &Path,
-    rect: Rect,
-    cell_px: (u32, u32),
-    embedded: EmbeddedThumbnail,
-) -> io::Result<RgbaImage> {
-    let target_w = u32::from(rect.width) * cell_px.0;
-    let target_h = u32::from(rect.height) * cell_px.1;
-    load_and_resize_px(path, (target_w, target_h), embedded)
-}
 
 /// Decode `path` with the size hint `target` in pixels and fit the image into it.
 pub(crate) fn load_and_resize_px(
@@ -111,11 +99,10 @@ pub(crate) fn resize_to_exact(img: &DynamicImage, dst_w: u32, dst_h: u32) -> Rgb
 
 #[cfg(test)]
 mod tests {
-    use super::{load_and_resize, resize_decoded_to_dims, resize_to_exact};
+    use super::{load_and_resize_px, resize_decoded_to_dims, resize_to_exact};
     use crate::decode::EmbeddedThumbnail;
     use crate::test_support::test_dir;
     use image::{DynamicImage, RgbaImage};
-    use ratatui::layout::Rect;
 
     #[test]
     fn resize_preserves_aspect_ratio_without_upscaling() {
@@ -139,25 +126,17 @@ mod tests {
     }
 
     #[test]
-    fn load_and_resize_fits_the_cells() {
+    fn load_and_resize_fits_the_box() {
         let dir = test_dir();
         let path = dir.path().join("wide.png");
         RgbaImage::new(64, 32).save(&path).unwrap();
-        let fitted = load_and_resize(
-            &path,
-            Rect::new(0, 0, 2, 2),
-            (8, 8),
-            EmbeddedThumbnail::Deny,
-        )
-        .unwrap();
+        let fitted = load_and_resize_px(&path, (16, 16), EmbeddedThumbnail::Deny).unwrap();
         assert_eq!(fitted.dimensions(), (16, 8));
-        let full =
-            load_and_resize(&path, Rect::default(), (8, 8), EmbeddedThumbnail::Deny).unwrap();
+        let full = load_and_resize_px(&path, (0, 0), EmbeddedThumbnail::Deny).unwrap();
         assert_eq!(full.dimensions(), (64, 32));
         assert!(
-            load_and_resize(
+            load_and_resize_px(
                 &dir.path().join("missing.png"),
-                Rect::new(0, 0, 1, 1),
                 (8, 8),
                 EmbeddedThumbnail::Deny
             )

@@ -1,4 +1,4 @@
-use crate::app::{App, ViewMode};
+use crate::app::{App, DeleteMode, ViewMode};
 use crate::gallery::LABEL_ROWS;
 use crate::styles::STYLES;
 use ratatui::{
@@ -206,7 +206,7 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
         Line::from(Span::styled(
             format!(
                 " {} {}? [y/N] ",
-                if pending.permanent {
+                if pending.mode == DeleteMode::Permanent {
                     "Permanently delete"
                 } else {
                     "Move to trash"
@@ -361,7 +361,7 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
 /// or name, position, selection count, scan note and hints.
 fn gallery_status_line(app: &App, filtered_count: usize, status: Option<&str>) -> Line<'static> {
     if let Some(pending) = &app.pending_delete {
-        let action = if pending.permanent {
+        let action = if pending.mode == DeleteMode::Permanent {
             "Permanently delete"
         } else {
             "Move to trash"
@@ -463,7 +463,7 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     let first_visible = app.gallery.scroll_offset * app.gallery.grid_cols;
     let mut selected_border = None;
 
-    for (vis_idx, img_idx) in app.gallery.visible_items().collect::<Vec<_>>() {
+    for (vis_idx, img_idx) in app.gallery.visible_items() {
         let is_selected = vis_idx + first_visible == app.gallery.cursor;
         let is_marked = app.is_marked(img_idx);
         let border = app.gallery.border_rect(vis_idx);
@@ -729,7 +729,7 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
 #[cfg(test)]
 mod tests {
     use super::draw;
-    use crate::app::{App, PendingDelete, ViewMode};
+    use crate::app::{App, DeleteMode, PendingDelete, ViewMode};
     use crate::image_list::SharedImageList;
     use crate::picker::PickerState;
     use image::RgbaImage;
@@ -894,14 +894,14 @@ mod tests {
     }
 
     /// A delete question for `names` below `/photos`.
-    fn pending(names: &[&str], permanent: bool) -> PendingDelete {
+    fn pending(names: &[&str], mode: DeleteMode) -> PendingDelete {
         PendingDelete {
             paths: names
                 .iter()
                 .map(|name| PathBuf::from("/photos").join(name))
                 .collect(),
             from_fullscreen: false,
-            permanent,
+            mode,
         }
     }
 
@@ -1289,11 +1289,11 @@ mod tests {
     #[test]
     fn gallery_asks_before_a_delete() {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
-        app.pending_delete = Some(pending(&["a.jpg"], false));
+        app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Trash));
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, " Move to trash a.jpg?  y: confirm  n/Esc: cancel ");
 
-        app.pending_delete = Some(pending(&["a.jpg", "b.jpg"], true));
+        app.pending_delete = Some(pending(&["a.jpg", "b.jpg"], DeleteMode::Permanent));
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, " Permanently delete 2 files? ");
     }
@@ -1371,11 +1371,11 @@ mod tests {
     fn fullscreen_asks_before_a_delete_and_shows_errors() {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
         app.mode = ViewMode::Fullscreen;
-        app.pending_delete = Some(pending(&["a.jpg"], true));
+        app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Permanent));
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, " Permanently delete a.jpg? [y/N] ");
 
-        app.pending_delete = Some(pending(&[], false));
+        app.pending_delete = Some(pending(&[], DeleteMode::Trash));
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, " Move to trash 0 files? [y/N] ");
 
@@ -1400,7 +1400,7 @@ mod tests {
         assert_symbol(&buffer, (1, 29), "a", Color::Reset, Modifier::empty());
         assert_ansi(cell_of(&buffer, "\u{2190}/\u{2192}: navigate"), Color::Cyan);
 
-        app.pending_delete = Some(pending(&["a.jpg"], false));
+        app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Trash));
         let buffer = render_buffer(&mut app, None, 100, 30);
         assert_ansi(cell_of(&buffer, "Move to trash a.jpg?"), Color::Red);
     }

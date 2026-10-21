@@ -59,6 +59,8 @@ impl Write for GraphicsOutput {
     }
 }
 
+/// The default places the picture at the cursor, without an id and without a pixel offset.
+#[derive(Debug, Default)]
 pub(crate) struct DisplayOptions {
     pub id: Option<u32>,
     pub cols: Option<u16>,

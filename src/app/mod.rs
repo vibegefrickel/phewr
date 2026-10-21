@@ -13,7 +13,7 @@ pub(crate) mod thumbnails;
 mod video;
 mod zoom;
 
-pub(crate) use delete::PendingDelete;
+pub(crate) use delete::{DeleteMode, PendingDelete};
 pub(crate) use slideshow::Slideshow;
 #[cfg(feature = "video")]
 pub(crate) use video::VideoReturn;
@@ -29,13 +29,13 @@ use disk_cache::default_disk_cache_dir;
 use image::{DynamicImage, RgbaImage};
 use lru::LruCache;
 use ratatui::layout::Rect;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
-use thumbnails::ThumbResult;
+use thumbnails::{JobSlots, ThumbResult};
 #[cfg(feature = "video")]
 use video::VideoWindow;
 
@@ -145,14 +145,10 @@ pub(crate) struct App {
     // Async thumbnails
     thumb_tx: mpsc::Sender<ThumbResult>,
     thumb_rx: mpsc::Receiver<ThumbResult>,
-    /// The thumbnails that decode right now, at most `MAX_THUMB_JOBS`.
-    thumb_loading: HashSet<usize>,
-    /// The visible thumbnails that wait for a free job, in the order of the grid.
-    thumb_queue: VecDeque<(usize, PathBuf, Rect)>,
-    /// The HEIC previews that decode right now, at most `MAX_PREVIEW_JOBS`.
-    preview_loading: HashSet<usize>,
-    /// The HEIC previews that wait for a free job, in the order of the grid.
-    preview_queue: VecDeque<(usize, PathBuf, Rect)>,
+    /// The sharp thumbnail decodes, at most `MAX_THUMB_JOBS` at once.
+    thumb_jobs: JobSlots,
+    /// The HEIC preview decodes, at most `MAX_PREVIEW_JOBS` at once.
+    preview_jobs: JobSlots,
     thumb_generation: u32,
     /// The Kitty ids of previews that a sharp thumbnail replaced, with their cell. The next
     /// write of the grid deletes them in the terminal.
@@ -252,10 +248,8 @@ impl App {
             filter_cursor: None,
             thumb_tx,
             thumb_rx,
-            thumb_loading: HashSet::new(),
-            thumb_queue: VecDeque::new(),
-            preview_loading: HashSet::new(),
-            preview_queue: VecDeque::new(),
+            thumb_jobs: Self::thumb_slots(),
+            preview_jobs: Self::preview_slots(),
             thumb_generation: 0,
             stale_image_ids: Vec::new(),
             transmitted_image_ids: HashSet::new(),
@@ -263,11 +257,22 @@ impl App {
         }
     }
 
+    /// Run `write` with a handle on the graphics output, so that the output and the app can
+    /// both change inside. The `_to` twin of each write takes any `Write`, for the tests.
+    pub(crate) fn with_graphics_out(
+        &mut self,
+        write: impl FnOnce(&mut Self, &mut GraphicsOutput) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let mut out = self.graphics_out.clone();
+        write(self, &mut out)
+    }
+
     /// Wipe backend storage and drop transmitted-image tracking.
     pub(crate) fn graphics_delete_all(&mut self) -> io::Result<()> {
-        let mut out = self.graphics_out.clone();
-        self.graphics_delete_all_to(&mut out)?;
-        out.flush()
+        self.with_graphics_out(|app, out| {
+            app.graphics_delete_all_to(out)?;
+            out.flush()
+        })
     }
 
     pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
@@ -286,9 +291,7 @@ impl App {
     pub(crate) fn has_pending_work(&self) -> bool {
         self.fullscreen_rx.is_some()
             || self.source_rx.is_some()
-            || !self.thumb_loading.is_empty()
-            || !self.thumb_queue.is_empty()
-            || self.previews_pending()
+            || self.thumbnails_pending()
             || self.prefetcher.has_jobs()
             || self.filter_rx.is_some()
             || self.shape_rx.is_some()

@@ -18,11 +18,12 @@ pub(super) fn default_disk_cache_dir() -> PathBuf {
     )
 }
 
+/// The cache file of `path` at the pixel size `target`. The name hashes the file identity, so a
+/// changed file or another size never hits an old thumbnail.
 pub(super) fn get_cache_file_path(
     cache_dir: &Path,
     path: &Path,
-    target_w: u32,
-    target_h: u32,
+    target: (u32, u32),
 ) -> Option<PathBuf> {
     use std::collections::hash_map::DefaultHasher;
     use std::fs;
@@ -42,8 +43,8 @@ pub(super) fn get_cache_file_path(
     metadata.len().hash(&mut hasher);
     mtime.as_secs().hash(&mut hasher);
     mtime.subsec_nanos().hash(&mut hasher);
-    target_w.hash(&mut hasher);
-    target_h.hash(&mut hasher);
+    target.0.hash(&mut hasher);
+    target.1.hash(&mut hasher);
     let filename = format!("{:016x}.png", hasher.finish());
 
     Some(cache_dir.join(filename))
@@ -52,10 +53,9 @@ pub(super) fn get_cache_file_path(
 pub(super) fn try_load_from_disk_cache(
     cache_dir: &Path,
     path: &Path,
-    target_w: u32,
-    target_h: u32,
+    target: (u32, u32),
 ) -> Option<RgbaImage> {
-    let cache_path = get_cache_file_path(cache_dir, path, target_w, target_h)?;
+    let cache_path = get_cache_file_path(cache_dir, path, target)?;
     if cache_path.exists() {
         if let Ok(image) = image::open(&cache_path) {
             Some(image.to_rgba8())
@@ -75,15 +75,14 @@ pub(super) fn try_load_from_disk_cache(
 pub(super) fn try_save_to_disk_cache(
     cache_dir: &Path,
     path: &Path,
-    target_w: u32,
-    target_h: u32,
+    target: (u32, u32),
     img: &RgbaImage,
 ) -> Option<()> {
     use std::fs;
     static CACHE_PRUNED: OnceLock<()> = OnceLock::new();
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    let cache_path = get_cache_file_path(cache_dir, path, target_w, target_h)?;
+    let cache_path = get_cache_file_path(cache_dir, path, target)?;
     let parent = cache_path.parent()?;
     fs::create_dir_all(parent).ok()?;
     CACHE_PRUNED.get_or_init(|| prune_disk_cache(parent, 512 * 1024 * 1024));
@@ -178,10 +177,10 @@ mod tests {
         let cache = dir.path().join("cache");
         let source = dir.path().join("source.png");
         fs::write(&source, b"synthetic-a").unwrap();
-        let first = get_cache_file_path(&cache, &source, 100, 100).unwrap();
-        let resized = get_cache_file_path(&cache, &source, 200, 100).unwrap();
+        let first = get_cache_file_path(&cache, &source, (100, 100)).unwrap();
+        let resized = get_cache_file_path(&cache, &source, (200, 100)).unwrap();
         fs::write(&source, b"synthetic-content-b").unwrap();
-        let changed = get_cache_file_path(&cache, &source, 100, 100).unwrap();
+        let changed = get_cache_file_path(&cache, &source, (100, 100)).unwrap();
 
         assert_eq!(first.parent(), Some(cache.as_path()));
         assert_ne!(first, resized);
@@ -201,32 +200,32 @@ mod tests {
         RgbaImage::new(4, 4).save(&source).unwrap();
         let thumb = RgbaImage::new(2, 3);
 
-        assert!(get_cache_file_path(&cache, &dir.path().join("missing.png"), 1, 1).is_none());
-        assert!(try_load_from_disk_cache(&cache, &source, 2, 3).is_none());
+        assert!(get_cache_file_path(&cache, &dir.path().join("missing.png"), (1, 1)).is_none());
+        assert!(try_load_from_disk_cache(&cache, &source, (2, 3)).is_none());
         assert_eq!(
-            try_save_to_disk_cache(&cache, &source, 2, 3, &thumb),
+            try_save_to_disk_cache(&cache, &source, (2, 3), &thumb),
             Some(())
         );
         assert_eq!(
-            try_save_to_disk_cache(&cache, &source, 2, 3, &thumb),
+            try_save_to_disk_cache(&cache, &source, (2, 3), &thumb),
             Some(())
         );
         assert_eq!(
-            try_load_from_disk_cache(&cache, &source, 2, 3)
+            try_load_from_disk_cache(&cache, &source, (2, 3))
                 .unwrap()
                 .dimensions(),
             (2, 3)
         );
 
-        let entry = get_cache_file_path(&cache, &source, 2, 3).unwrap();
+        let entry = get_cache_file_path(&cache, &source, (2, 3)).unwrap();
         fs::write(&entry, b"not a png").unwrap();
-        assert!(try_load_from_disk_cache(&cache, &source, 2, 3).is_none());
+        assert!(try_load_from_disk_cache(&cache, &source, (2, 3)).is_none());
         assert!(!entry.exists(), "a broken entry goes away");
 
         // A cache directory that is a file cannot hold entries.
         let blocked = dir.path().join("blocked");
         fs::write(&blocked, b"file").unwrap();
-        assert!(try_save_to_disk_cache(&blocked, &source, 2, 3, &thumb).is_none());
+        assert!(try_save_to_disk_cache(&blocked, &source, (2, 3), &thumb).is_none());
     }
 
     #[test]

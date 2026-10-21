@@ -1,5 +1,6 @@
 //! The keys of the thumbnail grid and of its search line.
 
+use super::delete_key;
 use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io;
@@ -113,9 +114,7 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
         KeyCode::Char('A') => {
             app.clear_selection();
         }
-        KeyCode::Char('d' | 'D') => {
-            app.begin_delete(matches!(key.code, KeyCode::Char('D')));
-        }
+        KeyCode::Char('d' | 'D') => delete_key(app, key.code),
         KeyCode::Char('o') => {
             app.graphics_delete_all()?;
             app.open_picker();

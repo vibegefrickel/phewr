@@ -6,7 +6,7 @@ pub(crate) mod picker;
 #[cfg(feature = "video")]
 pub(crate) mod video;
 
-use crate::app::{App, ViewMode};
+use crate::app::{App, DeleteMode, ViewMode};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use fullscreen::handle_fullscreen_key;
 use gallery::{handle_gallery_key, handle_search_key};
@@ -61,10 +61,32 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     Ok(false)
 }
 
+/// The steps through the list that the fullscreen view and the video player share. A step
+/// restarts the slideshow countdown, so that the new file gets the full interval.
+fn step_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Left | KeyCode::Char('h') => app.prev(),
+        KeyCode::Right | KeyCode::Char('l') => app.next(),
+        KeyCode::Home => app.first(),
+        KeyCode::End => app.last(),
+        _ => return,
+    }
+    app.slideshow_touch();
+}
+
+/// `d` asks before the trash, `D` before the permanent delete.
+fn delete_key(app: &mut App, code: KeyCode) {
+    app.begin_delete(if code == KeyCode::Char('D') {
+        DeleteMode::Permanent
+    } else {
+        DeleteMode::Trash
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::handle_event;
-    use crate::app::ViewMode;
+    use crate::app::{DeleteMode, ViewMode};
     use crate::test_support::{char_key, fullscreen_app, gallery_app, press};
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use std::fs;
@@ -158,7 +180,7 @@ mod tests {
         let pending = app.pending_delete.as_ref().unwrap();
         assert_eq!(pending.paths, [PathBuf::from("/photos/photo-01.jpg")]);
         assert!(pending.from_fullscreen);
-        assert!(!pending.permanent);
+        assert_eq!(pending.mode, DeleteMode::Trash);
 
         char_key(&mut app, 'x');
         assert!(app.pending_delete.is_some(), "other keys keep the question");
@@ -166,7 +188,10 @@ mod tests {
         assert!(app.pending_delete.is_none());
 
         char_key(&mut app, 'D');
-        assert!(app.pending_delete.as_ref().unwrap().permanent);
+        assert_eq!(
+            app.pending_delete.as_ref().unwrap().mode,
+            DeleteMode::Permanent
+        );
         char_key(&mut app, 'N');
         assert!(app.pending_delete.is_none());
 

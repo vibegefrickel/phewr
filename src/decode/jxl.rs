@@ -108,9 +108,8 @@ mod tests {
         let full =
             decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
         assert_eq!(dimensions(path), Some((full.width(), full.height())));
-        let rect = ratatui::layout::Rect::new(0, 0, 10, 10);
         let thumb =
-            crate::decode::resize::load_and_resize(path, rect, (20, 20), EmbeddedThumbnail::Allow)
+            crate::decode::resize::load_and_resize_px(path, (200, 200), EmbeddedThumbnail::Allow)
                 .expect("grid decode");
         assert!(thumb.width() <= 200 && thumb.height() <= 200);
         let info = crate::info::load(path);

@@ -3,10 +3,9 @@
 #[cfg(feature = "video")]
 use super::VideoReturn;
 use super::{App, ViewMode};
-use crate::decode::resize::load_and_resize;
-use crate::decode::{EmbeddedThumbnail, foreground};
+use crate::decode::resize::load_and_resize_px;
+use crate::decode::{EmbeddedThumbnail, spawn_foreground};
 use ratatui::layout::Rect;
-use std::sync::mpsc;
 
 impl App {
     pub(crate) fn enter_fullscreen_selected(&mut self) {
@@ -35,20 +34,15 @@ impl App {
     }
 
     fn start_fullscreen_decode(&mut self, idx: usize, rect: Rect) {
-        let (tx, rx) = mpsc::channel();
-        self.fullscreen_rx = Some(rx);
         self.fullscreen_target = Some((idx, rect));
         let path = self.images[idx].clone();
-        let cell_px = self.cell_px;
-        rayon::spawn(move || {
-            let result =
-                foreground(|| load_and_resize(&path, rect, cell_px, EmbeddedThumbnail::Deny));
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "a closed receiver means that nobody waits for the result"
-            )]
-            let _ = tx.send(result);
-        });
+        let target = (
+            u32::from(rect.width) * self.cell_px.0,
+            u32::from(rect.height) * self.cell_px.1,
+        );
+        self.fullscreen_rx = Some(spawn_foreground(move || {
+            load_and_resize_px(&path, target, EmbeddedThumbnail::Deny)
+        }));
     }
 
     pub(crate) fn poll_fullscreen(&mut self) -> bool {

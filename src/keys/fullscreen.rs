@@ -1,5 +1,6 @@
 //! The keys of the fullscreen view.
 
+use super::{delete_key, step_key};
 use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::io;
@@ -36,27 +37,12 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
         KeyCode::Right | KeyCode::Char('l') if app.zoom > 1.0 => app.pan(1.0, 0.0),
         KeyCode::Up | KeyCode::Char('k') if app.zoom > 1.0 => app.pan(0.0, -1.0),
         KeyCode::Down | KeyCode::Char('j') if app.zoom > 1.0 => app.pan(0.0, 1.0),
-        KeyCode::Left | KeyCode::Char('h') => {
-            app.prev();
-            app.slideshow_touch();
-        }
-        KeyCode::Right | KeyCode::Char('l') => {
-            app.next();
-            app.slideshow_touch();
-        }
-        KeyCode::Home => {
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') => step_key(app, key.code),
+        KeyCode::Home | KeyCode::End => {
             app.graphics_delete_all()?;
-            app.first();
-            app.slideshow_touch();
+            step_key(app, key.code);
         }
-        KeyCode::End => {
-            app.graphics_delete_all()?;
-            app.last();
-            app.slideshow_touch();
-        }
-        KeyCode::Char('d' | 'D') => {
-            app.begin_delete(matches!(key.code, KeyCode::Char('D')));
-        }
+        KeyCode::Char('d' | 'D') => delete_key(app, key.code),
         _ => {}
     }
     Ok(false)
