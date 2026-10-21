@@ -199,7 +199,8 @@ missing.
 - **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
   and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
-  (`MAX_PREFETCH_JOBS`) run at once. The other cells wait in a queue in grid order.
+  (`MAX_PREFETCH_JOBS`) run at once. The other cells wait in a queue in grid order. A failed
+  thumbnail decode sends `None` and frees its slot.
 - **Kitty temp file medium:** the temp file medium wins only when the probe answer is `OK` and
   the terminal deleted the probe file. A terminal with another `TMPDIR` reads the file but keeps
   it, and viewr would leave a 22 MB file per frame. The file name contains
@@ -217,10 +218,20 @@ missing.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature
   too. The `image` feature `avif` is the encoder, not a decoder.
-- **Embedded HEIC thumbnails:** a grid decode passes `EmbeddedThumbnail::Allow`. viewr uses the
-  embedded thumbnail if it is at least the fitted size of the primary image and has the same
-  `irot` and `imir` properties. `decode/heif_boxes.rs` reads them. Fullscreen, zoom and prefetch
-  pass `EmbeddedThumbnail::Deny`.
+- **Embedded HEIC thumbnails:** a cold HEIC cell decodes in two phases. Phase 1 decodes the
+  embedded thumbnail (iPhone: 320x240) and shows it as a preview (`start_preview_decode`, at most
+  `MAX_PREVIEW_JOBS`). The thumbnail must have the same `irot` and `imir` as the primary image.
+  `decode/heif_boxes.rs` reads them. viewr scales the preview to the size of the sharp image.
+  Phase 2 is the sharp decode through `MAX_THUMB_JOBS`. The sharp jobs of libheif files wait
+  until every preview is out (`sharp_job_waits`). Other formats start at once. A preview never
+  goes into the disk cache, and a disk cache hit skips the preview. The sharp image gets a new
+  Kitty id. `emit_new_thumbnails_to` deletes the preview image (`a=d,d=I`) before the transmit
+  (`app.stale_image_ids`). The sharp decode still uses the embedded thumbnail when it is at least
+  the fitted size of the primary image. Fullscreen, zoom and prefetch pass
+  `EmbeddedThumbnail::Deny`.
+- **libheif reads through a stream.** `open_heif_context` opens a file with
+  `libheif_rs::StreamReader`. `HeifContext::read_from_file` copies the whole file first, which
+  costs 30 ms to 40 ms per 24 MP photo.
 - **The `sips` route:** sips writes an uncompressed TIFF with the Orientation tag into a temp
   file. The grid and the fullscreen view ask for a copy at the size of their box (`-Z`), and the
   zoom gets the full image. A relative path gets `./` in front, because sips reads `-x` as a

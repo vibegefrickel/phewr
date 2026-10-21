@@ -176,7 +176,7 @@ At start, viewr asks the terminal whether it reads image data from a temp file. 
 
 **Camera RAW, PSD, JPEG 2000, PDF, SVG, ICNS, SGI, DDS and PICT** (feature `sips`, macOS only): viewr converts these files with the built-in macOS tool `sips`. The grid and the fullscreen view get a copy at the size of their box. The zoom gets the full image. A PDF shows its first page.
 
-**HEIC, HEIF and AVIF** (feature `heic`): viewr decodes these files through libheif. Without `heic`, viewr does not open AVIF. For HEIC grid thumbnails, viewr uses the thumbnail that the file holds, if it is large enough and has the rotation and the mirror of the main image.
+**HEIC, HEIF and AVIF** (feature `heic`): viewr decodes these files through libheif. Without `heic`, viewr does not open AVIF. A cold HEIC grid shows the thumbnails that the files hold at once, then replaces them with sharp thumbnails. viewr uses such a thumbnail only if it has the rotation and the mirror of the main image.
 
 viewr applies the EXIF orientation of JPEG, TIFF, WebP and PNG files, so portrait photos show upright.
 
