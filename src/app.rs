@@ -75,6 +75,23 @@ pub(crate) enum VideoReturn {
     Fullscreen,
 }
 
+/// An mpv window that viewr follows: the index of its file and the receiver of its exit code.
+#[cfg(feature = "video")]
+struct VideoWindow {
+    index: usize,
+    exit: mpsc::Receiver<Option<i32>>,
+    /// True when a slideshow plays the video one time and waits for the window.
+    holds_slideshow: bool,
+}
+
+/// The exit of a followed mpv window: the exit code and the file, for the status note.
+#[cfg(feature = "video")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct WindowExit {
+    pub code: Option<i32>,
+    pub path: PathBuf,
+}
+
 pub(crate) struct PendingDelete {
     pub paths: Vec<PathBuf>,
     pub from_fullscreen: bool,
@@ -162,9 +179,9 @@ pub(crate) struct App {
     pub video: Option<crate::video::VideoPlayback>,
     #[cfg(feature = "video")]
     pub video_return: VideoReturn,
-    /// The slideshow position of a video in an mpv window, and the exit code of the window.
+    /// The mpv window that plays the current video, until it exits.
     #[cfg(feature = "video")]
-    video_window: Option<(usize, mpsc::Receiver<Option<i32>>)>,
+    video_window: Option<VideoWindow>,
 
     // Scanner state
     shared_list: SharedImageList,
@@ -299,6 +316,17 @@ impl App {
         self.info_visible = !self.info_visible;
         // The panel changes the image/grid area, so placements must be redone.
         self.needs_render = true;
+    }
+
+    /// The file that yazi reveals when viewr quits: the fullscreen file, or the gallery cursor.
+    pub(crate) fn reveal_path(&self) -> Option<&Path> {
+        let index = match self.mode {
+            ViewMode::Gallery | ViewMode::Picker => self.gallery.selected_index()?,
+            ViewMode::Fullscreen => self.current,
+            #[cfg(feature = "video")]
+            ViewMode::Video => self.current,
+        };
+        self.images.get(index).map(PathBuf::as_path)
     }
 
     /// Path the info panel describes: the fullscreen image, or the hovered thumbnail.
@@ -759,8 +787,8 @@ impl App {
     /// A slideshow video holds the slide until its end. Returns true while it holds.
     ///
     /// The built-in player ends the clip and the slideshow moves on. An mpv window holds the
-    /// placeholder until the window closes: exit code 0 moves on, a quit stops the slideshow.
-    /// If the user leaves the placeholder, the slideshow forgets the window.
+    /// placeholder until the window closes, see [`App::poll_video_window`]. If the user leaves
+    /// the placeholder, the slideshow forgets the window.
     #[cfg(feature = "video")]
     fn slideshow_video_holds(&mut self) -> bool {
         if self.mode == ViewMode::Video {
@@ -770,30 +798,107 @@ impl App {
             }
             return true;
         }
-        let Some((index, exit)) = self.video_window.as_ref() else {
+        let Some(window) = self.video_window.as_ref() else {
             return false;
         };
-        if *index != self.current || self.mode != ViewMode::Fullscreen {
+        if !window.holds_slideshow {
+            return false;
+        }
+        if window.index != self.current || self.mode != ViewMode::Fullscreen {
             self.video_window = None;
             return false;
         }
-        let code = match exit.try_recv() {
-            Ok(code) => code,
-            Err(mpsc::TryRecvError::Empty) => {
-                self.slideshow_check_again_soon();
-                return true;
-            }
-            Err(mpsc::TryRecvError::Disconnected) => None,
-        };
-        self.video_window = None;
-        self.after_slideshow_video(crate::mpv::reached_the_end(code));
+        self.slideshow_check_again_soon();
         true
     }
 
-    /// Hold the slideshow on the placeholder of the current video until the mpv window closes.
+    /// Follow the mpv window of the current video until it exits.
+    ///
+    /// `holds_slideshow` holds a running slideshow on the placeholder until the window closes.
     #[cfg(feature = "video")]
-    pub(crate) fn hold_slideshow_for_window(&mut self, exit: mpsc::Receiver<Option<i32>>) {
-        self.video_window = Some((self.current, exit));
+    pub(crate) fn watch_video_window(
+        &mut self,
+        exit: mpsc::Receiver<Option<i32>>,
+        holds_slideshow: bool,
+    ) {
+        self.video_window = Some(VideoWindow {
+            index: self.current,
+            exit,
+            holds_slideshow,
+        });
+    }
+
+    /// True while an mpv window plays and viewr waits for its exit code.
+    #[cfg(feature = "video")]
+    pub(crate) fn watches_video_window(&self) -> bool {
+        self.video_window.is_some()
+    }
+
+    /// Take the exit code of the followed mpv window, and act on it.
+    ///
+    /// `n` and `N` in the window step to the neighbor, see [`App::step_from_video`]. In a
+    /// slideshow, the end of the clip moves on and each other exit stops the slideshow. The
+    /// exit counts only while viewr shows the file of the window in the fullscreen view or in
+    /// the gallery, without an overlay. Otherwise viewr forgets the window.
+    #[cfg(feature = "video")]
+    pub(crate) fn poll_video_window(&mut self) -> Option<WindowExit> {
+        let window = self.video_window.as_ref()?;
+        let code = match window.exit.try_recv() {
+            Ok(code) => code,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        let window = self.video_window.take()?;
+        if !self.follows_window(window.index) {
+            return None;
+        }
+        let path = self.images[window.index].clone();
+        if let Some(step) = crate::mpv::step(code) {
+            self.step_from_video(step);
+        } else if window.holds_slideshow && self.slideshow.is_some() {
+            let reached_end = crate::mpv::reached_the_end(code);
+            // A paused slideshow stays on the placeholder after the end of the clip.
+            if !reached_end || self.slideshow_advancing() {
+                self.after_slideshow_video(reached_end);
+            }
+        }
+        Some(WindowExit { code, path })
+    }
+
+    /// True while viewr shows the file `index` of an mpv window and no overlay takes the keys.
+    #[cfg(feature = "video")]
+    fn follows_window(&self, index: usize) -> bool {
+        index == self.current
+            && index < self.images.len()
+            && matches!(self.mode, ViewMode::Fullscreen | ViewMode::Gallery)
+            && !self.help_visible
+            && self.pending_delete.is_none()
+            && !self.gallery.search_active
+    }
+
+    /// Step from the current video to its neighbor in the list, after `n` or `N` in mpv.
+    ///
+    /// An image opens in the fullscreen view. A video opens in the video view and keeps the
+    /// view that the first video returns to, so that a run of videos from the gallery ends in
+    /// the gallery. Returns false at the end of the list, and then nothing moves.
+    #[cfg(feature = "video")]
+    pub(crate) fn step_from_video(&mut self, step: crate::mpv::Step) -> bool {
+        let target = match step {
+            crate::mpv::Step::Next => {
+                Some(self.current + 1).filter(|&next| next < self.images.len())
+            }
+            crate::mpv::Step::Previous => self.current.checked_sub(1),
+        };
+        let Some(target) = target else {
+            return false;
+        };
+        let return_to = self.video_return;
+        self.jump_to(target);
+        if self.mode == ViewMode::Video {
+            self.video_return = return_to;
+        }
+        self.slideshow_touch();
+        true
     }
 
     /// After a video that a slideshow played one time: the end of the clip moves the slideshow
@@ -1285,7 +1390,7 @@ impl App {
         if let Some(v) = self.video.take() {
             v.stop();
         }
-        // A step away from the placeholder forgets the mpv window of the slideshow.
+        // A step away from the placeholder forgets the mpv window.
         #[cfg(feature = "video")]
         {
             self.video_window = None;

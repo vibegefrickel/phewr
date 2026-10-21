@@ -30,9 +30,12 @@ use encoder::GraphicsBackend;
 use image::RgbaImage;
 use image_list::SharedImageList;
 use ratatui::prelude::*;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Write, stdout};
-use std::path::PathBuf;
-use std::time::Duration;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 #[command(
@@ -144,6 +147,9 @@ fn main() -> io::Result<()> {
     #[cfg(feature = "video")]
     ffmpeg::init()
         .map_err(|error| io::Error::other(format!("failed to initialize ffmpeg: {error}")))?;
+    // A libav warning on stderr breaks the screen of the TUI.
+    #[cfg(feature = "video")]
+    ffmpeg::util::log::set_level(ffmpeg::util::log::Level::Quiet);
 
     let cli = Cli::parse();
     let paths = if cli.files.is_empty() {
@@ -223,7 +229,67 @@ fn main() -> io::Result<()> {
     app.slideshow_autostart = cli.slideshow;
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();
+    if run_result.is_ok() && restore_result.is_ok() {
+        // viewr quits anyway. A yazi that does not answer keeps its old cursor.
+        reveal_in_yazi(
+            app.reveal_path(),
+            std::env::var_os("YAZI_ID").as_deref(),
+            std::env::var_os("PATH").as_deref(),
+            run_briefly,
+        );
+    }
     run_result.and(restore_result)
+}
+
+/// How long viewr waits for `ya` when it quits. A yazi that does not answer must not hold viewr.
+const YA_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Move the cursor of the yazi that started viewr to `path`, so that yazi shows the last file.
+///
+/// yazi sets `YAZI_ID` for each program that it starts. Without it, or without `ya` on PATH,
+/// nothing happens. `run` starts `ya emit reveal <path>`. The tests pass a fake.
+fn reveal_in_yazi(
+    path: Option<&Path>,
+    yazi_id: Option<&OsStr>,
+    search_path: Option<&OsStr>,
+    run: impl FnOnce(&Path, &[OsString]) -> io::Result<()>,
+) -> Option<io::Result<()>> {
+    yazi_id.filter(|id| !id.is_empty())?;
+    let ya = find_on_path("ya", search_path)?;
+    let path = std::path::absolute(path?).ok()?;
+    let args = [
+        OsString::from("emit"),
+        OsString::from("reveal"),
+        path.into_os_string(),
+    ];
+    Some(run(&ya, &args))
+}
+
+/// Run `program` without output after the TUI, and wait at most [`YA_TIMEOUT`] for its exit.
+fn run_briefly(program: &Path, args: &[OsString]) -> io::Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let deadline = Instant::now() + YA_TIMEOUT;
+    while child.try_wait()?.is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+/// The first executable `program` in the directories of `path`, like the lookup of a shell.
+fn find_on_path(program: &str, path: Option<&OsStr>) -> Option<PathBuf> {
+    std::env::split_paths(path?)
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .map(|directory| directory.join(program))
+        .find(|candidate| {
+            candidate.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
+        })
 }
 
 fn initial_dir_from_paths(paths: &[PathBuf]) -> PathBuf {
@@ -248,6 +314,9 @@ const BUSY_POLL: Duration = Duration::from_millis(10);
 const IDLE_POLL: Duration = Duration::from_millis(250);
 /// How long the start waits for the answer of the terminal to the Kitty probe.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+/// The wait of the loop while an mpv window plays: the latency of `n` and `N` in the window.
+#[cfg(feature = "video")]
+const WINDOW_POLL: Duration = Duration::from_millis(100);
 
 struct LoopState {
     /// A one-line note for the status bar. The next key press clears it.
@@ -272,7 +341,7 @@ impl LoopState {
     fn new(config: &config::Config) -> Self {
         let player = mpv::resolve(
             config.video_player,
-            mpv::find_on_path("mpv", std::env::var_os("PATH").as_deref()),
+            find_on_path("mpv", std::env::var_os("PATH").as_deref()),
         );
         Self {
             status: None,
@@ -304,13 +373,13 @@ fn run(
         }
 
         // 2. Poll background tasks
+        #[cfg(feature = "video")]
+        poll_mpv_window(app, state);
         poll_background(app, &mut pending_emits);
 
         // mpv takes the video before the draw, so that the gallery comes back in this pass.
         #[cfg(feature = "video")]
-        if app.mode == ViewMode::Video && app.video.is_none() {
-            hand_off_video(app, state, terminal, &mut mpv::SystemRunner)?;
-        }
+        hand_off_videos(app, state, terminal, &mut mpv::SystemRunner)?;
 
         if app.scan_complete
             && app.images.is_empty()
@@ -432,6 +501,10 @@ fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     if let Some(remaining) = app.slideshow_timeout() {
         timeout = timeout.min(remaining);
     }
+    #[cfg(feature = "video")]
+    if app.watches_video_window() {
+        timeout = timeout.min(WINDOW_POLL);
+    }
     timeout
 }
 
@@ -445,6 +518,8 @@ fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
 trait TerminalHandoff {
     /// The size for the command line of mpv, see [`mpv::fallback_geometry`].
     fn geometry(&self, cell_px: (u32, u32)) -> Option<mpv::Geometry>;
+    /// The longest side of the terminal in pixels, see [`mpv::longest_side`].
+    fn longest_side(&self, cell_px: (u32, u32)) -> u32;
     /// Delete the Kitty images of viewr and clear the screen for mpv.
     fn suspend(&mut self, app: &mut App) -> io::Result<()>;
     /// Turn raw mode on if something turned it off, so that Ctrl+C cannot stop viewr.
@@ -460,6 +535,12 @@ impl TerminalHandoff for Terminal<CrosstermBackend<io::Stdout>> {
     fn geometry(&self, cell_px: (u32, u32)) -> Option<mpv::Geometry> {
         let size = crossterm::terminal::window_size().ok()?;
         mpv::fallback_geometry((size.columns, size.rows, size.width, size.height), cell_px)
+    }
+
+    fn longest_side(&self, cell_px: (u32, u32)) -> u32 {
+        crossterm::terminal::window_size().map_or(FALLBACK_SIDE, |size| {
+            mpv::longest_side((size.columns, size.rows, size.width, size.height), cell_px)
+        })
     }
 
     fn suspend(&mut self, app: &mut App) -> io::Result<()> {
@@ -482,18 +563,43 @@ impl TerminalHandoff for Terminal<CrosstermBackend<io::Stdout>> {
 
     fn discard_input(&mut self) -> io::Result<bool> {
         let mut resized = false;
-        while event::poll(Duration::ZERO)? {
+        while event::poll(LATE_INPUT)? {
             resized |= matches!(event::read()?, Event::Resize(_, _));
         }
         Ok(resized)
     }
 }
 
+/// The size of the picture for mpv when the terminal does not tell its size.
+#[cfg(feature = "video")]
+const FALLBACK_SIDE: u32 = 1920;
+
+/// How long viewr waits for more input after mpv. Mouse reports and key presses can still be on
+/// their way when mpv exits, and must not reach the gallery as keys.
+#[cfg(feature = "video")]
+const LATE_INPUT: Duration = Duration::from_millis(20);
+
 /// The result of an mpv start: a window that plays on, or the exit code of mpv in the terminal.
 #[cfg(feature = "video")]
 enum Played {
     Window(std::sync::mpsc::Receiver<Option<i32>>),
     Terminal(Option<i32>),
+}
+
+/// Give the current video to mpv. After `n` or `N` in mpv, the next video goes to mpv at once,
+/// without a draw of viewr in between.
+#[cfg(feature = "video")]
+fn hand_off_videos(
+    app: &mut App,
+    state: &mut LoopState,
+    handoff: &mut impl TerminalHandoff,
+    runner: &mut impl mpv::Runner,
+) -> io::Result<()> {
+    while app.mode == ViewMode::Video
+        && app.video.is_none()
+        && hand_off_video(app, state, handoff, runner)?
+    {}
+    Ok(())
 }
 
 /// Play the current video in mpv when the configuration and PATH allow it.
@@ -503,13 +609,14 @@ enum Played {
 /// not start, the built-in player takes over for the rest of the session.
 ///
 /// A running slideshow that is not paused plays the video one time, see [`after_mpv`].
+/// Returns true when mpv took the video, so that the run loop can start the next video.
 #[cfg(feature = "video")]
 fn hand_off_video(
     app: &mut App,
     state: &mut LoopState,
     handoff: &mut impl TerminalHandoff,
     runner: &mut impl mpv::Runner,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let path = app.current_path().to_path_buf();
     let playback = if app.slideshow_advancing() {
         mpv::Playback::Once
@@ -519,64 +626,117 @@ fn hand_off_video(
     let played = match &state.player {
         mpv::Player::Builtin => {
             state.status.clone_from(&state.fallback_note);
-            return Ok(());
+            return Ok(false);
         }
         mpv::Player::Window(program) => runner
             .spawn(program, &mpv::window_args(&path, playback))
             .map(Played::Window),
         mpv::Player::Terminal(program) => {
-            play_in_terminal(app, handoff, runner, program, &path, playback)?.map(Played::Terminal)
+            let picture = mpv::Picture {
+                longest_side: handoff.longest_side(app.cell_px),
+                tone_map: mpv::hdr_of(&path).and_then(|hdr| {
+                    let temp = std::env::temp_dir().join("viewr");
+                    mpv::tone_map_file(&[&app.disk_cache_dir, &temp], hdr)
+                }),
+            };
+            let args = mpv::terminal_args(&path, handoff.geometry(app.cell_px), playback, &picture);
+            play_in_terminal(app, handoff, runner, program, &args)?.map(Played::Terminal)
         }
     };
     match played {
         Ok(played) => {
-            app.return_from_video();
-            focus_gallery_on_current(app);
             state.status = after_mpv(app, played, playback, &path);
+            Ok(true)
         }
         Err(error) => {
             state.player = mpv::Player::Builtin;
             state.fallback_note = Some(format!("mpv did not start ({error}): built-in player"));
             state.status.clone_from(&state.fallback_note);
+            Ok(false)
         }
     }
-    Ok(())
 }
 
-/// Lead the slideshow on after mpv, and return the status note.
+/// Lead the view and the slideshow on after mpv, and return the status note.
 ///
+/// `n` and `N` in mpv step to the neighbor in the list, see [`App::step_from_video`].
 /// Outside a slideshow, or in a paused one, mpv played in a loop until the user quit it, so a
 /// slideshow stops. In [`mpv::Playback::Once`], exit code 0 in the terminal is the end of the
 /// file and the slideshow moves on. Each other exit stops the slideshow on the placeholder:
-/// `q`, `Q` and `Ctrl+C` (code 4), an error or a signal. A window holds the slideshow on the
-/// placeholder until the window closes, see [`App::hold_slideshow_for_window`].
+/// `q`, `Q` and `Ctrl+C` (code 4), an error or a signal. viewr follows a window until it
+/// closes, see [`App::poll_video_window`]. A window in a slideshow holds the slideshow on the
+/// placeholder until then.
 #[cfg(feature = "video")]
 fn after_mpv(
     app: &mut App,
     played: Played,
     playback: mpv::Playback,
-    path: &std::path::Path,
+    path: &Path,
 ) -> Option<String> {
-    let name = mpv::file_name(path);
-    match (played, playback) {
-        (Played::Window(_), mpv::Playback::Loop) => {
-            app.stop_slideshow();
-            Some(format!("{name} plays in an mpv window"))
+    let once = playback == mpv::Playback::Once;
+    let code = match played {
+        Played::Window(exit) => {
+            back_from_video(app);
+            if !once {
+                app.stop_slideshow();
+            }
+            app.watch_video_window(exit, once);
+            let name = mpv::file_name(path);
+            return Some(if once {
+                format!("{name} plays in an mpv window, the slideshow waits for its end")
+            } else {
+                format!("{name} plays in an mpv window")
+            });
         }
-        (Played::Window(exit), mpv::Playback::Once) => {
-            app.hold_slideshow_for_window(exit);
-            Some(format!(
-                "{name} plays in an mpv window, the slideshow waits for its end"
-            ))
+        Played::Terminal(code) => code,
+    };
+    if let Some(step) = mpv::step(code) {
+        if app.step_from_video(step) {
+            focus_gallery_on_current(app);
+        } else {
+            back_from_video(app);
         }
-        (Played::Terminal(code), mpv::Playback::Loop) => {
-            app.stop_slideshow();
-            mpv::exit_note(code, path)
-        }
-        (Played::Terminal(code), mpv::Playback::Once) => {
+    } else {
+        back_from_video(app);
+        if once {
             app.after_slideshow_video(mpv::reached_the_end(code));
-            mpv::exit_note(code, path)
+        } else {
+            app.stop_slideshow();
         }
+    }
+    mpv_note(app, code, path)
+}
+
+/// Return to the view that opened the video, with the gallery cursor on it.
+#[cfg(feature = "video")]
+fn back_from_video(app: &mut App) {
+    app.return_from_video();
+    focus_gallery_on_current(app);
+}
+
+/// The status note after mpv played `path`: a failed playback, or a step past the list end.
+#[cfg(feature = "video")]
+fn mpv_note(app: &App, code: Option<i32>, path: &Path) -> Option<String> {
+    let Some(step) = mpv::step(code) else {
+        return mpv::exit_note(code, path);
+    };
+    // A step that moved nothing hit an end of the list.
+    (app.current_path() == path).then(|| {
+        let end = match step {
+            mpv::Step::Next => "last",
+            mpv::Step::Previous => "first",
+        };
+        format!("{} is the {end} file", mpv::file_name(path))
+    })
+}
+
+/// Act on the exit of an mpv window, and show the note of a failed playback.
+#[cfg(feature = "video")]
+fn poll_mpv_window(app: &mut App, state: &mut LoopState) {
+    if let Some(exit) = app.poll_video_window()
+        && let Some(note) = mpv_note(app, exit.code, &exit.path)
+    {
+        state.status = Some(note);
     }
 }
 
@@ -588,11 +748,9 @@ fn play_in_terminal(
     app: &mut App,
     handoff: &mut impl TerminalHandoff,
     runner: &mut impl mpv::Runner,
-    program: &std::path::Path,
-    path: &std::path::Path,
-    playback: mpv::Playback,
+    program: &Path,
+    args: &[OsString],
 ) -> io::Result<io::Result<Option<i32>>> {
-    let args = mpv::terminal_args(path, handoff.geometry(app.cell_px), playback);
     if let Err(error) = handoff
         .suspend(app)
         .and_then(|()| handoff.ensure_raw_mode())
@@ -604,7 +762,7 @@ fn play_in_terminal(
         let _ = handoff.resume(app);
         return Err(error);
     }
-    let played = runner.run(program, &args);
+    let played = runner.run(program, args);
     handoff.resume(app)?;
     if handoff.discard_input()? {
         app.mark_dirty();
@@ -1033,7 +1191,6 @@ fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
 fn query_terminal(sequence: &[u8]) -> Option<Vec<u8>> {
     use rustix::event::{PollFd, PollFlags};
     use std::io::Read;
-    use std::time::Instant;
 
     let mut tty = std::fs::File::options()
         .read(true)
@@ -1396,6 +1553,8 @@ mod tests {
     mod video_handoff {
         use super::super::{App, LoopState, SharedImageList, TerminalHandoff, ViewMode};
         use super::super::{hand_off_video, handle_fullscreen_key, handle_video_key, mpv};
+        use super::super::{hand_off_videos, poll_mpv_window};
+        use crate::app::VideoReturn;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use std::cell::{Cell, RefCell};
         use std::ffi::OsString;
@@ -1417,6 +1576,10 @@ mod tests {
         impl TerminalHandoff for FakeTerminal {
             fn geometry(&self, _cell_px: (u32, u32)) -> Option<mpv::Geometry> {
                 None
+            }
+
+            fn longest_side(&self, _cell_px: (u32, u32)) -> u32 {
+                1600
             }
 
             fn suspend(&mut self, _app: &mut App) -> io::Result<()> {
@@ -1446,10 +1609,12 @@ mod tests {
 
         /// Records each start; `exit` is the exit code of mpv or the error of the start.
         /// `window` sends the exit code of the last window, so that the test closes it.
+        /// `exits` holds the exit codes of the next runs in the terminal; `exit` comes after.
         struct FakeRunner {
             log: Log,
             raw: Rc<Cell<bool>>,
             exit: Result<Option<i32>, io::ErrorKind>,
+            exits: Vec<Option<i32>>,
             window: Option<mpsc::Sender<Option<i32>>>,
         }
 
@@ -1472,6 +1637,9 @@ mod tests {
         impl mpv::Runner for FakeRunner {
             fn run(&mut self, program: &Path, args: &[OsString]) -> io::Result<Option<i32>> {
                 self.record("run", program, args)?;
+                if !self.exits.is_empty() {
+                    return Ok(self.exits.remove(0));
+                }
                 Ok(self.exit?)
             }
 
@@ -1551,6 +1719,7 @@ mod tests {
                 log: Rc::clone(&log),
                 raw,
                 exit,
+                exits: Vec::new(),
                 window: None,
             };
             (log, terminal, runner)
@@ -1574,7 +1743,10 @@ mod tests {
                     "suspend",
                     "raw mode",
                     "run (raw) /bin/mpv --vo=kitty --vo-kitty-alt-screen=no --profile=sw-fast \
-                     --really-quiet --terminal=yes --input-terminal=yes --loop-file=inf \
+                     --hwdec=auto-copy-safe --really-quiet --terminal=yes --input-terminal=yes \
+                     --vf-pre=lavfi=[scale=w=min(iw\\,1600):h=min(ih\\,1600)\
+                     :force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bilinear] \
+                     --loop-file=inf --input-commands=keybind n \"quit 10\",keybind N \"quit 11\" \
                      -- /videos/clip.mp4",
                     "resume",
                     "discard input",
@@ -1628,7 +1800,9 @@ mod tests {
             let start = last_start(&log);
             assert!(start.contains(" --loop-file=no "), "{start}");
             assert!(
-                start.contains(r#" --input-commands=keybind q "quit 4",keybind Q "quit 4" "#),
+                start.contains(
+                    r#" --input-commands=keybind n "quit 10",keybind N "quit 11",keybind q "quit 4",keybind Q "quit 4" "#
+                ),
                 "{start}"
             );
             assert_eq!(app.current, 2, "the end of the clip moves on");
@@ -1691,7 +1865,8 @@ mod tests {
 
             hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
 
-            assert!(last_start(&log).contains(" --loop-file=inf -- "));
+            assert!(last_start(&log).contains(" --loop-file=inf "));
+            assert!(!last_start(&log).contains("quit 4"));
             assert_eq!(app.current, 1);
             assert!(app.shows_video_placeholder());
             assert!(!app.slideshow_running(), "the user quit the loop");
@@ -1706,8 +1881,8 @@ mod tests {
             hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
 
             let start = last_start(&log);
-            assert!(start.contains(" --loop-file=inf -- "), "{start}");
-            assert!(!start.contains("--input-commands"), "{start}");
+            assert!(start.contains(" --loop-file=inf "), "{start}");
+            assert!(!start.contains("quit 4"), "{start}");
             assert_eq!(app.current, 1);
             assert!(!app.slideshow_running());
         }
@@ -1733,7 +1908,7 @@ mod tests {
             assert!(app.slideshow_timeout().is_some(), "the loop checks again");
 
             runner.window.take().unwrap().send(Some(0)).unwrap();
-            app.slideshow_tick();
+            poll_mpv_window(&mut app, &mut state);
             assert_eq!(app.current, 2);
             assert!(app.slideshow_running());
         }
@@ -1752,6 +1927,7 @@ mod tests {
                     // A wait thread that ends without a code.
                     None => drop(window),
                 }
+                poll_mpv_window(&mut app, &mut state);
                 app.slideshow_tick();
 
                 assert_eq!(app.current, 1, "{close:?}");
@@ -1951,7 +2127,9 @@ mod tests {
                 *log.borrow(),
                 [
                     "spawn (cooked) /bin/mpv --no-terminal --force-window=immediate \
-                     --loop-file=inf -- /videos/clip.mp4"
+                     --hwdec=auto-safe --loop-file=inf \
+                     --input-commands=keybind n \"quit 10\",keybind N \"quit 11\" \
+                     -- /videos/clip.mp4"
                 ]
             );
             assert_eq!(app.mode, ViewMode::Gallery);
@@ -1990,6 +2168,339 @@ mod tests {
             assert!(log.borrow().is_empty());
             assert_eq!(app.mode, ViewMode::Video);
             assert_eq!(state.status.as_deref(), Some(mpv::MISSING_NOTE));
+        }
+
+        /// An app with `names` below `/videos` in the gallery, in the video view of `index`.
+        fn gallery_app_on_video(names: &[&str], index: usize) -> App {
+            let mut app = App::new((8, 16), SharedImageList::new());
+            app.images = names
+                .iter()
+                .map(|name| Path::new("/videos").join(name))
+                .collect();
+            app.filenames = names.iter().map(|name| (*name).to_owned()).collect();
+            app.gallery.filtered_indices = (0..names.len()).collect();
+            app.enter_video(index);
+            app
+        }
+
+        /// The mpv starts in `log`.
+        fn starts(log: &Log) -> Vec<String> {
+            log.borrow()
+                .iter()
+                .filter(|entry| entry.starts_with("run ") || entry.starts_with("spawn "))
+                .cloned()
+                .collect()
+        }
+
+        #[test]
+        fn n_in_the_terminal_plays_the_next_video_at_once_and_q_returns_to_the_gallery() {
+            let mut app = gallery_app_on_video(&["clip.mp4", "next.mov", "b.jpg"], 0);
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+            runner.exits = vec![Some(mpv::NEXT_FILE)];
+
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            let starts = starts(&log);
+            assert_eq!(starts.len(), 2);
+            assert!(starts[0].ends_with(" -- /videos/clip.mp4"), "{}", starts[0]);
+            assert!(starts[1].ends_with(" -- /videos/next.mov"), "{}", starts[1]);
+            assert_eq!(
+                app.mode,
+                ViewMode::Gallery,
+                "a run of videos ends in the gallery"
+            );
+            assert_eq!(app.current, 1);
+            assert_eq!(app.gallery.cursor, 1, "the cursor is on the last video");
+            assert_eq!(state.status, None);
+        }
+
+        #[test]
+        fn a_step_in_the_terminal_onto_an_image_shows_it_in_the_fullscreen_view() {
+            for (code, target) in [(mpv::NEXT_FILE, 2), (mpv::PREVIOUS_FILE, 0)] {
+                let mut app = gallery_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], 1);
+                let mut state = terminal_state();
+                let (log, mut terminal, mut runner) = fakes(Ok(Some(code)));
+
+                hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+                assert_eq!(starts(&log).len(), 1, "{code}");
+                assert_eq!(app.mode, ViewMode::Fullscreen, "{code}");
+                assert_eq!(app.current, target, "{code}");
+                assert_eq!(app.gallery.cursor, target, "{code}");
+                assert_eq!(state.status, None);
+            }
+        }
+
+        #[test]
+        fn a_step_past_an_end_of_the_list_returns_with_a_note() {
+            for (code, note) in [
+                (mpv::NEXT_FILE, "clip.mp4 is the last file"),
+                (mpv::PREVIOUS_FILE, "clip.mp4 is the first file"),
+            ] {
+                let mut app = gallery_app_on_video(&["clip.mp4"], 0);
+                let mut state = terminal_state();
+                let (log, mut terminal, mut runner) = fakes(Ok(Some(code)));
+
+                hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+                assert_eq!(starts(&log).len(), 1);
+                assert_eq!(app.mode, ViewMode::Gallery);
+                assert_eq!(app.current, 0);
+                assert_eq!(state.status.as_deref(), Some(note));
+            }
+        }
+
+        #[test]
+        fn a_run_of_videos_from_the_fullscreen_view_ends_on_the_placeholder() {
+            let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4", "next.mov"], false);
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+            runner.exits = vec![Some(mpv::NEXT_FILE)];
+
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert_eq!(starts(&log).len(), 2);
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 2);
+            assert!(app.shows_video_placeholder());
+        }
+
+        #[test]
+        fn a_step_in_a_slideshow_keeps_the_slideshow_and_its_rules() {
+            let mut app =
+                fullscreen_app_on_video(&["a.jpg", "clip.mp4", "next.mov", "b.jpg"], true);
+            let mut state = terminal_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(Some(0)));
+            runner.exits = vec![Some(mpv::NEXT_FILE)];
+
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            let starts = starts(&log);
+            assert_eq!(starts.len(), 2);
+            assert!(
+                starts[1].contains(" --loop-file=no "),
+                "the next video plays once"
+            );
+            assert_eq!(app.current, 3, "the end of the second clip moves on");
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert!(app.slideshow_running());
+        }
+
+        #[test]
+        fn n_and_shift_n_in_a_window_open_the_neighbor_video_in_a_new_window() {
+            let mut app = gallery_app_on_video(&["clip.mp4", "next.mov", "b.jpg"], 0);
+            let mut state = window_state();
+            let (log, mut terminal, mut runner) = fakes(Ok(None));
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert!(app.watches_video_window());
+
+            runner
+                .window
+                .take()
+                .unwrap()
+                .send(Some(mpv::NEXT_FILE))
+                .unwrap();
+            poll_mpv_window(&mut app, &mut state);
+            assert_eq!(app.mode, ViewMode::Video);
+            assert_eq!(app.video_return, VideoReturn::Gallery);
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+            assert!(last_start(&log).ends_with(" -- /videos/next.mov"));
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert_eq!(app.gallery.cursor, 1);
+
+            runner
+                .window
+                .take()
+                .unwrap()
+                .send(Some(mpv::PREVIOUS_FILE))
+                .unwrap();
+            poll_mpv_window(&mut app, &mut state);
+            assert_eq!(app.mode, ViewMode::Video);
+            assert_eq!(app.current, 0);
+            assert_eq!(
+                state.status.as_deref(),
+                Some("next.mov plays in an mpv window")
+            );
+        }
+
+        #[test]
+        fn a_step_in_a_window_onto_an_image_opens_the_fullscreen_view() {
+            let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], false);
+            let mut state = window_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(None));
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            runner
+                .window
+                .take()
+                .unwrap()
+                .send(Some(mpv::NEXT_FILE))
+                .unwrap();
+            poll_mpv_window(&mut app, &mut state);
+
+            assert_eq!(app.mode, ViewMode::Fullscreen);
+            assert_eq!(app.current, 2);
+            assert!(!app.watches_video_window());
+        }
+
+        #[test]
+        fn a_window_that_fails_shows_the_exit_code() {
+            let mut app = video_app();
+            let mut state = window_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(None));
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            runner.window.take().unwrap().send(Some(2)).unwrap();
+            poll_mpv_window(&mut app, &mut state);
+
+            assert_eq!(
+                state.status.as_deref(),
+                Some("mpv could not play clip.mp4 (exit code 2)")
+            );
+            assert_eq!(app.mode, ViewMode::Gallery);
+            assert!(!app.watches_video_window());
+        }
+
+        #[test]
+        fn a_window_step_behind_an_overlay_does_nothing() {
+            let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], false);
+            let mut state = window_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(None));
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+            app.help_visible = true;
+
+            runner
+                .window
+                .take()
+                .unwrap()
+                .send(Some(mpv::NEXT_FILE))
+                .unwrap();
+            poll_mpv_window(&mut app, &mut state);
+
+            assert_eq!(app.current, 1, "the help popup keeps the view");
+            assert!(app.shows_video_placeholder());
+            assert!(!app.watches_video_window(), "viewr forgets the window");
+        }
+
+        #[test]
+        fn the_loop_looks_for_the_window_exit_every_100_ms() {
+            let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4"], false);
+            let mut state = window_state();
+            let (_log, mut terminal, mut runner) = fakes(Ok(None));
+            hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+
+            assert!(super::super::next_timeout(&app, &[]) <= super::super::WINDOW_POLL);
+        }
+    }
+
+    /// The yazi reveal after the TUI, and the PATH lookup of its `ya`.
+    mod yazi {
+        use super::super::{find_on_path, reveal_in_yazi};
+        use std::ffi::{OsStr, OsString};
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::{Path, PathBuf};
+
+        /// A PATH with an executable `ya` in a temp directory.
+        fn path_with_ya() -> (tempfile::TempDir, OsString) {
+            let dir = tempfile::tempdir().unwrap();
+            let ya = dir.path().join("ya");
+            std::fs::write(&ya, "").unwrap();
+            std::fs::set_permissions(&ya, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let path = std::env::join_paths([dir.path()]).unwrap();
+            (dir, path)
+        }
+
+        /// The calls that `reveal_in_yazi` makes, and its result.
+        fn reveal(
+            path: Option<&Path>,
+            yazi_id: Option<&str>,
+            search_path: &OsStr,
+        ) -> (Option<bool>, Vec<(PathBuf, Vec<OsString>)>) {
+            let mut calls = Vec::new();
+            let result = reveal_in_yazi(
+                path,
+                yazi_id.map(OsStr::new),
+                Some(search_path),
+                |program, args| {
+                    calls.push((program.to_path_buf(), args.to_vec()));
+                    Ok(())
+                },
+            );
+            (result.map(|result| result.is_ok()), calls)
+        }
+
+        #[test]
+        fn with_yazi_id_viewr_asks_ya_to_reveal_the_file() {
+            let (dir, path) = path_with_ya();
+            let (result, calls) = reveal(Some(Path::new("/photos/a.jpg")), Some("4711"), &path);
+            assert_eq!(result, Some(true));
+            assert_eq!(
+                calls,
+                [(
+                    dir.path().join("ya"),
+                    ["emit", "reveal", "/photos/a.jpg"]
+                        .map(OsString::from)
+                        .to_vec()
+                )]
+            );
+        }
+
+        #[test]
+        fn a_relative_path_goes_to_yazi_as_an_absolute_path() {
+            let (_dir, path) = path_with_ya();
+            let (_result, calls) = reveal(Some(Path::new("./photos/a.jpg")), Some("1"), &path);
+            let revealed = PathBuf::from(&calls[0].1[2]);
+            assert!(revealed.is_absolute());
+            assert_eq!(
+                revealed,
+                std::env::current_dir().unwrap().join("photos/a.jpg")
+            );
+        }
+
+        #[test]
+        fn without_yazi_id_or_ya_or_a_file_nothing_runs() {
+            let (_dir, path) = path_with_ya();
+            let file = Some(Path::new("/photos/a.jpg"));
+            let empty = tempfile::tempdir().unwrap();
+            let no_ya = std::env::join_paths([empty.path()]).unwrap();
+            for (case, path, yazi_id, search_path) in [
+                ("no YAZI_ID", file, None, &path),
+                ("an empty YAZI_ID", file, Some(""), &path),
+                ("no file", None, Some("1"), &path),
+                ("no ya on PATH", file, Some("1"), &no_ya),
+            ] {
+                let (result, calls) = reveal(path, yazi_id, search_path);
+                assert_eq!(result, None, "{case}");
+                assert!(calls.is_empty(), "{case}");
+            }
+        }
+
+        #[test]
+        fn find_on_path_takes_the_first_executable_file() {
+            let root = tempfile::tempdir().unwrap();
+            let plain = root.path().join("plain");
+            let executable = root.path().join("executable");
+            std::fs::create_dir_all(&plain).unwrap();
+            std::fs::create_dir_all(&executable).unwrap();
+            std::fs::write(plain.join("mpv"), "").unwrap();
+            std::fs::write(executable.join("mpv"), "").unwrap();
+            std::fs::set_permissions(
+                executable.join("mpv"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+
+            let path = std::env::join_paths([&plain, &executable]).unwrap();
+            assert_eq!(
+                find_on_path("mpv", Some(&path)),
+                Some(executable.join("mpv"))
+            );
+            assert_eq!(find_on_path("mpv", Some(OsStr::new(""))), None);
+            assert_eq!(find_on_path("mpv", None), None);
+            let only_plain = std::env::join_paths([&plain]).unwrap();
+            assert_eq!(find_on_path("mpv", Some(&only_plain)), None);
         }
     }
 
