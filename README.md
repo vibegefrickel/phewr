@@ -122,7 +122,8 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 | `i` | Toggle the info panel |
 | `d` `D` | Trash / permanently delete, with confirm |
 | `Enter` | Play the video again (on a video placeholder) |
-| `q` `Esc` | Stop the slideshow, or back to the gallery |
+| `q` | Back to the gallery. In a running slideshow, `q` stops it and goes back in one press |
+| `Esc` | Stop the slideshow, or back to the gallery |
 
 ### Video
 
@@ -139,7 +140,9 @@ In a slideshow, a video plays one time and the slideshow continues. With the win
 
 In fullscreen, a status note (for example "clip.mp4 plays in an mpv window") replaces the key hints until the next key press.
 
-The built-in player (`[video] player = "builtin"`) keeps its keys: `Space`, `←` / `→`, `h` / `l`, `Home` / `End`, `d` / `D`, `Esc`, `q`.
+The built-in player (`[video] player = "builtin"`) keeps its keys: `Space`, `←` / `→`, `h` / `l`, `Home` / `End`, `d` / `D`. `q` and `Esc` go back to the view that opened the video.
+
+`q` goes back one step in every view. Only `q` in the grid quits viewr. In the directory picker, `q` closes the picker. If the folder has no photos yet, `q` in the picker quits viewr, because there is no view to go back to.
 
 ## Configuration
 
