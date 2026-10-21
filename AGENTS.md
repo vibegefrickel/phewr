@@ -90,7 +90,7 @@ missing.
 ### Code style
 
 - **Functions stay small.** The clippy limit is 150 lines and fewer than 7 arguments. A key
-  handler is a thin `match` that calls one function per view mode (`handle_key` in `main.rs`).
+  handler is a thin `match` that calls one function per view mode (`handle_key` in `keys/mod.rs`).
 - **Pure code motion stays pure.** A refactor does not change behavior. Features come
   separately.
 - **Idiomatic, short Rust.** Use `let else`, `is_some_and`, iterators and small functions. Give
@@ -126,6 +126,8 @@ missing.
   Homebrew's libheif. If a plugin is missing, `just check` fails.
 - A test that writes files uses `tempfile::tempdir()` (`TempDir`) or `tempfile::NamedTempFile`.
   The directory goes away on drop, also when the test panics.
+- The app builders, the key press helpers and the synthetic file writers that tests of more than
+  one module share live in `test_support.rs`.
 - A test app writes the Kitty sequences to a buffer (`GraphicsOutput::Buffer`). Read them with
   `app.graphics_out.take_bytes()`. A test that needs a config uses `App::new_with_config`, never
   `App::with_config`.
@@ -140,15 +142,38 @@ missing.
 
 ## Layout
 
-- `main.rs`: CLI (clap), terminal session, event loop, key handlers, Kitty output per frame.
-- `app.rs`: `App`, the whole view state. Decoding (`decode_image_with_hint`, turbojpeg,
-  libheif for HEIC/HEIF/AVIF), resizing, the disk thumbnail cache, slideshow, zoom and pan,
-  delete.
-- `decode/`: the decoders outside `app.rs`. `Route::for_path` picks the route by extension.
-  `jxl.rs` (JPEG XL), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats),
-  `tonemap.rs` (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`,
-  `imir` and `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell
-  shape).
+- `main.rs`: the module list and `main`: the FFmpeg init, the CLI checks, the terminal
+  session and the start of the run loop.
+- `cli.rs`: the clap arguments (`Cli`) and the start directory.
+- `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
+  `query_terminal` and the cell pixel size.
+- `run_loop.rs`: `LoopState` (the status note, the mpv player), `run`, the background polls,
+  `render_images` and `next_timeout`. The status note lives here, not in `App`.
+- `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
+  `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
+  `gallery.rs` (with the search line), `picker.rs`, `video.rs` (feature `video`).
+- `kitty_output.rs`: the Kitty writes per frame: the fullscreen image, the video frame, the
+  grid and the new thumbnails. Each `render_*` has a `*_to` twin that writes to any `Write`,
+  so that the tests read the escape sequences.
+- `video_handoff.rs` (feature `video`): the hand-off to mpv in the terminal or in a window,
+  the `TerminalHandoff` trait, the way back after mpv and the steps with `n` and `N`.
+- `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
+- `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
+  construction. One file per topic: `info_panel.rs`, `grid_zoom.rs` (the cell size and the
+  state file), `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter),
+  `cell_shape.rs`, `fullscreen.rs` (enter, leave, the steps and the decode), `zoom.rs` (zoom,
+  pan and the full-resolution source), `delete.rs` (the marks and the delete question),
+  `directory.rs` (the picker and the directory switch), `video.rs` (the built-in player, the
+  return after a video, the mpv window watch), `thumbnails.rs` (the jobs, the queue, the HEIC
+  previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
+- `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the
+  route by extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the
+  user waits for. `raster.rs` (the `image` crate and the EXIF orientation), `turbo.rs`
+  (libjpeg-turbo with DCT scaling), `libheif.rs` (HEIC, HEIF, AVIF, the embedded thumbnails
+  and the core share `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom), `jxl.rs`
+  (JPEG XL), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
+  (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and
+  `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell shape).
 - `ui.rs`: the ratatui drawing of each view, the help popup and the pickers. The gallery, the
   fullscreen view and the video view have no frame. They use the full area minus 1 status row
   (`content_area`, `status_area`). The help popup, the pickers and the info panel keep their
@@ -170,13 +195,13 @@ missing.
 - `config.rs`: `config.toml` and the state file.
 - `video.rs` (feature `video`): the built-in FFmpeg player in a thread, and first-frame
   thumbnails.
-- `mpv.rs` (feature `video`): video playback in mpv. The argument lists, the exit notes, the
-  step exit codes, the HDR probe and tone mapping LUT, and the `Runner` trait for the process
-  start. The PATH lookup `find_on_path` is in `main.rs`, because the yazi reveal needs it
-  without the `video` feature.
+- `mpv.rs` (feature `video`): the argument lists for mpv, the exit notes, the step exit codes,
+  the HDR probe and tone mapping LUT, and the `Runner` trait for the process start.
 - `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `detect_transfer` probes the terminal at start with `a=q`.
   `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe.
+- `test_support.rs` (test only): the app builders, the key press helpers and the synthetic
+  file writers that the tests of more than one module share.
 - `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
   terminal and read `VIEWR_TEST_DIR`.
 
@@ -202,7 +227,7 @@ missing.
   quit (Cmd+Q) of a window mpv exits with 0, so a window slideshow continues.
 - **mpv steps:** each mpv start gets `--input-commands` with `keybind n "quit 10"` and
   `keybind N "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). `hand_off_videos` in
-  `main.rs` starts the next video at once, without a draw. `App::step_from_video` keeps
+  `video_handoff.rs` starts the next video at once, without a draw. `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
   file that mpv played, not from the gallery cursor.
 - **Video player default:** `[video] player` defaults to `window` (`VideoPlayer::default`).
@@ -227,15 +252,15 @@ missing.
   iPhone clips. The PQ LUT has no test on a real PQ file.
 - **FFmpeg log:** `main` sets the FFmpeg log level to `Quiet` directly after `ffmpeg::init()`, so
   no libav warning reaches the screen of the TUI.
-- **yazi reveal:** `reveal_in_yazi` in `main.rs` runs after `TerminalSession::restore`, only when
+- **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
   that does not answer cannot hold viewr. Tests pass a closure and never start `ya`.
-- **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `main.rs`. `App` holds no
+- **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds no
   status note. The note shows in the status row at the bottom. The next key press clears it.
 
 - **The run loop polls every 10 ms while a background job runs** (`App::has_pending_work`:
   a decode, a prefetch, a thumbnail, a filter, the scan or thumbnails that wait for their emit),
-  because no event wakes it. Otherwise it waits 250 ms (`next_timeout` in `main.rs`).
+  because no event wakes it. Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
 - **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
   and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
@@ -271,7 +296,7 @@ missing.
   count includes 1 gap per column plus the edge gap. The first
   screen waits for the shape (2 ms to 4 ms), and the shape stays until the next directory
   switch, so the columns never move while the user browses.
-- **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `app.rs`). It is one
+- **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `decode/resize.rs`). It is one
   third faster than Lanczos3, and the difference is not visible.
 - **FFmpeg versions:** `ffmpeg-next` must match the major version of Homebrew's FFmpeg.
   ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
