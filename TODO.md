@@ -12,10 +12,13 @@
   - The grid: no empty lines between the thumbnails, the grid reaches the right and the bottom edge, the blue fill under the cursor and the yellow fill of marked images. The Kitty keys `X=` and `Y=` center each picture to the pixel. If a terminal ignores them, the pictures sit in the top left corner of their cells.
   - A transparent PNG under the cursor: the blue fill shows through the transparent pixels. If that looks wrong, put each thumbnail on an opaque background, or fill only a frame around the picture.
   - A portrait folder gets narrow cells and more columns, a landscape folder wide cells.
-- Terminal tests after batch 10 (maintainer), in Ghostty and in herdr: `just install`, then `viewr /tmp/viewr-bench`. No picture overlaps a border or the gap row, landscapes keep their shape at every zoom level from 2 to 12 rows, no black cells after a long scroll up and down, the HEIC previews come first and the empty JPG and MOV cells fill early.
-
 ## Next
 
+- Route 3, a built-in terminal video player, measured in Ghostty on 2026-10-21 (tool in `research/route3/`, git ignores it). ffmpeg decodes with videotoolbox, `scale_vt` scales, the viewr HLG cube tone maps, each frame goes through the temp file medium (`t=t`) and Ghostty scales it to the window with `c=` / `r=`. Results with 4K HLG `IMG_0639.MOV` in a 200x47 cell window:
+  - Untimed, file medium: 960x540 305 fps, 1280x720 212 fps, 1920x1080 107 fps. A first run on a busy machine gave about a quarter of that at 1280x720 and 1920x1080.
+  - Real time: 1920x1080 30.2 fps with 0 dropped frames (one id and two ids), 1280x720 30.1 fps with 0 dropped over 400 frames (one id and two ids). ffmpeg takes about one core.
+  - `direct` (base64) is 5 to 15 times slower and drops most frames in real time. Ghostty deletes every temp file.
+  - Open: flicker, smoothness and colors against the mpv window, then the decision to build it.
 - Follow-ups after the Kitty output fixes (batch 10):
   - The Kitty bytes of a cold grid rose by 28 percent under the direct transfer (44.9 MB to 57.3 MB, 36 cells), because the padding to the full box doubles a landscape picture in a portrait box. A follow-up can pad to whole cells only and keep the no-offset rule, with the content centered to within half a cell. With the temp file medium in local Ghostty, the cost is only a larger file write.
   - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.
@@ -57,6 +60,8 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
 
 ## Done
 
+- `q` goes back one step in every view and quits only in the grid. In a running slideshow, `q` leaves in one press. In the built-in player during a slideshow, `q` goes to the fullscreen placeholder, like `Esc`.
+- Zoom fix: a `+`, `-` or `0` at a limit no longer deletes all pictures (black cells), `q` in the fullscreen view goes back to the grid.
 - Kitty output fixes (batch 10): thumbnails padded to whole cells, no `X=` / `Y=` (fixes the herdr overlap and the squeezed landscapes), `d=I` for evicted images and a 128 MB terminal budget (fixes the black cells), a 512 MB in-memory cache limit, `CSI 16 t` for the cell size, the filename toggle decodes again, late probe answers are dropped, empty cells decode first, the HEIC preview goes out at native size, grid zoom 2 to 12 rows.
 - Refactor (batch 9): `main.rs` and `app.rs` split into 30 modules, then the repeating patterns removed.
 - Video in a fullscreen mpv window by default, grid gaps with line borders, loading icons, no frames and no search bar (batch 8b).
