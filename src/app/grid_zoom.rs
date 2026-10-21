@@ -123,6 +123,39 @@ mod tests {
         assert!(app.gallery.grid_cols > cols_before);
     }
 
+    /// A `+` at the largest cells and a `-` at the most rows change nothing: the thumbnails
+    /// stay, no picture is deleted, and nothing draws again.
+    #[test]
+    fn a_zoom_key_at_a_limit_keeps_the_thumbnails_and_the_pictures() {
+        let dir = test_dir();
+        let mut app = gallery_app(3);
+        app.state_file = dir.path().join("state.toml");
+        for (key, limit) in [('+', 2), ('-', 5)] {
+            for _ in 0..40 {
+                char_key(&mut app, key);
+            }
+            assert_eq!(app.gallery.zoom_rows, limit);
+            app.thumb_cache.insert(0, image::RgbaImage::new(1, 1));
+            app.graphics_storage_dirty = false;
+            app.needs_render = false;
+            app.graphics_out.take_bytes();
+
+            char_key(&mut app, key);
+
+            assert_eq!(app.gallery.zoom_rows, limit);
+            assert!(app.thumb_cache.contains(0), "{key}: the thumbnails stay");
+            assert!(
+                !app.graphics_storage_dirty,
+                "{key}: no redraw of the pictures"
+            );
+            assert!(!app.needs_render, "{key}: no draw");
+            assert!(
+                app.graphics_out.take_bytes().is_empty(),
+                "{key}: no delete in the terminal"
+            );
+        }
+    }
+
     #[test]
     fn thumb_zoom_stops_at_the_limits() {
         let dir = test_dir();

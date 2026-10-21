@@ -249,13 +249,13 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
             })
             .unwrap_or_default();
         let hint = if app.slideshow.is_some() {
-            " space: pause  [/]: interval  s: stop  i: info  q: quit "
+            " space: pause  [/]: interval  s/q/Esc: stop  i: info "
         } else if placeholder {
-            " Enter: play  \u{2190}/\u{2192}: navigate  i: info  ?: help  q: quit "
+            " Enter: play  \u{2190}/\u{2192}: navigate  i: info  ?: help  q/Esc: back "
         } else if app.zoom > 1.0 {
-            " hjkl: pan  +/-: zoom  0: reset  ?: help  q: quit "
+            " hjkl: pan  +/-: zoom  0: reset  ?: help  q/Esc: back "
         } else {
-            " \u{2190}/\u{2192}: navigate  +/-: zoom  s: slideshow  i: info  ?: help  q: quit "
+            " \u{2190}/\u{2192}: navigate  +/-: zoom  s: slideshow  i: info  ?: help  q/Esc: back "
         };
         Line::from(vec![
             Span::styled(
@@ -642,9 +642,8 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         ("Space", "Pause / resume slideshow"),
         ("[ / ]", "Shorter / longer slide interval"),
         ("d / D", "Trash / permanently delete image"),
-        ("Esc", "Back to gallery"),
+        ("q / Esc", "Back to gallery"),
         ("?", "Toggle help"),
-        ("q", "Quit"),
         #[cfg(feature = "video")]
         ("", ""),
         #[cfg(feature = "video")]
@@ -1359,7 +1358,7 @@ mod tests {
         let interval = format!("{:.1}s", app.slideshow_interval.as_secs_f64());
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, &format!("\u{25b6} {interval}"));
-        assert_shows(&screen, "space: pause  [/]: interval  s: stop");
+        assert_shows(&screen, "space: pause  [/]: interval  s/q/Esc: stop");
 
         app.slideshow_toggle_pause();
         let screen = render(&mut app, None, 100, 30);

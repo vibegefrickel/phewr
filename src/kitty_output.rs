@@ -350,10 +350,10 @@ mod tests {
         render_fullscreen_image_to, render_gallery_images,
     };
     use crate::app::App;
-    use crate::app::thumbnails::pad_for_grid;
+    use crate::app::thumbnails::{pad_for_grid, thumb_target_px};
     use crate::image_list::SharedImageList;
     use crate::test_support::kitty::FakeTerminal;
-    use crate::test_support::text;
+    use crate::test_support::{char_key, text};
     use image::RgbaImage;
     use ratatui::layout::Rect;
     use std::path::PathBuf;
@@ -791,6 +791,110 @@ mod tests {
             result.is_err(),
             "the fake terminal evicts, so a cell goes black"
         );
+    }
+
+    /// A gallery like the one of the maintainer: a 5K screen in Ghostty, cells of 18x43 px,
+    /// a grid area of 280x50 cells, 3:2 photos and the default of 4 rows.
+    fn large_screen_app(count: usize) -> App {
+        let cell_px = (18, 43);
+        let mut app = App::new(cell_px, SharedImageList::new());
+        app.images = (0..count)
+            .map(|index| PathBuf::from(format!("/photos/{index}.jpg")))
+            .collect();
+        app.filenames = (0..count).map(|index| format!("{index}.jpg")).collect();
+        app.gallery.filtered_indices = (0..count).collect();
+        app.gallery.zoom_rows = 4;
+        app.gallery.update_grid(Rect::new(0, 0, 280, 50));
+        app.gallery.set_cell_shape(1.5, cell_px);
+        app.scan_complete = true;
+        app.needs_render = false;
+        app
+    }
+
+    /// A sharp thumbnail for the base cell of `app`: a portrait photo in the odd cells and a
+    /// landscape one in the even cells, padded to the pixel box of the cell.
+    fn thumbnail_for_grid(app: &App, index: usize) -> RgbaImage {
+        let target = thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+        let (width, height) = if index.is_multiple_of(2) {
+            (target.0, target.1 * 2 / 3)
+        } else {
+            (target.0 * 2 / 3, target.1)
+        };
+        let image = RgbaImage::from_pixel(width, height, image::Rgba([9, 9, 9, 255]));
+        pad_for_grid(image, target, true)
+    }
+
+    /// One pass of the run loop after a key: the grid write when a render is due, then the
+    /// decodes of the visible cells arrive and go out. Then every visible cell must show a
+    /// stored image.
+    fn settle_grid(app: &mut App, terminal: &mut FakeTerminal, step: &str) {
+        if app.needs_render {
+            render_gallery_images(app).unwrap();
+            app.needs_render = false;
+        }
+        terminal.feed(&app.graphics_out.take_bytes());
+        let fresh: Vec<usize> = app
+            .gallery
+            .visible_items()
+            .map(|(_, index)| index)
+            .filter(|&index| !app.thumb_cache.is_sharp(index))
+            .collect();
+        for &index in &fresh {
+            let image = thumbnail_for_grid(app, index);
+            assert!(app.store_thumbnail(index, image, true));
+        }
+        let mut out = Vec::new();
+        emit_new_thumbnails_to(app, &fresh, &mut out).unwrap();
+        terminal.feed(&out);
+        assert!(terminal.black_cells.is_empty(), "{step}: black cells");
+        assert_eq!(terminal.synchronized_depth, 0, "{step}");
+        for (_, index) in app.gallery.visible_items() {
+            let (_, id) = app.thumb_cache.peek(index).unwrap();
+            assert!(
+                terminal
+                    .placements
+                    .iter()
+                    .any(|placement| placement.id == id),
+                "{step}: the cell {index} shows nothing"
+            );
+        }
+    }
+
+    /// Half of the 320 MB that Ghostty stores, because herdr stores each image twice.
+    const RELAYED_TERMINAL_LIMIT: usize = 160 * 1024 * 1024;
+
+    /// The zoom keys through the real key path, from 4 rows to a limit and one key past it.
+    /// The terminal evicts above the relayed Ghostty limit, so the test also covers the
+    /// storage of the large pictures of a 2x2 grid.
+    fn zoom_to_the_limit(key: char, limit: usize) {
+        let mut app = large_screen_app(300);
+        let mut terminal = FakeTerminal::with_limit(RELAYED_TERMINAL_LIMIT);
+        settle_grid(&mut app, &mut terminal, "start");
+        for step in 0..12 {
+            char_key(&mut app, key);
+            settle_grid(&mut app, &mut terminal, &format!("{key} {step}"));
+            if app.gallery.zoom_rows == limit {
+                break;
+            }
+        }
+        assert_eq!(app.gallery.zoom_rows, limit);
+        let cells = app.gallery.visible_cells();
+
+        // One more key at the limit changes nothing and takes no picture away.
+        char_key(&mut app, key);
+        settle_grid(&mut app, &mut terminal, "at the limit");
+        assert_eq!(app.gallery.zoom_rows, limit);
+        assert_eq!(terminal.placements.len(), cells);
+    }
+
+    #[test]
+    fn a_zoom_in_to_the_largest_cells_and_one_more_leaves_no_black_cell() {
+        zoom_to_the_limit('+', 2);
+    }
+
+    #[test]
+    fn a_zoom_out_to_the_most_rows_and_one_more_leaves_no_black_cell() {
+        zoom_to_the_limit('-', 12);
     }
 
     #[test]

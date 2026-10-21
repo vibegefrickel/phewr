@@ -8,13 +8,13 @@ use std::io;
 /// Keys of the fullscreen view: navigation, zoom and pan, slideshow, info, delete.
 pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     match key.code {
-        KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('?') => {
             app.graphics_delete_all()?;
             app.help_visible = true;
         }
-        KeyCode::Esc if app.slideshow_running() => app.stop_slideshow(),
-        KeyCode::Esc => {
+        // `q` leaves the view like `Esc`, not viewr: the gallery is the way out.
+        KeyCode::Char('q') | KeyCode::Esc if app.slideshow_running() => app.stop_slideshow(),
+        KeyCode::Char('q') | KeyCode::Esc => {
             app.graphics_delete_all()?;
             app.enter_gallery();
         }
@@ -51,7 +51,7 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
 #[cfg(test)]
 mod tests {
     use crate::app::{App, ViewMode};
-    use crate::test_support::{char_key, fullscreen_app, press};
+    use crate::test_support::{char_key, fullscreen_app, press, text};
     use crossterm::event::KeyCode;
 
     fn zoom_is_one(app: &App) -> bool {
@@ -171,6 +171,36 @@ mod tests {
         char_key(&mut app, 'x');
         assert_eq!(app.mode, ViewMode::Fullscreen);
         assert_eq!(app.current, 0);
-        assert!(char_key(&mut app, 'q'));
+    }
+
+    #[test]
+    fn q_goes_back_to_the_gallery_and_quits_only_from_there() {
+        let mut app = fullscreen_app(2, 1);
+        app.graphics_out.take_bytes();
+
+        assert!(!char_key(&mut app, 'q'), "q leaves the view, not viewr");
+        assert_eq!(app.mode, ViewMode::Gallery);
+        assert!(app.needs_render);
+        let out = text(&app.graphics_out.take_bytes());
+        assert!(
+            out.contains("\x1b_Ga=d,d=A,"),
+            "the image goes first: {out}"
+        );
+
+        assert!(char_key(&mut app, 'q'), "q in the gallery quits viewr");
+    }
+
+    #[test]
+    fn q_stops_a_running_slideshow_first_like_esc() {
+        let mut app = fullscreen_app(2, 0);
+        char_key(&mut app, 's');
+        assert!(app.slideshow_running());
+
+        assert!(!char_key(&mut app, 'q'));
+        assert!(!app.slideshow_running());
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+
+        assert!(!char_key(&mut app, 'q'));
+        assert_eq!(app.mode, ViewMode::Gallery);
     }
 }

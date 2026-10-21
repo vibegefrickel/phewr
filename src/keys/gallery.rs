@@ -57,16 +57,15 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             app.graphics_delete_all()?;
             app.toggle_info();
         }
+        // A zoom change marks the grid dirty, and the next grid write deletes the old
+        // pictures. A key at a limit changes nothing, so it deletes nothing.
         KeyCode::Char('+' | '=') => {
-            app.graphics_delete_all()?;
             app.thumb_zoom_in();
         }
         KeyCode::Char('-' | '_') => {
-            app.graphics_delete_all()?;
             app.thumb_zoom_out();
         }
         KeyCode::Char('0') => {
-            app.graphics_delete_all()?;
             app.thumb_zoom_reset();
         }
         KeyCode::Char('n') => {
