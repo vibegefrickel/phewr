@@ -36,7 +36,7 @@ main() {
        echo "Note: $prefix/bin is not on your PATH; add this line to ~/.zshrc:"
        echo "  export PATH=\"$shown:\$PATH\"" ;;
   esac
-  echo "Next: run 'viewr' in a folder with pictures, in Ghostty, Kitty or WezTerm."
+  echo "Next: run 'viewr' in a folder with pictures, in Ghostty or Kitty."
 }
 
 main "$@"
