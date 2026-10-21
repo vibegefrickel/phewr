@@ -136,8 +136,7 @@ viewr reads `~/.config/viewr/config.toml`. If `XDG_CONFIG_HOME` is set, viewr re
 
 ```toml
 [gallery]
-thumb_cols = 20      # thumbnail cell width in terminal cells, border included
-thumb_rows = 8       # thumbnail cell height
+visible_rows = 4     # thumbnail rows in the grid (the zoom level, 1 to 32)
 
 [slideshow]
 interval = 3.0       # seconds per slide

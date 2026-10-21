@@ -29,17 +29,6 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
   - Make sure that JPEG XL decodes correctly: sRGB, Display P3, PQ and an ICC profile (`VIEWR_TEST_JXL`).
   - Make sure that camera RAW decodes correctly, with a portrait photo (`VIEWR_TEST_RAW`).
   - Measure whether `sips -Z` on a RAW uses the embedded preview, and measure the `sips` times with a real RAW.
-- Remove the theme system: use the terminal colors and the 16 ANSI colors, no theme files
-  - Decision: the theme system goes. viewr uses the default background and foreground of the terminal.
-  - Delete `src/theme.rs`, the theme picker (`t` key, `ThemePickerState`, `draw_theme_picker`), the `-t` CLI flag and `install_themes`.
-  - Ignore the `theme` and `theme_catalog` keys in `config.toml`. Remove the theme docs from `README.md` and `AGENTS.md`.
-  - Keep a small `Styles` struct with one role per use. No RGB values and no 256-color indexes.
-  - Background and normal text: `Style::default()`, so the terminal background and foreground win.
-  - Selected cell border: default foreground + `BOLD`. Marked images: ANSI `Yellow`. Errors: ANSI `Red`.
-  - Picker and list selection: `REVERSED`, so the highlight follows the terminal scheme.
-  - Dim text: ANSI `DarkGray`. Key hints: ANSI `Cyan`.
-  - Ghostty runs cendre, so viewr follows cendre without a theme file.
-  - Delete the theme tests and the theme helpers in the test code.
 - Horizontal flow in the grid (justified rows): all thumbnails in a row have the same height. Each width follows the aspect ratio.
   - The layout needs the dimensions before the decode. Read them from the file header.
   - The cursor keys up and down need a new rule, because the columns do not line up.
@@ -84,6 +73,7 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
 
 ## Done
 
+- Theme system removed: `src/theme.rs`, the theme catalog, the `t` picker and the `-t` flag are gone. viewr uses the terminal default colors and the 16 ANSI colors (`src/styles.rs`). The config keys `theme` and `theme_catalog` have no effect, an old config still loads.
 - Grid look: a border only around the selected and the marked cells, no spacer line, centered thumbnails, filenames hidden by default (`n` toggles them)
 - Grid zoom: `+`/`-` change the visible rows (default 4), the columns follow the terminal width (minimum 2), the state file saves the zoom level as `[gallery] visible_rows`
 - Fullscreen fix: a gallery pre-decode without a hint showed HEIC, JPEG and PNG at full size
