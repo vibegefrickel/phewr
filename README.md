@@ -99,7 +99,9 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `Space` | Toggle selection |
 | `a` `A` | Select all / clear selection |
 
-The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. A blue background marks the cell under the cursor, and a yellow background marks the selected images.
+The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. The grid separates the thumbnails with 1-cell gaps. A thick blue border marks the thumbnail under the cursor. A thin yellow border marks each selected image (`Space`). A cell shows a dim ◌ (image) or ▶ (video) while its thumbnail loads.
+
+There is no search bar and no frame. A status row at the bottom shows the name and the position of the selected image, the search query and the match count while you search with `/`, the number of selected images, `scanning…` while the scan runs, and the key hints. In the fullscreen view, the image uses the whole terminal above the status row, and the filename shows in the status row.
 | `d` `D` | Trash / permanently delete, with confirm |
 | `o` | Directory picker |
 | `q` `Esc` | Quit |
