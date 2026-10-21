@@ -1,39 +1,55 @@
-use crate::config::{MAX_THUMB_COLS, MAX_THUMB_ROWS, MIN_THUMB_COLS, MIN_THUMB_ROWS};
+use crate::config::MAX_VISIBLE_ROWS;
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::num::NonZeroUsize;
 
 pub(crate) const LABEL_ROWS: u16 = 1;
-/// Multiplier applied to the thumbnail width on each grid zoom step.
-const THUMB_ZOOM_STEP: f64 = 1.25;
+
+/// Provisional cell size before the first `update_grid` computes the real one.
+const DEFAULT_THUMB_COLS: u16 = 20;
+const DEFAULT_THUMB_ROWS: u16 = 8;
+const MIN_THUMB_COLS: u16 = 8;
+const MAX_THUMB_COLS: u16 = 120;
+const MIN_THUMB_ROWS: u16 = 3;
+const MAX_THUMB_ROWS: u16 = 60;
+
+/// Cell aspect (columns per row) for the column count: about a 4:3 photo in cells
+/// that are twice as tall as wide.
+const DEFAULT_CELL_ASPECT: f64 = 2.5;
+/// The grid always shows at least this many columns.
+const MIN_GRID_COLS: usize = 2;
 
 pub(crate) struct GalleryState {
     pub filtered_indices: Vec<usize>,
     pub cursor: usize,
     pub scroll_offset: usize,
     pub grid_cols: usize,
+    /// The rows that fit after the zoom level is clamped to the terminal height.
     pub visible_rows: usize,
     pub grid_rect: Rect,
     pub search_active: bool,
     pub search_query: String,
-    /// Thumbnail cell size in terminal cells, border included.
+    /// Show the filename label below each thumbnail.
+    pub show_filenames: bool,
+    /// The zoom level: how many thumbnail rows the grid shows.
+    pub zoom_rows: usize,
+    /// Thumbnail cell size in terminal cells, border included. `update_grid` computes it.
     pub thumb_cols: u16,
     pub thumb_rows: u16,
-    /// Size the grid returns to on reset (from config).
-    default_thumb: (u16, u16),
+    /// Zoom level the grid returns to on reset (from config).
+    default_zoom_rows: usize,
 }
 
 impl GalleryState {
     #[cfg(test)]
     pub(crate) fn new(image_count: usize) -> Self {
-        use crate::config::{DEFAULT_THUMB_COLS, DEFAULT_THUMB_ROWS};
-        Self::with_thumb_size(image_count, DEFAULT_THUMB_COLS, DEFAULT_THUMB_ROWS)
+        use crate::config::DEFAULT_VISIBLE_ROWS;
+        Self::with_zoom_rows(image_count, usize::from(DEFAULT_VISIBLE_ROWS))
     }
 
-    pub(crate) fn with_thumb_size(image_count: usize, thumb_cols: u16, thumb_rows: u16) -> Self {
-        let thumb_cols = thumb_cols.clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
-        let thumb_rows = thumb_rows.clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
+    pub(crate) fn with_zoom_rows(image_count: usize, zoom_rows: usize) -> Self {
+        let zoom_rows = zoom_rows.clamp(1, usize::from(MAX_VISIBLE_ROWS));
         Self {
             filtered_indices: (0..image_count).collect(),
             cursor: 0,
@@ -43,59 +59,61 @@ impl GalleryState {
             grid_rect: Rect::default(),
             search_active: false,
             search_query: String::new(),
-            thumb_cols,
-            thumb_rows,
-            default_thumb: (thumb_cols, thumb_rows),
+            show_filenames: false,
+            zoom_rows,
+            thumb_cols: DEFAULT_THUMB_COLS,
+            thumb_rows: DEFAULT_THUMB_ROWS,
+            default_zoom_rows: zoom_rows,
         }
     }
 
-    /// Height of one grid row: thumbnail, label and a spacer line.
+    /// Height of one grid row: the thumbnail and the optional label, no spacer.
     pub(crate) fn cell_height_total(&self) -> u16 {
-        self.thumb_rows + LABEL_ROWS + 1
+        self.thumb_rows + self.label_rows()
     }
 
-    /// Make the configured default the current size again. Returns `true` if it changed.
-    pub(crate) fn reset_thumb_size(&mut self) -> bool {
-        let (cols, rows) = self.default_thumb;
-        self.set_thumb_size(cols, rows)
+    /// Show or hide the filename labels and reflow the visible rows.
+    pub(crate) fn toggle_filenames(&mut self) {
+        self.show_filenames = !self.show_filenames;
+        self.update_grid(self.grid_rect);
     }
 
-    /// Change the thumbnail size, keeping the hovered image on screen.
-    /// Returns `true` if the size actually changed.
-    pub(crate) fn set_thumb_size(&mut self, cols: u16, rows: u16) -> bool {
-        let cols = cols.clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
-        let rows = rows.clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
-        if (cols, rows) == (self.thumb_cols, self.thumb_rows) {
+    fn label_rows(&self) -> u16 {
+        u16::from(self.show_filenames)
+    }
+
+    /// Back to the configured zoom level. Returns `true` if it changed.
+    pub(crate) fn reset_zoom(&mut self) -> bool {
+        self.set_zoom_rows(self.default_zoom_rows)
+    }
+
+    /// One row fewer: larger thumbnails. Returns `true` if the level changed.
+    pub(crate) fn thumb_zoom_in(&mut self) -> bool {
+        self.set_zoom_rows(self.zoom_rows.saturating_sub(1))
+    }
+
+    /// One row more: smaller thumbnails. Returns `true` if the level changed.
+    pub(crate) fn thumb_zoom_out(&mut self) -> bool {
+        self.set_zoom_rows(self.zoom_rows + 1)
+    }
+
+    fn set_zoom_rows(&mut self, rows: usize) -> bool {
+        let rows = rows.clamp(1, self.max_visible_rows());
+        if rows == self.zoom_rows {
             return false;
         }
-        self.thumb_cols = cols;
-        self.thumb_rows = rows;
+        self.zoom_rows = rows;
         self.update_grid(self.grid_rect);
         true
     }
 
-    /// Larger thumbnails. The width grows by a fixed factor and the height follows
-    /// the configured aspect ratio, so the step feels the same at every size.
-    pub(crate) fn thumb_zoom_in(&mut self) -> bool {
-        let cols = (f64::from(self.thumb_cols) * THUMB_ZOOM_STEP).round() as u16;
-        let cols = cols.max(self.thumb_cols + 1);
-        let rows = self.rows_for_cols(cols);
-        self.set_thumb_size(cols, rows)
-    }
-
-    pub(crate) fn thumb_zoom_out(&mut self) -> bool {
-        let cols = (f64::from(self.thumb_cols) / THUMB_ZOOM_STEP).round() as u16;
-        let cols = cols.min(self.thumb_cols.saturating_sub(1));
-        let rows = self.rows_for_cols(cols);
-        self.set_thumb_size(cols, rows)
-    }
-
-    fn rows_for_cols(&self, cols: u16) -> u16 {
-        let (default_cols, default_rows) = self.default_thumb;
-        let ratio = f64::from(default_rows) / f64::from(default_cols.max(1));
-        (f64::from(cols) * ratio)
-            .round()
-            .max(f64::from(MIN_THUMB_ROWS)) as u16
+    /// The rows that fit the terminal at the smallest thumbnail height.
+    fn max_visible_rows(&self) -> usize {
+        if self.grid_rect.is_empty() {
+            return usize::from(MAX_VISIBLE_ROWS);
+        }
+        let min_cell = usize::from(MIN_THUMB_ROWS + self.label_rows());
+        (self.grid_rect.height as usize / min_cell).max(1)
     }
 
     pub(crate) fn reset_cursor(&mut self) {
@@ -103,10 +121,21 @@ impl GalleryState {
         self.scroll_offset = 0;
     }
 
+    /// Fit `zoom_rows` rows into the terminal: the rows share the height, and the columns
+    /// share the width. The cell aspect only picks the column count, then the width fills.
     pub(crate) fn update_grid(&mut self, grid_rect: Rect) {
         self.grid_rect = grid_rect;
-        self.grid_cols = (grid_rect.width as usize / self.thumb_cols as usize).max(1);
-        self.visible_rows = (grid_rect.height as usize / self.cell_height_total() as usize).max(1);
+        self.visible_rows = self.zoom_rows.clamp(1, self.max_visible_rows());
+        let cell_height =
+            (grid_rect.height / self.visible_rows as u16).max(MIN_THUMB_ROWS + self.label_rows());
+        self.thumb_rows = cell_height
+            .saturating_sub(self.label_rows())
+            .clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
+        let candidate_cols = (f64::from(self.thumb_rows) * DEFAULT_CELL_ASPECT).round() as u16;
+        self.grid_cols =
+            (grid_rect.width as usize / usize::from(candidate_cols.max(1))).max(MIN_GRID_COLS);
+        self.thumb_cols =
+            (grid_rect.width / self.grid_cols as u16).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
         self.ensure_cursor_visible();
     }
 
@@ -245,13 +274,12 @@ impl ThumbnailCache {
 #[cfg(test)]
 mod tests {
     use super::{GalleryState, ThumbnailCache};
-    use crate::config::{DEFAULT_THUMB_COLS, MAX_THUMB_COLS, MIN_THUMB_COLS};
     use ratatui::layout::Rect;
 
     #[test]
     fn grid_navigation_tracks_rows_and_scroll() {
-        let mut gallery = GalleryState::new(12);
-        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 3, 20));
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.update_grid(Rect::new(0, 0, 75, 20));
 
         gallery.move_down();
         assert_eq!(gallery.selected_index(), Some(3));
@@ -272,33 +300,49 @@ mod tests {
     }
 
     #[test]
-    fn thumb_zoom_steps_keep_aspect_and_clamp() {
-        let mut gallery = GalleryState::with_thumb_size(50, 20, 8);
+    fn filename_toggle_moves_a_row_from_the_thumbnails_to_the_labels() {
+        let mut gallery = GalleryState::with_zoom_rows(12, 4);
+        gallery.update_grid(Rect::new(0, 0, 75, 20));
+        assert!(!gallery.show_filenames);
+        assert_eq!(gallery.cell_height_total(), 5);
+        assert_eq!(gallery.thumb_rows, 5);
+
+        gallery.toggle_filenames();
+        assert!(gallery.show_filenames);
+        assert_eq!(gallery.thumb_rows, 4);
+        assert_eq!(gallery.cell_height_total(), 5);
+        assert_eq!(gallery.visible_rows, 4);
+    }
+
+    #[test]
+    fn zoom_changes_the_row_count_and_clamps() {
+        let mut gallery = GalleryState::with_zoom_rows(50, 4);
         gallery.update_grid(Rect::new(0, 0, 100, 40));
-        assert_eq!(gallery.grid_cols, 5);
+        assert_eq!(gallery.grid_cols, 4);
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (25, 10));
 
         assert!(gallery.thumb_zoom_in());
-        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (25, 10));
-        assert_eq!(gallery.grid_cols, 4);
+        assert_eq!(gallery.zoom_rows, 3);
+        assert!(gallery.thumb_rows > 10);
 
         assert!(gallery.thumb_zoom_out());
-        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (20, 8));
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (25, 10));
 
         for _ in 0..40 {
             gallery.thumb_zoom_in();
         }
-        assert_eq!(gallery.thumb_cols, MAX_THUMB_COLS);
+        assert_eq!(gallery.zoom_rows, 1);
         assert!(!gallery.thumb_zoom_in());
 
         for _ in 0..40 {
             gallery.thumb_zoom_out();
         }
-        assert_eq!(gallery.thumb_cols, MIN_THUMB_COLS);
+        assert_eq!(gallery.zoom_rows, 13, "40 rows at 3 rows minimum each");
         assert!(!gallery.thumb_zoom_out());
 
-        assert!(gallery.reset_thumb_size());
-        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (20, 8));
-        assert!(!gallery.reset_thumb_size());
+        assert!(gallery.reset_zoom());
+        assert_eq!(gallery.zoom_rows, 4);
+        assert!(!gallery.reset_zoom());
     }
 
     #[test]
@@ -312,8 +356,8 @@ mod tests {
 
     #[test]
     fn cursor_row_matches_grid_columns() {
-        let mut gallery = GalleryState::new(15);
-        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 3, 20));
+        let mut gallery = GalleryState::with_zoom_rows(15, 2);
+        gallery.update_grid(Rect::new(0, 0, 75, 20));
 
         gallery.move_to_first();
         for _ in 0..4 {
@@ -327,8 +371,8 @@ mod tests {
 
     #[test]
     fn directional_moves_within_grid_bounds() {
-        let mut gallery = GalleryState::new(12);
-        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 3, 20));
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.update_grid(Rect::new(0, 0, 75, 20));
 
         gallery.move_right();
         assert_eq!(gallery.selected_index(), Some(1));
@@ -346,8 +390,8 @@ mod tests {
 
     #[test]
     fn page_moves_jump_by_visible_rows() {
-        let mut gallery = GalleryState::new(20);
-        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 4, 24));
+        let mut gallery = GalleryState::with_zoom_rows(20, 2);
+        gallery.update_grid(Rect::new(0, 0, 120, 24));
 
         gallery.move_page_down();
         assert_eq!(gallery.selected_index(), Some(8));
@@ -359,8 +403,8 @@ mod tests {
 
     #[test]
     fn scroll_follows_cursor() {
-        let mut gallery = GalleryState::new(20);
-        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 4, 24));
+        let mut gallery = GalleryState::with_zoom_rows(20, 2);
+        gallery.update_grid(Rect::new(0, 0, 120, 24));
 
         gallery.move_page_down();
         gallery.move_right();
@@ -371,8 +415,8 @@ mod tests {
 
     #[test]
     fn visible_items_and_cell_rect_match_geometry() {
-        let mut gallery = GalleryState::new(12);
-        gallery.update_grid(Rect::new(0, 0, DEFAULT_THUMB_COLS * 3, 20));
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.update_grid(Rect::new(0, 0, 75, 20));
         gallery.scroll_offset = 1;
 
         let items: Vec<_> = gallery.visible_items().collect();

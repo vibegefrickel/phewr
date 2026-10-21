@@ -6,7 +6,7 @@ viewr runs in [Ghostty](https://ghostty.org/), [Kitty](https://sw.kovidgoyal.net
 
 viewr is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork adds these features:
 
-- **Resizable thumbnails:** `+` and `-` zoom the grid, and `0` resets it. viewr remembers the last size.
+- **Zoomable grid:** `+` and `-` show fewer or more thumbnail rows, and `0` resets the zoom. viewr remembers the zoom level.
 - **Slideshow:** `s` starts a slideshow from the current image. `Space` pauses it, and `[` / `]` change the interval. The slideshow loops by default.
 - **Info panel:** `i` shows file data and EXIF next to the grid or the fullscreen image. EXIF data includes the camera, lens, exposure, aperture, ISO, focal length and GPS position.
 - **HEIC / HEIF:** viewr decodes iPhone photos through libheif and applies their rotation.
@@ -92,6 +92,7 @@ desc = "Image grid (viewr)"
 | `Enter` | Open fullscreen |
 | `s` | Start a slideshow from the cursor |
 | `+` `-` `0` | Larger / smaller / default thumbnails |
+| `n` | Show or hide filename labels |
 | `i` | Toggle the info panel |
 | `/` | Search. `Enter` applies, `Esc` clears, `Backspace` deletes |
 | `Space` | Toggle selection |

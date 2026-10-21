@@ -687,7 +687,7 @@ error = "red"
         std::fs::write(
             &config_path,
             format!(
-                "theme = \"{}\"\n[gallery]\nthumb_cols = 55\n",
+                "theme = \"{}\"\n[gallery]\nvisible_rows = 6\n",
                 custom_theme.display()
             ),
         )
@@ -701,6 +701,6 @@ error = "red"
         // config.rs reads the same file, so the gallery key is visible there too.
         let state_path = home.join(".local/state/viewr/state.toml");
         let config = config::load_at(&config_path, &state_path);
-        assert_eq!(config.thumb_cols, 55);
+        assert_eq!(config.visible_rows, 6);
     }
 }

@@ -494,6 +494,13 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
     let gallery_area = chunks[1];
     draw_search_bar(frame, app, search_rect);
 
+    // The title shows the fitted cell size, so the grid layout runs first.
+    let gallery_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.theme.border);
+    let grid_rect = gallery_block.inner(gallery_area);
+    app.gallery.update_grid(grid_rect);
+
     let theme = &app.theme;
     let filtered_count = app.gallery.filtered_indices.len();
     let total = app.images.len();
@@ -511,13 +518,9 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
 
     let bottom_line = gallery_bottom_line(app, filtered_count, status);
 
-    let gallery_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme.border)
+    let gallery_block = gallery_block
         .title(Line::from(Span::styled(gallery_title, theme.title)))
         .title_bottom(bottom_line);
-
-    let grid_rect = gallery_block.inner(gallery_area);
     frame.render_widget(gallery_block, gallery_area);
 
     draw_thumbnail_cells(frame, app, grid_rect);
@@ -607,7 +610,7 @@ fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -
             Span::styled(format!(" {status} "), theme.popup_text)
         } else {
             Span::styled(
-                " Enter: open  +/-: size  i: info  /: search  ?: help  q: quit ",
+                " Enter: open  +/-: zoom  n: names  i: info  /: search  ?: help  q: quit ",
                 theme.popup_desc,
             )
         };
@@ -630,7 +633,7 @@ fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -
     }
 }
 
-/// One bordered cell with a filename label per visible thumbnail; Kitty draws the pictures.
+/// One bordered cell per visible thumbnail, with an optional filename label; Kitty draws the pictures.
 fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     app.gallery.update_grid(grid_rect);
     let thumb_cols = app.gallery.thumb_cols;
@@ -649,25 +652,30 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
             vis_idx + app.gallery.scroll_offset * app.gallery.grid_cols == app.gallery.cursor;
         let is_marked = app.is_marked(img_idx);
 
+        // Only the selected cell and the marked cells get a border. The selected style wins.
         let border_style = if is_selected {
-            theme.border_selected
+            Some(theme.border_selected)
         } else if is_marked {
-            theme.border_marked
+            Some(theme.border_marked)
         } else {
-            theme.border
+            None
         };
+        if let Some(border_style) = border_style {
+            let thumb_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style);
+            let block_rect = Rect {
+                x: cell_x,
+                y: cell_y,
+                width: thumb_cols.min(grid_rect.right().saturating_sub(cell_x)),
+                height: thumb_rows.min(grid_rect.bottom().saturating_sub(cell_y)),
+            };
+            frame.render_widget(thumb_block, block_rect);
+        }
 
-        let thumb_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style);
-
-        let block_rect = Rect {
-            x: cell_x,
-            y: cell_y,
-            width: thumb_cols.min(grid_rect.right().saturating_sub(cell_x)),
-            height: thumb_rows.min(grid_rect.bottom().saturating_sub(cell_y)),
-        };
-        frame.render_widget(thumb_block, block_rect);
+        if !app.gallery.show_filenames {
+            continue;
+        }
 
         let raw_filename = app.images[img_idx]
             .file_name()
@@ -725,6 +733,7 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
         ("Enter", "Open fullscreen"),
         ("+ / -", "Larger / smaller thumbnails"),
         ("0", "Reset thumbnail size"),
+        ("n", "Toggle filename labels"),
         ("i", "Toggle info panel"),
         ("s", "Start slideshow from cursor"),
         ("Space", "Toggle selection"),
@@ -955,17 +964,30 @@ mod tests {
     #[test]
     fn gallery_shows_the_count_the_size_the_position_and_the_hints() {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
-        let size = format!("[{}x{}]", app.gallery.thumb_cols, app.gallery.thumb_rows);
+        app.gallery.show_filenames = true;
         let screen = render(&mut app, None, 100, 30);
+        let size = format!("[{}x{}]", app.gallery.thumb_cols, app.gallery.thumb_rows);
         assert_shows(&screen, &format!(" Gallery [2 images] {size} "));
         assert_shows(&screen, " Search ");
         assert_shows(&screen, " a.jpg [1/2] ");
-        assert_shows(&screen, "Enter: open  +/-: size");
+        assert_shows(&screen, "Enter: open  +/-: zoom");
         assert_shows(&screen, "b.jpg");
 
         app.scan_complete = false;
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, "[2 images, scanning\u{2026}]");
+    }
+
+    #[test]
+    fn gallery_hides_thumbnail_labels_by_default() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        let screen = render(&mut app, None, 100, 30);
+        assert_hides(&screen, "b.jpg");
+        assert_shows(&screen, " a.jpg [1/2] ");
+
+        app.gallery.toggle_filenames();
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, "b.jpg");
     }
 
     #[test]
@@ -992,6 +1014,7 @@ mod tests {
     #[test]
     fn gallery_shows_the_selection_count_and_marks_the_label() {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.gallery.show_filenames = true;
         app.selection.insert(app.images[1].clone());
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, " 1 selected");
@@ -999,9 +1022,29 @@ mod tests {
     }
 
     #[test]
+    fn gallery_draws_a_border_only_around_the_selected_and_the_marked_cells() {
+        let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
+        let screen = render(&mut app, None, 100, 30);
+        assert_eq!(
+            screen.matches('\u{250c}').count(),
+            3,
+            "search bar + gallery block + cursor:\n{screen}"
+        );
+
+        app.selection.insert(app.images[2].clone());
+        let screen = render(&mut app, None, 100, 30);
+        assert_eq!(
+            screen.matches('\u{250c}').count(),
+            4,
+            "+ one marked cell:\n{screen}"
+        );
+    }
+
+    #[test]
     fn gallery_shortens_a_long_label() {
         let long = format!("{}.jpg", "x".repeat(80));
         let mut app = app_with(&[long.as_str()]);
+        app.gallery.show_filenames = true;
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, "xx\u{2026}");
     }

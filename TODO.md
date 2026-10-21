@@ -6,9 +6,10 @@
 
 ## Next
 
-The main goal is speed for JPEG, HEIC and PNG.
+The main goal is perceived speed for JPEG, HEIC and PNG.
 
 - Speed round. Measure first on a real iPhone folder, then fix:
+  - Optimize for perceived speed. Keep decode and resize off the UI thread. Show the first thumbnail before the grid is full.
   - the time to the first thumbnail and to a full grid
   - the time to open an image in fullscreen
   - the prefetch hits for the next and the previous image
@@ -20,17 +21,25 @@ The main goal is speed for JPEG, HEIC and PNG.
 - mpv round: the playback in mpv is not stable yet. Collect the problems first.
   - Make sure that the mpv hand-off works in Ghostty, Kitty and WezTerm. The worker tested it only in a herdr pane.
   - Next and previous video from inside mpv (for example mpv key bindings that run `quit <code>`).
+  - iPhone HDR MOV files are oversaturated and slow with `--vo=kitty`. Dolby Vision/HLG tone-mapping causes the brightness problem.
+  - Test `tone-mapping=bt.2446a` and `target-colorspace-hint=no` for iPhone HDR video.
+  - Test `hwdec=videotoolbox`, `profile=sw-fast` and `framedrop=vo` to improve performance.
+  - Document the mpv options that viewr passes for HDR files and for the Kitty output driver.
 - Real files for the new formats. This machine has no JPEG XL and no camera RAW file.
   - Make sure that JPEG XL decodes correctly: sRGB, Display P3, PQ and an ICC profile (`VIEWR_TEST_JXL`).
   - Make sure that camera RAW decodes correctly, with a portrait photo (`VIEWR_TEST_RAW`).
   - Measure whether `sips -Z` on a RAW uses the embedded preview, and measure the `sips` times with a real RAW.
-- Terminal colors: remove the hard-coded fallback theme (a Tokyo Night palette with the wrong background).
-  - By default, viewr uses the background, the foreground and the ANSI colors of the terminal.
+- Remove the theme system: use the terminal colors and the 16 ANSI colors, no theme files
+  - Decision: the theme system goes. viewr uses the default background and foreground of the terminal.
+  - Delete `src/theme.rs`, the theme picker (`t` key, `ThemePickerState`, `draw_theme_picker`), the `-t` CLI flag and `install_themes`.
+  - Ignore the `theme` and `theme_catalog` keys in `config.toml`. Remove the theme docs from `README.md` and `AGENTS.md`.
+  - Keep a small `Styles` struct with one role per use. No RGB values and no 256-color indexes.
+  - Background and normal text: `Style::default()`, so the terminal background and foreground win.
+  - Selected cell border: default foreground + `BOLD`. Marked images: ANSI `Yellow`. Errors: ANSI `Red`.
+  - Picker and list selection: `REVERSED`, so the highlight follows the terminal scheme.
+  - Dim text: ANSI `DarkGray`. Key hints: ANSI `Cyan`.
   - Ghostty runs cendre, so viewr follows cendre without a theme file.
-  - Decide if the theme system stays or goes.
-- Grid look:
-  - By default, no borders. Only the selected image and the marked images get a border. The spacing between the thumbnails stays.
-  - By default, no filenames. A key toggles the filenames.
+  - Delete the theme tests and the theme helpers in the test code.
 - Horizontal flow in the grid (justified rows): all thumbnails in a row have the same height. Each width follows the aspect ratio.
   - The layout needs the dimensions before the decode. Read them from the file header.
   - The cursor keys up and down need a new rule, because the columns do not line up.
@@ -47,8 +56,36 @@ The main goal is speed for JPEG, HEIC and PNG.
 - Mouse-based pan and zoom in the fullscreen view
 - Window slideshow: read the `end-file` reason through the mpv IPC socket, so that Cmd+Q stops the slideshow
 
+- Chafa preview variant: a fast image and video preview mode that uses the chafa character-art backend instead of the Kitty graphics protocol
+  - Goal: give a speed-optimized preview for large galleries and slow formats
+  - Chafa output works in any true-color terminal. This is useful for preview on terminals that do not support the Kitty protocol.
+  - Measure the current Kitty decode and transfer times on a real folder first. Then write the chafa plan.
+  - Use chafa to convert each image and each video frame into terminal symbols and colors.
+  - Start with still images. Add video frames after still images work.
+  - Add a config key and a CLI flag to pick the backend. Make Kitty the default. Keep Kitty as the fallback.
+  - Decide between the `chafa` binary and the chafa library. Build a prototype before you change the encoder.
+  - Add a `ChafaBackend` in `encoder/` next to `KittyBackend`. Make the UI show the text output as a ratatui widget.
+  - Cache the chafa output for thumbnails so the UI does not regenerate it each frame.
+  - For video, extract frames with FFmpeg at a low rate. Run chafa on each frame. Do not use mpv for this mode.
+  - Test the backend with synthetic images and videos. Write the output to a buffer, not to the real terminal.
+  - Use chafa as a fast preview for HDR iPhone video. Chafa can avoid the mpv tone-mapping and Kitty transfer overhead.
+  - Test `ffmpeg -f rawvideo -pix_fmt rgb24` piped into `chafa -f kitty` for iPhone MOV files.
+  - Compare the speed and the color quality of chafa against mpv `--vo=kitty` on iPhone HDR video.
+
+- Moving thumbnails: the selected grid cell plays a short loop for GIF, WebP, APNG, AVIF and video files when the cell is active
+  - Extract 12 frames with FFmpeg for each animated file. Space the frames evenly across the video duration. You can also sample the first 4 seconds.
+  - Loop the 12 frames over 4 seconds. Set the gap between frames to 333 ms.
+  - Use the Kitty animation protocol for terminal-driven looping. Upload frames with `a=f`. Start the loop with `a=a,s=3,v=1`.
+  - Test the animation support in Ghostty, Kitty and WezTerm. Fall back to a static thumbnail when the terminal does not support animation.
+  - For the chafa backend, convert each frame with chafa and cycle the output client-side.
+  - Decode the frames in a background thread. Cache the frame data so the UI can replay the loop without redecoding.
+  - Stop the animation and remove the image when the cursor leaves the cell.
+  - Add a config key to disable moving thumbnails.
+
 ## Done
 
+- Grid look: a border only around the selected and the marked cells, no spacer line, centered thumbnails, filenames hidden by default (`n` toggles them)
+- Grid zoom: `+`/`-` change the visible rows (default 4), the columns follow the terminal width (minimum 2), the state file saves the zoom level as `[gallery] visible_rows`
 - Fullscreen fix: a gallery pre-decode without a hint showed HEIC, JPEG and PNG at full size
 - JPEG XL (jxl-oxide, sRGB), EXR and HDR (tone map), QOI, TGA
 - Camera RAW, PSD, JPEG 2000, PDF, SVG and other ImageIO formats through `sips` (TIFF output)

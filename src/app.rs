@@ -92,7 +92,7 @@ pub(crate) struct App {
     pub info_visible: bool,
     info_cache: LruCache<PathBuf, ImageInfo>,
 
-    /// The state file that remembers the thumbnail size. Tests point it into a temp directory.
+    /// The state file that remembers the grid zoom. Tests point it into a temp directory.
     pub state_file: PathBuf,
     /// The directory of the thumbnail disk cache. Tests point it into a temp directory.
     pub disk_cache_dir: PathBuf,
@@ -225,7 +225,7 @@ impl App {
             slideshow_interval: Duration::from_secs_f64(config.slideshow_interval),
             slideshow_loop: config.slideshow_loop,
             slideshow_autostart: false,
-            gallery: GalleryState::with_thumb_size(0, config.thumb_cols, config.thumb_rows),
+            gallery: GalleryState::with_zoom_rows(0, usize::from(config.visible_rows)),
             thumb_cache: ThumbnailCache::new(),
             selection: HashSet::new(),
             pending_delete: None,
@@ -365,35 +365,32 @@ impl App {
         }
     }
 
-    // ----- Thumbnail size ---------------------------------------------------
+    // ----- Grid zoom ---------------------------------------------------------
 
     pub(crate) fn thumb_zoom_in(&mut self) {
         if self.gallery.thumb_zoom_in() {
-            self.after_thumb_size_change(true);
+            self.after_grid_zoom_change(true);
         }
     }
 
     pub(crate) fn thumb_zoom_out(&mut self) {
         if self.gallery.thumb_zoom_out() {
-            self.after_thumb_size_change(true);
+            self.after_grid_zoom_change(true);
         }
     }
 
-    /// Back to the configured size; also forgets the remembered size.
+    /// Back to the configured zoom level; also forgets the remembered level.
     pub(crate) fn thumb_zoom_reset(&mut self) {
-        config::clear_thumb_size(&self.state_file);
-        if self.gallery.reset_thumb_size() {
-            self.after_thumb_size_change(false);
+        config::clear_visible_rows(&self.state_file);
+        if self.gallery.reset_zoom() {
+            self.after_grid_zoom_change(false);
         }
     }
 
-    fn after_thumb_size_change(&mut self, remember: bool) {
+    fn after_grid_zoom_change(&mut self, remember: bool) {
         if remember {
-            config::save_thumb_size(
-                &self.state_file,
-                self.gallery.thumb_cols,
-                self.gallery.thumb_rows,
-            );
+            let rows = u16::try_from(self.gallery.zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS);
+            config::save_visible_rows(&self.state_file, rows);
         }
         // Thumbnails are decoded for a pixel size, so every cached one is stale.
         self.mark_dirty();
@@ -2971,26 +2968,26 @@ mod tests {
             let dir = test_dir();
             let mut app = app_with(&["a.png"]);
             app.state_file = dir.path().join("state/state.toml");
-            let start = (app.gallery.thumb_cols, app.gallery.thumb_rows);
+            let start = app.gallery.zoom_rows;
 
             app.thumb_zoom_in();
-            assert!(app.gallery.thumb_cols > start.0);
+            assert_eq!(app.gallery.zoom_rows, start - 1);
             assert!(app.graphics_storage_dirty);
             let saved = fs::read_to_string(&app.state_file).unwrap();
             assert!(
-                saved.contains(&format!("thumb_cols = {}", app.gallery.thumb_cols)),
+                saved.contains(&format!("visible_rows = {}", app.gallery.zoom_rows)),
                 "{saved}"
             );
 
             app.thumb_zoom_out();
             app.thumb_zoom_out();
-            assert!(app.gallery.thumb_cols < start.0);
+            assert_eq!(app.gallery.zoom_rows, start + 1);
 
             app.thumb_zoom_reset();
-            assert_eq!((app.gallery.thumb_cols, app.gallery.thumb_rows), start);
+            assert_eq!(app.gallery.zoom_rows, start);
             assert!(!app.state_file.exists());
 
-            // A reset at the default size only removes the state file.
+            // A reset at the default level only removes the state file.
             app.thumb_zoom_reset();
             assert!(!app.state_file.exists());
         }
@@ -3003,10 +3000,10 @@ mod tests {
             for _ in 0..40 {
                 app.thumb_zoom_out();
             }
-            let smallest = app.gallery.thumb_cols;
+            let most = app.gallery.zoom_rows;
             fs::remove_file(&app.state_file).unwrap();
             app.thumb_zoom_out();
-            assert_eq!(app.gallery.thumb_cols, smallest);
+            assert_eq!(app.gallery.zoom_rows, most);
             assert!(!app.state_file.exists(), "no change, no write");
         }
 

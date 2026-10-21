@@ -1,5 +1,5 @@
 //! User configuration (`~/.config/viewr/config.toml`) and the small state
-//! file that remembers the last used thumbnail size.
+//! file that remembers the grid zoom level.
 //!
 //! Theme-related keys (`theme`, `theme_catalog`) are read by `theme.rs` from
 //! the same file; this module only handles the gallery, slideshow, info and video sections.
@@ -8,20 +8,16 @@ use serde::Deserialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-pub(crate) const DEFAULT_THUMB_COLS: u16 = 20;
-pub(crate) const DEFAULT_THUMB_ROWS: u16 = 8;
+/// The grid shows this many thumbnail rows until the user zooms.
+pub(crate) const DEFAULT_VISIBLE_ROWS: u16 = 4;
+pub(crate) const MIN_VISIBLE_ROWS: u16 = 1;
+pub(crate) const MAX_VISIBLE_ROWS: u16 = 32;
 pub(crate) const DEFAULT_SLIDESHOW_INTERVAL: f64 = 3.0;
-
-pub(crate) const MIN_THUMB_COLS: u16 = 8;
-pub(crate) const MAX_THUMB_COLS: u16 = 120;
-pub(crate) const MIN_THUMB_ROWS: u16 = 3;
-pub(crate) const MAX_THUMB_ROWS: u16 = 60;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Config {
-    /// Thumbnail cell size in terminal cells (border included).
-    pub thumb_cols: u16,
-    pub thumb_rows: u16,
+    /// The grid zoom level: how many thumbnail rows the terminal shows.
+    pub visible_rows: u16,
     /// Seconds between slides.
     pub slideshow_interval: f64,
     /// Wrap around to the first image when the slideshow reaches the end.
@@ -59,8 +55,7 @@ impl VideoPlayer {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            thumb_cols: DEFAULT_THUMB_COLS,
-            thumb_rows: DEFAULT_THUMB_ROWS,
+            visible_rows: DEFAULT_VISIBLE_ROWS,
             slideshow_interval: DEFAULT_SLIDESHOW_INTERVAL,
             slideshow_loop: true,
             info_panel: false,
@@ -83,8 +78,7 @@ struct ConfigFile {
 
 #[derive(Default, Deserialize)]
 struct GallerySection {
-    thumb_cols: Option<u16>,
-    thumb_rows: Option<u16>,
+    visible_rows: Option<u16>,
 }
 
 #[derive(Default, Deserialize)]
@@ -104,11 +98,10 @@ struct VideoSection {
     player: Option<String>,
 }
 
-/// Remembered thumbnail size, written whenever the user zooms the grid.
+/// Remembered grid zoom, written whenever the user zooms the grid.
 #[derive(Default, Deserialize, serde::Serialize)]
 struct StateFile {
-    thumb_cols: Option<u16>,
-    thumb_rows: Option<u16>,
+    visible_rows: Option<u16>,
 }
 
 pub(crate) fn load() -> Config {
@@ -123,11 +116,8 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
         .ok()
         .and_then(|contents| toml::from_str::<ConfigFile>(&contents).ok())
         .unwrap_or_default();
-    if let Some(cols) = file.gallery.thumb_cols {
-        config.thumb_cols = cols;
-    }
-    if let Some(rows) = file.gallery.thumb_rows {
-        config.thumb_rows = rows;
+    if let Some(rows) = file.gallery.visible_rows {
+        config.visible_rows = rows;
     }
     if let Some(interval) = file.slideshow.interval
         && interval.is_finite()
@@ -145,38 +135,37 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
         config.video_player = player;
     }
 
-    // The remembered size wins over the configured default until the user
-    // presses `0`, which resets to the configured size and forgets the state.
+    // The remembered zoom wins over the configured default until the user
+    // presses `0`, which resets to the configured level and forgets the state.
     let state = std::fs::read_to_string(state_path)
         .ok()
         .and_then(|contents| toml::from_str::<StateFile>(&contents).ok())
         .unwrap_or_default();
-    if let (Some(cols), Some(rows)) = (state.thumb_cols, state.thumb_rows) {
-        config.thumb_cols = cols;
-        config.thumb_rows = rows;
+    if let Some(rows) = state.visible_rows {
+        config.visible_rows = rows;
     }
 
-    config.thumb_cols = config.thumb_cols.clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
-    config.thumb_rows = config.thumb_rows.clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
+    config.visible_rows = config
+        .visible_rows
+        .clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS);
     config
 }
 
-/// The state file below the user's home, the default target of the thumbnail-size functions.
+/// The state file below the user's home, the default target of the grid-zoom functions.
 pub(crate) fn default_state_path() -> PathBuf {
     state_path(&home_dir())
 }
 
-/// Remember `cols` x `rows` in the state file at `path` for the next start.
-pub(crate) fn save_thumb_size(path: &Path, cols: u16, rows: u16) {
+/// Remember the zoom level `rows` in the state file at `path` for the next start.
+pub(crate) fn save_visible_rows(path: &Path, rows: u16) {
     let state = StateFile {
-        thumb_cols: Some(cols),
-        thumb_rows: Some(rows),
+        visible_rows: Some(rows),
     };
     write_state(path, &state);
 }
 
-/// Forget the remembered thumbnail size: remove the state file at `path`.
-pub(crate) fn clear_thumb_size(path: &Path) {
+/// Forget the remembered grid zoom: remove the state file at `path`.
+pub(crate) fn clear_visible_rows(path: &Path) {
     if path.exists() {
         #[expect(
             clippy::let_underscore_must_use,
@@ -251,18 +240,18 @@ mod tests {
     }
 
     #[test]
-    fn config_sections_are_read_and_state_overrides_thumb_size() {
+    fn config_sections_are_read_and_state_overrides_the_zoom() {
         let root = test_root();
         let config_path = root.path().join("config.toml");
         let state_path = root.path().join("state.toml");
         std::fs::write(
             &config_path,
-            "theme = \"ignored-here\"\n[gallery]\nthumb_cols = 30\nthumb_rows = 12\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
+            "theme = \"ignored-here\"\n[gallery]\nvisible_rows = 6\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
         )
         .unwrap();
 
         let config = load_at(&config_path, &state_path);
-        assert_eq!((config.thumb_cols, config.thumb_rows), (30, 12));
+        assert_eq!(config.visible_rows, 6);
         assert_eq!(config.slideshow_interval, 1.5);
         assert!(!config.slideshow_loop);
         assert!(config.info_panel);
@@ -270,12 +259,11 @@ mod tests {
         write_state(
             &state_path,
             &StateFile {
-                thumb_cols: Some(16),
-                thumb_rows: Some(6),
+                visible_rows: Some(2),
             },
         );
         let config = load_at(&config_path, &state_path);
-        assert_eq!((config.thumb_cols, config.thumb_rows), (16, 6));
+        assert_eq!(config.visible_rows, 2);
     }
 
     #[test]
@@ -302,17 +290,14 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_sizes_are_clamped() {
+    fn an_out_of_range_zoom_is_clamped() {
         let root = test_root();
         let config_path = root.path().join("config.toml");
-        std::fs::write(
-            &config_path,
-            "[gallery]\nthumb_cols = 2\nthumb_rows = 999\n",
-        )
-        .unwrap();
-        let config = load_at(&config_path, &root.path().join("state.toml"));
-        assert_eq!(config.thumb_cols, MIN_THUMB_COLS);
-        assert_eq!(config.thumb_rows, MAX_THUMB_ROWS);
+        for (value, expected) in [(0, MIN_VISIBLE_ROWS), (999, MAX_VISIBLE_ROWS)] {
+            std::fs::write(&config_path, format!("[gallery]\nvisible_rows = {value}\n")).unwrap();
+            let config = load_at(&config_path, &root.path().join("state.toml"));
+            assert_eq!(config.visible_rows, expected, "visible_rows = {value}");
+        }
     }
 
     #[test]
@@ -333,39 +318,36 @@ mod tests {
             );
         }
 
-        std::fs::write(&config_path, "[gallery\nthumb_cols = 30").unwrap();
-        std::fs::write(&state_path, "thumb_cols = \"wide\"").unwrap();
+        std::fs::write(&config_path, "[gallery\nvisible_rows = 30").unwrap();
+        std::fs::write(&state_path, "visible_rows = \"many\"").unwrap();
         assert_eq!(load_at(&config_path, &state_path), Config::default());
     }
 
     #[test]
-    fn a_state_file_with_one_dimension_is_ignored() {
+    fn an_old_state_file_with_a_thumb_size_is_ignored() {
         let root = test_root();
         let state_path = root.path().join("state.toml");
-        std::fs::write(&state_path, "thumb_cols = 40\n").unwrap();
+        std::fs::write(&state_path, "thumb_cols = 40\nthumb_rows = 12\n").unwrap();
         let config = load_at(&root.path().join("config.toml"), &state_path);
-        assert_eq!(
-            (config.thumb_cols, config.thumb_rows),
-            (DEFAULT_THUMB_COLS, DEFAULT_THUMB_ROWS)
-        );
+        assert_eq!(config.visible_rows, DEFAULT_VISIBLE_ROWS);
     }
 
     #[test]
-    fn save_and_clear_thumb_size_round_trip_through_the_state_file() {
+    fn save_and_clear_visible_rows_round_trip_through_the_state_file() {
         let root = test_root();
         let config_path = root.path().join("config.toml");
         let state_path = root.path().join("nested/viewr/state.toml");
 
-        save_thumb_size(&state_path, 24, 10);
+        save_visible_rows(&state_path, 7);
         let config = load_at(&config_path, &state_path);
-        assert_eq!((config.thumb_cols, config.thumb_rows), (24, 10));
+        assert_eq!(config.visible_rows, 7);
 
-        clear_thumb_size(&state_path);
+        clear_visible_rows(&state_path);
         assert!(!state_path.exists());
         assert_eq!(load_at(&config_path, &state_path), Config::default());
 
         // A second clear finds no file and does nothing.
-        clear_thumb_size(&state_path);
+        clear_visible_rows(&state_path);
         assert!(!state_path.exists());
     }
 
@@ -375,8 +357,7 @@ mod tests {
         let blocker = root.path().join("file");
         std::fs::write(&blocker, "not a directory").unwrap();
         let state = StateFile {
-            thumb_cols: Some(16),
-            thumb_rows: Some(6),
+            visible_rows: Some(6),
         };
 
         write_state(&blocker.join("state.toml"), &state);

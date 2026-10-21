@@ -25,6 +25,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use encoder::GraphicsBackend;
+use image::RgbaImage;
 use image_list::SharedImageList;
 use ratatui::prelude::*;
 use std::io::{self, Write, stdout};
@@ -808,6 +809,10 @@ fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
             app.graphics_delete_all()?;
             app.thumb_zoom_reset();
         }
+        KeyCode::Char('n') => {
+            app.gallery.toggle_filenames();
+            app.needs_render = true;
+        }
         KeyCode::Left | KeyCode::Char('h') => {
             app.gallery.move_left();
             app.pre_decode_hovered();
@@ -1136,7 +1141,8 @@ fn emit_new_thumbnails_to(
         }
         let cell_rect = app.gallery.cell_rect(vis_idx);
         if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
-            queue!(out, cursor::MoveTo(cell_rect.x + 1, cell_rect.y + 1))?;
+            let (image_x, image_y) = gallery_image_origin(app, cell_rect, img);
+            queue!(out, cursor::MoveTo(image_x, image_y))?;
             app.graphics.transmit(
                 out,
                 img,
@@ -1156,19 +1162,34 @@ fn emit_new_thumbnails_to(
     Ok(())
 }
 
+/// The area inside a thumbnail border, where the image fits.
+fn gallery_thumb_inner(cell_rect: Rect) -> Rect {
+    Rect {
+        x: cell_rect.x + 1,
+        y: cell_rect.y + 1,
+        width: cell_rect.width.saturating_sub(2),
+        height: cell_rect.height.saturating_sub(2),
+    }
+}
+
+/// Center the fitted thumbnail inside the area inside the border.
+fn gallery_image_origin(app: &App, cell_rect: Rect, img: &RgbaImage) -> (u16, u16) {
+    let inner = gallery_thumb_inner(cell_rect);
+    let (cell_width, cell_height) = app.cell_px;
+    let image_cols = u16::try_from(img.width().div_ceil(cell_width)).unwrap_or(u16::MAX);
+    let image_rows = u16::try_from(img.height().div_ceil(cell_height)).unwrap_or(u16::MAX);
+    let image_x = inner.x + inner.width.saturating_sub(image_cols) / 2;
+    let image_y = inner.y + inner.height.saturating_sub(image_rows) / 2;
+    (image_x, image_y)
+}
+
 fn render_gallery_images(app: &mut App) -> io::Result<()> {
     let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
 
     for &(vis_idx, img_idx) in &visible {
         let cell_rect = app.gallery.cell_rect(vis_idx);
-        let inner = Rect {
-            x: cell_rect.x + 1,
-            y: cell_rect.y + 1,
-            width: cell_rect.width.saturating_sub(2),
-            height: cell_rect.height.saturating_sub(2),
-        };
         let path = app.images[img_idx].clone();
-        app.spawn_thumb_decode(img_idx, path, inner);
+        app.spawn_thumb_decode(img_idx, path, gallery_thumb_inner(cell_rect));
     }
 
     let mut out = app.graphics_out.clone();
@@ -1194,9 +1215,8 @@ fn place_gallery_images_to(
     for &(vis_idx, img_idx) in visible {
         let cell_rect = app.gallery.cell_rect(vis_idx);
         if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
-            let inner_x = cell_rect.x + 1;
-            let inner_y = cell_rect.y + 1;
-            queue!(out, cursor::MoveTo(inner_x, inner_y))?;
+            let (image_x, image_y) = gallery_image_origin(app, cell_rect, img);
+            queue!(out, cursor::MoveTo(image_x, image_y))?;
             if app.transmitted_image_ids.contains(&id) {
                 app.graphics.place_by_id_to(out, id)?;
             } else {
@@ -2053,9 +2073,7 @@ mod tests {
     mod keys {
         use super::super::{App, SharedImageList, ViewMode, handle_event, handle_theme_picker_key};
         use super::{cleanup, picker_app, select_path, synthetic_tree};
-        use crate::config::{
-            Config, MAX_THUMB_COLS, MAX_THUMB_ROWS, MIN_THUMB_COLS, MIN_THUMB_ROWS,
-        };
+        use crate::config::Config;
         use crate::theme::{NamedTheme, Theme};
         use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         use ratatui::layout::Rect;
@@ -2093,9 +2111,8 @@ mod tests {
                 .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
                 .collect();
             app.gallery.filtered_indices = (0..count).collect();
-            let width = app.gallery.thumb_cols * 3;
-            let height = app.gallery.cell_height_total() * 2;
-            app.gallery.update_grid(Rect::new(0, 0, width, height));
+            app.gallery.zoom_rows = 2;
+            app.gallery.update_grid(Rect::new(0, 0, 100, 24));
             app.scan_complete = true;
             app.needs_render = false;
             app
@@ -2554,37 +2571,40 @@ mod tests {
             assert!(press(&mut app, KeyCode::Esc));
         }
 
-        /// The thumbnail keys save the size in the state file of the user, so these tests only
-        /// press them at the size limits, where the size does not change.
         #[test]
-        fn gallery_thumbnail_size_keys_stop_at_the_limits() {
-            let largest = Config {
-                thumb_cols: MAX_THUMB_COLS,
-                thumb_rows: MAX_THUMB_ROWS,
-                ..Config::default()
-            };
-            let mut app = gallery_app_with(2, &largest);
-            assert!(
-                !app.gallery.thumb_zoom_in(),
-                "the guard: no state file write"
-            );
-            char_key(&mut app, '+');
-            char_key(&mut app, '=');
-            assert_eq!(app.gallery.thumb_cols, MAX_THUMB_COLS);
+        fn gallery_n_toggles_the_filename_labels() {
+            let mut app = gallery_app(2);
+            let compact_thumbs = app.gallery.thumb_rows;
+            assert!(!app.gallery.show_filenames);
 
-            let smallest = Config {
-                thumb_cols: MIN_THUMB_COLS,
-                thumb_rows: MIN_THUMB_ROWS,
-                ..Config::default()
-            };
-            let mut app = gallery_app_with(2, &smallest);
-            assert!(
-                !app.gallery.thumb_zoom_out(),
-                "the guard: no state file write"
-            );
+            app.needs_render = false;
+            char_key(&mut app, 'n');
+            assert!(app.gallery.show_filenames);
+            assert_eq!(app.gallery.thumb_rows, compact_thumbs - 1);
+            assert!(app.needs_render);
+
+            char_key(&mut app, 'n');
+            assert!(!app.gallery.show_filenames);
+            assert_eq!(app.gallery.thumb_rows, compact_thumbs);
+        }
+
+        /// The zoom keys stop at one row and at the most rows that fit the terminal.
+        #[test]
+        fn gallery_zoom_keys_stop_at_the_limits() {
+            let mut app = gallery_app(2);
+            for _ in 0..40 {
+                char_key(&mut app, '+');
+            }
+            assert_eq!(app.gallery.zoom_rows, 1);
+            char_key(&mut app, '+');
+            assert_eq!(app.gallery.zoom_rows, 1);
+
+            for _ in 0..40 {
+                char_key(&mut app, '-');
+            }
+            assert_eq!(app.gallery.zoom_rows, 8, "24 rows at 3 rows minimum each");
             char_key(&mut app, '-');
-            char_key(&mut app, '_');
-            assert_eq!(app.gallery.thumb_cols, MIN_THUMB_COLS);
+            assert_eq!(app.gallery.zoom_rows, 8);
         }
 
         #[test]
@@ -2873,9 +2893,7 @@ mod tests {
                 .map(|index| PathBuf::from(format!("/photos/{index}.jpg")))
                 .collect();
             app.gallery.filtered_indices = (0..count).collect();
-            let width = app.gallery.thumb_cols * 3;
-            let height = app.gallery.cell_height_total();
-            app.gallery.update_grid(Rect::new(0, 0, width, height));
+            app.gallery.update_grid(Rect::new(0, 0, 100, 24));
             for index in 0..count {
                 app.thumb_cache.insert(index, RgbaImage::new(4, 4));
             }
@@ -2945,6 +2963,16 @@ mod tests {
         }
 
         #[test]
+        fn gallery_centers_each_thumbnail_inside_the_inner_cell() {
+            let mut app = thumbnail_app(1);
+            let mut out = Vec::new();
+
+            place_visible(&mut app, &mut out);
+
+            assert!(text(&out).contains("\x1b[3;8H"), "4x4 px in a 14x4 cell");
+        }
+
+        #[test]
         fn gallery_skips_a_cell_without_a_thumbnail() {
             let mut app = thumbnail_app(2);
             app.images.push(PathBuf::from("/photos/missing.jpg"));
@@ -2968,7 +2996,7 @@ mod tests {
             assert_eq!(text.matches(TRANSMIT).count(), 2);
             assert!(!text.contains("\x1b_Ga=d"));
             assert_eq!(app.transmitted_image_ids.len(), 2);
-            assert!(text.contains(&format!("\x1b[2;{}H", app.gallery.thumb_cols + 2)));
+            assert!(text.contains("\x1b[3;24H"), "centered in the second cell");
         }
 
         #[cfg(feature = "video")]
