@@ -192,6 +192,10 @@ impl App {
     ) -> Self {
         let (thumb_tx, thumb_rx) = mpsc::channel();
         let mut gallery = GalleryState::with_zoom_rows(0, usize::from(config.visible_rows));
+        gallery.default_zoom_rows = usize::from(config.configured_visible_rows).clamp(
+            usize::from(config::MIN_VISIBLE_ROWS),
+            usize::from(config::MAX_VISIBLE_ROWS),
+        );
         gallery.set_cell_shape(crate::gallery::DEFAULT_IMAGE_ASPECT, cell_px);
         Self {
             images: Vec::new(),

@@ -16,9 +16,11 @@ impl App {
         }
     }
 
-    /// Back to the configured zoom level; also forgets the remembered level.
+    /// Back to the configured zoom level; also forgets the remembered level for this folder.
     pub(crate) fn thumb_zoom_reset(&mut self) {
-        config::clear_visible_rows(&self.state_file);
+        if let Some(dir) = &self.current_dir {
+            config::clear_folder_zoom(&self.state_file, dir);
+        }
         if self.gallery.reset_zoom() {
             self.after_grid_zoom_change(false);
         }
@@ -46,7 +48,7 @@ impl App {
     fn after_grid_zoom_change(&mut self, remember: bool) {
         if remember {
             let rows = u16::try_from(self.gallery.zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS);
-            config::save_visible_rows(&self.state_file, rows);
+            config::save_visible_rows(&self.state_file, self.current_dir.as_deref(), rows);
         }
         // Thumbnails are decoded for a pixel size, so every cached one is stale.
         self.mark_dirty();
@@ -56,15 +58,19 @@ impl App {
 #[cfg(test)]
 mod tests {
 
+    use crate::config;
     use crate::test_support::{app_with, char_key, gallery_app, test_dir};
 
     use std::fs;
 
     #[test]
-    fn thumb_zoom_writes_and_reset_clears_the_state_file() {
+    fn thumb_zoom_writes_the_folder_and_the_global_level_reset_clears_the_folder() {
         let dir = test_dir();
+        let folder = dir.path().join("photos");
+        fs::create_dir(&folder).unwrap();
         let mut app = app_with(&["a.png"]);
         app.state_file = dir.path().join("state/state.toml");
+        app.current_dir = Some(folder.clone());
         let start = app.gallery.zoom_rows;
 
         app.thumb_zoom_in();
@@ -75,6 +81,13 @@ mod tests {
             saved.contains(&format!("visible_rows = {}", app.gallery.zoom_rows)),
             "{saved}"
         );
+        assert!(
+            saved.contains(&format!(
+                "\"{}\"",
+                folder.to_string_lossy().replace('\\', "\\\\")
+            )),
+            "{saved}"
+        );
 
         app.thumb_zoom_out();
         app.thumb_zoom_out();
@@ -82,11 +95,19 @@ mod tests {
 
         app.thumb_zoom_reset();
         assert_eq!(app.gallery.zoom_rows, start);
-        assert!(!app.state_file.exists());
+        let saved = fs::read_to_string(&app.state_file).unwrap();
+        assert!(
+            !saved.contains(&format!(
+                "\"{}\"",
+                folder.to_string_lossy().replace('\\', "\\\\")
+            )),
+            "{saved}"
+        );
+        assert!(saved.contains("visible_rows"), "the global fallback stays");
 
-        // A reset at the default level only removes the state file.
+        // A second reset changes nothing.
         app.thumb_zoom_reset();
-        assert!(!app.state_file.exists());
+        assert_eq!(app.gallery.zoom_rows, start);
     }
 
     #[test]
@@ -159,8 +180,11 @@ mod tests {
     #[test]
     fn thumb_zoom_stops_at_the_limits() {
         let dir = test_dir();
+        let folder = dir.path().join("photos");
+        fs::create_dir(&folder).unwrap();
         let mut app = app_with(&["a.png"]);
         app.state_file = dir.path().join("state.toml");
+        app.current_dir = Some(folder);
         for _ in 0..40 {
             app.thumb_zoom_out();
         }
@@ -169,5 +193,26 @@ mod tests {
         app.thumb_zoom_out();
         assert_eq!(app.gallery.zoom_rows, most);
         assert!(!app.state_file.exists(), "no change, no write");
+    }
+
+    #[test]
+    fn a_folder_without_a_saved_level_uses_the_global_fallback() {
+        let dir = test_dir();
+        let folder = dir.path().join("photos");
+        fs::create_dir(&folder).unwrap();
+        let mut app = app_with(&["a.png"]);
+        app.state_file = dir.path().join("state.toml");
+        app.current_dir = Some(folder.clone());
+
+        // The state file has a global level but no entry for this folder.
+        config::save_visible_rows(&app.state_file, None, 3);
+        app.gallery.set_zoom_rows(4);
+        assert_eq!(app.gallery.zoom_rows, 4);
+
+        app.apply_folder_zoom(&folder);
+        assert_eq!(
+            app.gallery.zoom_rows, 3,
+            "a folder without an entry uses the global level"
+        );
     }
 }

@@ -32,6 +32,7 @@ use app::App;
 use clap::Parser;
 use cli::{Cli, initial_dir_from_paths};
 use image_list::SharedImageList;
+use picker::canonicalize_or_self;
 use run_loop::{LoopState, run};
 use std::io;
 use std::path::PathBuf;
@@ -130,7 +131,10 @@ fn main() -> io::Result<()> {
         "Kitty transfer: {}",
         encoder::kitty::describe(transfer)
     ));
-    app.initial_dir = Some(initial_dir);
+    let initial_dir = canonicalize_or_self(&initial_dir);
+    app.initial_dir = Some(initial_dir.clone());
+    app.current_dir = Some(initial_dir.clone());
+    app.apply_folder_zoom(&initial_dir);
     app.slideshow_autostart = cli.slideshow;
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();

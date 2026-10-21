@@ -1,6 +1,7 @@
 //! The directory picker, and the switch of the gallery to another directory.
 
 use super::{App, ViewMode};
+use crate::config;
 use crate::image_list::SharedImageList;
 use crate::picker::{self, PickerState};
 use crate::scanner;
@@ -35,6 +36,7 @@ impl App {
     pub(crate) fn switch_to_dir(&mut self, dir: &Path) {
         let canonical = picker::canonicalize_or_self(dir);
         self.current_dir = Some(canonical.clone());
+        self.apply_folder_zoom(&canonical);
 
         let new_list = SharedImageList::new();
         scanner::spawn(vec![canonical.clone()], new_list.clone());
@@ -74,12 +76,25 @@ impl App {
 
         self.needs_render = true;
     }
+
+    /// Apply the saved zoom level for `dir`. This runs when viewr opens a folder at start and
+    /// on every folder switch. A folder without its own entry falls back to the global saved
+    /// level, then to the configured default.
+    pub(crate) fn apply_folder_zoom(&mut self, dir: &Path) {
+        let rows = config::load_folder_zoom(&self.state_file, dir)
+            .or_else(|| config::load_global_zoom(&self.state_file))
+            .unwrap_or_else(|| {
+                u16::try_from(self.gallery.default_zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS)
+            });
+        self.gallery.set_zoom_rows(usize::from(rows));
+    }
 }
 
 #[cfg(test)]
 mod tests {
 
     use crate::app::ViewMode;
+    use crate::config;
     use crate::test_support::{app_with, test_dir, wait_until};
     use image::RgbaImage;
 
@@ -124,5 +139,33 @@ mod tests {
         let mut app = app_with(&[photos.join("a.png").to_str().unwrap()]);
         app.open_picker();
         assert_eq!(app.current_dir.as_deref(), Some(photos.as_path()));
+    }
+
+    #[test]
+    fn switching_to_a_folder_applies_its_saved_zoom_level() {
+        let dir = test_dir();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let photos = root.join("photos");
+        let other = root.join("other");
+        fs::create_dir(&photos).unwrap();
+        fs::create_dir(&other).unwrap();
+        RgbaImage::new(4, 4).save(photos.join("a.png")).unwrap();
+        RgbaImage::new(4, 4).save(other.join("b.png")).unwrap();
+
+        let mut app = app_with(&["/nowhere/x.png"]);
+        app.state_file = dir.path().join("state.toml");
+        config::save_visible_rows(&app.state_file, Some(&photos), 3);
+
+        app.switch_to_dir(&other);
+        assert_eq!(
+            app.gallery.zoom_rows, 3,
+            "a folder without an entry falls back to the global level"
+        );
+
+        app.switch_to_dir(&photos);
+        assert_eq!(
+            app.gallery.zoom_rows, 3,
+            "the saved level of the folder is applied"
+        );
     }
 }

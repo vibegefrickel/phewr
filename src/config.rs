@@ -5,6 +5,7 @@
 //! unknown keys, so an old file with the removed keys `theme` and `theme_catalog` still loads.
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,10 @@ pub(crate) const DEFAULT_SLIDESHOW_INTERVAL: f64 = 3.0;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Config {
     /// The grid zoom level: how many thumbnail rows the terminal shows.
+    /// This is the effective level, which the remembered global level can override.
     pub visible_rows: u16,
+    /// The zoom level from `[gallery] visible_rows` alone, used by the `0` reset key.
+    pub configured_visible_rows: u16,
     /// Seconds between slides.
     pub slideshow_interval: f64,
     /// Wrap around to the first image when the slideshow reaches the end.
@@ -57,6 +61,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             visible_rows: DEFAULT_VISIBLE_ROWS,
+            configured_visible_rows: DEFAULT_VISIBLE_ROWS,
             slideshow_interval: DEFAULT_SLIDESHOW_INTERVAL,
             slideshow_loop: true,
             info_panel: false,
@@ -99,10 +104,53 @@ struct VideoSection {
     player: Option<String>,
 }
 
+/// The largest number of folders that viewr remembers a zoom level for.
+const MAX_ZOOM_FOLDERS: usize = 200;
+
 /// Remembered grid zoom, written whenever the user zooms the grid.
 #[derive(Default, Deserialize, serde::Serialize)]
 struct StateFile {
+    /// The last zoom level the user chose anywhere; folders without their own entry fall back
+    /// to this value.
     visible_rows: Option<u16>,
+    /// Monotonic counter that records the last-used order of per-folder zoom entries.
+    #[serde(default)]
+    zoom_counter: u64,
+    /// Per-folder zoom levels, keyed by the canonical folder path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    zoom: BTreeMap<PathBuf, ZoomValue>,
+}
+
+/// A zoom value in the state file. The simple form `"/path" = 3` is accepted on load; the
+/// detailed form with a monotonic order is written so viewr can drop the least recently
+/// used folders.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(untagged)]
+enum ZoomValue {
+    Rows(u16),
+    Detailed(ZoomEntry),
+}
+
+impl ZoomValue {
+    fn rows(&self) -> u16 {
+        match self {
+            Self::Rows(rows) => *rows,
+            Self::Detailed(entry) => entry.rows,
+        }
+    }
+
+    fn order(&self) -> u64 {
+        match self {
+            Self::Rows(_) => 0,
+            Self::Detailed(entry) => entry.order,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+struct ZoomEntry {
+    rows: u16,
+    order: u64,
 }
 
 pub(crate) fn load() -> Config {
@@ -119,6 +167,7 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
         .unwrap_or_default();
     if let Some(rows) = file.gallery.visible_rows {
         config.visible_rows = rows;
+        config.configured_visible_rows = rows;
     }
     if let Some(interval) = file.slideshow.interval
         && interval.is_finite()
@@ -136,12 +185,9 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
         config.video_player = player;
     }
 
-    // The remembered zoom wins over the configured default until the user
-    // presses `0`, which resets to the configured level and forgets the state.
-    let state = std::fs::read_to_string(state_path)
-        .ok()
-        .and_then(|contents| toml::from_str::<StateFile>(&contents).ok())
-        .unwrap_or_default();
+    // The remembered global zoom wins over the configured default until the user
+    // presses `0` in a folder, which resets that folder to the configured level.
+    let state = read_state(state_path);
     if let Some(rows) = state.visible_rows {
         config.visible_rows = rows;
     }
@@ -149,6 +195,9 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     // The config key and the saved state both land in the range of the zoom keys.
     config.visible_rows = config
         .visible_rows
+        .clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS);
+    config.configured_visible_rows = config
+        .configured_visible_rows
         .clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS);
     config
 }
@@ -158,23 +207,71 @@ pub(crate) fn default_state_path() -> PathBuf {
     state_path(&home_dir())
 }
 
-/// Remember the zoom level `rows` in the state file at `path` for the next start.
-pub(crate) fn save_visible_rows(path: &Path, rows: u16) {
-    let state = StateFile {
-        visible_rows: Some(rows),
-    };
+/// Read the saved zoom level for `folder` from the state file at `path`.
+pub(crate) fn load_folder_zoom(path: &Path, folder: &Path) -> Option<u16> {
+    let state = read_state(path);
+    state
+        .zoom
+        .get(folder)
+        .map(ZoomValue::rows)
+        .map(|rows| rows.clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS))
+}
+
+/// Read the global saved zoom level from the state file at `path`.
+pub(crate) fn load_global_zoom(path: &Path) -> Option<u16> {
+    let state = read_state(path);
+    state
+        .visible_rows
+        .map(|rows| rows.clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS))
+}
+
+/// Remember the zoom level `rows` in the state file at `path`. `folder` gets its own entry,
+/// and `rows` is also stored as the global fallback for folders without an entry.
+pub(crate) fn save_visible_rows(path: &Path, folder: Option<&Path>, rows: u16) {
+    let rows = rows.clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS);
+    let mut state = read_state(path);
+    state.visible_rows = Some(rows);
+    if let Some(folder) = folder {
+        state.zoom_counter += 1;
+        state.zoom.insert(
+            folder.to_path_buf(),
+            ZoomValue::Detailed(ZoomEntry {
+                rows,
+                order: state.zoom_counter,
+            }),
+        );
+    }
+    prune_oldest_zoom_entries(&mut state);
     write_state(path, &state);
 }
 
-/// Forget the remembered grid zoom: remove the state file at `path`.
-pub(crate) fn clear_visible_rows(path: &Path) {
-    if path.exists() {
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "a state file that stays only brings the old size back"
-        )]
-        let _ = std::fs::remove_file(path);
+/// Forget the zoom level for `folder`. The global fallback stays unchanged.
+pub(crate) fn clear_folder_zoom(path: &Path, folder: &Path) {
+    let mut state = read_state(path);
+    if state.zoom.remove(folder).is_none() {
+        return;
     }
+    prune_oldest_zoom_entries(&mut state);
+    write_state(path, &state);
+}
+
+/// Remove the oldest entries when the per-folder table grew past `MAX_ZOOM_FOLDERS`.
+fn prune_oldest_zoom_entries(state: &mut StateFile) {
+    if state.zoom.len() <= MAX_ZOOM_FOLDERS {
+        return;
+    }
+    let mut entries: Vec<(PathBuf, ZoomValue)> =
+        std::mem::take(&mut state.zoom).into_iter().collect();
+    entries.sort_by_key(|(_, value)| std::cmp::Reverse(value.order()));
+    entries.truncate(MAX_ZOOM_FOLDERS);
+    state.zoom = entries.into_iter().collect();
+}
+
+fn read_state(path: &Path) -> StateFile {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| toml::from_str(&contents).ok())
+        .unwrap_or_default()
 }
 
 fn write_state(path: &Path, state: &StateFile) {
@@ -263,6 +360,7 @@ mod tests {
             &state_path,
             &StateFile {
                 visible_rows: Some(2),
+                ..StateFile::default()
             },
         );
         let config = load_at(&config_path, &state_path);
@@ -286,6 +384,7 @@ mod tests {
             config,
             Config {
                 visible_rows: 6,
+                configured_visible_rows: 6,
                 ..Config::default()
             }
         );
@@ -359,22 +458,101 @@ mod tests {
     }
 
     #[test]
-    fn save_and_clear_visible_rows_round_trip_through_the_state_file() {
+    fn save_and_load_per_folder_zoom_keeps_the_global_fallback() {
         let root = test_root();
         let config_path = root.path().join("config.toml");
-        let state_path = root.path().join("nested/viewr/state.toml");
+        let state_path = root.path().join("state.toml");
+        let folder_a = PathBuf::from("/photos/a");
+        let folder_b = PathBuf::from("/photos/b");
 
-        save_visible_rows(&state_path, 7);
+        save_visible_rows(&state_path, Some(&folder_a), 3);
+        assert_eq!(load_folder_zoom(&state_path, &folder_a), Some(3));
+        assert_eq!(load_folder_zoom(&state_path, &folder_b), None);
         let config = load_at(&config_path, &state_path);
-        assert_eq!(config.visible_rows, 7);
+        assert_eq!(config.visible_rows, 3, "the global fallback is also set");
 
-        clear_visible_rows(&state_path);
-        assert!(!state_path.exists());
-        assert_eq!(load_at(&config_path, &state_path), Config::default());
+        save_visible_rows(&state_path, Some(&folder_b), 7);
+        assert_eq!(load_folder_zoom(&state_path, &folder_a), Some(3));
+        assert_eq!(load_folder_zoom(&state_path, &folder_b), Some(7));
+    }
 
-        // A second clear finds no file and does nothing.
-        clear_visible_rows(&state_path);
-        assert!(!state_path.exists());
+    #[test]
+    fn the_configured_default_stays_available_for_the_reset_key() {
+        let root = test_root();
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("state.toml");
+        std::fs::write(&config_path, "[gallery]\nvisible_rows = 8\n").unwrap();
+        save_visible_rows(&state_path, None, 3);
+
+        let config = load_at(&config_path, &state_path);
+        assert_eq!(config.visible_rows, 3);
+        assert_eq!(config.configured_visible_rows, 8);
+    }
+
+    #[test]
+    fn clear_folder_zoom_removes_the_entry_but_keeps_the_global_level() {
+        let root = test_root();
+        let state_path = root.path().join("state.toml");
+        let folder = PathBuf::from("/photos/a");
+
+        save_visible_rows(&state_path, Some(&folder), 5);
+        clear_folder_zoom(&state_path, &folder);
+        assert_eq!(load_folder_zoom(&state_path, &folder), None);
+        let config = load_at(&root.path().join("config.toml"), &state_path);
+        assert_eq!(config.visible_rows, 5, "the global fallback stays");
+    }
+
+    #[test]
+    fn per_folder_zoom_values_outside_the_range_are_clamped() {
+        let root = test_root();
+        let state_path = root.path().join("state.toml");
+        let folder = PathBuf::from("/photos/a");
+
+        std::fs::write(
+            &state_path,
+            "[zoom]\n\"/photos/a\" = 1\n\"/photos/b\" = 99\n",
+        )
+        .unwrap();
+        assert_eq!(load_folder_zoom(&state_path, &folder), Some(2));
+        assert_eq!(
+            load_folder_zoom(&state_path, &PathBuf::from("/photos/b")),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn an_old_state_file_without_a_zoom_table_still_loads() {
+        let root = test_root();
+        let state_path = root.path().join("state.toml");
+        std::fs::write(&state_path, "visible_rows = 5\n").unwrap();
+
+        let config = load_at(&root.path().join("config.toml"), &state_path);
+        assert_eq!(config.visible_rows, 5);
+        assert_eq!(load_folder_zoom(&state_path, &PathBuf::from("/any")), None);
+    }
+
+    #[test]
+    fn the_zoom_table_drops_the_oldest_folders_past_the_limit() {
+        let root = test_root();
+        let state_path = root.path().join("state.toml");
+
+        for index in 0..MAX_ZOOM_FOLDERS + 10 {
+            let folder = PathBuf::from(format!("/photos/{index}"));
+            save_visible_rows(&state_path, Some(&folder), 3);
+        }
+
+        let state: StateFile = read_state(&state_path);
+        assert_eq!(state.zoom.len(), MAX_ZOOM_FOLDERS);
+        assert!(
+            !state.zoom.contains_key(&PathBuf::from("/photos/0")),
+            "the oldest folders are dropped"
+        );
+        assert!(
+            state
+                .zoom
+                .contains_key(&PathBuf::from(format!("/photos/{}", MAX_ZOOM_FOLDERS + 9))),
+            "the newest folders stay"
+        );
     }
 
     #[test]
@@ -384,6 +562,7 @@ mod tests {
         std::fs::write(&blocker, "not a directory").unwrap();
         let state = StateFile {
             visible_rows: Some(6),
+            ..StateFile::default()
         };
 
         write_state(&blocker.join("state.toml"), &state);

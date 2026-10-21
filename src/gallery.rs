@@ -54,7 +54,7 @@ pub(crate) struct GalleryState {
     /// The width over the height of the photos of the folder, behind `cols_per_row`.
     image_aspect: f64,
     /// Zoom level the grid returns to on reset (from config).
-    default_zoom_rows: usize,
+    pub(crate) default_zoom_rows: usize,
 }
 
 impl GalleryState {
@@ -148,7 +148,7 @@ impl GalleryState {
         self.set_zoom_rows(self.zoom_rows + 1)
     }
 
-    fn set_zoom_rows(&mut self, rows: usize) -> bool {
+    pub(crate) fn set_zoom_rows(&mut self, rows: usize) -> bool {
         let rows = rows.clamp(self.min_visible_rows(), self.max_visible_rows());
         if rows == self.zoom_rows {
             return false;
