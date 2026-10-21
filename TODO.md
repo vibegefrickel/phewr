@@ -2,19 +2,24 @@
 
 ## Now
 
-- Terminal tests after batch 6 (maintainer): start viewr in Ghostty and Kitty. Read the first status note (`Kitty transfer: ...`). Step through HEIC files. Then make sure that `ls $TMPDIR/tty-graphics-protocol-viewr-*` lists nothing. `VIEWR_KITTY_TRANSFER=direct` is the escape hatch. Check the `DarkGray` borders and the dim text on cendre. If the dim text is too dark, change the `dim` role in `src/styles.rs` to ANSI `Gray`.
-- Terminal tests after batch 7 (maintainer), in Ghostty and Kitty:
+- Terminal tests after batch 6 (maintainer): start viewr in Ghostty. Read the first status note (`Kitty transfer: ...`). Step through HEIC files. Then make sure that `ls $TMPDIR/tty-graphics-protocol-viewr-*` lists nothing. `VIEWR_KITTY_TRANSFER=direct` is the escape hatch. Check the `DarkGray` borders and the dim text on cendre. If the dim text is too dark, change the `dim` role in `src/styles.rs` to ANSI `Gray`.
+- Terminal tests after batch 7 (maintainer), in Ghostty:
   - The cold HEIC grid: the previews come first, then the sharp thumbnails replace them without a jump or a leftover image.
   - mpv in the terminal: the speed and the HDR colors of an iPhone HDR MOV, and `n` / `N` between videos and images.
   - mpv in a window (`[video] player = "window"`) with an HDR clip. The worker could not measure the window mode.
   - The yazi reveal: start viewr with `g v` in yazi, quit, and make sure that the yazi cursor is on the last file. Nobody has proven that `ya emit reveal` reaches a yazi that blocks on `shell --block`.
-- Terminal tests after batch 8 (maintainer), in Ghostty and Kitty:
+- Terminal tests after batch 8 (maintainer), in Ghostty:
   - The grid: no empty lines between the thumbnails, the grid reaches the right and the bottom edge, the blue fill under the cursor and the yellow fill of marked images. The Kitty keys `X=` and `Y=` center each picture to the pixel. If a terminal ignores them, the pictures sit in the top left corner of their cells.
   - A transparent PNG under the cursor: the blue fill shows through the transparent pixels. If that looks wrong, put each thumbnail on an opaque background, or fill only a frame around the picture.
   - A portrait folder gets narrow cells and more columns, a landscape folder wide cells.
 
 ## Next
 
+- Bug, inside herdr only (plain Ghostty is correct): grid pictures overflow their cells by a few pixels downward, and landscape pictures look squeezed at zoom levels with 3 or more rows. Cause, confirmed in the herdr 0.9.5 and Ghostty 1.3.1 sources (2026-10-21): viewr centers each thumbnail with a cell origin plus `X=` / `Y=` (`gallery_image_origin`). herdr computes `c = ceil((w + X) / cw)` and `r = ceil((h + Y) / ch)` and relays `a=p,c=,r=,X=,Y=` to the host. Ghostty then scales the picture to exactly `c x r` cells and draws it from the offset. viewr's cell size is correct in herdr (18 x 43 px, also by `CSI 16 t`).
+  - Fix: pad each grid thumbnail with transparent pixels to the `thumb_box` size (whole cells, content pixel-centered inside), place it at a whole-cell origin, and send no `X=` / `Y=`. Pad when the picture goes into the in-memory cache, not in the disk cache. Cost: a landscape thumbnail at zoom 5 grows from 513 KB to 926 KB of raw RGBA. With the temp file medium, that is only a larger local file.
+  - Also file a herdr issue: herdr should not add `c=` / `r=` when the guest sent none, or it should fold the offset in like the host does.
+- Bug, also in plain Ghostty: the filename toggle `n` makes `thumb_rows` one row smaller, but it does not call `mark_dirty` / `forget_thumbnails`. Cached thumbnails for the taller box stay, and they overflow into the label row by up to one row.
+- Latent: `cell_px` is read only at start, and TIOCGWINSZ includes Ghostty's window padding (2258 px / 52 rows = 43.42). Ask `CSI 16 t` at start and on each resize, and keep the division as the fallback.
 - Bug: black grid cells, mostly inside herdr. A scroll makes them appear. Analysis (2026-10-21), plain Ghostty shows no black cells:
   - `ThumbnailCache::push` (`src/gallery.rs`) drops the id of an evicted entry without `d=I`, so the terminal storage grows. At its limit (320 MB by default) the terminal evicts unplaced images. A redraw sends `d=a` and then `a=p,q=2` by id, so an evicted image stays black without an error. herdr stores each image twice (its Ghostty core and the host), so it reaches the limit sooner.
   - Fix: send `d=I` on eviction, keep a byte budget, send `a=T` instead of `a=p` when the terminal can have dropped the image.
@@ -32,7 +37,7 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
   - Candidate: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size, so this is low priority.
   - The start status note with the transfer medium stays until the terminal tests are done (decided 2026-10-21). Then remove the three lines after `App::with_config` in `main`.
 - mpv follow-ups after batch 7:
-  - Candidate: `--vo-kitty-use-shm=yes` skips the base64 and the pty transfer. Kitty supports shared memory. Ghostty is unknown. A probe like `detect_transfer` can decide.
+  - Dropped: `--vo-kitty-use-shm=yes`. Ghostty shows no picture with it (tested 2026-10-21).
   - The PQ LUT has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
   - Candidate: rescale when the terminal gets larger during playback. Today the scale size comes from the terminal size at the start of mpv.
 - Real files for the new formats. This machine has no JPEG XL and no camera RAW file.
@@ -55,7 +60,7 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
   - Extract 12 frames with FFmpeg for each animated file. Space the frames evenly across the video duration. You can also sample the first 4 seconds.
   - Loop the 12 frames over 4 seconds. Set the gap between frames to 333 ms.
   - Use the Kitty animation protocol for terminal-driven looping. Upload frames with `a=f`. Start the loop with `a=a,s=3,v=1`.
-  - Test the animation support in Ghostty and Kitty. Fall back to a static thumbnail when the terminal does not support animation.
+  - Test the animation support in Ghostty. Fall back to a static thumbnail when the terminal does not support animation.
   - Decode the frames in a background thread. Cache the frame data so the UI can replay the loop without redecoding.
   - Stop the animation and remove the image when the cursor leaves the cell.
   - Add a config key to disable moving thumbnails.

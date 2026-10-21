@@ -2,7 +2,7 @@
 
 viewr is a terminal image and video gallery for the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/), in the spirit of Phoenix Slides. It shows a directory as a thumbnail grid. It opens images fullscreen, runs slideshows, plays videos and shows EXIF data inside the terminal.
 
-viewr runs in [Ghostty](https://ghostty.org/) and [Kitty](https://sw.kovidgoyal.net/kitty/).
+viewr draws through the Kitty graphics protocol. It is tested in [Ghostty](https://ghostty.org/).
 
 viewr is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork adds these features:
 

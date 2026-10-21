@@ -11,7 +11,7 @@ imgrrr before 2026-10-17.
 
 - viewr is a viewer only. It does not edit, convert or write images.
 - The only file operations are trash, permanent delete, and (planned) move and rename.
-- The target is macOS on Apple Silicon, in Ghostty and Kitty.
+- The target is macOS on Apple Silicon, in Ghostty. viewr uses the Kitty graphics protocol, not the Kitty terminal. Nobody tests in the Kitty terminal.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
 
 The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
