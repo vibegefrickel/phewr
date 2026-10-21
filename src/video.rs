@@ -446,7 +446,6 @@ mod tests {
     };
     use crate::app::{App, ViewMode};
     use crate::image_list::SharedImageList;
-    use crate::theme::Theme;
     use ratatui::layout::Rect;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -798,7 +797,7 @@ mod tests {
         };
         let photo = dir.path().join("photo.png");
         image::RgbaImage::new(4, 4).save(&photo).unwrap();
-        let mut app = App::new(Theme::fallback(), (8, 16), SharedImageList::new());
+        let mut app = App::new((8, 16), SharedImageList::new());
         app.images = vec![clip, photo];
         app.filenames = vec!["clip.mp4".to_owned(), "photo.png".to_owned()];
         app.gallery.filtered_indices = vec![0, 1];

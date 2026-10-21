@@ -1,8 +1,8 @@
 //! User configuration (`~/.config/viewr/config.toml`) and the small state
 //! file that remembers the grid zoom level.
 //!
-//! Theme-related keys (`theme`, `theme_catalog`) are read by `theme.rs` from
-//! the same file; this module only handles the gallery, slideshow, info and video sections.
+//! The file has the sections `[gallery]`, `[slideshow]`, `[info]` and `[video]`. viewr ignores
+//! unknown keys, so an old file with the removed keys `theme` and `theme_catalog` still loads.
 
 use serde::Deserialize;
 use std::ffi::OsString;
@@ -246,7 +246,7 @@ mod tests {
         let state_path = root.path().join("state.toml");
         std::fs::write(
             &config_path,
-            "theme = \"ignored-here\"\n[gallery]\nvisible_rows = 6\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
+            "[gallery]\nvisible_rows = 6\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
         )
         .unwrap();
 
@@ -264,6 +264,28 @@ mod tests {
         );
         let config = load_at(&config_path, &state_path);
         assert_eq!(config.visible_rows, 2);
+    }
+
+    #[test]
+    fn the_removed_theme_keys_are_ignored() {
+        let root = test_root();
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("state.toml");
+        std::fs::write(
+            &config_path,
+            "theme = \"~/.config/themes/nord.toml\"\ntheme_catalog = \"~/.config/themes/catalog.toml\"\n[gallery]\nvisible_rows = 6\n",
+        )
+        .unwrap();
+
+        let config = load_at(&config_path, &state_path);
+
+        assert_eq!(
+            config,
+            Config {
+                visible_rows: 6,
+                ..Config::default()
+            }
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ mod picker;
 mod prefetch;
 mod scanner;
 mod search;
-mod theme;
+mod styles;
 mod ui;
 #[cfg(feature = "video")]
 mod video;
@@ -41,10 +41,6 @@ use std::time::Duration;
 struct Cli {
     /// Image file(s) or directory to display [default: .]
     files: Vec<PathBuf>,
-
-    /// Explicit theme file path or configured catalog name
-    #[arg(short, long)]
-    theme: Option<String>,
 
     /// Number of threads for image decoding [default: all cores]
     #[arg(short = 'j', long)]
@@ -184,10 +180,6 @@ fn main() -> io::Result<()> {
         }
     }
 
-    let theme_set = theme::load_themes(cli.theme.as_deref())
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let theme = theme_set.themes[theme_set.selected].theme.clone();
-
     let mut config = config::load();
     let mut state = LoopState::new(&config);
     if let Some(interval) = cli.interval {
@@ -211,8 +203,7 @@ fn main() -> io::Result<()> {
     let mut session = TerminalSession::enter()?;
 
     let cell_px = query_cell_pixel_size();
-    let mut app = App::with_config(theme, cell_px, shared_list, &config);
-    app.install_themes(theme_set.themes, theme_set.selected);
+    let mut app = App::with_config(cell_px, shared_list, &config);
     app.initial_dir = Some(initial_dir);
     app.slideshow_autostart = cli.slideshow;
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
@@ -325,7 +316,7 @@ fn run(
         terminal.draw(|frame| ui::draw(frame, app, state.status.as_deref()))?;
 
         // 4. Render Kitty images
-        if app.theme_picker.is_some() || app.mode == ViewMode::Picker {
+        if app.mode == ViewMode::Picker {
             app.needs_render = false;
             pending_emits.clear();
         } else if app.needs_render && !app.images.is_empty() {
@@ -588,7 +579,7 @@ fn handle_event(app: &mut App, event: &Event) -> io::Result<bool> {
     }
 }
 
-/// Route a key press: overlays (help, delete question, theme picker) win over the view mode.
+/// Route a key press: overlays (help, delete question) win over the view mode.
 fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     if app.help_visible {
         app.help_visible = false;
@@ -607,18 +598,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
             }
             _ => {}
         }
-    } else if app.theme_picker.is_some() {
-        handle_theme_picker_key(app, key.code);
-    } else if key.code == KeyCode::Char('t')
-        && !(app.mode == ViewMode::Gallery && app.gallery.search_active)
-        && !(app.mode == ViewMode::Picker
-            && app
-                .picker
-                .as_ref()
-                .is_some_and(|picker| picker.filter_active))
-    {
-        app.graphics_delete_all()?;
-        app.open_theme_picker();
     } else {
         return match app.mode {
             ViewMode::Fullscreen => handle_fullscreen_key(app, key),
@@ -867,32 +846,6 @@ fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
         app.needs_render = true;
     }
     Ok(false)
-}
-
-fn handle_theme_picker_key(app: &mut App, code: KeyCode) {
-    let Some(picker) = app.theme_picker.as_ref() else {
-        return;
-    };
-    let selected = picker.selected;
-    let visible_height = picker.visible_height.max(1);
-    let last = app.themes.len().saturating_sub(1);
-    match code {
-        KeyCode::Down | KeyCode::Char('j') => {
-            app.theme_picker_select(if selected == last { 0 } else { selected + 1 });
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            app.theme_picker_select(if selected == 0 { last } else { selected - 1 });
-        }
-        KeyCode::Home | KeyCode::Char('g') => app.theme_picker_select(0),
-        KeyCode::End | KeyCode::Char('G') => app.theme_picker_select(last),
-        KeyCode::PageDown => {
-            app.theme_picker_select((selected + visible_height).min(last));
-        }
-        KeyCode::PageUp => app.theme_picker_select(selected.saturating_sub(visible_height)),
-        KeyCode::Enter => app.theme_picker_confirm(),
-        KeyCode::Esc | KeyCode::Char('q' | 't') => app.theme_picker_cancel(),
-        _ => {}
-    }
 }
 
 fn handle_picker_key(app: &mut App, code: KeyCode) -> bool {
@@ -1243,11 +1196,7 @@ fn place_gallery_images_to(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        App, KeyCode, SharedImageList, ViewMode, handle_picker_key, handle_theme_picker_key,
-    };
-    use crate::theme::{NamedTheme, Theme};
-    use ratatui::style::{Color, Style};
+    use super::{App, KeyCode, SharedImageList, ViewMode, handle_picker_key};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
@@ -1255,7 +1204,7 @@ mod tests {
 
     fn picker_app(root: &Path) -> App {
         let list = SharedImageList::new();
-        let mut app = App::new(Theme::default(), (8, 16), list);
+        let mut app = App::new((8, 16), list);
         app.initial_dir = Some(root.to_path_buf());
         app.open_picker();
         app
@@ -1321,73 +1270,10 @@ mod tests {
         cleanup(temp);
     }
 
-    #[test]
-    fn theme_picker_applies_for_the_session_and_cancel_restores() {
-        let list = SharedImageList::new();
-        let first = Theme::fallback();
-        let mut second = Theme::fallback();
-        second.title = Style::default().fg(Color::Red);
-        let mut app = App::new(first.clone(), (8, 16), list);
-        app.install_themes(
-            vec![
-                NamedTheme {
-                    name: "first".to_owned(),
-                    path: None,
-                    theme: first.clone(),
-                },
-                NamedTheme {
-                    name: "second".to_owned(),
-                    path: None,
-                    theme: second.clone(),
-                },
-            ],
-            0,
-        );
-
-        app.open_theme_picker();
-        handle_theme_picker_key(&mut app, KeyCode::Down);
-        assert_eq!(app.theme, second);
-        app.theme_picker_confirm();
-        assert_eq!(app.theme_index, 1);
-        assert!(app.theme_picker.is_none());
-
-        app.open_theme_picker();
-        handle_theme_picker_key(&mut app, KeyCode::Up);
-        assert_eq!(app.theme, first);
-        app.theme_picker_cancel();
-        assert_eq!(app.theme, second);
-        assert_eq!(app.theme_index, 1);
-    }
-
-    #[test]
-    fn theme_picker_pages_by_the_visible_rows() {
-        let list = SharedImageList::new();
-        let theme = Theme::fallback();
-        let mut app = App::new(theme.clone(), (8, 16), list);
-        let themes = (0..12)
-            .map(|index| NamedTheme {
-                name: format!("theme-{index}"),
-                path: None,
-                theme: theme.clone(),
-            })
-            .collect();
-        app.install_themes(themes, 0);
-        app.open_theme_picker();
-        app.theme_picker.as_mut().unwrap().visible_height = 5;
-
-        handle_theme_picker_key(&mut app, KeyCode::PageDown);
-        assert_eq!(app.theme_picker.as_ref().unwrap().selected, 5);
-        handle_theme_picker_key(&mut app, KeyCode::PageDown);
-        assert_eq!(app.theme_picker.as_ref().unwrap().selected, 10);
-        handle_theme_picker_key(&mut app, KeyCode::PageUp);
-        assert_eq!(app.theme_picker.as_ref().unwrap().selected, 5);
-    }
-
     #[cfg(feature = "video")]
     mod video_handoff {
         use super::super::{App, LoopState, SharedImageList, TerminalHandoff, ViewMode};
         use super::super::{hand_off_video, handle_fullscreen_key, handle_video_key, mpv};
-        use crate::theme::Theme;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use std::cell::{Cell, RefCell};
         use std::ffi::OsString;
@@ -1481,7 +1367,7 @@ mod tests {
 
         /// An app with a photo and a video, in video mode for the video.
         fn video_app() -> App {
-            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            let mut app = App::new((8, 16), SharedImageList::new());
             app.images = vec![
                 PathBuf::from("/videos/a.jpg"),
                 PathBuf::from("/videos/clip.mp4"),
@@ -1505,7 +1391,7 @@ mod tests {
         /// An app with `names` below `/videos` that steps from the first file onto the second,
         /// a video, in the fullscreen view. `slideshow` starts a slideshow on the first file.
         fn fullscreen_app_on_video(names: &[&str], slideshow: bool) -> App {
-            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            let mut app = App::new((8, 16), SharedImageList::new());
             app.images = names
                 .iter()
                 .map(|name| Path::new("/videos").join(name))
@@ -1995,12 +1881,11 @@ mod tests {
         #[test]
         fn parses_files_and_all_options() {
             let cli = Cli::try_parse_from([
-                "viewr", "-t", "nord", "-j", "4", "-s", "-n", "2.5", "-i", "a.jpg", "photos",
+                "viewr", "-j", "4", "-s", "-n", "2.5", "-i", "a.jpg", "photos",
             ])
             .unwrap();
 
             assert_eq!(cli.files, [PathBuf::from("a.jpg"), PathBuf::from("photos")]);
-            assert_eq!(cli.theme.as_deref(), Some("nord"));
             assert_eq!(cli.threads, Some(4));
             assert!(cli.slideshow);
             assert_eq!(cli.interval, Some(2.5));
@@ -2011,8 +1896,6 @@ mod tests {
         fn parses_the_long_options() {
             let cli = Cli::try_parse_from([
                 "viewr",
-                "--theme",
-                "/themes/dark.toml",
                 "--threads",
                 "2",
                 "--slideshow",
@@ -2023,7 +1906,6 @@ mod tests {
             .unwrap();
 
             assert!(cli.files.is_empty());
-            assert_eq!(cli.theme.as_deref(), Some("/themes/dark.toml"));
             assert_eq!(cli.threads, Some(2));
             assert!(cli.slideshow && cli.info);
             assert_eq!(cli.interval, Some(7.0));
@@ -2034,7 +1916,6 @@ mod tests {
             let cli = Cli::try_parse_from(["viewr"]).unwrap();
 
             assert!(cli.files.is_empty());
-            assert_eq!(cli.theme, None);
             assert_eq!(cli.threads, None);
             assert_eq!(cli.interval, None);
             assert!(!cli.slideshow && !cli.info);
@@ -2045,6 +1926,7 @@ mod tests {
             assert!(Cli::try_parse_from(["viewr", "--interval", "soon"]).is_err());
             assert!(Cli::try_parse_from(["viewr", "--threads", "-1"]).is_err());
             assert!(Cli::try_parse_from(["viewr", "--fullscreen"]).is_err());
+            assert!(Cli::try_parse_from(["viewr", "-t", "nord"]).is_err());
         }
 
         #[test]
@@ -2071,10 +1953,9 @@ mod tests {
 
     /// The key handlers, driven through `handle_event` like the run loop does.
     mod keys {
-        use super::super::{App, SharedImageList, ViewMode, handle_event, handle_theme_picker_key};
+        use super::super::{App, SharedImageList, ViewMode, handle_event};
         use super::{cleanup, picker_app, select_path, synthetic_tree};
         use crate::config::Config;
-        use crate::theme::{NamedTheme, Theme};
         use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         use ratatui::layout::Rect;
         use std::fs;
@@ -2102,8 +1983,7 @@ mod tests {
 
         /// A scanned gallery of `count` photos in a grid of 3 columns and 2 visible rows.
         fn gallery_app_with(count: usize, config: &Config) -> App {
-            let mut app =
-                App::new_with_config(Theme::default(), (8, 16), SharedImageList::new(), config);
+            let mut app = App::new_with_config((8, 16), SharedImageList::new(), config);
             app.images = photo_paths(count);
             app.filenames = app
                 .images
@@ -2126,24 +2006,6 @@ mod tests {
             let mut app = gallery_app(count);
             app.enter_fullscreen_at(index);
             app
-        }
-
-        fn themed_app() -> App {
-            let mut app = gallery_app(2);
-            let themes = ["first", "second", "third"]
-                .into_iter()
-                .map(|name| NamedTheme {
-                    name: name.to_owned(),
-                    path: None,
-                    theme: Theme::fallback(),
-                })
-                .collect();
-            app.install_themes(themes, 0);
-            app
-        }
-
-        fn theme_selected(app: &App) -> usize {
-            app.theme_picker.as_ref().unwrap().selected
         }
 
         fn zoom_is_one(app: &App) -> bool {
@@ -2207,68 +2069,26 @@ mod tests {
         }
 
         #[test]
-        fn t_opens_the_theme_picker_and_its_keys_move_the_selection() {
-            let mut app = themed_app();
-
-            assert!(!char_key(&mut app, 't'));
-            assert_eq!(theme_selected(&app), 0);
-            press(&mut app, KeyCode::Down);
-            assert_eq!(theme_selected(&app), 1);
-            char_key(&mut app, 'j');
-            char_key(&mut app, 'j');
-            assert_eq!(theme_selected(&app), 0, "Down wraps to the first theme");
-            char_key(&mut app, 'k');
-            assert_eq!(theme_selected(&app), 2, "Up wraps to the last theme");
-            press(&mut app, KeyCode::Up);
-            assert_eq!(theme_selected(&app), 1);
-            char_key(&mut app, 'g');
-            assert_eq!(theme_selected(&app), 0);
-            char_key(&mut app, 'G');
-            assert_eq!(theme_selected(&app), 2);
-            press(&mut app, KeyCode::Home);
-            assert_eq!(theme_selected(&app), 0);
-            press(&mut app, KeyCode::End);
-            assert_eq!(theme_selected(&app), 2);
-            char_key(&mut app, 'x');
-            assert_eq!(theme_selected(&app), 2, "other keys do nothing");
-
-            press(&mut app, KeyCode::Enter);
-            assert!(app.theme_picker.is_none());
-            assert_eq!(app.theme_index, 2);
-        }
-
-        #[test]
-        fn esc_q_and_t_cancel_the_theme_picker() {
-            for code in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Char('t')] {
-                let mut app = themed_app();
-                char_key(&mut app, 't');
-                press(&mut app, KeyCode::Down);
-
-                assert!(!press(&mut app, code), "{code:?} does not quit");
-                assert!(app.theme_picker.is_none());
-                assert_eq!(app.theme_index, 0);
-            }
-        }
-
-        #[test]
-        fn the_theme_picker_keys_do_nothing_without_a_picker() {
-            let mut app = themed_app();
-
-            handle_theme_picker_key(&mut app, KeyCode::Down);
-
-            assert!(app.theme_picker.is_none());
-            assert_eq!(app.theme_index, 0);
-        }
-
-        #[test]
         fn t_is_text_in_the_gallery_search() {
-            let mut app = themed_app();
+            let mut app = gallery_app(2);
             char_key(&mut app, '/');
 
             char_key(&mut app, 't');
 
-            assert!(app.theme_picker.is_none());
             assert_eq!(app.gallery.search_query, "t");
+        }
+
+        #[test]
+        fn t_is_no_key_in_the_gallery_and_the_fullscreen_view() {
+            for mut app in [gallery_app(2), fullscreen_app(2, 0)] {
+                let mode = app.mode;
+                app.graphics_out.take_bytes();
+
+                assert!(!char_key(&mut app, 't'));
+
+                assert_eq!(app.mode, mode);
+                assert!(app.graphics_out.take_bytes().is_empty());
+            }
         }
 
         #[test]
@@ -2713,7 +2533,6 @@ mod tests {
             assert!(app.picker.as_ref().unwrap().filter_active);
             char_key(&mut app, 'b');
             char_key(&mut app, 't');
-            assert!(app.theme_picker.is_none(), "t is text in the filter");
             assert_eq!(app.picker.as_ref().unwrap().filter, "bt");
             press(&mut app, KeyCode::Backspace);
             press(&mut app, KeyCode::Tab);
@@ -2762,18 +2581,6 @@ mod tests {
             assert_eq!(app.picker.as_ref().unwrap().current_dir, child);
             char_key(&mut app, 'h');
             assert_eq!(app.picker.as_ref().unwrap().current_dir, root);
-            assert_eq!(app.mode, ViewMode::Picker);
-
-            cleanup(temp);
-        }
-
-        #[test]
-        fn t_opens_the_theme_picker_over_the_directory_picker() {
-            let (temp, mut app) = picker_tree();
-
-            char_key(&mut app, 't');
-
-            assert!(app.theme_picker.is_some());
             assert_eq!(app.mode, ViewMode::Picker);
 
             cleanup(temp);
@@ -2871,7 +2678,6 @@ mod tests {
             place_gallery_images_to, query_cell_pixel_size, render_fullscreen_image_to,
         };
         use crate::config::Config;
-        use crate::theme::Theme;
         use crossterm::terminal::WindowSize;
         use image::RgbaImage;
         use ratatui::layout::Rect;
@@ -2888,7 +2694,7 @@ mod tests {
 
         /// A gallery of `count` photos with a decoded thumbnail for each, so no decode starts.
         fn thumbnail_app(count: usize) -> App {
-            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            let mut app = App::new((8, 16), SharedImageList::new());
             app.images = (0..count)
                 .map(|index| PathBuf::from(format!("/photos/{index}.jpg")))
                 .collect();
@@ -2908,7 +2714,7 @@ mod tests {
 
         #[test]
         fn fullscreen_centers_the_image_in_a_synchronized_update() {
-            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            let mut app = App::new((8, 16), SharedImageList::new());
             app.loaded = Some(RgbaImage::new(16, 32));
             app.image_rect = Rect::new(2, 1, 10, 10);
             app.transmitted_image_ids.insert(7);
@@ -2927,7 +2733,7 @@ mod tests {
 
         #[test]
         fn fullscreen_without_an_image_only_deletes() {
-            let mut app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            let mut app = App::new((8, 16), SharedImageList::new());
             let mut out = Vec::new();
 
             render_fullscreen_image_to(&mut app, &mut out).unwrap();
@@ -3002,7 +2808,7 @@ mod tests {
         #[cfg(feature = "video")]
         #[test]
         fn a_video_without_a_frame_writes_nothing() {
-            let app = App::new(Theme::default(), (8, 16), SharedImageList::new());
+            let app = App::new((8, 16), SharedImageList::new());
             let mut out = Vec::new();
 
             super::super::render_video_frame_to(&app, &mut out).unwrap();

@@ -1,5 +1,6 @@
 use crate::app::{App, ViewMode};
 use crate::gallery::LABEL_ROWS;
+use crate::styles::STYLES;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -11,7 +12,6 @@ const INFO_PANEL_WIDTH: u16 = 42;
 /// Draw the whole frame. `status` is a one-line note of the run loop, in place of the key hints.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     let area = frame.area();
-    frame.render_widget(Block::default().style(app.theme.background), area);
     let (main, info) = split_info(area, app);
     match app.mode {
         ViewMode::Gallery => draw_gallery(frame, app, main, status),
@@ -23,10 +23,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     if let Some(info) = info {
         draw_info_panel(frame, app, info);
     }
-    if app.theme_picker.is_some() {
-        draw_theme_picker(frame, app);
-    } else if app.help_visible {
-        draw_help_popup(frame, app);
+    if app.help_visible {
+        draw_help_popup(frame);
     }
 }
 
@@ -45,18 +43,17 @@ fn split_info(area: Rect, app: &App) -> (Rect, Option<Rect>) {
 }
 
 fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    let theme = app.theme.clone();
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border)
-        .title(Line::from(Span::styled(" Info ", theme.title)))
-        .title_bottom(Line::from(Span::styled(" i: close ", theme.popup_desc)));
+        .border_style(STYLES.border)
+        .title(Line::from(Span::styled(" Info ", STYLES.title)))
+        .title_bottom(Line::from(Span::styled(" i: close ", STYLES.key)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let Some(path) = app.info_path() else {
         frame.render_widget(
-            Paragraph::new(Span::styled("no image selected", theme.popup_desc)),
+            Paragraph::new(Span::styled("no image selected", STYLES.dim)),
             inner,
         );
         return;
@@ -76,131 +73,18 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             if !lines.is_empty() {
                 lines.push(Line::default());
             }
-            lines.push(Line::from(Span::styled(value.clone(), theme.popup_title)));
+            lines.push(Line::from(Span::styled(value.clone(), STYLES.title)));
         } else {
             lines.push(Line::from(vec![
-                Span::styled(format!("{label:<label_width$}  "), theme.popup_key),
-                Span::styled(value.clone(), theme.popup_text),
+                Span::styled(format!("{label:<label_width$}  "), STYLES.dim),
+                Span::styled(value.clone(), STYLES.text),
             ]));
         }
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_theme_picker(frame: &mut Frame<'_>, app: &mut App) {
-    let area = frame.area();
-    let popup = picker_rect(area);
-    frame.render_widget(Block::default().style(app.theme.picker_backdrop), area);
-    frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .style(app.theme.picker_surface)
-        .border_style(app.theme.popup_border)
-        .title(Line::from(Span::styled(" Themes ", app.theme.popup_title)));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
-    let visible = chunks[0].height.max(1) as usize;
-    let Some(picker) = app.theme_picker.as_mut() else {
-        return;
-    };
-    let (selected, scroll) = {
-        picker.visible_height = visible;
-        if picker.selected < picker.scroll {
-            picker.scroll = picker.selected;
-        } else if picker.selected >= picker.scroll + visible {
-            picker.scroll = picker.selected + 1 - visible;
-        }
-        (picker.selected, picker.scroll)
-    };
-
-    let row_width = chunks[0].width as usize;
-    let lines = app
-        .themes
-        .iter()
-        .enumerate()
-        .skip(scroll)
-        .take(visible)
-        .map(|(index, theme)| {
-            let is_selected = index == selected;
-            let row_style = if is_selected {
-                app.theme.picker_selection.add_modifier(Modifier::BOLD)
-            } else {
-                app.theme.picker_surface
-            };
-            let marker_style = if is_selected {
-                app.theme.picker_selection.patch(app.theme.popup_key)
-            } else {
-                app.theme.picker_surface
-            };
-            let mut line = Line::from(vec![
-                Span::styled(if is_selected { "▌ " } else { "  " }, marker_style),
-                Span::styled(theme.name.clone(), row_style),
-            ]);
-            let used = line.width();
-            if used < row_width {
-                line.spans
-                    .push(Span::styled(" ".repeat(row_width - used), row_style));
-            }
-            line
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(
-        Paragraph::new(lines).style(app.theme.picker_surface),
-        chunks[0],
-    );
-
-    let status = format!("{}/{}", selected + 1, app.themes.len());
-    let bindings = [("j/k", "preview"), ("enter", "apply"), ("esc", "cancel")];
-    let key_style = app.theme.picker_selection.patch(app.theme.popup_key);
-    let description_style = app.theme.picker_chrome.patch(app.theme.popup_desc);
-    let mut spans = vec![Span::styled(" ", app.theme.picker_chrome)];
-    for (key, action) in bindings {
-        spans.push(Span::styled(format!(" {key} "), key_style));
-        spans.push(Span::styled(format!(" {action}  "), description_style));
-    }
-    let used = spans
-        .iter()
-        .map(|span| span.content.chars().count())
-        .sum::<usize>();
-    let status_width = status.chars().count();
-    let footer_width = usize::from(chunks[1].width);
-    if used + status_width < footer_width {
-        spans.push(Span::styled(
-            " ".repeat(footer_width - used - status_width),
-            app.theme.picker_chrome,
-        ));
-    }
-    spans.push(Span::styled(status, description_style));
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(app.theme.picker_chrome),
-        chunks[1],
-    );
-}
-
-fn picker_rect(area: Rect) -> Rect {
-    let width = if area.width > 4 {
-        (area.width * 3 / 4).max(50).min(area.width - 4)
-    } else {
-        area.width.max(1)
-    };
-    let height = if area.height > 4 {
-        (area.height * 3 / 4).max(6).min(area.height - 2)
-    } else {
-        area.height.max(1)
-    };
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    )
-}
-
 fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
-    let theme = &app.theme;
     let area = frame.area();
 
     let Some(picker) = app.picker.as_mut() else {
@@ -213,8 +97,8 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
 
     let filter_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border)
-        .title(Line::from(Span::styled(" Filter ", theme.title)));
+        .border_style(STYLES.border)
+        .title(Line::from(Span::styled(" Filter ", STYLES.title)));
     let filter_inner = filter_block.inner(filter_rect);
     frame.render_widget(filter_block, filter_rect);
 
@@ -223,22 +107,22 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
         let total = picker.entries.len();
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!("/{}\u{2588}", picker.filter), theme.search_input),
-                Span::styled(format!("  {match_count}/{total} matches"), theme.popup_desc),
+                Span::styled(format!("/{}\u{2588}", picker.filter), STYLES.text),
+                Span::styled(format!("  {match_count}/{total} matches"), STYLES.dim),
             ])),
             filter_inner,
         );
     } else if !picker.filter.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!(" /{}", picker.filter), theme.popup_text),
+                Span::styled(format!(" /{}", picker.filter), STYLES.text),
                 Span::styled(
                     format!(
                         "  {}/{} matches",
                         picker.filtered_indices.len(),
                         picker.entries.len()
                     ),
-                    theme.popup_desc,
+                    STYLES.dim,
                 ),
             ])),
             filter_inner,
@@ -258,15 +142,15 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
     };
 
     let bottom_line = if let Some(err) = &picker.error {
-        Line::from(Span::styled(format!(" {err} "), theme.status_bar_error))
+        Line::from(Span::styled(format!(" {err} "), STYLES.error))
     } else {
-        Line::from(Span::styled(hint, theme.popup_desc))
+        Line::from(Span::styled(hint, STYLES.key))
     };
 
     let list_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border)
-        .title(Line::from(Span::styled(list_title, theme.title)))
+        .border_style(STYLES.border)
+        .title(Line::from(Span::styled(list_title, STYLES.title)))
         .title_bottom(bottom_line);
 
     let list_inner = list_block.inner(list_area);
@@ -289,9 +173,9 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
                 format!("{}/", entry.name)
             };
             let style = if is_cursor {
-                theme.label_selected
+                STYLES.selection
             } else {
-                theme.label
+                STYLES.text
             };
             Line::from(vec![
                 Span::styled(marker.to_owned(), style),
@@ -304,7 +188,6 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
 }
 
 fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Option<&str>) {
-    let theme = &app.theme;
     let placeholder = app.shows_video_placeholder();
 
     let filename = app
@@ -331,18 +214,12 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
                         |n| n.to_string_lossy().into_owned()
                     ),
             ),
-            theme.status_bar_error,
+            STYLES.error,
         ))
     } else if let Some(err) = &app.delete_error {
-        Line::from(Span::styled(
-            format!(" Delete error: {err} "),
-            theme.status_bar_error,
-        ))
+        Line::from(Span::styled(format!(" Delete error: {err} "), STYLES.error))
     } else if let Some(err) = &app.error {
-        Line::from(Span::styled(
-            format!(" Error: {err} "),
-            theme.status_bar_error,
-        ))
+        Line::from(Span::styled(format!(" Error: {err} "), STYLES.error))
     } else {
         let dims = app
             .loaded
@@ -382,21 +259,21 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
                     app.current + 1,
                     app.images.len(),
                 ),
-                theme.popup_text,
+                STYLES.text,
             ),
             status_note.map_or_else(
-                || Span::styled(hint, theme.popup_desc),
-                |note| Span::styled(format!(" {note} "), theme.popup_text),
+                || Span::styled(hint, STYLES.key),
+                |note| Span::styled(format!(" {note} "), STYLES.text),
             ),
         ])
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border)
+        .border_style(STYLES.border)
         .title(Line::from(Span::styled(
             format!(" {filename} "),
-            theme.title,
+            STYLES.title,
         )))
         .title_bottom(bottom_line);
 
@@ -409,7 +286,7 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
             ..inner
         };
         frame.render_widget(
-            Paragraph::new(Span::styled("video: press Enter to play", theme.popup_desc))
+            Paragraph::new(Span::styled("video: press Enter to play", STYLES.dim))
                 .alignment(Alignment::Center),
             middle,
         );
@@ -420,8 +297,6 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
 
 #[cfg(feature = "video")]
 fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Option<&str>) {
-    let theme = &app.theme;
-
     let filename = app
         .current_path()
         .file_name()
@@ -442,10 +317,7 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Opt
     };
 
     let bottom_line = if let Some(err) = &app.error {
-        Line::from(Span::styled(
-            format!(" Error: {err} "),
-            theme.status_bar_error,
-        ))
+        Line::from(Span::styled(format!(" Error: {err} "), STYLES.error))
     } else {
         Line::from(vec![
             Span::styled(
@@ -459,26 +331,26 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Opt
                     app.current + 1,
                     app.images.len(),
                 ),
-                theme.popup_text,
+                STYLES.text,
             ),
             status_note.map_or_else(
                 || {
                     Span::styled(
                         " Space: pause  \u{2190}/\u{2192}: navigate  ?: help  q: quit ",
-                        theme.popup_desc,
+                        STYLES.key,
                     )
                 },
-                |note| Span::styled(format!(" {note} "), theme.popup_text),
+                |note| Span::styled(format!(" {note} "), STYLES.text),
             ),
         ])
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border)
+        .border_style(STYLES.border)
         .title(Line::from(Span::styled(
             format!(" {filename} "),
-            theme.title,
+            STYLES.title,
         )))
         .title_bottom(bottom_line);
 
@@ -497,11 +369,10 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
     // The title shows the fitted cell size, so the grid layout runs first.
     let gallery_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(app.theme.border);
+        .border_style(STYLES.border);
     let grid_rect = gallery_block.inner(gallery_area);
     app.gallery.update_grid(grid_rect);
 
-    let theme = &app.theme;
     let filtered_count = app.gallery.filtered_indices.len();
     let total = app.images.len();
     let scanning = if app.is_scanning() {
@@ -519,7 +390,7 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
     let bottom_line = gallery_bottom_line(app, filtered_count, status);
 
     let gallery_block = gallery_block
-        .title(Line::from(Span::styled(gallery_title, theme.title)))
+        .title(Line::from(Span::styled(gallery_title, STYLES.title)))
         .title_bottom(bottom_line);
     frame.render_widget(gallery_block, gallery_area);
 
@@ -528,12 +399,10 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
 
 /// The search line above the grid: the query while typing, else the selection count.
 fn draw_search_bar(frame: &mut Frame<'_>, app: &App, search_rect: Rect) {
-    let theme = &app.theme;
-
     let search_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border)
-        .title(Line::from(Span::styled(" Search ", theme.title)));
+        .border_style(STYLES.border)
+        .title(Line::from(Span::styled(" Search ", STYLES.title)));
 
     let search_inner = search_block.inner(search_rect);
     frame.render_widget(search_block, search_rect);
@@ -545,9 +414,9 @@ fn draw_search_bar(frame: &mut Frame<'_>, app: &App, search_rect: Rect) {
             Paragraph::new(Line::from(vec![
                 Span::styled(
                     format!("/{}\u{2588}", app.gallery.search_query),
-                    theme.search_input,
+                    STYLES.text,
                 ),
-                Span::styled(format!("  {match_count}/{total} matches"), theme.popup_desc),
+                Span::styled(format!("  {match_count}/{total} matches"), STYLES.dim),
             ])),
             search_inner,
         );
@@ -555,7 +424,7 @@ fn draw_search_bar(frame: &mut Frame<'_>, app: &App, search_rect: Rect) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 format!(" {} selected", app.selection.len()),
-                theme.popup_desc,
+                STYLES.dim,
             ))),
             search_inner,
         );
@@ -566,7 +435,6 @@ fn draw_search_bar(frame: &mut Frame<'_>, app: &App, search_rect: Rect) {
 
 /// The bottom border of the grid: a delete question, an error, or name, position and hints.
 fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -> Line<'static> {
-    let theme = &app.theme;
     let selected_name = app
         .gallery
         .selected_index()
@@ -590,28 +458,22 @@ fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -
             format!(" {action} {} files? ", pending.paths.len())
         };
         Line::from(vec![
-            Span::styled(prompt, theme.status_bar_error),
-            Span::styled(" y: confirm  n/Esc: cancel ", theme.popup_desc),
+            Span::styled(prompt, STYLES.error),
+            Span::styled(" y: confirm  n/Esc: cancel ", STYLES.key),
         ])
     } else if let Some(err) = &app.delete_error {
-        Line::from(Span::styled(
-            format!(" Delete error: {err} "),
-            theme.status_bar_error,
-        ))
+        Line::from(Span::styled(format!(" Delete error: {err} "), STYLES.error))
     } else if let Some(err) = &app.error {
-        Line::from(Span::styled(
-            format!(" Error: {err} "),
-            theme.status_bar_error,
-        ))
+        Line::from(Span::styled(format!(" Error: {err} "), STYLES.error))
     } else {
         let hint = if app.gallery.search_active {
-            Span::styled(" Esc: cancel  Enter: confirm ", theme.popup_desc)
+            Span::styled(" Esc: cancel  Enter: confirm ", STYLES.key)
         } else if let Some(status) = status {
-            Span::styled(format!(" {status} "), theme.popup_text)
+            Span::styled(format!(" {status} "), STYLES.text)
         } else {
             Span::styled(
                 " Enter: open  +/-: zoom  n: names  i: info  /: search  ?: help  q: quit ",
-                theme.popup_desc,
+                STYLES.key,
             )
         };
         if filtered_count == 0 {
@@ -625,7 +487,7 @@ fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -
                         app.gallery.cursor + 1,
                         filtered_count,
                     ),
-                    theme.popup_text,
+                    STYLES.text,
                 ),
                 hint,
             ])
@@ -639,7 +501,6 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     let thumb_cols = app.gallery.thumb_cols;
     let thumb_rows = app.gallery.thumb_rows;
     let cell_height_total = app.gallery.cell_height_total();
-    let theme = &app.theme;
 
     for (vis_idx, img_idx) in app.gallery.visible_items().collect::<Vec<_>>() {
         let col = vis_idx % app.gallery.grid_cols;
@@ -654,9 +515,9 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
 
         // Only the selected cell and the marked cells get a border. The selected style wins.
         let border_style = if is_selected {
-            Some(theme.border_selected)
+            Some(STYLES.cursor_cell)
         } else if is_marked {
-            Some(theme.border_marked)
+            Some(STYLES.marked)
         } else {
             None
         };
@@ -706,10 +567,12 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
                 width: thumb_cols.min(grid_rect.right().saturating_sub(cell_x)),
                 height: LABEL_ROWS,
             };
-            let label_style = if is_selected || is_marked {
-                theme.label_selected
+            let label_style = if is_selected {
+                STYLES.cursor_cell
+            } else if is_marked {
+                STYLES.marked
             } else {
-                theme.label
+                STYLES.text
             };
             frame.render_widget(
                 Paragraph::new(filename)
@@ -721,8 +584,7 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     }
 }
 
-fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
-    let theme = &app.theme;
+fn draw_help_popup(frame: &mut Frame<'_>) {
     let area = frame.area();
 
     let help_lines = [
@@ -740,7 +602,6 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
         ("a / A", "Select all / clear all"),
         ("d / D", "Trash / permanently delete selection"),
         ("o", "Open directory picker"),
-        ("t", "Open session theme picker"),
         ("/", "Search"),
         ("?", "Toggle help"),
         ("q / Esc", "Quit"),
@@ -763,7 +624,6 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
         ("Space", "Pause / resume slideshow"),
         ("[ / ]", "Shorter / longer slide interval"),
         ("d / D", "Trash / permanently delete image"),
-        ("t", "Open session theme picker"),
         ("Esc", "Back to gallery"),
         ("?", "Toggle help"),
         ("q", "Quit"),
@@ -790,8 +650,6 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
         #[cfg(feature = "video")]
         ("h / l", "Previous / next file"),
         #[cfg(feature = "video")]
-        ("t", "Open session theme picker"),
-        #[cfg(feature = "video")]
         ("Esc", "Back to gallery"),
         #[cfg(feature = "video")]
         ("q", "Quit"),
@@ -802,7 +660,6 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
         ("l / Right", "Descend into directory"),
         ("h", "Parent directory"),
         ("g / G", "First / last"),
-        ("t", "Open session theme picker"),
         ("/", "Filter names"),
         ("Esc", "Back to gallery"),
         ("q", "Quit"),
@@ -818,8 +675,8 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.popup_border)
-        .title(Line::from(Span::styled(" Help ", theme.popup_title)));
+        .border_style(STYLES.popup_border)
+        .title(Line::from(Span::styled(" Help ", STYLES.title)));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -831,11 +688,11 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
         .iter()
         .map(|(key, desc)| {
             if key.is_empty() {
-                Line::from(Span::styled(format!(" {desc}"), theme.popup_title))
+                Line::from(Span::styled(format!(" {desc}"), STYLES.title))
             } else {
                 Line::from(vec![
-                    Span::styled(format!(" {key:>key_width$}  "), theme.popup_key),
-                    Span::styled(*desc, theme.popup_desc),
+                    Span::styled(format!(" {key:>key_width$}  "), STYLES.key),
+                    Span::styled(*desc, STYLES.text),
                 ])
             }
         })
@@ -845,7 +702,7 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             " press any key to close",
-            theme.popup_desc,
+            STYLES.dim,
         ))),
         chunks[1],
     );
@@ -853,21 +710,21 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{draw, draw_theme_picker, picker_rect};
+    use super::draw;
     use crate::app::{App, PendingDelete, ViewMode};
     use crate::image_list::SharedImageList;
     use crate::picker::PickerState;
-    use crate::theme::{NamedTheme, Theme};
     use image::RgbaImage;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::{Buffer, Cell};
     use ratatui::layout::Rect;
-    use ratatui::style::{Color, Style};
+    use ratatui::style::{Color, Modifier};
     use std::path::PathBuf;
 
     /// An app with `names` below `/photos`, as if a finished scan had listed them.
     fn app_with(names: &[&str]) -> App {
-        let mut app = App::new(Theme::fallback(), (8, 16), SharedImageList::new());
+        let mut app = App::new((8, 16), SharedImageList::new());
         app.images = names
             .iter()
             .map(|name| PathBuf::from("/photos").join(name))
@@ -878,19 +735,60 @@ mod tests {
         app
     }
 
-    /// Draw one frame and return the screen as text, one line per row.
-    fn render(app: &mut App, status: Option<&str>, width: u16, height: u16) -> String {
+    /// Draw one frame and return the screen buffer with the symbols and the styles.
+    fn render_buffer(app: &mut App, status: Option<&str>, width: u16, height: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| draw(frame, app, status)).unwrap();
-        let buffer = terminal.backend().buffer();
-        (0..height)
+        terminal.backend().buffer().clone()
+    }
+
+    /// The rows of `buffer` as text.
+    fn screen_rows(buffer: &Buffer) -> Vec<String> {
+        let area = buffer.area;
+        (0..area.height)
             .map(|y| {
-                (0..width)
+                (0..area.width)
                     .map(|x| buffer[(x, y)].symbol())
                     .collect::<String>()
             })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect()
+    }
+
+    /// Draw one frame and return the screen as text, one line per row.
+    fn render(app: &mut App, status: Option<&str>, width: u16, height: u16) -> String {
+        screen_rows(&render_buffer(app, status, width, height)).join("\n")
+    }
+
+    /// The cell of the first character of `needle`. The test screens hold one character per cell.
+    fn cell_of<'a>(buffer: &'a Buffer, needle: &str) -> &'a Cell {
+        let (x, y) = screen_rows(buffer)
+            .iter()
+            .enumerate()
+            .find_map(|(y, row)| {
+                row.find(needle)
+                    .and_then(|byte| row.get(..byte))
+                    .map(|head| (head.chars().count(), y))
+            })
+            .unwrap_or_else(|| panic!("missing {needle:?}"));
+        &buffer[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())]
+    }
+
+    /// Fail when a cell sets a background, so the terminal background shows everywhere.
+    fn assert_terminal_background(buffer: &Buffer) {
+        assert!(
+            buffer.content().iter().all(|cell| cell.bg == Color::Reset),
+            "a cell sets a background color"
+        );
+    }
+
+    /// Fail when the cell does not carry the terminal foreground and `modifier`.
+    fn assert_default_fg(cell: &Cell, modifier: Modifier) {
+        assert_eq!((cell.fg, cell.modifier), (Color::Reset, modifier));
+    }
+
+    /// Fail when the cell does not carry the ANSI color `fg` without a modifier.
+    fn assert_ansi(cell: &Cell, fg: Color) {
+        assert_eq!((cell.fg, cell.modifier), (fg, Modifier::empty()));
     }
 
     /// Fail with the whole screen when `screen` does not contain `needle`.
@@ -916,49 +814,6 @@ mod tests {
             from_fullscreen: false,
             permanent,
         }
-    }
-
-    #[test]
-    fn theme_picker_uses_the_previewed_theme_and_pdfterm_layout() {
-        let first = Theme::fallback();
-        let mut preview = Theme::fallback();
-        preview.picker_backdrop = Style::default().bg(Color::Red);
-        preview.picker_selection = Style::default().fg(Color::White).bg(Color::Green);
-        preview.popup_border = Style::default().fg(Color::Blue);
-
-        let mut app = App::new(first.clone(), (8, 16), SharedImageList::new());
-        app.install_themes(
-            vec![
-                NamedTheme {
-                    name: "first".to_owned(),
-                    path: None,
-                    theme: first,
-                },
-                NamedTheme {
-                    name: "preview".to_owned(),
-                    path: None,
-                    theme: preview,
-                },
-            ],
-            0,
-        );
-        app.open_theme_picker();
-        app.theme_picker_select(1);
-
-        let area = Rect::new(0, 0, 80, 30);
-        let popup = picker_rect(area);
-        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
-        terminal
-            .draw(|frame| draw_theme_picker(frame, &mut app))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-
-        assert_eq!(popup.width, 60);
-        assert_eq!(popup.height, 22);
-        assert_eq!(buffer[(0, 0)].bg, Color::Red);
-        assert_eq!(buffer[(popup.x, popup.y)].fg, Color::Blue);
-        assert_eq!(buffer[(popup.x + 1, popup.y + 2)].symbol(), "▌");
-        assert_eq!(buffer[(popup.x + 2, popup.y + 2)].bg, Color::Green);
     }
 
     #[test]
@@ -1041,6 +896,42 @@ mod tests {
     }
 
     #[test]
+    fn gallery_uses_the_terminal_defaults_and_the_ansi_roles() {
+        let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
+        app.gallery.show_filenames = true;
+        app.selection.insert(app.images[1].clone());
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_terminal_background(&buffer);
+
+        // The grid starts inside the search bar (3 rows) and the gallery border.
+        let (left, top) = (1, 4);
+        let cursor_corner = &buffer[(left, top)];
+        assert_eq!(cursor_corner.symbol(), "\u{250c}");
+        assert_default_fg(cursor_corner, Modifier::BOLD);
+        let marked_corner = &buffer[(left + app.gallery.thumb_cols, top)];
+        assert_eq!(marked_corner.symbol(), "\u{250c}");
+        assert_ansi(marked_corner, Color::Yellow);
+
+        assert_default_fg(cell_of(&buffer, "a.jpg"), Modifier::BOLD);
+        assert_ansi(cell_of(&buffer, "\u{25cf} b.jpg"), Color::Yellow);
+        assert_default_fg(cell_of(&buffer, "c.jpg"), Modifier::empty());
+        assert_ansi(&buffer[(0, 0)], Color::DarkGray);
+        assert_default_fg(cell_of(&buffer, "Gallery ["), Modifier::BOLD);
+        assert_ansi(cell_of(&buffer, "1 selected"), Color::DarkGray);
+        assert_ansi(cell_of(&buffer, "Enter: open"), Color::Cyan);
+
+        // On a marked cell under the cursor, the cursor style wins for the border and the label.
+        app.selection.insert(app.images[0].clone());
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_default_fg(&buffer[(left, top)], Modifier::BOLD);
+        assert_default_fg(cell_of(&buffer, "\u{25cf} a.jpg"), Modifier::BOLD);
+
+        app.error = Some("scan failed".to_owned());
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_ansi(cell_of(&buffer, "Error: scan failed"), Color::Red);
+    }
+
+    #[test]
     fn gallery_shortens_a_long_label() {
         let long = format!("{}.jpg", "x".repeat(80));
         let mut app = app_with(&[long.as_str()]);
@@ -1077,8 +968,8 @@ mod tests {
     #[test]
     fn gallery_status_note_replaces_the_hints() {
         let mut app = app_with(&["a.jpg"]);
-        let screen = render(&mut app, Some("theme saved"), 100, 30);
-        assert_shows(&screen, " a.jpg [1/1]  theme saved ");
+        let screen = render(&mut app, Some("1 file moved to trash"), 100, 30);
+        assert_shows(&screen, " a.jpg [1/1]  1 file moved to trash ");
         assert_hides(&screen, "Enter: open");
     }
 
@@ -1141,6 +1032,22 @@ mod tests {
         assert_shows(&screen, " Delete error: no trash ");
     }
 
+    #[test]
+    fn fullscreen_uses_the_terminal_defaults_and_the_ansi_roles() {
+        let mut app = app_with(&["a.jpg"]);
+        app.mode = ViewMode::Fullscreen;
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_terminal_background(&buffer);
+        assert_ansi(&buffer[(0, 0)], Color::DarkGray);
+        assert_default_fg(cell_of(&buffer, "a.jpg "), Modifier::BOLD);
+        assert_default_fg(cell_of(&buffer, "a.jpg ["), Modifier::empty());
+        assert_ansi(cell_of(&buffer, "\u{2190}/\u{2192}: navigate"), Color::Cyan);
+
+        app.pending_delete = Some(pending(&["a.jpg"], false));
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_ansi(cell_of(&buffer, "Move to trash a.jpg?"), Color::Red);
+    }
+
     #[cfg(feature = "video")]
     #[test]
     fn video_status_bar_shows_the_time_the_position_and_the_note() {
@@ -1171,6 +1078,14 @@ mod tests {
         assert_shows(&screen, "File");
         assert_shows(&screen, "Name    a.jpg");
         assert_shows(&screen, "Format  JPG");
+
+        let buffer = render_buffer(&mut app, None, 120, 30);
+        assert_terminal_background(&buffer);
+        assert_default_fg(cell_of(&buffer, "Info "), Modifier::BOLD);
+        assert_ansi(cell_of(&buffer, "i: close"), Color::Cyan);
+        assert_default_fg(cell_of(&buffer, "File"), Modifier::BOLD);
+        assert_ansi(cell_of(&buffer, "Name "), Color::DarkGray);
+        assert_default_fg(cell_of(&buffer, "a.jpg"), Modifier::empty());
     }
 
     #[test]
@@ -1198,51 +1113,14 @@ mod tests {
         assert_shows(&screen, "     h/j/k/l  Navigate grid");
         assert_shows(&screen, " Directory picker");
         assert_shows(&screen, " press any key to close");
-    }
 
-    #[test]
-    fn theme_picker_hides_the_help_popup() {
-        let mut app = app_with(&["a.jpg"]);
-        app.help_visible = true;
-        app.open_theme_picker();
-        let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, " Themes ");
-        assert_shows(&screen, "\u{258c} fallback");
-        assert_shows(&screen, "  j/k  preview   enter  apply");
-        assert_shows(&screen, "1/1");
-        assert_hides(&screen, " Help ");
-    }
-
-    #[test]
-    fn theme_picker_scrolls_to_the_selection() {
-        let mut app = app_with(&[]);
-        let themes = (0..30)
-            .map(|index| NamedTheme {
-                name: format!("theme-{index:02}"),
-                path: None,
-                theme: Theme::fallback(),
-            })
-            .collect();
-        app.install_themes(themes, 0);
-        app.open_theme_picker();
-
-        app.theme_picker_select(20);
-        let screen = render(&mut app, None, 30, 12);
-        let picker = app.theme_picker.as_ref().unwrap();
-        assert_eq!((picker.visible_height, picker.scroll), (6, 15));
-        assert_shows(&screen, "\u{258c} theme-20");
-        assert_hides(&screen, "theme-14");
-
-        app.theme_picker_select(2);
-        let screen = render(&mut app, None, 30, 12);
-        assert_eq!(app.theme_picker.as_ref().unwrap().scroll, 2);
-        assert_shows(&screen, "\u{258c} theme-02");
-    }
-
-    #[test]
-    fn picker_rect_keeps_a_tiny_area() {
-        assert_eq!(picker_rect(Rect::new(0, 0, 4, 4)), Rect::new(0, 0, 4, 4));
-        assert_eq!(picker_rect(Rect::new(0, 0, 0, 0)), Rect::new(0, 0, 1, 1));
+        let buffer = render_buffer(&mut app, None, 100, 120);
+        assert_terminal_background(&buffer);
+        assert_default_fg(cell_of(&buffer, "Help "), Modifier::BOLD);
+        assert_default_fg(cell_of(&buffer, "Gallery   "), Modifier::BOLD);
+        assert_ansi(cell_of(&buffer, "h/j/k/l"), Color::Cyan);
+        assert_default_fg(cell_of(&buffer, "Navigate grid"), Modifier::empty());
+        assert_ansi(cell_of(&buffer, "press any key"), Color::DarkGray);
     }
 
     #[test]
@@ -1265,6 +1143,11 @@ mod tests {
         assert_shows(&screen, "  beta/");
         assert_shows(&screen, " Enter: choose  /: filter");
         assert_hides(&screen, " Info ");
+        let buffer = render_buffer(&mut app, None, width, 20);
+        assert_terminal_background(&buffer);
+        assert_default_fg(cell_of(&buffer, "\u{25b6} .."), Modifier::REVERSED);
+        assert_default_fg(cell_of(&buffer, "alpha/"), Modifier::empty());
+        assert_ansi(cell_of(&buffer, "Enter: choose"), Color::Cyan);
 
         let picker = app.picker.as_mut().unwrap();
         picker.filter = "bet".to_owned();
@@ -1281,6 +1164,9 @@ mod tests {
         let screen = render(&mut app, None, width, 20);
         assert_shows(&screen, " /bet  1/3 matches");
         assert_shows(&screen, " permission denied ");
+        let buffer = render_buffer(&mut app, None, width, 20);
+        assert_ansi(cell_of(&buffer, "permission denied"), Color::Red);
+        assert_ansi(cell_of(&buffer, "1/3 matches"), Color::DarkGray);
 
         app.picker = None;
         let screen = render(&mut app, None, width, 20);

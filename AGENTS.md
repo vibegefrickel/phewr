@@ -107,6 +107,8 @@ missing.
 - **No `unsafe`.** The crate denies `unsafe_code`.
 - **Each feature set builds.** `just lint` runs clippy with the default features and with
   `--no-default-features`. Code behind `#[cfg(feature = "...")]` must compile in both.
+- **Terminal colors only.** The TUI uses the terminal default colors and the 16 ANSI colors from
+  `styles.rs`. Do not add RGB values or 256-color indexes.
 - **One formatter, one style.** Use rustfmt with `rustfmt.toml`. The hook runs
   `cargo fmt --check`.
 - **Language:** code, comments and docs are in English.
@@ -129,7 +131,7 @@ missing.
   `App::new` points `app.state_file` and `app.disk_cache_dir` below `/dev/null`. A test that
   needs them sets them to temp paths.
 - A test never sets `HOME` or `XDG_*`. Use the functions that take a path: `config::load_at`,
-  `theme::load_themes_at`, `config::xdg_path`, `config::save_thumb_size(path, ..)`.
+  `config::xdg_path`, `config::save_thumb_size(path, ..)`.
 - A test waits for background work in a loop with a limit (for example 2 s in 10 ms steps), and
   never depends on the clock within a frame interval.
 - A test calls `trash::delete` only with a missing path, so it never asks Finder.
@@ -155,7 +157,7 @@ missing.
   the decode box is smaller, it returns `None`.
 - `picker.rs`: the directory picker. `search.rs`: fuzzy filename search (nucleo-matcher).
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
-- `theme.rs`: themes, the theme catalog and the shared theme file.
+- `styles.rs`: `STYLES`, one style per role on the screen.
 - `config.rs`: `config.toml` and the state file.
 - `video.rs` (feature `video`): the built-in FFmpeg player in a thread, and first-frame
   thumbnails.

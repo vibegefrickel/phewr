@@ -66,7 +66,6 @@ viewr image.png                            # single file opens fullscreen
 viewr -s ~/Pictures/holiday                # start a slideshow at once
 viewr -s -n 5 ~/Pictures/holiday           # ... with 5 seconds per slide
 viewr -i ~/Pictures                        # open with the info panel
-viewr -t ~/.config/themes/nord.toml        # theme file, or a catalog name
 viewr -j 4 ~/Pictures                      # decode threads (default: all cores)
 ```
 
@@ -99,7 +98,6 @@ desc = "Image grid (viewr)"
 | `a` `A` | Select all / clear selection |
 | `d` `D` | Trash / permanently delete, with confirm |
 | `o` | Directory picker |
-| `t` | Theme picker |
 | `q` `Esc` | Quit |
 | `?` | Full help |
 
@@ -137,10 +135,6 @@ The built-in player (`[video] player = "builtin"`) keeps its keys: `Space`, `←
 viewr reads `~/.config/viewr/config.toml`. If `XDG_CONFIG_HOME` is set, viewr reads `$XDG_CONFIG_HOME/viewr/config.toml`.
 
 ```toml
-# Theme file or catalog entry, see "Themes".
-theme = "~/.config/themes/nord.toml"
-theme_catalog = "~/.config/themes/catalog.toml"
-
 [gallery]
 thumb_cols = 20      # thumbnail cell width in terminal cells, border included
 thumb_rows = 8       # thumbnail cell height
@@ -165,9 +159,9 @@ When you zoom the grid with `+` / `-`, viewr writes the new size to `~/.local/st
 
 viewr caches thumbnails in the OS cache directory: `~/Library/Caches/viewr` on macOS, `~/.cache/viewr` on Linux. The cache stays below 512 MB.
 
-### Themes
+### Colors
 
-viewr loads themes from the `theme` and `theme_catalog` keys above. `-t` sets the theme for one session. If the `-t` value is neither a theme file nor a catalog name, viewr stops and lists the catalog names. If the `theme` key names an unknown theme, viewr uses the first catalog theme. `t` shows a preview of each catalog theme. viewr does not write that choice back.
+viewr uses the default foreground and background of the terminal and the 16 ANSI colors. The color scheme of the terminal sets the look of viewr. viewr has no color settings.
 
 ## Formats
 

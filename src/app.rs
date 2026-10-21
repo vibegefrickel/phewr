@@ -8,7 +8,6 @@ use crate::picker::{self, PickerState};
 use crate::prefetch::Prefetcher;
 use crate::scanner;
 use crate::search;
-use crate::theme::{NamedTheme, Theme};
 use directories::ProjectDirs;
 use fast_image_resize as fir;
 use image::metadata::Orientation;
@@ -56,13 +55,6 @@ pub(crate) struct PendingDelete {
     pub permanent: bool,
 }
 
-pub(crate) struct ThemePickerState {
-    pub selected: usize,
-    pub original_index: usize,
-    pub scroll: usize,
-    pub visible_height: usize,
-}
-
 /// A running slideshow in fullscreen mode.
 pub(crate) struct Slideshow {
     pub interval: Duration,
@@ -79,10 +71,6 @@ pub(crate) struct App {
     pub images: Vec<PathBuf>,
     pub filenames: Vec<String>,
     pub mode: ViewMode,
-    pub theme: Theme,
-    pub themes: Vec<NamedTheme>,
-    pub theme_index: usize,
-    pub theme_picker: Option<ThemePickerState>,
     pub cell_px: (u32, u32),
     pub graphics: KittyBackend,
     /// Where `graphics_delete_all` and the render functions write. A test app writes to a buffer.
@@ -176,19 +164,18 @@ impl App {
     /// A test app. The state file and the disk cache sit below `/dev/null`, so every write
     /// fails quietly and no test can touch the real files. A test that needs them sets a temp path.
     #[cfg(test)]
-    pub(crate) fn new(theme: Theme, cell_px: (u32, u32), shared_list: SharedImageList) -> Self {
-        Self::new_with_config(theme, cell_px, shared_list, &Config::default())
+    pub(crate) fn new(cell_px: (u32, u32), shared_list: SharedImageList) -> Self {
+        Self::new_with_config(cell_px, shared_list, &Config::default())
     }
 
     /// A test app with `config`. The Kitty sequences go to a buffer, not to the terminal.
     #[cfg(test)]
     pub(crate) fn new_with_config(
-        theme: Theme,
         cell_px: (u32, u32),
         shared_list: SharedImageList,
         config: &Config,
     ) -> Self {
-        let mut app = Self::with_config(theme, cell_px, shared_list, config);
+        let mut app = Self::with_config(cell_px, shared_list, config);
         app.state_file = PathBuf::from("/dev/null/viewr/state.toml");
         app.disk_cache_dir = PathBuf::from("/dev/null/viewr/cache");
         app.graphics_out = GraphicsOutput::buffer();
@@ -196,7 +183,6 @@ impl App {
     }
 
     pub(crate) fn with_config(
-        theme: Theme,
         cell_px: (u32, u32),
         shared_list: SharedImageList,
         config: &Config,
@@ -206,14 +192,6 @@ impl App {
             images: Vec::new(),
             filenames: Vec::new(),
             mode: ViewMode::Gallery,
-            themes: vec![NamedTheme {
-                name: "fallback".to_owned(),
-                path: None,
-                theme: theme.clone(),
-            }],
-            theme,
-            theme_index: 0,
-            theme_picker: None,
             cell_px,
             graphics: KittyBackend,
             graphics_out: GraphicsOutput::Stdout,
@@ -269,52 +247,6 @@ impl App {
             transmitted_image_ids: HashSet::new(),
             graphics_storage_dirty: false,
         }
-    }
-
-    pub(crate) fn install_themes(&mut self, themes: Vec<NamedTheme>, selected: usize) {
-        if themes.is_empty() {
-            return;
-        }
-        self.theme_index = selected.min(themes.len() - 1);
-        self.theme = themes[self.theme_index].theme.clone();
-        self.themes = themes;
-        self.needs_render = true;
-    }
-
-    pub(crate) fn open_theme_picker(&mut self) {
-        self.theme_picker = Some(ThemePickerState {
-            selected: self.theme_index,
-            original_index: self.theme_index,
-            scroll: 0,
-            visible_height: 1,
-        });
-        self.needs_render = true;
-    }
-
-    pub(crate) fn theme_picker_select(&mut self, selected: usize) {
-        if selected >= self.themes.len() {
-            return;
-        }
-        if let Some(picker) = self.theme_picker.as_mut() {
-            picker.selected = selected;
-            self.theme_index = selected;
-            self.theme = self.themes[selected].theme.clone();
-            self.needs_render = true;
-        }
-    }
-
-    pub(crate) fn theme_picker_confirm(&mut self) {
-        self.theme_picker = None;
-        self.needs_render = true;
-    }
-
-    pub(crate) fn theme_picker_cancel(&mut self) {
-        let Some(picker) = self.theme_picker.take() else {
-            return;
-        };
-        self.theme_index = picker.original_index;
-        self.theme = self.themes[self.theme_index].theme.clone();
-        self.needs_render = true;
     }
 
     // ----- Info panel -------------------------------------------------------
@@ -2653,10 +2585,9 @@ mod tests {
     fn zoom_view_crops_and_fills_the_viewport() {
         use super::App;
         use crate::image_list::SharedImageList;
-        use crate::theme::Theme;
         use ratatui::layout::Rect;
 
-        let mut app = App::new(Theme::fallback(), (1, 1), SharedImageList::new());
+        let mut app = App::new((1, 1), SharedImageList::new());
         app.image_rect = Rect::new(0, 0, 100, 100);
         // 400x400 source, viewport 100x100 -> fit scale 0.25 (base image is 100x100).
         app.source = Some(DynamicImage::new_rgba8(400, 400));
@@ -2738,11 +2669,10 @@ mod tests {
     fn slideshow_advances_wraps_and_stops_without_loop() {
         use super::{App, Slideshow};
         use crate::image_list::SharedImageList;
-        use crate::theme::Theme;
         use std::path::PathBuf;
         use std::time::{Duration, Instant};
 
-        let mut app = App::new(Theme::fallback(), (8, 16), SharedImageList::new());
+        let mut app = App::new((8, 16), SharedImageList::new());
         app.images = vec![PathBuf::from("a.png"), PathBuf::from("b.png")];
         app.filenames = vec!["a.png".into(), "b.png".into()];
         app.mode = super::ViewMode::Fullscreen;
@@ -2785,11 +2715,10 @@ mod tests {
     fn slideshow_waits_for_a_pending_decode() {
         use super::{App, Slideshow};
         use crate::image_list::SharedImageList;
-        use crate::theme::Theme;
         use std::path::PathBuf;
         use std::time::{Duration, Instant};
 
-        let mut app = App::new(Theme::fallback(), (8, 16), SharedImageList::new());
+        let mut app = App::new((8, 16), SharedImageList::new());
         app.images = vec![PathBuf::from("a.png"), PathBuf::from("b.png")];
         app.filenames = vec!["a.png".into(), "b.png".into()];
         app.mode = super::ViewMode::Fullscreen;
@@ -2810,9 +2739,8 @@ mod tests {
     fn slideshow_interval_adjusts_in_steps_and_clamps() {
         use super::App;
         use crate::image_list::SharedImageList;
-        use crate::theme::Theme;
 
-        let mut app = App::new(Theme::fallback(), (8, 16), SharedImageList::new());
+        let mut app = App::new((8, 16), SharedImageList::new());
         assert_eq!(app.slideshow_interval.as_secs_f64(), 3.0);
         app.slideshow_adjust_interval(1.0);
         assert_eq!(app.slideshow_interval.as_secs_f64(), 3.5);
@@ -2845,17 +2773,15 @@ mod tests {
             try_save_to_disk_cache,
         };
         use crate::image_list::SharedImageList;
-        use crate::theme::{NamedTheme, Theme};
         use image::{DynamicImage, RgbaImage};
         use ratatui::layout::Rect;
-        use ratatui::style::Color;
         use std::fs;
         use std::path::{Path, PathBuf};
         use std::thread;
         use std::time::{Duration, Instant, SystemTime};
 
         fn app() -> App {
-            App::new(Theme::fallback(), (8, 16), SharedImageList::new())
+            App::new((8, 16), SharedImageList::new())
         }
 
         /// An app with the synthetic paths `names` in the list and the grid. The files do not exist.
@@ -2893,50 +2819,6 @@ mod tests {
             Instant::now()
                 .checked_sub(Duration::from_millis(1))
                 .unwrap()
-        }
-
-        fn named(name: &str, accent: Color) -> NamedTheme {
-            let mut theme = Theme::fallback();
-            theme.title = theme.title.fg(accent);
-            NamedTheme {
-                name: name.to_owned(),
-                path: None,
-                theme,
-            }
-        }
-
-        #[test]
-        fn theme_picker_previews_confirms_and_cancels() {
-            let mut app = app();
-            app.install_themes(Vec::new(), 3);
-            assert_eq!(app.themes.len(), 1);
-
-            let themes = vec![named("one", Color::Red), named("two", Color::Blue)];
-            app.install_themes(themes, 7);
-            assert_eq!(app.theme_index, 1);
-            assert_eq!(app.theme.title.fg, Some(Color::Blue));
-
-            // Without an open picker, a selection does nothing.
-            app.theme_picker_select(0);
-            assert_eq!(app.theme_index, 1);
-            app.theme_picker_cancel();
-            assert_eq!(app.theme_index, 1);
-
-            app.open_theme_picker();
-            app.theme_picker_select(5);
-            assert_eq!(app.theme_index, 1);
-            app.theme_picker_select(0);
-            assert_eq!(app.theme.title.fg, Some(Color::Red));
-            app.theme_picker_cancel();
-            assert!(app.theme_picker.is_none());
-            assert_eq!(app.theme_index, 1);
-            assert_eq!(app.theme.title.fg, Some(Color::Blue));
-
-            app.open_theme_picker();
-            app.theme_picker_select(0);
-            app.theme_picker_confirm();
-            assert!(app.theme_picker.is_none());
-            assert_eq!(app.theme_index, 0);
         }
 
         #[test]
@@ -3502,7 +3384,7 @@ mod tests {
         #[test]
         fn scanner_results_extend_the_list_and_sort_at_the_end() {
             let list = SharedImageList::new();
-            let mut app = App::new(Theme::fallback(), (8, 16), list.clone());
+            let mut app = App::new((8, 16), list.clone());
             assert!(app.is_scanning());
 
             list.push_error("synthetic: denied".to_owned());
@@ -3539,7 +3421,7 @@ mod tests {
         #[test]
         fn a_single_scanned_image_opens_in_fullscreen() {
             let list = SharedImageList::new();
-            let mut app = App::new(Theme::fallback(), (8, 16), list.clone());
+            let mut app = App::new((8, 16), list.clone());
             list.push_batch(vec![PathBuf::from("/x/only.png")]);
             list.mark_complete();
             app.refresh_from_scanner();
@@ -3552,7 +3434,7 @@ mod tests {
         #[test]
         fn scanner_results_respect_an_active_filter() {
             let list = SharedImageList::new();
-            let mut app = App::new(Theme::fallback(), (8, 16), list.clone());
+            let mut app = App::new((8, 16), list.clone());
             app.gallery.search_query = "be".to_owned();
             list.push_batch(vec![
                 PathBuf::from("/x/zebra.png"),
