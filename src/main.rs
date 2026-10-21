@@ -421,6 +421,7 @@ fn poll_background(app: &mut App, pending_emits: &mut Vec<usize>) {
     app.refresh_from_scanner();
     app.maybe_autostart_slideshow();
     app.poll_filter();
+    app.poll_cell_shape();
     app.poll_fullscreen();
     app.poll_source();
     app.prefetcher.poll();
@@ -1279,6 +1280,7 @@ fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) -> io::Result
                 id: None,
                 cols: None,
                 rows: None,
+                offset: (0, 0),
             },
         )?;
     }
@@ -1321,6 +1323,7 @@ fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
                 id: Some(VIDEO_IMAGE_ID),
                 cols: None,
                 rows: None,
+                offset: (0, 0),
             },
         )?;
         queue!(out, EndSynchronizedUpdate)?;
@@ -1349,8 +1352,8 @@ fn emit_new_thumbnails_to(
         let cell_rect = app.gallery.cell_rect(vis_idx);
         delete_stale_images_to(app, out, |cell| cell == img_idx)?;
         if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
-            let (image_x, image_y) = gallery_image_origin(app, cell_rect, img);
-            queue!(out, cursor::MoveTo(image_x, image_y))?;
+            let origin = gallery_image_origin(app, cell_rect, img);
+            queue!(out, cursor::MoveTo(origin.cell.0, origin.cell.1))?;
             app.graphics.transmit(
                 out,
                 img,
@@ -1358,6 +1361,7 @@ fn emit_new_thumbnails_to(
                     id: Some(id),
                     cols: None,
                     rows: None,
+                    offset: origin.offset,
                 },
             )?;
             newly_transmitted.push(id);
@@ -1390,36 +1394,38 @@ fn delete_stale_images_to(
     Ok(())
 }
 
-/// The area inside a thumbnail border, where the image fits.
-fn gallery_thumb_inner(cell_rect: Rect) -> Rect {
-    Rect {
-        x: cell_rect.x + 1,
-        y: cell_rect.y + 1,
-        width: cell_rect.width.saturating_sub(2),
-        height: cell_rect.height.saturating_sub(2),
-    }
+/// Where a thumbnail starts: the cell of the grid and the pixel offset inside that cell.
+struct ImageOrigin {
+    cell: (u16, u16),
+    offset: (u32, u32),
 }
 
-/// Center the fitted thumbnail inside the area inside the border.
-fn gallery_image_origin(app: &App, cell_rect: Rect, img: &RgbaImage) -> (u16, u16) {
-    let inner = gallery_thumb_inner(cell_rect);
-    let (cell_width, cell_height) = app.cell_px;
-    let image_cols = u16::try_from(img.width().div_ceil(cell_width)).unwrap_or(u16::MAX);
-    let image_rows = u16::try_from(img.height().div_ceil(cell_height)).unwrap_or(u16::MAX);
-    let image_x = inner.x + inner.width.saturating_sub(image_cols) / 2;
-    let image_y = inner.y + inner.height.saturating_sub(image_rows) / 2;
-    (image_x, image_y)
+/// Center the fitted thumbnail in its grid cell, to the pixel. The thumbnail is smaller than
+/// the cell by at least the padding, so the offset stays inside the first cell.
+fn gallery_image_origin(app: &App, cell_rect: Rect, img: &RgbaImage) -> ImageOrigin {
+    let (cell_width, cell_height) = (app.cell_px.0.max(1), app.cell_px.1.max(1));
+    let gap_x = (u32::from(cell_rect.width) * cell_width).saturating_sub(img.width()) / 2;
+    let gap_y = (u32::from(cell_rect.height) * cell_height).saturating_sub(img.height()) / 2;
+    let cell_x = cell_rect.x + u16::try_from(gap_x / cell_width).unwrap_or(u16::MAX);
+    let cell_y = cell_rect.y + u16::try_from(gap_y / cell_height).unwrap_or(u16::MAX);
+    ImageOrigin {
+        cell: (cell_x, cell_y),
+        offset: (gap_x % cell_width, gap_y % cell_height),
+    }
 }
 
 fn render_gallery_images(app: &mut App) -> io::Result<()> {
     let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
 
-    // The cells that left the screen need no decode. The visible ones queue again below.
+    // The cells that left the screen need no decode. The visible ones queue again below. The
+    // first screen waits for the cell shape, so that no cell decodes for two sizes.
     app.clear_thumb_queue();
-    for &(vis_idx, img_idx) in &visible {
-        let cell_rect = app.gallery.cell_rect(vis_idx);
-        let path = app.images[img_idx].clone();
-        app.spawn_thumb_decode(img_idx, path, gallery_thumb_inner(cell_rect));
+    app.request_cell_shape();
+    if !app.cell_shape_pending() {
+        for &(_, img_idx) in &visible {
+            let path = app.images[img_idx].clone();
+            app.spawn_thumb_decode(img_idx, path, app.gallery.thumb_box());
+        }
     }
 
     let mut out = app.graphics_out.clone();
@@ -1447,10 +1453,10 @@ fn place_gallery_images_to(
     for &(vis_idx, img_idx) in visible {
         let cell_rect = app.gallery.cell_rect(vis_idx);
         if let Some((img, id)) = app.thumb_cache.peek(img_idx) {
-            let (image_x, image_y) = gallery_image_origin(app, cell_rect, img);
-            queue!(out, cursor::MoveTo(image_x, image_y))?;
+            let origin = gallery_image_origin(app, cell_rect, img);
+            queue!(out, cursor::MoveTo(origin.cell.0, origin.cell.1))?;
             if app.transmitted_image_ids.contains(&id) {
-                app.graphics.place_by_id_to(out, id)?;
+                app.graphics.place_by_id_to(out, id, origin.offset)?;
             } else {
                 app.graphics.transmit(
                     out,
@@ -1459,6 +1465,7 @@ fn place_gallery_images_to(
                         id: Some(id),
                         cols: None,
                         rows: None,
+                        offset: origin.offset,
                     },
                 )?;
                 newly_transmitted.push(id);
@@ -2625,7 +2632,8 @@ mod tests {
                 .collect();
             app.gallery.filtered_indices = (0..count).collect();
             app.gallery.zoom_rows = 2;
-            app.gallery.update_grid(Rect::new(0, 0, 100, 24));
+            // 3:2 cells of 12 rows are 36 columns wide: 3 columns of 40 cells.
+            app.gallery.update_grid(Rect::new(0, 0, 120, 24));
             app.scan_complete = true;
             app.needs_render = false;
             app
@@ -3326,6 +3334,7 @@ mod tests {
         }
 
         /// A gallery of `count` photos with a decoded thumbnail for each, so no decode starts.
+        /// The cells are 20x6 cells of 8x16 px, so 160x96 px.
         fn thumbnail_app(count: usize) -> App {
             let mut app = App::new((8, 16), SharedImageList::new());
             app.images = (0..count)
@@ -3402,13 +3411,40 @@ mod tests {
         }
 
         #[test]
-        fn gallery_centers_each_thumbnail_inside_the_inner_cell() {
+        fn gallery_centers_each_thumbnail_to_the_pixel() {
             let mut app = thumbnail_app(1);
+            assert_eq!((app.gallery.thumb_cols, app.gallery.thumb_rows), (20, 6));
             let mut out = Vec::new();
 
             place_visible(&mut app, &mut out);
 
-            assert!(text(&out).contains("\x1b[3;8H"), "4x4 px in a 14x4 cell");
+            // 4x4 px in 160x96 px: a gap of 78 px (9 cells and 6 px) and 46 px (2 rows and 14 px).
+            let first = text(&out);
+            assert!(
+                first.contains("\x1b[3;10H"),
+                "the cell of the origin: {first}"
+            );
+            assert!(first.contains(",X=6,Y=14,"), "the pixel offset: {first}");
+
+            app.transmitted_image_ids.insert(1);
+            out.clear();
+            place_visible(&mut app, &mut out);
+            assert!(text(&out).contains("\x1b_Ga=p,q=2,C=1,i=1,X=6,Y=14\x1b\\"));
+        }
+
+        #[test]
+        fn a_thumbnail_as_large_as_its_box_starts_at_the_padding() {
+            let mut app = thumbnail_app(1);
+            let (width, height) = crate::app::thumb_target_px(app.gallery.thumb_box(), (8, 16));
+            assert_eq!((width, height), (152, 88));
+            app.thumb_cache.insert(0, RgbaImage::new(width, height));
+            let mut out = Vec::new();
+
+            place_visible(&mut app, &mut out);
+
+            let text = text(&out);
+            assert!(text.contains("\x1b[1;1H"), "the first cell: {text}");
+            assert!(text.contains(",X=4,Y=4,"), "the padding: {text}");
         }
 
         #[test]
@@ -3435,7 +3471,7 @@ mod tests {
             assert_eq!(text.matches(TRANSMIT).count(), 2);
             assert!(!text.contains("\x1b_Ga=d"));
             assert_eq!(app.transmitted_image_ids.len(), 2);
-            assert!(text.contains("\x1b[3;24H"), "centered in the second cell");
+            assert!(text.contains("\x1b[3;30H"), "centered in the second cell");
         }
 
         #[test]

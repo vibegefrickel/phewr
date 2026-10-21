@@ -15,9 +15,10 @@ pub(crate) struct Styles {
     pub border: Style,
     /// The border of the help popup, so the popup stands out from the view borders.
     pub popup_border: Style,
-    /// The border and the label of the grid cell under the cursor.
+    /// The background and the label of the grid cell under the cursor. The background shows
+    /// in the gap around the thumbnail.
     pub cursor_cell: Style,
-    /// The border and the label of a marked image.
+    /// The background and the label of a marked image.
     pub marked: Style,
     /// Errors and the delete question.
     pub error: Style,
@@ -35,8 +36,11 @@ pub(crate) const STYLES: Styles = Styles {
     title: Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
     border: Style::new().fg(Color::DarkGray),
     popup_border: Style::new(),
-    cursor_cell: Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
-    marked: Style::new().fg(Color::Yellow),
+    cursor_cell: Style::new()
+        .fg(Color::White)
+        .bg(Color::Blue)
+        .add_modifier(Modifier::BOLD),
+    marked: Style::new().fg(Color::Black).bg(Color::Yellow),
     error: Style::new().fg(Color::Red),
     selection: Style::new().add_modifier(Modifier::REVERSED),
     dim: Style::new().fg(Color::DarkGray),

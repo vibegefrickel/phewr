@@ -359,13 +359,10 @@ fn extract_frame(
     RgbaImage::from_raw(w, h, pixels).map(|image| VideoFrame { image, pts })
 }
 
-pub(crate) fn decode_first_frame(
-    path: &Path,
-    rect: Rect,
-    cell_px: (u32, u32),
-) -> io::Result<RgbaImage> {
-    let target_w = (u32::from(rect.width) * cell_px.0).max(1);
-    let target_h = (u32::from(rect.height) * cell_px.1).max(1);
+/// The first frame of `path`, fitted into `target` pixels, for a grid thumbnail.
+pub(crate) fn decode_first_frame(path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
+    let target_w = target.0.max(1);
+    let target_h = target.1.max(1);
 
     let mut input = ffmpeg::format::input(path)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -537,8 +534,8 @@ mod tests {
         let Some(clip) = test_clip(dir.path(), "0.5") else {
             return;
         };
-        let frame = decode_first_frame(&clip, Rect::new(0, 0, 4, 3), (8, 16)).unwrap();
-        let tiny = decode_first_frame(&clip, Rect::new(0, 0, 0, 0), (8, 16)).unwrap();
+        let frame = decode_first_frame(&clip, (32, 48)).unwrap();
+        let tiny = decode_first_frame(&clip, (0, 0)).unwrap();
         assert_eq!(frame.dimensions(), (32, 24));
         assert_eq!(tiny.dimensions(), (1, 1));
     }
@@ -549,13 +546,13 @@ mod tests {
         let text = dir.path().join("notes.mp4");
         std::fs::write(&text, "not a video").unwrap();
         let rect = Rect::new(0, 0, 4, 3);
-        assert!(decode_first_frame(&text, rect, (8, 16)).is_err());
+        assert!(decode_first_frame(&text, (32, 48)).is_err());
         assert!(VideoPlayback::open(&text, rect, (8, 16), true).is_err());
 
         let audio = dir.path().join("tone.m4a");
         let audio_text = audio.to_str().unwrap();
         if run_ffmpeg(&["-f", "lavfi", "-i", "sine=duration=0.2", audio_text]) {
-            let error = decode_first_frame(&audio, rect, (8, 16)).unwrap_err();
+            let error = decode_first_frame(&audio, (32, 48)).unwrap_err();
             assert_eq!(error.to_string(), "no video stream");
             let error = VideoPlayback::open(&audio, rect, (8, 16), true)
                 .err()

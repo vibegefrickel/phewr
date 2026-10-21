@@ -89,6 +89,12 @@ fn scanned_app(dir: &Path) -> Bench {
         .map(|&index| app.filenames[index].clone())
         .collect();
     app.gallery.filtered_indices = (0..app.images.len()).collect();
+    // The complete scan started the header read for the cell shape. The grid waits for it.
+    while app.cell_shape_pending() {
+        assert!(Instant::now() < deadline, "the header read did not finish");
+        app.poll_cell_shape();
+        thread::sleep(Duration::from_millis(1));
+    }
     app.gallery.update_grid(grid_rect());
     app.needs_render = true;
     Bench { app, _cache: cache }
@@ -234,6 +240,80 @@ fn grid_first_thumbnail_and_full_grid() {
 
     bench.app.mark_dirty();
     measure_grid(&mut bench.app).report("warm (disk cache)");
+}
+
+/// The cost of the header read that picks the cell shape: the first 64 files of the folder,
+/// as `App::request_cell_shape` reads them, and one file per extension.
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn folder_shape_from_the_headers() {
+    use crate::decode::shape::{aspect_of, folder_aspect};
+
+    let Some(dir) = test_dir() else {
+        report("skipped: VIEWR_TEST_DIR is not set");
+        return;
+    };
+    let bench = scanned_app(&dir);
+    let sample: Vec<PathBuf> = bench.app.images.iter().take(64).cloned().collect();
+    for round in ["cold", "warm"] {
+        let start = Instant::now();
+        let aspect = folder_aspect(&sample);
+        report(&format!(
+            "shape: {} headers in {} ({round}), folder aspect {aspect:.3}",
+            sample.len(),
+            millis(start.elapsed())
+        ));
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for path in &bench.app.images {
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if seen.contains(&extension) {
+            continue;
+        }
+        seen.push(extension.clone());
+        let start = Instant::now();
+        let aspect = aspect_of(path);
+        report(&format!(
+            "shape: one .{extension} header in {:.2} ms, aspect {aspect:?}",
+            start.elapsed().as_secs_f64() * 1000.0
+        ));
+    }
+}
+
+/// The wait for the cell shape after a directory switch, while the cold decodes of the old
+/// folder still run. The first screen of the new folder waits for this read.
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn folder_switch_waits_for_the_shape() {
+    let Some(dir) = test_dir() else {
+        report("skipped: VIEWR_TEST_DIR is not set");
+        return;
+    };
+    let mut bench = scanned_app(&dir);
+    let images = bench.app.images.clone();
+    let mut pending = Vec::new();
+    // One pass starts the cold decodes of the first screen and fills the rayon pool.
+    run_pass(&mut bench.app, &mut pending);
+    thread::sleep(Duration::from_millis(20));
+
+    bench.app.switch_to_dir(&dir);
+    bench.app.images = images;
+    bench.app.gallery.filtered_indices = (0..bench.app.images.len()).collect();
+    let start = Instant::now();
+    bench.app.request_cell_shape();
+    while bench.app.cell_shape_pending() {
+        assert!(start.elapsed() < LIMIT, "the header read did not finish");
+        bench.app.poll_cell_shape();
+        thread::sleep(Duration::from_millis(1));
+    }
+    report(&format!(
+        "shape after a folder switch with cold decodes in flight: {}",
+        millis(start.elapsed())
+    ));
 }
 
 #[test]

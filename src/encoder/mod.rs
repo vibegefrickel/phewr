@@ -63,6 +63,9 @@ pub(crate) struct DisplayOptions {
     pub id: Option<u32>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    /// The pixel offset inside the first cell (`X=` and `Y=`), so that a picture can start
+    /// between two cell borders.
+    pub offset: (u32, u32),
 }
 
 /// How the pixels reach the terminal.
@@ -91,7 +94,7 @@ pub(crate) trait GraphicsBackend {
     ) -> io::Result<()>;
     fn delete_all_to(&self, out: &mut dyn Write) -> io::Result<()>;
     fn clear_placements_to(&self, out: &mut dyn Write) -> io::Result<()>;
-    fn place_by_id_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
+    fn place_by_id_to(&self, out: &mut dyn Write, id: u32, offset: (u32, u32)) -> io::Result<()>;
     fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
 }
 
@@ -129,8 +132,8 @@ impl GraphicsBackend for KittyBackend {
         kitty::clear_placements_to(out)
     }
 
-    fn place_by_id_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
-        kitty::place_by_id_to(out, id)
+    fn place_by_id_to(&self, out: &mut dyn Write, id: u32, offset: (u32, u32)) -> io::Result<()> {
+        kitty::place_by_id_to(out, id, offset)
     }
 
     fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
@@ -172,12 +175,13 @@ mod tests {
                     id: Some(7),
                     cols: Some(5),
                     rows: Some(3),
+                    offset: (0, 0),
                 },
             )
             .unwrap();
         backend.delete_all_to(&mut out).unwrap();
         backend.clear_placements_to(&mut out).unwrap();
-        backend.place_by_id_to(&mut out, 9).unwrap();
+        backend.place_by_id_to(&mut out, 9, (0, 0)).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(",i=7,"));

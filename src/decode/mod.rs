@@ -1,9 +1,11 @@
 //! The decoders outside the `image` crate and libheif, and the helpers of the decode routes:
-//! JPEG XL, macOS `sips`, the tone map of float images and the HEIF box reader.
+//! JPEG XL, macOS `sips`, the tone map of float images, the HEIF box reader and the folder shape
+//! from the file headers.
 
 #[cfg(feature = "heic")]
 pub(crate) mod heif_boxes;
 pub(crate) mod jxl;
+pub(crate) mod shape;
 #[cfg(all(feature = "sips", target_os = "macos"))]
 pub(crate) mod sips;
 pub(crate) mod tonemap;

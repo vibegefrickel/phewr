@@ -495,43 +495,36 @@ fn gallery_bottom_line(app: &App, filtered_count: usize, status: Option<&str>) -
     }
 }
 
-/// One bordered cell per visible thumbnail, with an optional filename label; Kitty draws the pictures.
+/// One cell per visible thumbnail, with an optional filename label; Kitty draws the pictures.
+/// The selected cell and the marked cells get a background color, which shows in the gap
+/// around the picture. The selected style wins.
 fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     app.gallery.update_grid(grid_rect);
-    let thumb_cols = app.gallery.thumb_cols;
-    let thumb_rows = app.gallery.thumb_rows;
-    let cell_height_total = app.gallery.cell_height_total();
 
     for (vis_idx, img_idx) in app.gallery.visible_items().collect::<Vec<_>>() {
-        let col = vis_idx % app.gallery.grid_cols;
-        let row = vis_idx / app.gallery.grid_cols;
-
-        let cell_x = grid_rect.x + (col as u16) * thumb_cols;
-        let cell_y = grid_rect.y + (row as u16) * cell_height_total;
+        let cell = app.gallery.cell_rect(vis_idx).intersection(grid_rect);
+        let (cell_x, cell_y) = (cell.x, cell.y);
+        let thumb_cols = cell.width;
+        let thumb_rows = cell.height;
 
         let is_selected =
             vis_idx + app.gallery.scroll_offset * app.gallery.grid_cols == app.gallery.cursor;
         let is_marked = app.is_marked(img_idx);
 
-        // Only the selected cell and the marked cells get a border. The selected style wins.
-        let border_style = if is_selected {
+        let fill_style = if is_selected {
             Some(STYLES.cursor_cell)
         } else if is_marked {
             Some(STYLES.marked)
         } else {
             None
         };
-        if let Some(border_style) = border_style {
-            let thumb_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style);
-            let block_rect = Rect {
-                x: cell_x,
-                y: cell_y,
-                width: thumb_cols.min(grid_rect.right().saturating_sub(cell_x)),
-                height: thumb_rows.min(grid_rect.bottom().saturating_sub(cell_y)),
-            };
-            frame.render_widget(thumb_block, block_rect);
+        if let Some(fill_style) = fill_style {
+            let fill_rect = Rect {
+                height: cell.height + LABEL_ROWS * u16::from(app.gallery.show_filenames),
+                ..cell
+            }
+            .intersection(grid_rect);
+            frame.buffer_mut().set_style(fill_rect, fill_style);
         }
 
         if !app.gallery.show_filenames {
@@ -774,11 +767,24 @@ mod tests {
     }
 
     /// Fail when a cell sets a background, so the terminal background shows everywhere.
-    fn assert_terminal_background(buffer: &Buffer) {
-        assert!(
-            buffer.content().iter().all(|cell| cell.bg == Color::Reset),
-            "a cell sets a background color"
-        );
+    /// Fail when a cell sets a background color. Inside `grid`, the fill of the selected and
+    /// the marked cells (blue and yellow) is allowed.
+    fn assert_terminal_background(buffer: &Buffer, grid: Option<Rect>) {
+        let area = buffer.area;
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                let bg = buffer[(x, y)].bg;
+                let in_grid = grid.is_some_and(|grid| grid.contains((x, y).into()));
+                let allowed =
+                    bg == Color::Reset || (in_grid && matches!(bg, Color::Blue | Color::Yellow));
+                assert!(allowed, "cell ({x}, {y}) sets the background {bg:?}");
+            }
+        }
+    }
+
+    /// Fail when the cell does not carry the ANSI colors `fg` on `bg` and `modifier`.
+    fn assert_fill(cell: &Cell, fg: Color, bg: Color, modifier: Modifier) {
+        assert_eq!((cell.fg, cell.bg, cell.modifier), (fg, bg, modifier));
     }
 
     /// Fail when the cell does not carry the terminal foreground and `modifier`.
@@ -877,22 +883,46 @@ mod tests {
     }
 
     #[test]
-    fn gallery_draws_a_border_only_around_the_selected_and_the_marked_cells() {
+    fn gallery_fills_only_the_selected_and_the_marked_cells() {
         let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
-        let screen = render(&mut app, None, 100, 30);
+        let buffer = render_buffer(&mut app, None, 100, 30);
         assert_eq!(
-            screen.matches('\u{250c}').count(),
-            3,
-            "search bar + gallery block + cursor:\n{screen}"
+            screen_rows(&buffer).join("\n").matches('\u{250c}').count(),
+            2,
+            "search bar + gallery block, no cell border"
         );
+        let cursor = app.gallery.cell_rect(0);
+        let second = app.gallery.cell_rect(1);
+        let third = app.gallery.cell_rect(2);
+        assert_eq!(
+            (cursor.x, cursor.y),
+            (1, 4),
+            "inside the search bar and the border"
+        );
+        assert_eq!(buffer[(cursor.x, cursor.y)].bg, Color::Blue);
+        assert_eq!(
+            buffer[(cursor.right() - 1, cursor.bottom() - 1)].bg,
+            Color::Blue
+        );
+        assert_eq!(buffer[(cursor.right(), cursor.y)].bg, Color::Reset);
+        assert_eq!(buffer[(cursor.x, cursor.bottom())].bg, Color::Reset);
+        assert_eq!(buffer[(second.x, second.y)].bg, Color::Reset);
 
         app.selection.insert(app.images[2].clone());
-        let screen = render(&mut app, None, 100, 30);
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_eq!(buffer[(third.x, third.y)].bg, Color::Yellow);
         assert_eq!(
-            screen.matches('\u{250c}').count(),
-            4,
-            "+ one marked cell:\n{screen}"
+            buffer[(third.right() - 1, third.bottom() - 1)].bg,
+            Color::Yellow
         );
+        assert_eq!(buffer[(second.x, second.y)].bg, Color::Reset);
+
+        // The fill covers the label row too.
+        app.gallery.show_filenames = true;
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let cursor = app.gallery.cell_rect(0);
+        assert_eq!(buffer[(cursor.x, cursor.bottom())].bg, Color::Blue);
+        assert_eq!(buffer[(cursor.x, cursor.bottom() + 1)].bg, Color::Reset);
     }
 
     #[test]
@@ -901,30 +931,58 @@ mod tests {
         app.gallery.show_filenames = true;
         app.selection.insert(app.images[1].clone());
         let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_terminal_background(&buffer);
+        assert_terminal_background(&buffer, Some(app.gallery.grid_rect));
 
         // The grid starts inside the search bar (3 rows) and the gallery border.
         let (left, top) = (1, 4);
-        let cursor_corner = &buffer[(left, top)];
-        assert_eq!(cursor_corner.symbol(), "\u{250c}");
-        assert_default_fg(cursor_corner, Modifier::BOLD);
-        let marked_corner = &buffer[(left + app.gallery.thumb_cols, top)];
-        assert_eq!(marked_corner.symbol(), "\u{250c}");
-        assert_ansi(marked_corner, Color::Yellow);
+        assert_fill(
+            &buffer[(left, top)],
+            Color::White,
+            Color::Blue,
+            Modifier::BOLD,
+        );
+        let marked = app.gallery.cell_rect(1);
+        assert_fill(
+            &buffer[(marked.x, top)],
+            Color::Black,
+            Color::Yellow,
+            Modifier::empty(),
+        );
 
-        assert_default_fg(cell_of(&buffer, "a.jpg"), Modifier::BOLD);
-        assert_ansi(cell_of(&buffer, "\u{25cf} b.jpg"), Color::Yellow);
+        assert_fill(
+            cell_of(&buffer, "a.jpg"),
+            Color::White,
+            Color::Blue,
+            Modifier::BOLD,
+        );
+        assert_fill(
+            cell_of(&buffer, "\u{25cf} b.jpg"),
+            Color::Black,
+            Color::Yellow,
+            Modifier::empty(),
+        );
         assert_default_fg(cell_of(&buffer, "c.jpg"), Modifier::empty());
+        assert_eq!(cell_of(&buffer, "c.jpg").bg, Color::Reset);
         assert_ansi(&buffer[(0, 0)], Color::DarkGray);
         assert_default_fg(cell_of(&buffer, "Gallery ["), Modifier::BOLD);
         assert_ansi(cell_of(&buffer, "1 selected"), Color::DarkGray);
         assert_ansi(cell_of(&buffer, "Enter: open"), Color::Cyan);
 
-        // On a marked cell under the cursor, the cursor style wins for the border and the label.
+        // On a marked cell under the cursor, the cursor style wins for the fill and the label.
         app.selection.insert(app.images[0].clone());
         let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_default_fg(&buffer[(left, top)], Modifier::BOLD);
-        assert_default_fg(cell_of(&buffer, "\u{25cf} a.jpg"), Modifier::BOLD);
+        assert_fill(
+            &buffer[(left, top)],
+            Color::White,
+            Color::Blue,
+            Modifier::BOLD,
+        );
+        assert_fill(
+            cell_of(&buffer, "\u{25cf} a.jpg"),
+            Color::White,
+            Color::Blue,
+            Modifier::BOLD,
+        );
 
         app.error = Some("scan failed".to_owned());
         let buffer = render_buffer(&mut app, None, 100, 30);
@@ -1037,7 +1095,7 @@ mod tests {
         let mut app = app_with(&["a.jpg"]);
         app.mode = ViewMode::Fullscreen;
         let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_terminal_background(&buffer);
+        assert_terminal_background(&buffer, None);
         assert_ansi(&buffer[(0, 0)], Color::DarkGray);
         assert_default_fg(cell_of(&buffer, "a.jpg "), Modifier::BOLD);
         assert_default_fg(cell_of(&buffer, "a.jpg ["), Modifier::empty());
@@ -1080,7 +1138,7 @@ mod tests {
         assert_shows(&screen, "Format  JPG");
 
         let buffer = render_buffer(&mut app, None, 120, 30);
-        assert_terminal_background(&buffer);
+        assert_terminal_background(&buffer, Some(app.gallery.grid_rect));
         assert_default_fg(cell_of(&buffer, "Info "), Modifier::BOLD);
         assert_ansi(cell_of(&buffer, "i: close"), Color::Cyan);
         assert_default_fg(cell_of(&buffer, "File"), Modifier::BOLD);
@@ -1115,7 +1173,7 @@ mod tests {
         assert_shows(&screen, " press any key to close");
 
         let buffer = render_buffer(&mut app, None, 100, 120);
-        assert_terminal_background(&buffer);
+        assert_terminal_background(&buffer, Some(app.gallery.grid_rect));
         assert_default_fg(cell_of(&buffer, "Help "), Modifier::BOLD);
         assert_default_fg(cell_of(&buffer, "Gallery   "), Modifier::BOLD);
         assert_ansi(cell_of(&buffer, "h/j/k/l"), Color::Cyan);
@@ -1144,7 +1202,7 @@ mod tests {
         assert_shows(&screen, " Enter: choose  /: filter");
         assert_hides(&screen, " Info ");
         let buffer = render_buffer(&mut app, None, width, 20);
-        assert_terminal_background(&buffer);
+        assert_terminal_background(&buffer, None);
         assert_default_fg(cell_of(&buffer, "\u{25b6} .."), Modifier::REVERSED);
         assert_default_fg(cell_of(&buffer, "alpha/"), Modifier::empty());
         assert_ansi(cell_of(&buffer, "Enter: choose"), Color::Cyan);

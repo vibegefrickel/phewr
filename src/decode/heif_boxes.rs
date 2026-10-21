@@ -9,7 +9,8 @@
 //!
 //! The reader reads only the `meta` box: `pitm` (the primary item), `iref` with its `thmb`
 //! references, and `iprp` with `ipco` (the properties) and `ipma` (the property indices of each
-//! item). It does not read `iinf`, because libheif already lists the thumbnail items.
+//! item). It does not read `iinf`, because libheif already lists the thumbnail items. The `ispe`
+//! property gives the size of the primary item without a decode, for the cell shape of the grid.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -47,6 +48,11 @@ impl Transform {
         }
     }
 
+    /// True for a quarter turn: the width and the height change places.
+    fn swaps_axes(self) -> bool {
+        self.0[0][0] == 0
+    }
+
     /// This transform, then `next`.
     fn then(self, next: Self) -> Self {
         let (a, b) = (next.0, self.0);
@@ -63,6 +69,8 @@ pub(crate) struct HeifItems {
     thumbnails: Vec<(u32, u32)>,
     /// The transform of each item with an `irot` or `imir` property.
     transforms: HashMap<u32, Transform>,
+    /// The `ispe` size (width, height) of each item, before its transform.
+    sizes: HashMap<u32, (u32, u32)>,
 }
 
 impl HeifItems {
@@ -78,6 +86,17 @@ impl HeifItems {
             .iter()
             .any(|&(thumb, master)| thumb == thumbnail && master == self.primary)
             && self.transform(thumbnail) == self.transform(self.primary)
+    }
+
+    /// The size of the primary image as the viewer shows it: `ispe`, swapped by a 90 or 270
+    /// degree `irot`.
+    pub(crate) fn primary_size(&self) -> Option<(u32, u32)> {
+        let (width, height) = *self.sizes.get(&self.primary)?;
+        if self.transform(self.primary).swaps_axes() {
+            Some((height, width))
+        } else {
+            Some((width, height))
+        }
     }
 
     fn transform(&self, item: u32) -> Transform {
@@ -111,9 +130,12 @@ impl HeifItems {
         }
         items.primary = primary?;
         for (item, indices) in associations {
-            let transform = indices
+            let item_properties: Vec<&([u8; 4], &[u8])> = indices
                 .into_iter()
                 .filter_map(|index| properties.get(usize::from(index).checked_sub(1)?))
+                .collect();
+            let transform = item_properties
+                .iter()
                 .filter_map(|(kind, body)| match kind {
                     b"irot" => Some(Transform::rotation(*body.first()?)),
                     b"imir" => Some(Transform::mirror(*body.first()?)),
@@ -123,9 +145,24 @@ impl HeifItems {
             if transform != Transform::IDENTITY {
                 items.transforms.insert(item, transform);
             }
+            if let Some(size) = item_properties
+                .iter()
+                .find_map(|(kind, body)| (kind == b"ispe").then(|| parse_ispe(body)).flatten())
+            {
+                items.sizes.insert(item, size);
+            }
         }
         Some(items)
     }
+}
+
+/// `ispe`: a full box with the width and the height as `u32`.
+fn parse_ispe(body: &[u8]) -> Option<(u32, u32)> {
+    let mut bytes = Bytes(body);
+    bytes.full_box_version()?;
+    let width = bytes.u32()?;
+    let height = bytes.u32()?;
+    (width > 0 && height > 0).then_some((width, height))
 }
 
 /// Find the top-level `meta` box and load its content. `Ok(None)` if the file has none.
@@ -312,18 +349,27 @@ mod tests {
     /// `primary_rotation`, property 2 is `ispe`. `thumbnail_properties` are the 1-based property
     /// indices of the thumbnail, `extra` are more properties after the first two.
     fn meta(primary_rotation: u8, extra: &[Vec<u8>], thumbnail_properties: &[u8]) -> Vec<u8> {
+        let mut ipco = vec![bx(*b"irot", &[primary_rotation]), full(*b"ispe", &[0; 8])];
+        ipco.extend_from_slice(extra);
+        meta_items(&ipco, &[0x81, 2], thumbnail_properties)
+    }
+
+    /// A `meta` body with the properties `ipco`: primary item 1 with the 1-based
+    /// `primary_properties`, thumbnail item 2 with `thumbnail_properties`.
+    fn meta_items(
+        ipco: &[Vec<u8>],
+        primary_properties: &[u8],
+        thumbnail_properties: &[u8],
+    ) -> Vec<u8> {
         let thmb = bx(*b"thmb", &[0, 2, 0, 1, 0, 1]);
-        let mut ipco = [bx(*b"irot", &[primary_rotation]), full(*b"ispe", &[0; 8])].concat();
-        for property in extra {
-            ipco.extend_from_slice(property);
-        }
         let mut ipma = vec![0, 0, 0, 2];
-        ipma.extend_from_slice(&[0, 1, 2, 0x81, 2]);
+        ipma.extend_from_slice(&[0, 1, u8::try_from(primary_properties.len()).unwrap()]);
+        ipma.extend_from_slice(primary_properties);
         ipma.extend_from_slice(&[0, 2, u8::try_from(thumbnail_properties.len()).unwrap()]);
         ipma.extend_from_slice(thumbnail_properties);
         let iprp = bx(
             *b"iprp",
-            &[bx(*b"ipco", &ipco), full(*b"ipma", &ipma)].concat(),
+            &[bx(*b"ipco", &ipco.concat()), full(*b"ipma", &ipma)].concat(),
         );
         [
             vec![0, 0, 0, 0],
@@ -372,6 +418,23 @@ mod tests {
         let mirrored = HeifItems::parse_meta(&meta(0, &extra, &[5])).unwrap();
         assert!(!items.thumbnail_matches_primary(2));
         assert_eq!(items.transform(2), mirrored.transform(2));
+    }
+
+    #[test]
+    fn the_primary_size_follows_the_rotation() {
+        let ispe = full(*b"ispe", &[0, 0, 0x0f, 0xc0, 0, 0, 0x0b, 0xd0]);
+        let quarter_turn = bx(*b"irot", &[1]);
+        let ipco = [ispe, quarter_turn.clone()];
+
+        let upright = HeifItems::parse_meta(&meta_items(&ipco, &[1], &[])).unwrap();
+        assert_eq!(upright.primary_size(), Some((4032, 3024)));
+        let turned = HeifItems::parse_meta(&meta_items(&ipco, &[1, 2], &[])).unwrap();
+        assert_eq!(turned.primary_size(), Some((3024, 4032)));
+
+        let no_size = HeifItems::parse_meta(&meta_items(&[quarter_turn], &[1], &[])).unwrap();
+        assert_eq!(no_size.primary_size(), None);
+        let zero_size = HeifItems::parse_meta(&meta(0, &[], &[])).unwrap();
+        assert_eq!(zero_size.primary_size(), None, "an empty ispe is no size");
     }
 
     #[test]

@@ -14,9 +14,10 @@ const MAX_THUMB_COLS: u16 = 120;
 const MIN_THUMB_ROWS: u16 = 3;
 const MAX_THUMB_ROWS: u16 = 60;
 
-/// Cell aspect (columns per row) for the column count: about a 4:3 photo in cells
-/// that are twice as tall as wide.
-const DEFAULT_CELL_ASPECT: f64 = 2.5;
+/// The aspect ratio (width over height) of a photo whose size nobody knows: 3:2.
+pub(crate) const DEFAULT_IMAGE_ASPECT: f64 = 1.5;
+/// The height of a terminal cell over its width, before the terminal reports its cell size.
+const DEFAULT_CELL_RATIO: f64 = 2.0;
 /// The grid always shows at least this many columns.
 const MIN_GRID_COLS: usize = 2;
 
@@ -34,9 +35,17 @@ pub(crate) struct GalleryState {
     pub show_filenames: bool,
     /// The zoom level: how many thumbnail rows the grid shows.
     pub zoom_rows: usize,
-    /// Thumbnail cell size in terminal cells, border included. `update_grid` computes it.
+    /// The base cell size in terminal cells. `update_grid` computes it. Every thumbnail is
+    /// decoded for this size.
     pub thumb_cols: u16,
     pub thumb_rows: u16,
+    /// The first `extra_cols` columns are one cell wider, and the first `extra_rows` rows one
+    /// cell taller, so that the grid reaches the right and the bottom edge.
+    pub extra_cols: u16,
+    pub extra_rows: u16,
+    /// The width of a cell over its height, in terminal cells, for the column count. It comes
+    /// from the photos of the folder and the pixel size of a cell.
+    cols_per_row: f64,
     /// Zoom level the grid returns to on reset (from config).
     default_zoom_rows: usize,
 }
@@ -63,8 +72,35 @@ impl GalleryState {
             zoom_rows,
             thumb_cols: DEFAULT_THUMB_COLS,
             thumb_rows: DEFAULT_THUMB_ROWS,
+            extra_cols: 0,
+            extra_rows: 0,
+            cols_per_row: DEFAULT_IMAGE_ASPECT * DEFAULT_CELL_RATIO,
             default_zoom_rows: zoom_rows,
         }
+    }
+
+    /// Shape the cells like a photo with `image_aspect` (width over height) on cells of
+    /// `cell_px`. Returns `true` if the grid changed, so the thumbnails need a new decode.
+    pub(crate) fn set_cell_shape(&mut self, image_aspect: f64, cell_px: (u32, u32)) -> bool {
+        let cell_ratio = if cell_px.0 == 0 || cell_px.1 == 0 {
+            DEFAULT_CELL_RATIO
+        } else {
+            f64::from(cell_px.1) / f64::from(cell_px.0)
+        };
+        let aspect = if image_aspect.is_finite() && image_aspect > 0.0 {
+            image_aspect
+        } else {
+            DEFAULT_IMAGE_ASPECT
+        };
+        let before = (self.grid_cols, self.thumb_cols, self.extra_cols);
+        self.cols_per_row = aspect * cell_ratio;
+        self.update_grid(self.grid_rect);
+        before != (self.grid_cols, self.thumb_cols, self.extra_cols)
+    }
+
+    /// The box that every thumbnail is decoded for: the base cell size.
+    pub(crate) fn thumb_box(&self) -> Rect {
+        Rect::new(0, 0, self.thumb_cols, self.thumb_rows)
     }
 
     /// Height of one grid row: the thumbnail and the optional label, no spacer.
@@ -122,21 +158,34 @@ impl GalleryState {
     }
 
     /// Fit `zoom_rows` rows into the terminal: the rows share the height, and the columns
-    /// share the width. The cell aspect only picks the column count, then the width fills.
+    /// share the width. The cell shape only picks the column count, then the width fills. The
+    /// remainders of the division go to the first columns and the first rows, one cell each.
     pub(crate) fn update_grid(&mut self, grid_rect: Rect) {
         self.grid_rect = grid_rect;
         self.visible_rows = self.zoom_rows.clamp(1, self.max_visible_rows());
-        let cell_height =
-            (grid_rect.height / self.visible_rows as u16).max(MIN_THUMB_ROWS + self.label_rows());
+        let rows = self.visible_rows as u16;
+        let cell_height = (grid_rect.height / rows).max(MIN_THUMB_ROWS + self.label_rows());
         self.thumb_rows = cell_height
             .saturating_sub(self.label_rows())
             .clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
-        let candidate_cols = (f64::from(self.thumb_rows) * DEFAULT_CELL_ASPECT).round() as u16;
+        self.extra_rows = spread(grid_rect.height, self.cell_height_total(), rows);
+        let candidate_cols = (f64::from(self.thumb_rows) * self.cols_per_row).round() as u16;
         self.grid_cols =
             (grid_rect.width as usize / usize::from(candidate_cols.max(1))).max(MIN_GRID_COLS);
-        self.thumb_cols =
-            (grid_rect.width / self.grid_cols as u16).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
+        let cols = self.grid_cols as u16;
+        self.thumb_cols = (grid_rect.width / cols).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
+        self.extra_cols = spread(grid_rect.width, self.thumb_cols, cols);
         self.ensure_cursor_visible();
+    }
+
+    /// The left edge of the column `col`: the columns before it, plus one cell for each wide one.
+    fn col_x(&self, col: u16) -> u16 {
+        self.grid_rect.x + col * self.thumb_cols + col.min(self.extra_cols)
+    }
+
+    /// The top edge of the row `row`, with one cell for each tall row before it.
+    fn row_y(&self, row: u16) -> u16 {
+        self.grid_rect.y + row * self.cell_height_total() + row.min(self.extra_rows)
     }
 
     pub(crate) fn selected_index(&self) -> Option<usize> {
@@ -214,16 +263,24 @@ impl GalleryState {
             .map(move |(vis, &img_idx)| (vis, img_idx))
     }
 
+    /// The thumbnail area of the visible cell `vis_index`, without the label row.
     pub(crate) fn cell_rect(&self, vis_index: usize) -> Rect {
-        let col = vis_index % self.grid_cols;
-        let row = vis_index / self.grid_cols;
+        let col = (vis_index % self.grid_cols) as u16;
+        let row = (vis_index / self.grid_cols) as u16;
         Rect {
-            x: self.grid_rect.x + (col as u16) * self.thumb_cols,
-            y: self.grid_rect.y + (row as u16) * self.cell_height_total(),
-            width: self.thumb_cols,
-            height: self.thumb_rows,
+            x: self.col_x(col),
+            y: self.row_y(row),
+            width: self.thumb_cols + u16::from(col < self.extra_cols),
+            height: self.thumb_rows + u16::from(row < self.extra_rows),
         }
     }
+}
+
+/// How many of the `count` cells get one cell more, so that `count` cells of `base` fill
+/// `total`. Zero when the base size came from a clamp and the cells cannot fill `total`.
+fn spread(total: u16, base: u16, count: u16) -> u16 {
+    let rest = total.saturating_sub(base.saturating_mul(count));
+    if rest < count { rest } else { 0 }
 }
 
 const THUMB_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(200).unwrap();
@@ -301,7 +358,8 @@ mod tests {
     #[test]
     fn grid_navigation_tracks_rows_and_scroll() {
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
-        gallery.update_grid(Rect::new(0, 0, 75, 20));
+        gallery.update_grid(Rect::new(0, 0, 100, 20));
+        assert_eq!(gallery.grid_cols, 3);
 
         gallery.move_down();
         assert_eq!(gallery.selected_index(), Some(3));
@@ -340,15 +398,15 @@ mod tests {
     fn zoom_changes_the_row_count_and_clamps() {
         let mut gallery = GalleryState::with_zoom_rows(50, 4);
         gallery.update_grid(Rect::new(0, 0, 100, 40));
-        assert_eq!(gallery.grid_cols, 4);
-        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (25, 10));
+        assert_eq!(gallery.grid_cols, 3);
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (33, 10));
 
         assert!(gallery.thumb_zoom_in());
         assert_eq!(gallery.zoom_rows, 3);
         assert!(gallery.thumb_rows > 10);
 
         assert!(gallery.thumb_zoom_out());
-        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (25, 10));
+        assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (33, 10));
 
         for _ in 0..40 {
             gallery.thumb_zoom_in();
@@ -379,7 +437,7 @@ mod tests {
     #[test]
     fn cursor_row_matches_grid_columns() {
         let mut gallery = GalleryState::with_zoom_rows(15, 2);
-        gallery.update_grid(Rect::new(0, 0, 75, 20));
+        gallery.update_grid(Rect::new(0, 0, 100, 20));
 
         gallery.move_to_first();
         for _ in 0..4 {
@@ -394,7 +452,7 @@ mod tests {
     #[test]
     fn directional_moves_within_grid_bounds() {
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
-        gallery.update_grid(Rect::new(0, 0, 75, 20));
+        gallery.update_grid(Rect::new(0, 0, 100, 20));
 
         gallery.move_right();
         assert_eq!(gallery.selected_index(), Some(1));
@@ -413,7 +471,8 @@ mod tests {
     #[test]
     fn page_moves_jump_by_visible_rows() {
         let mut gallery = GalleryState::with_zoom_rows(20, 2);
-        gallery.update_grid(Rect::new(0, 0, 120, 24));
+        gallery.update_grid(Rect::new(0, 0, 150, 24));
+        assert_eq!(gallery.grid_cols, 4);
 
         gallery.move_page_down();
         assert_eq!(gallery.selected_index(), Some(8));
@@ -426,7 +485,7 @@ mod tests {
     #[test]
     fn scroll_follows_cursor() {
         let mut gallery = GalleryState::with_zoom_rows(20, 2);
-        gallery.update_grid(Rect::new(0, 0, 120, 24));
+        gallery.update_grid(Rect::new(0, 0, 150, 24));
 
         gallery.move_page_down();
         gallery.move_right();
@@ -438,7 +497,7 @@ mod tests {
     #[test]
     fn visible_items_and_cell_rect_match_geometry() {
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
-        gallery.update_grid(Rect::new(0, 0, 75, 20));
+        gallery.update_grid(Rect::new(0, 0, 100, 20));
         gallery.scroll_offset = 1;
 
         let items: Vec<_> = gallery.visible_items().collect();
@@ -447,15 +506,110 @@ mod tests {
         let first = gallery.cell_rect(0);
         assert_eq!(first.x, gallery.grid_rect.x);
         assert_eq!(first.y, gallery.grid_rect.y);
-        assert_eq!(first.width, gallery.thumb_cols);
+        assert_eq!(
+            first.width,
+            gallery.thumb_cols + 1,
+            "the first column is wide"
+        );
         assert_eq!(first.height, gallery.thumb_rows);
 
         let last_col = gallery.grid_cols - 1;
         let last = gallery.cell_rect(last_col);
+        assert_eq!(last.width, gallery.thumb_cols);
+        assert_eq!(last.right(), gallery.grid_rect.right());
+    }
+
+    #[test]
+    fn the_remainders_go_to_the_first_columns_and_rows() {
+        // 3 columns of 33 cells leave 1 cell; 2 rows of 10 rows leave 1 row.
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.update_grid(Rect::new(5, 7, 100, 21));
+        assert_eq!((gallery.grid_cols, gallery.thumb_cols), (3, 33));
+        assert_eq!((gallery.extra_cols, gallery.extra_rows), (1, 1));
+
+        let cells: Vec<Rect> = (0..6).map(|index| gallery.cell_rect(index)).collect();
+        assert_eq!(cells[0], Rect::new(5, 7, 34, 11));
+        assert_eq!(cells[1], Rect::new(39, 7, 33, 11));
+        assert_eq!(cells[2], Rect::new(72, 7, 33, 11));
+        assert_eq!(cells[3], Rect::new(5, 18, 34, 10));
+        assert_eq!(cells[5], Rect::new(72, 18, 33, 10));
+        assert_eq!(cells[2].right(), gallery.grid_rect.right());
+        assert_eq!(cells[5].bottom(), gallery.grid_rect.bottom());
+
+        // The thumbnails of a wide column are decoded for the base size.
+        assert_eq!(gallery.thumb_box(), Rect::new(0, 0, 33, 10));
+
+        // A clamped cell size cannot fill the width, so nothing spreads.
+        gallery.update_grid(Rect::new(0, 0, 12, 21));
+        assert_eq!((gallery.grid_cols, gallery.thumb_cols), (2, 8));
+        assert_eq!(gallery.extra_cols, 0);
+    }
+
+    #[test]
+    fn the_labels_sit_below_the_tall_rows() {
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.show_filenames = true;
+        gallery.update_grid(Rect::new(0, 0, 100, 23));
+        assert_eq!((gallery.thumb_rows, gallery.cell_height_total()), (10, 11));
+        assert_eq!(gallery.extra_rows, 1);
+
+        let first = gallery.cell_rect(0);
+        let second_row = gallery.cell_rect(3);
+        assert_eq!(first.height, 11);
+        assert_eq!(second_row.y, 12, "11 rows of thumbnail and 1 row of label");
+        assert_eq!(second_row.height, 10);
+        assert_eq!(second_row.bottom() + 1, gallery.grid_rect.bottom());
+    }
+
+    #[test]
+    fn the_cursor_moves_over_cells_of_different_widths() {
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.update_grid(Rect::new(0, 0, 100, 21));
+        assert_eq!(gallery.extra_cols, 1);
+
+        let widths: Vec<u16> = (0..3).map(|col| gallery.cell_rect(col).width).collect();
+        assert_eq!(widths, [34, 33, 33]);
+        gallery.move_right();
+        gallery.move_right();
+        gallery.move_down();
+        assert_eq!(gallery.selected_index(), Some(5));
+        assert_eq!(gallery.cell_rect(5), Rect::new(67, 11, 33, 10));
+        gallery.move_left();
+        gallery.move_left();
+        assert_eq!(gallery.selected_index(), Some(3));
+        assert_eq!(gallery.cell_rect(3).width, 34);
+    }
+
+    #[test]
+    fn the_cell_shape_follows_the_photos_and_the_cell_pixels() {
+        let mut gallery = GalleryState::with_zoom_rows(50, 2);
+        let rect = Rect::new(0, 0, 120, 20);
+        gallery.update_grid(rect);
         assert_eq!(
-            last.x,
-            gallery.grid_rect.x + (last_col as u16) * gallery.thumb_cols
+            gallery.grid_cols, 4,
+            "3:2 on 1:2 cells: 30 columns per 10 rows"
         );
+
+        // A portrait folder on 8x16 px cells: 3:4 photos are 15 columns wide.
+        assert!(gallery.set_cell_shape(0.75, (8, 16)));
+        assert_eq!(gallery.grid_cols, 8);
+        assert!(
+            !gallery.set_cell_shape(0.75, (8, 16)),
+            "the same shape changes nothing"
+        );
+
+        // A landscape folder: 16:9 photos are 36 columns wide.
+        assert!(gallery.set_cell_shape(16.0 / 9.0, (8, 16)));
+        assert_eq!(gallery.grid_cols, 3);
+
+        // Wider cells (10x16 px) make the same photo fewer columns wide: 28, so 4 columns.
+        assert!(gallery.set_cell_shape(16.0 / 9.0, (10, 16)));
+        assert_eq!(gallery.grid_cols, 4);
+
+        // A bad aspect or an unknown cell size falls back to 3:2 on 1:2 cells.
+        assert!(gallery.set_cell_shape(0.75, (8, 16)));
+        assert!(gallery.set_cell_shape(f64::NAN, (0, 0)));
+        assert_eq!(gallery.grid_cols, 4);
     }
 
     #[test]

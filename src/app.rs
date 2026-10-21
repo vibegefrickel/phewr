@@ -21,6 +21,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{OnceLock, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Multiplier applied on each zoom step.
@@ -40,6 +41,12 @@ const MAX_THUMB_JOBS: usize = 4;
 /// The previews of a cold HEIC grid that decode at once. A preview is the embedded 320x240
 /// thumbnail, a few milliseconds each. The sharp decodes wait until every preview is out.
 const MAX_PREVIEW_JOBS: usize = 4;
+/// The files whose headers decide the cell shape of the grid: the first screen, or the first
+/// files of a large folder.
+const SHAPE_SAMPLE: usize = 64;
+/// The version in the disk cache key. Change it when the thumbnail output changes. v5: the
+/// thumbnail box is the cell minus the padding.
+const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v5";
 
 /// The job that produced a thumbnail result, so that `poll_thumbnails` frees the right slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +195,11 @@ pub(crate) struct App {
     known_len: usize,
     pub scan_complete: bool,
 
+    /// The header read for the cell shape, while it runs. The thumbnail decodes wait for it.
+    shape_rx: Option<mpsc::Receiver<f64>>,
+    /// True after the header read started for this scan. The shape stays until the next scan.
+    shape_requested: bool,
+
     // Async filter
     filter_rx: Option<mpsc::Receiver<Vec<usize>>>,
     /// The cursor position for the next filter result. A delete sets it, a new query clears it.
@@ -244,6 +256,8 @@ impl App {
         config: &Config,
     ) -> Self {
         let (thumb_tx, thumb_rx) = mpsc::channel();
+        let mut gallery = GalleryState::with_zoom_rows(0, usize::from(config.visible_rows));
+        gallery.set_cell_shape(crate::gallery::DEFAULT_IMAGE_ASPECT, cell_px);
         Self {
             images: Vec::new(),
             filenames: Vec::new(),
@@ -259,7 +273,7 @@ impl App {
             slideshow_interval: Duration::from_secs_f64(config.slideshow_interval),
             slideshow_loop: config.slideshow_loop,
             slideshow_autostart: false,
-            gallery: GalleryState::with_zoom_rows(0, usize::from(config.visible_rows)),
+            gallery,
             thumb_cache: ThumbnailCache::new(),
             selection: HashSet::new(),
             pending_delete: None,
@@ -295,6 +309,8 @@ impl App {
             shared_list,
             known_len: 0,
             scan_complete: false,
+            shape_rx: None,
+            shape_requested: false,
             filter_rx: None,
             filter_cursor: None,
             thumb_tx,
@@ -577,11 +593,15 @@ impl App {
             if old_len == 0 {
                 self.needs_render = true;
             }
+            if self.images.len() >= SHAPE_SAMPLE {
+                self.request_cell_shape();
+            }
         }
 
         if !self.scan_complete && self.shared_list.is_complete() {
             self.scan_complete = true;
             self.finalize_scan_order();
+            self.request_cell_shape();
 
             if self.images.len() == 1 && self.mode == ViewMode::Gallery {
                 self.mode = ViewMode::Fullscreen;
@@ -653,7 +673,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.filter_rx = Some(rx);
 
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let results = search::filter(&query, &filenames);
             #[expect(
                 clippy::let_underscore_must_use,
@@ -661,6 +681,50 @@ impl App {
             )]
             let _ = tx.send(results);
         });
+    }
+
+    /// Read the headers of the first `SHAPE_SAMPLE` files in the background, one time per scan.
+    /// The grid keeps the shape until the next scan, so the columns do not jump while the user
+    /// browses. A later call does nothing.
+    pub(crate) fn request_cell_shape(&mut self) {
+        if self.shape_requested || self.images.is_empty() {
+            return;
+        }
+        self.shape_requested = true;
+        let paths: Vec<PathBuf> = self.images.iter().take(SHAPE_SAMPLE).cloned().collect();
+        let (tx, rx) = mpsc::channel();
+        self.shape_rx = Some(rx);
+        // A thread of its own: the rayon pool can be full of decodes of the old folder after a
+        // directory switch, and the first screen of the new folder waits for this read.
+        thread::spawn(move || {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a closed receiver means that a new scan replaced this one"
+            )]
+            let _ = tx.send(decode::shape::folder_aspect(&paths));
+        });
+    }
+
+    /// True while the header read runs. The thumbnail decodes wait, so that no cell decodes
+    /// twice for two cell sizes.
+    pub(crate) fn cell_shape_pending(&self) -> bool {
+        self.shape_rx.is_some()
+    }
+
+    /// Take the folder shape. A changed grid drops the thumbnails. The gallery draws again,
+    /// because its first screen waited for the shape. A fullscreen image stays as it is.
+    pub(crate) fn poll_cell_shape(&mut self) {
+        let Some(aspect) = self.shape_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+            return;
+        };
+        self.shape_rx = None;
+        if self.gallery.set_cell_shape(aspect, self.cell_px) {
+            self.forget_thumbnails();
+            self.graphics_storage_dirty = true;
+        }
+        if self.mode == ViewMode::Gallery {
+            self.needs_render = true;
+        }
     }
 
     pub(crate) fn poll_filter(&mut self) {
@@ -1341,6 +1405,8 @@ impl App {
         self.gallery.filtered_indices.clear();
         self.gallery.reset_cursor();
         self.filter_rx = None;
+        self.shape_rx = None;
+        self.shape_requested = false;
 
         self.current = 0;
         self.forget_thumbnails();
@@ -1561,8 +1627,7 @@ impl App {
         let generation = self.thumb_generation;
         let cache_dir = self.disk_cache_dir.clone();
         rayon::spawn(move || {
-            let target_w = u32::from(rect.width) * cell_px.0;
-            let target_h = u32::from(rect.height) * cell_px.1;
+            let (target_w, target_h) = thumb_target_px(rect, cell_px);
             let (image, sharp) =
                 match try_load_from_disk_cache(&cache_dir, &path, target_w, target_h) {
                     Some(image) => (Some(image), true),
@@ -1589,11 +1654,10 @@ impl App {
         let generation = self.thumb_generation;
         let cache_dir = self.disk_cache_dir.clone();
         rayon::spawn(move || {
-            let target_w = u32::from(rect.width) * cell_px.0;
-            let target_h = u32::from(rect.height) * cell_px.1;
+            let (target_w, target_h) = thumb_target_px(rect, cell_px);
             let image =
                 try_load_from_disk_cache(&cache_dir, &path, target_w, target_h).or_else(|| {
-                    let image = decode_thumbnail(&path, rect, cell_px).ok()?;
+                    let image = decode_thumbnail(&path, (target_w, target_h)).ok()?;
                     try_save_to_disk_cache(&cache_dir, &path, target_w, target_h, &image);
                     Some(image)
                 });
@@ -1633,6 +1697,7 @@ impl App {
             || self.previews_pending()
             || self.prefetcher.has_jobs()
             || self.filter_rx.is_some()
+            || self.shape_rx.is_some()
             || !self.scan_complete
     }
 
@@ -1731,13 +1796,27 @@ impl App {
     }
 }
 
+/// The gap in pixels between a thumbnail and the edge of its cell. The background color of the
+/// selected cell shows in the gap, because Kitty draws the pictures above the text.
+pub(crate) const THUMB_PADDING_PX: u32 = 4;
+
+/// The pixel box of a thumbnail in the cell `rect`: the cell size minus the padding on each side.
+pub(crate) fn thumb_target_px(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
+    let width = u32::from(rect.width) * cell_px.0;
+    let height = u32::from(rect.height) * cell_px.1;
+    (
+        width.saturating_sub(2 * THUMB_PADDING_PX).max(1),
+        height.saturating_sub(2 * THUMB_PADDING_PX).max(1),
+    )
+}
+
 /// The sharp thumbnail of a grid cell: the first frame of a video, or the fitted image.
-fn decode_thumbnail(path: &Path, rect: Rect, cell_px: (u32, u32)) -> io::Result<RgbaImage> {
+fn decode_thumbnail(path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
     #[cfg(feature = "video")]
     if crate::video::is_video(path) {
-        return crate::video::decode_first_frame(path, rect, cell_px);
+        return crate::video::decode_first_frame(path, target);
     }
-    load_and_resize(path, rect, cell_px, EmbeddedThumbnail::Allow)
+    load_and_resize_px(path, target, EmbeddedThumbnail::Allow)
 }
 
 /// Only the libheif formats carry an embedded thumbnail that viewr reads as a preview.
@@ -1773,13 +1852,22 @@ pub(crate) fn load_and_resize(
 ) -> io::Result<RgbaImage> {
     let target_w = u32::from(rect.width) * cell_px.0;
     let target_h = u32::from(rect.height) * cell_px.1;
+    load_and_resize_px(path, (target_w, target_h), embedded)
+}
+
+/// Decode `path` with the size hint `target` in pixels and fit the image into it.
+fn load_and_resize_px(
+    path: &Path,
+    (target_w, target_h): (u32, u32),
+    embedded: EmbeddedThumbnail,
+) -> io::Result<RgbaImage> {
     let hint = if target_w > 0 && target_h > 0 {
         Some((target_w, target_h))
     } else {
         None
     };
     let img = decode_image_with_hint(path, hint, embedded)?;
-    Ok(resize_decoded(&img, rect, cell_px))
+    Ok(resize_decoded_to_dims(&img, target_w, target_h))
 }
 
 pub(crate) fn resize_decoded_to_dims(img: &DynamicImage, max_w: u32, max_h: u32) -> RgbaImage {
@@ -1814,6 +1902,12 @@ pub(crate) fn scaled_down_size(size: (u32, u32), max: (u32, u32)) -> Option<(u32
     Some((dst_w, dst_h))
 }
 
+/// The filter of every resize: thumbnails, previews, fullscreen and zoom. Catmull-Rom costs
+/// two thirds of Lanczos3 on a 24 MP frame and keeps the edges sharp.
+fn resize_options() -> fir::ResizeOptions {
+    fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::CatmullRom))
+}
+
 /// Resize the packed RGBA `pixels` of `size` to `dst` with `fast_image_resize`. The pixels stay
 /// borrowed, so a caller can pass a decoder buffer without a copy. `None` when the resize fails.
 fn resize_rgba(pixels: &[u8], size: (u32, u32), dst: (u32, u32)) -> Option<RgbaImage> {
@@ -1821,15 +1915,9 @@ fn resize_rgba(pixels: &[u8], size: (u32, u32), dst: (u32, u32)) -> Option<RgbaI
         fir::images::ImageRef::new(size.0, size.1, pixels, fir::PixelType::U8x4).ok()?;
     let mut dst_image = fir::images::Image::new(dst.0, dst.1, fir::PixelType::U8x4);
     fir::Resizer::new()
-        .resize(&src_image, &mut dst_image, None)
+        .resize(&src_image, &mut dst_image, &resize_options())
         .ok()?;
     RgbaImage::from_raw(dst.0, dst.1, dst_image.into_vec())
-}
-
-pub(crate) fn resize_decoded(img: &DynamicImage, rect: Rect, cell_px: (u32, u32)) -> RgbaImage {
-    let max_w = u32::from(rect.width) * cell_px.0;
-    let max_h = u32::from(rect.height) * cell_px.1;
-    resize_decoded_to_dims(img, max_w, max_h)
 }
 
 /// Resize `img` to exactly `dst_w` x `dst_h` (used for zoomed crops, which may upscale).
@@ -1849,7 +1937,10 @@ pub(crate) fn resize_to_exact(img: &DynamicImage, dst_w: u32, dst_h: u32) -> Rgb
     };
     let mut dst_image = fir::images::Image::new(dst_w, dst_h, fir::PixelType::U8x4);
     let mut resizer = fir::Resizer::new();
-    if resizer.resize(&src_image, &mut dst_image, None).is_err() {
+    if resizer
+        .resize(&src_image, &mut dst_image, &resize_options())
+        .is_err()
+    {
         return img.to_rgba8();
     }
     RgbaImage::from_raw(dst_w, dst_h, dst_image.into_vec()).unwrap_or_else(|| img.to_rgba8())
@@ -1968,7 +2059,7 @@ struct LibheifSlot;
 impl LibheifSlot {
     fn take(ctx: &mut libheif_rs::HeifContext<'_>) -> Self {
         let running = LIBHEIF_DECODES.fetch_add(1, Ordering::Relaxed);
-        let cores = std::thread::available_parallelism().map_or(4, NonZeroUsize::get);
+        let cores = thread::available_parallelism().map_or(4, NonZeroUsize::get);
         let share = if FOREGROUND.get() { 0 } else { running };
         ctx.set_max_decoding_threads(libheif_tile_threads(cores, share));
         Self
@@ -2322,7 +2413,7 @@ fn get_cache_file_path(
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     let mut hasher = DefaultHasher::new();
-    "viewr-thumbnail-v4".hash(&mut hasher);
+    THUMBNAIL_CACHE_VERSION.hash(&mut hasher);
     canonical_path.hash(&mut hasher);
     metadata.len().hash(&mut hasher);
     mtime.as_secs().hash(&mut hasher);
@@ -2857,8 +2948,8 @@ mod tests {
             }
         }
 
-        /// An app with the one file `path` in a grid cell of 160x160 px, and a disk cache in
-        /// `cache`. The 256x128 primary image fits as 160x80.
+        /// An app with the one file `path` in a grid cell of 160x160 px, so a thumbnail box of
+        /// 152x152 px, and a disk cache in `cache`. The 256x128 primary image fits as 152x76.
         fn grid_app(path: &Path, cache: &Path) -> App {
             let mut app = App::new((8, 16), SharedImageList::new());
             app.images = vec![path.to_path_buf()];
@@ -2906,7 +2997,7 @@ mod tests {
             assert!(!app.thumb_cache.is_sharp(0));
             assert_eq!(
                 preview.dimensions(),
-                (160, 80),
+                (152, 76),
                 "the size of the sharp image"
             );
             assert_close(rgba_center(&preview), BLUE);
@@ -2919,7 +3010,7 @@ mod tests {
 
             let sharp = wait_for_new_image(&mut app);
             assert!(app.thumb_cache.is_sharp(0));
-            assert_eq!(sharp.dimensions(), (160, 80));
+            assert_eq!(sharp.dimensions(), (152, 76));
             assert_close(rgba_center(&sharp), RED);
             assert_eq!(
                 fs::read_dir(&cache).unwrap().count(),
@@ -2962,7 +3053,7 @@ mod tests {
                 app.thumb_cache.is_sharp(0),
                 "the first image is the sharp one"
             );
-            assert_eq!(first.dimensions(), (80, 160));
+            assert_eq!(first.dimensions(), (76, 152));
             assert_close(rgba_center(&first), RED);
             assert!(app.stale_image_ids.is_empty());
         }
@@ -3357,6 +3448,11 @@ mod tests {
         assert_eq!(first.parent(), Some(cache.as_path()));
         assert_ne!(first, resized);
         assert_ne!(first, changed);
+        assert_eq!(
+            super::THUMBNAIL_CACHE_VERSION,
+            "viewr-thumbnail-v5",
+            "the padded thumbnail box needs a new cache generation"
+        );
     }
 
     /// Tests of the view state in `App`: slideshow, zoom, selection, delete, scan and caches.
@@ -3364,7 +3460,7 @@ mod tests {
         use super::test_dir;
         use crate::app::{
             App, EmbeddedThumbnail, PendingDelete, Slideshow, ThumbPhase, ThumbResult, ViewMode,
-            get_cache_file_path, load_and_resize, prune_disk_cache, resize_decoded,
+            get_cache_file_path, load_and_resize, prune_disk_cache, resize_decoded_to_dims,
             try_load_from_disk_cache, try_save_to_disk_cache,
         };
         use crate::image_list::SharedImageList;
@@ -4222,7 +4318,8 @@ mod tests {
             let cache = dir.path().join("cache");
             let mut app = app_with_files(dir.path(), &["a.png"]);
             app.disk_cache_dir = cache.clone();
-            let rect = Rect::new(0, 0, 1, 1);
+            // 3x2 cells of 8x16 px, minus the padding: a box of 16x24 px.
+            let rect = Rect::new(0, 0, 3, 2);
             let path = app.images[0].clone();
 
             app.spawn_thumb_decode(0, path.clone(), rect);
@@ -4235,7 +4332,7 @@ mod tests {
             });
             assert_eq!(arrived, vec![0]);
             assert!(app.thumb_cache.contains(0));
-            let cached = get_cache_file_path(&cache, &path, 8, 16).unwrap();
+            let cached = get_cache_file_path(&cache, &path, 16, 24).unwrap();
             assert!(cached.is_file());
             app.spawn_thumb_decode(0, path.clone(), rect);
             assert!(
@@ -4253,6 +4350,70 @@ mod tests {
                 !arrived.is_empty()
             });
             assert_eq!(fresh.thumb_cache.peek(0).unwrap().0.dimensions(), (8, 8));
+        }
+
+        #[test]
+        fn the_folder_shape_comes_from_the_headers_once_per_scan() {
+            let dir = test_dir();
+            let mut app = app();
+            for index in 0..3 {
+                let path = dir.path().join(format!("{index}.png"));
+                RgbaImage::new(30, 40).save(&path).unwrap();
+                app.images.push(path);
+                app.filenames.push(format!("{index}.png"));
+            }
+            app.gallery.filtered_indices = (0..3).collect();
+            app.gallery.update_grid(Rect::new(0, 0, 120, 20));
+            let landscape_cols = app.gallery.grid_cols;
+            assert!(!app.cell_shape_pending());
+
+            app.request_cell_shape();
+            assert!(app.cell_shape_pending());
+            assert!(app.has_pending_work());
+            wait_until(|| {
+                app.poll_cell_shape();
+                !app.cell_shape_pending()
+            });
+            assert!(
+                app.gallery.grid_cols > landscape_cols,
+                "portraits: more columns"
+            );
+            assert!(app.needs_render);
+            let portrait_cols = app.gallery.grid_cols;
+
+            // A second request in the same scan does nothing.
+            app.request_cell_shape();
+            assert!(!app.cell_shape_pending());
+
+            // A new directory forgets the shape; the next scan reads it again.
+            app.switch_to_dir(dir.path());
+            app.images = vec![dir.path().join("0.png")];
+            app.gallery.filtered_indices = vec![0];
+            app.gallery.update_grid(Rect::new(0, 0, 120, 20));
+            assert_eq!(
+                app.gallery.grid_cols, portrait_cols,
+                "the old shape stays until the read"
+            );
+            app.request_cell_shape();
+            assert!(app.cell_shape_pending());
+        }
+
+        #[test]
+        fn the_scan_requests_the_shape_when_it_completes() {
+            let dir = test_dir();
+            RgbaImage::new(8, 8).save(dir.path().join("a.png")).unwrap();
+            let list = SharedImageList::new();
+            crate::scanner::spawn(vec![dir.path().to_path_buf()], list.clone());
+            let mut app = App::new((8, 16), list);
+            wait_until(|| {
+                app.refresh_from_scanner();
+                app.scan_complete
+            });
+            assert_eq!(app.images.len(), 1);
+            assert!(
+                app.cell_shape_pending(),
+                "the complete scan starts the header read"
+            );
         }
 
         #[test]
@@ -4560,10 +4721,7 @@ mod tests {
                 .is_err()
             );
             let image = DynamicImage::new_rgba8(10, 0);
-            assert_eq!(
-                resize_decoded(&image, Rect::new(0, 0, 1, 1), (4, 4)).dimensions(),
-                (10, 0)
-            );
+            assert_eq!(resize_decoded_to_dims(&image, 4, 4).dimensions(), (10, 0));
         }
 
         #[test]
