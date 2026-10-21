@@ -205,6 +205,11 @@ missing.
   `main.rs` starts the next video at once, without a draw. `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
   file that mpv played, not from the gallery cursor.
+- **Video player default:** `[video] player` defaults to `window` (`VideoPlayer::default`).
+  mpv's Kitty output is too slow in Ghostty: a 4K HLG clip plays at 2.4 fps, Ghostty ignores
+  `--vo-kitty-use-shm`, and a smaller `--vo-kitty-width` fills only a corner, because mpv's
+  Kitty output does not scale. The window gets `--fs --native-fs=no`, which overrides `fs=no` of
+  a user `mpv.conf`.
 - **mpv window:** viewr follows each mpv window until it exits (`App::poll_video_window`). The
   run loop polls every 100 ms (`WINDOW_POLL`) while a window plays. A step in viewr away from
   the file of the window forgets the window.

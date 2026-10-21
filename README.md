@@ -125,16 +125,16 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 
 ### Video
 
-viewr gives a video to mpv. All mpv keys work: `Space` pauses, `←` / `→` seek, `f` toggles fullscreen in window mode. `q` or `Ctrl-c` stops mpv. viewr then goes back to the view that opened the video:
+viewr gives a video to mpv. By default, mpv plays it in a fullscreen window, with the same picture and HDR as the mpv app. All mpv keys work: `Space` pauses, `←` / `→` seek, `f` leaves or enters fullscreen. `q` or `Ctrl-c` stops mpv. viewr then goes back to the view that opened the video:
 
 - From the gallery (`Enter`), viewr shows the gallery with the cursor on the video.
 - From fullscreen (`←` / `→`, `Home` / `End`), viewr stays on the video and shows "video: press Enter to play". `Enter` plays the video again, and `←` / `→` step on.
 
 In mpv, `n` plays the next file of the list and `N` (Shift-n) the previous file. viewr starts mpv at once for a video and shows an image in fullscreen. These keys need mpv 0.38 or later.
 
-In the terminal, viewr starts mpv with `--vo=kitty --profile=sw-fast --hwdec=auto-copy-safe` and a scale filter that fits each frame to the terminal before the rotation. A 4K iPhone video plays about three times faster with this filter. The Kitty output of mpv cannot tone map HDR video. For HLG and PQ videos (iPhone HDR, Dolby Vision 8.4, HDR10), viewr writes a tone mapping LUT into the cache directory, and mpv applies it. The colors are close to the SDR export of macOS. The mpv window gets `--hwdec=auto-safe` and does its own HDR tone mapping on the GPU. The filters of your `mpv.conf` stay active.
+The window gets `--fs --native-fs=no`, so macOS does not move it to its own Space. With the terminal player (`[video] player = "terminal"`), viewr starts mpv with `--vo=kitty --profile=sw-fast --hwdec=auto-copy-safe` and a scale filter that fits each frame to the terminal before the rotation. A 4K iPhone video plays about three times faster with this filter. The Kitty output of mpv cannot tone map HDR video. For HLG and PQ videos (iPhone HDR, Dolby Vision 8.4, HDR10), viewr writes a tone mapping LUT into the cache directory, and mpv applies it. The colors are close to the SDR export of macOS. The mpv window gets `--hwdec=auto-safe` and does its own HDR tone mapping on the GPU. The filters of your `mpv.conf` stay active.
 
-In a slideshow, a video plays one time and the slideshow continues. To stop the slideshow, quit mpv with `q` or `Ctrl-c`, or press `Esc` in the built-in player. With the window player, the slideshow waits until the window closes. Use `q` or the close button to stop it, because `Cmd-q` counts as the end of the clip. A paused slideshow plays the video in a loop.
+In a slideshow, a video plays one time and the slideshow continues. With the window player (the default), the slideshow waits until the window closes. Use `q` or the close button to stop it, because `Cmd-q` counts as the end of the clip. With the terminal player, quit mpv with `q` or `Ctrl-c` to stop the slideshow. In the built-in player, press `Esc`. A paused slideshow plays the video in a loop.
 
 In fullscreen, a status note (for example "clip.mp4 plays in an mpv window") replaces the key hints until the next key press.
 
@@ -156,10 +156,10 @@ loop = true          # start over after the last image
 show_on_start = false
 
 [video]
-# "terminal" (default): mpv plays in this terminal with --vo=kitty. Press q in mpv to go back.
-# "window": mpv plays in a window of its own, and viewr keeps running.
+# "window" (default): mpv plays in a fullscreen window of its own, and viewr keeps running.
+# "terminal": mpv plays in this terminal with --vo=kitty. Slow in Ghostty, use it over SSH. Press q in mpv to go back.
 # "builtin": the built-in FFmpeg player (10 fps, no sound).
-player = "terminal"
+player = "window"
 ```
 
 If mpv is not on PATH, viewr uses the built-in player and shows a note.
