@@ -283,6 +283,9 @@ missing.
   writes the pictures with Kitty escape sequences at the cell positions of the last draw. A
   popup must delete the pictures first (`graphics_delete_all`), because Kitty draws them above
   the text.
+  A key handler deletes the pictures only before an overlay. A zoom or a resize calls
+  `mark_dirty`, and the grid write deletes the old pictures itself. A delete without a later
+  draw leaves black cells.
 - **Grid gaps and borders:** the cells of the grid have 1-cell gaps (`GAP` in `gallery.rs`). A
   line of n cells takes n + 1 gaps: one between two neighbors and one at each edge.
   `update_grid` subtracts the gaps first and gives the remainder to the first columns and rows.

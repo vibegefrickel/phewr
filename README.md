@@ -122,8 +122,7 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 | `i` | Toggle the info panel |
 | `d` `D` | Trash / permanently delete, with confirm |
 | `Enter` | Play the video again (on a video placeholder) |
-| `Esc` | Stop the slideshow, or back to the gallery |
-| `q` | Quit |
+| `q` `Esc` | Stop the slideshow, or back to the gallery |
 
 ### Video
 
