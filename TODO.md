@@ -3,34 +3,35 @@
 ## Now
 
 - Terminal tests after batch 6 (maintainer): start viewr in Ghostty, Kitty and WezTerm. Read the first status note (`Kitty transfer: ...`). Step through HEIC files. Then make sure that `ls $TMPDIR/tty-graphics-protocol-viewr-*` lists nothing. `VIEWR_KITTY_TRANSFER=direct` is the escape hatch. Check the `DarkGray` borders and the dim text on cendre. If the dim text is too dark, change the `dim` role in `src/styles.rs` to ANSI `Gray`.
-- mpv round (see below)
+- Terminal tests after batch 7 (maintainer), in Ghostty, Kitty and WezTerm:
+  - The cold HEIC grid: the previews come first, then the sharp thumbnails replace them without a jump or a leftover image.
+  - mpv in the terminal: the speed and the HDR colors of an iPhone HDR MOV, and `n` / `N` between videos and images.
+  - mpv in a window (`[video] player = "window"`) with an HDR clip. The worker could not measure the window mode.
+  - The yazi reveal: start viewr with `g v` in yazi, quit, and make sure that the yazi cursor is on the last file. Nobody has proven that `ya emit reveal` reaches a yazi that blocks on `shell --block`.
 
 ## Next
 
 The main goal is perceived speed for JPEG, HEIC and PNG.
 
 - Speed round, open items after batch 6 (numbers from `just bench` on 40 HEIC, 24 MP, 10 cores):
-  - The cold HEIC grid is bound by the HEVC decode: about 100 ms per image with all cores, 1.9 s for 24 cells. Candidate: show the embedded 320x240 iPhone thumbnail at once as a preview, then replace it with the sharp decode (two-phase thumbnail job).
+  - Candidate: send the HEIC preview at its native 320x240 size with a Kitty placement that scales (`c=`, `r=`). A cold grid sends 45.8 MB today instead of 22.9 MB, because each cell gets two full-size images. This matters most over SSH (PNG medium).
+  - Candidate: a JPEG preview from the EXIF thumbnail or a DCT-scaled libjpeg-turbo decode. The JPEG grid is fast already, so this is low priority.
   - Candidate: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size, so this is low priority.
-  - Decide on the start status note with the transfer medium. It helps the terminal tests. Removal: the three lines after `App::with_config` in `main`.
-  - Decide on Catmull-Rom for the resizes: about 40 percent less resize time on a 24 MP frame, no visible difference at Retina density. `resize_options` in `src/app.rs` and the thumbnail cache key are the two places. `just bench` has the measurement.
-- mpv round: the playback in mpv is not stable yet. Collect the problems first.
-  - Make sure that the mpv hand-off works in Ghostty, Kitty and WezTerm. The worker tested it only in a herdr pane.
-  - Next and previous video from inside mpv (for example mpv key bindings that run `quit <code>`).
-  - iPhone HDR MOV files are oversaturated and slow with `--vo=kitty`. Dolby Vision/HLG tone-mapping causes the brightness problem.
-  - Test `tone-mapping=bt.2446a` and `target-colorspace-hint=no` for iPhone HDR video.
-  - Test `hwdec=videotoolbox`, `profile=sw-fast` and `framedrop=vo` to improve performance.
-  - Document the mpv options that viewr passes for HDR files and for the Kitty output driver.
+  - The start status note with the transfer medium stays until the terminal tests are done (decided 2026-10-21). Then remove the three lines after `App::with_config` in `main`.
+  - Decide on Catmull-Rom for the resizes: about 40 percent less resize time on a 24 MP frame. Compare the pairs in `/tmp/viewr-resize-compare` (ImageMagick `Lanczos` and `Catrom`, 49 to 55 dB PSNR on 3 iPhone photos). `resize_options` in `src/app.rs` and the thumbnail cache key are the two places. `just bench` has the measurement.
+- mpv follow-ups after batch 7:
+  - Candidate: `--vo-kitty-use-shm=yes` skips the base64 and the pty transfer. Kitty supports shared memory. Ghostty and WezTerm are unknown. A probe like `detect_transfer` can decide.
+  - The PQ LUT has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
+  - Candidate: rescale when the terminal gets larger during playback. Today the scale size comes from the terminal size at the start of mpv.
 - Real files for the new formats. This machine has no JPEG XL and no camera RAW file.
   - Make sure that JPEG XL decodes correctly: sRGB, Display P3, PQ and an ICC profile (`VIEWR_TEST_JXL`).
   - Make sure that camera RAW decodes correctly, with a portrait photo (`VIEWR_TEST_RAW`).
   - Measure whether `sips -Z` on a RAW uses the embedded preview, and measure the `sips` times with a real RAW.
-- Horizontal flow in the grid (justified rows): all thumbnails in a row have the same height. Each width follows the aspect ratio.
-  - The layout needs the dimensions before the decode. Read them from the file header.
-  - The cursor keys up and down need a new rule, because the columns do not line up.
+- Grid fill (decided 2026-10-21: no justified rows, the grid stays x times y for predictable hjkl movement):
+  - Spread the leftover columns and rows of `update_grid` over the cells, so that the grid fills the screen to the edge.
+  - Pick the cell shape from the aspect ratios of the folder. Read the dimensions from the file header. Assume 3:2 until the header is read. Round to whole cells first.
 - First release: create the Codeberg repository `viewr`, then `just render` and `just release`. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 - Subfolders as entries in the grid (navigate without the picker)
-- Reveal the picked image back in yazi (`ya emit reveal`)
 
 ## Later
 
@@ -69,6 +70,8 @@ The main goal is perceived speed for JPEG, HEIC and PNG.
 
 ## Done
 
+- mpv round (batch 7): `--hwdec=auto-copy-safe` and a scale filter in the terminal (4K HDR clip 34 fps to 97 fps), a tone mapping LUT for HLG and PQ in the terminal (8.4 dB to 30.5 dB against the macOS SDR export), `n` / `N` step to the next and previous file from inside mpv, the mpv window shows its exit code, quiet FFmpeg log, the yazi reveal on quit.
+- Two-phase HEIC grid thumbnails (batch 7): the embedded thumbnail shows at once, the sharp decode replaces it. libheif reads through a buffered stream. Cold grid of 40 HEIC files: first image 250 ms to 13 ms, all 24 cells shown after 125 ms, all cells sharp 1882 ms to 1461 ms.
 - Speed round (batch 6): the run loop polls every 10 ms while a decode, a prefetch, a filter or the scan runs. The gallery pre-decode gets the fullscreen box as size hint (resize on the UI thread 52 ms to 72 ms, now 0 ms). libheif decodes share the cores, the fullscreen decode takes all of them. At most 4 thumbnail and 2 prefetch decodes run at once, the prefetch follows the step direction and keeps the shown image. On the test folder: HEIC open 525 ms to about 210 ms, cold grid first thumbnail 1013 ms to about 100 ms, warm grid 565 ms to 90 ms.
 - Kitty transfer medium: a temp file (`t=t`) when the terminal answers the probe with `OK` and deletes the probe file, PNG over SSH, direct otherwise. `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe. One fullscreen frame: 29 MB of text, now 199 bytes and a 21.7 MB file.
 - Benchmarks: `src/bench.rs` holds ignored benchmarks on `VIEWR_TEST_DIR`, `just bench [DIR]` runs them.
