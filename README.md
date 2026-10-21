@@ -98,6 +98,8 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `/` | Search. `Enter` applies, `Esc` clears, `Backspace` deletes |
 | `Space` | Toggle selection |
 | `a` `A` | Select all / clear selection |
+
+The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. A blue background marks the cell under the cursor, and a yellow background marks the selected images.
 | `d` `D` | Trash / permanently delete, with confirm |
 | `o` | Directory picker |
 | `q` `Esc` | Quit |
@@ -142,7 +144,7 @@ viewr reads `~/.config/viewr/config.toml`. If `XDG_CONFIG_HOME` is set, viewr re
 
 ```toml
 [gallery]
-visible_rows = 4     # thumbnail rows in the grid (the zoom level, 1 to 32)
+visible_rows = 4     # thumbnail rows in the grid (the zoom level, 1 to 32), the columns fill the width
 
 [slideshow]
 interval = 3.0       # seconds per slide

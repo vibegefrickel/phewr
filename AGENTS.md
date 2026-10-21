@@ -146,10 +146,14 @@ missing.
   delete.
 - `decode/`: the decoders outside `app.rs`. `Route::for_path` picks the route by extension.
   `jxl.rs` (JPEG XL), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats),
-  `tonemap.rs` (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot` and
-  `imir`).
+  `tonemap.rs` (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`,
+  `imir` and `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell
+  shape).
 - `ui.rs`: the ratatui drawing of each view, the help popup and the pickers.
 - `gallery.rs`: the grid geometry, the cursor and the in-memory thumbnail cache.
+  `update_grid` gives the remainder of the width and the height to the first columns and rows,
+  so the grid reaches the edges. `set_cell_shape` picks the column count from the photo aspect
+  and the pixel size of a terminal cell.
 - `scanner.rs`: the background directory scan and the lists of supported extensions.
   `LIBHEIF_EXTENSIONS` is the one list for the libheif route.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
@@ -238,10 +242,24 @@ missing.
   writes the pictures with Kitty escape sequences at the cell positions of the last draw. A
   popup must delete the pictures first (`graphics_delete_all`), because Kitty draws them above
   the text.
+- **Grid cells have no border.** A thumbnail uses its full cell, minus a padding of
+  `THUMB_PADDING_PX` (4 px) on each side. viewr centers it to the pixel with the Kitty keys `X=`
+  and `Y=` (`DisplayOptions::offset`). The selected cell (`STYLES.cursor_cell`, white on blue)
+  and the marked cells (`STYLES.marked`, black on yellow) get a background fill. The fill shows
+  in the padding, and also through the transparent pixels of a thumbnail. Every thumbnail is
+  decoded for the base cell size, so a wider column only has a larger gap.
+- **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64)
+  files on a thread, one time per scan (`decode/shape.rs`). JPEG and PNG swap for the EXIF
+  orientation, HEIC and AVIF read `ispe` and swap for `irot`. RAW, PSD, PDF and video count as
+  3:2. The median snaps to one of 7 buckets (9:16, 2:3, 3:4, 1:1, 4:3, 3:2, 16:9). The first
+  screen waits for the shape (2 ms to 4 ms), and the shape stays until the next directory
+  switch, so the columns never move while the user browses.
+- **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `app.rs`). It is one
+  third faster than Lanczos3, and the difference is not visible.
 - **FFmpeg versions:** `ffmpeg-next` must match the major version of Homebrew's FFmpeg.
   ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
   release binary that links the old `libavcodec.<major>.dylib` does not start.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v4`, the path, the size, the mtime
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v5` (`THUMBNAIL_CACHE_VERSION`), the path, the size, the mtime
   and the target size. Change the version string when the thumbnail output changes.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature
