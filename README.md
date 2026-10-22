@@ -159,12 +159,33 @@ In fullscreen, a status note (for example "clip.mp4 plays in an mpv window") rep
 
 `q` goes back one step in every view. Only `q` in the grid quits viewr. In the directory picker, `q` closes the picker. If the folder has no photos yet, `q` in the picker quits viewr, because there is no view to go back to.
 
+### Mouse
+
+viewr reads the mouse in every view. `[gallery] mouse = false` turns this off, and the terminal keeps its own mouse. Shift+click and Shift+drag still select text in Ghostty while viewr runs.
+
+| Where | Mouse | Action |
+|-------|-------|--------|
+| Grid | Click / double-click | Select / open the image, video or folder |
+| Grid | Right click | Info panel |
+| Grid | Wheel / Shift+wheel | Scroll / change the thumbnail size (a sideways trackpad swipe also changes the size) |
+| Fullscreen | Wheel | Zoom |
+| Fullscreen | Drag | Pan the zoomed image |
+| Fullscreen | Click near the left or right edge | Previous / next image |
+| Fullscreen | Right click | Info panel |
+| Player | Click on the video / beside it or right click | Pause / back |
+| Player | Wheel | Seek 5 s |
+| Picker | Click / double-click / wheel / right click | Select / choose / move / back |
+| Every view | Click on the status row | Help |
+
+A click closes the help and the info panel. While an mpv window plays, viewr releases the mouse.
+
 ## Configuration
 
 viewr reads `~/.config/viewr/config.toml`. If `XDG_CONFIG_HOME` is set, viewr reads `$XDG_CONFIG_HOME/viewr/config.toml`.
 
 ```toml
 [gallery]
+mouse = true         # read the mouse; false keeps the terminal's own mouse
 visible_rows = 4     # thumbnail rows in the grid (the zoom level, 2 to 12), the columns fill the width
 
 [slideshow]

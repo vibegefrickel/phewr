@@ -156,6 +156,7 @@ missing.
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
   `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `picker.rs`, `video.rs` (feature `video`).
+  `mouse.rs` holds the mouse handler per view.
 - `kitty_output.rs`: the Kitty writes per frame: the fullscreen image, the video frame, the
   grid and the new thumbnails. Each `render_*` has a `*_to` twin that writes to any `Write`,
   so that the tests read the escape sequences. `App::with_graphics_out` runs a write against the
@@ -172,7 +173,8 @@ missing.
   state file), `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter),
   `cell_shape.rs`, `fullscreen.rs` (enter, leave, the steps and the decode), `zoom.rs` (zoom,
   pan and the full-resolution source), `delete.rs` (the marks and the delete question),
-  `directory.rs` (the picker and the directory switch), `folders.rs` (the folder entries of
+  `directory.rs` (the picker and the directory switch), `mouse.rs` (the mouse state and the
+  screen layout of the last draw), `folders.rs` (the folder entries of
   the grid, `Enter` into a folder, `go_to_parent`), `video.rs` (the terminal player state, the
   return after a video, the mpv window watch), `thumbnails.rs` (the jobs, the queue, the HEIC
   previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
@@ -331,6 +333,16 @@ missing.
   window padding of Ghostty (2258 px / 52 rows = 43.42 px). If the terminal answered at
   start, the run loop asks again after each resize. The read takes every byte of the tty, so
   a key typed in that millisecond is lost.
+- **Mouse:** viewr enables only the mouse modes 1000, 1002 and 1006 (`terminal::enable_mouse`),
+  never 1003, so a pointer move without a button does not wake the run loop. Do not use
+  crossterm's `EnableMouseCapture`, because it turns on 1003. `[gallery] mouse = false` turns
+  the capture off. The run loop releases the mouse while an mpv window plays
+  (`sync_mouse_capture`), and `TerminalSession::restore` releases it on exit and on a panic.
+  `ui::draw` records `app.layout`, and a mouse handler reads the regions through
+  `ui::split_info`, `ui::content_area` and `ui::status_area`. A test that needs them calls
+  `test_support::draw_frame` first. The double-click (400 ms) uses `handle_event_at` with a
+  clock, so tests add a `Duration` to an `Instant` and never sleep. macOS can send Shift+wheel
+  as a horizontal wheel, so `ScrollLeft` and `ScrollRight` change the grid size too.
 - **Late probe answer:** `LateAnswerFilter` in `keys/mod.rs` drops the key events of a Kitty
   probe answer that comes after `PROBE_TIMEOUT`, from Alt+`_` to Alt+`\`.
 - **Grid zoom:** the grid shows 2 to 12 rows (`MIN_VISIBLE_ROWS`, `MAX_VISIBLE_ROWS`). A 2x2
