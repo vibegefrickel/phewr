@@ -617,6 +617,31 @@ mod tests {
     }
 
     #[test]
+    fn a_disk_cache_read_of_the_grid_holds_the_start_like_a_decode() {
+        let mut tree = Tree::new();
+        let app = &mut tree.app;
+        let a = tree.root.join("a");
+        let start = Instant::now();
+        app.cache_reads.waiting.push_back(ThumbJob {
+            index: 0,
+            rect: Rect::new(0, 0, 10, 5),
+        });
+        app.tick_folder_prefetch(start);
+        let due = start + FOLDER_PREFETCH_DELAY;
+        app.tick_folder_prefetch(due);
+        assert_eq!(
+            app.folder_prefetch_running(),
+            None,
+            "the grid reads the cache"
+        );
+
+        app.clear_thumb_queue();
+        app.tick_folder_prefetch(due);
+        finish(app, &a, due);
+        assert_eq!(cache_files(&tree.temp), 5);
+    }
+
+    #[test]
     fn a_prefetched_folder_is_not_prefetched_again() {
         let mut tree = Tree::new();
         let app = &mut tree.app;

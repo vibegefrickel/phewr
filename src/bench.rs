@@ -245,7 +245,8 @@ impl GridTimes {
 }
 
 /// Fill the grid and take the times. A cell counts as shown when its image is in the cache and
-/// the loop has written the pending emits, as the user sees it.
+/// the loop has written the pending emits, as the user sees it. The times end with the pass
+/// and leave out the scan of the Kitty output, which takes milliseconds for a pass of 4 MB.
 fn measure_grid(app: &mut App) -> GridTimes {
     let visible: Vec<usize> = app.gallery.visible_items().map(|(_, idx)| idx).collect();
     let start = Instant::now();
@@ -253,22 +254,27 @@ fn measure_grid(app: &mut App) -> GridTimes {
     let mut first = None;
     let mut all_shown = None;
     let mut bytes = 0;
+    let mut scans = Duration::ZERO;
     loop {
         run_pass(app, &mut pending);
+        let now = start.elapsed().saturating_sub(scans);
+        let scan = Instant::now();
         let out = app.graphics_out.take_bytes();
         bytes += out.len();
-        if first.is_none() && count_transmissions(&out) > 0 {
-            first = Some(start.elapsed());
+        let transmitted = count_transmissions(&out) > 0;
+        scans += scan.elapsed();
+        if first.is_none() && transmitted {
+            first = Some(now);
         }
         let shown = pending.is_empty() && visible.iter().all(|&idx| app.thumb_cache.contains(idx));
         if shown && all_shown.is_none() {
-            all_shown = Some(start.elapsed());
+            all_shown = Some(now);
         }
         if shown && visible.iter().all(|&idx| app.thumb_cache.is_sharp(idx)) {
             return GridTimes {
                 first: first.unwrap_or_default(),
                 all_shown: all_shown.unwrap_or_default(),
-                all_sharp: start.elapsed(),
+                all_sharp: now,
                 bytes,
             };
         }

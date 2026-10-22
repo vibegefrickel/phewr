@@ -25,6 +25,9 @@ const SHAPE_POLL: Duration = Duration::from_millis(1);
 /// After this time, the header read is slow (a network share, an external disk), and the loop
 /// waits `BUSY_POLL` again, so that it does not draw 1000 times per second.
 const SHAPE_POLL_WINDOW: Duration = Duration::from_millis(20);
+/// The wait of the loop while a disk cache read of the grid runs or waits. A read takes about
+/// 1 ms, so a warm grid has its pictures after 2 ms to 4 ms, not after `BUSY_POLL`.
+const CACHE_READ_POLL: Duration = Duration::from_millis(2);
 /// The wait of the loop when nothing runs in the background.
 const IDLE_POLL: Duration = Duration::from_millis(250);
 /// The wait of the loop while an mpv window plays: the latency of `n` and `N` in the window.
@@ -216,11 +219,7 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
             render_video_frame(app)?;
             finish_render(app, pending_emits);
         }
-        ViewMode::Gallery if !pending_emits.is_empty() => {
-            let count = pending_emits.len().min(4);
-            let batch: Vec<usize> = pending_emits.drain(..count).collect();
-            emit_new_thumbnails(app, &batch)?;
-        }
+        ViewMode::Gallery if !pending_emits.is_empty() => emit_new_thumbnails(app, pending_emits)?,
         _ => {}
     }
     Ok(false)
@@ -236,9 +235,14 @@ fn finish_render(app: &mut App, pending_emits: &mut Vec<usize>) {
 ///
 /// No event wakes the loop when a decode finishes, so the wait is the latency of every
 /// background result. While a result is on its way, or thumbnails wait for their emit, the
-/// loop looks every 10 ms, and every 1 ms during the first 20 ms of the cell shape read.
-/// Otherwise it looks every 250 ms.
+/// loop looks every 10 ms, every 2 ms while a disk cache read of the grid is on its way, and
+/// every 1 ms during the first 20 ms of the cell shape read. Otherwise it looks every 250 ms.
+/// The thumbnails that one pass of the grid left for the next pass go out without a wait,
+/// after the loop read the input.
 pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
+    if app.mode == ViewMode::Gallery && !pending_emits.is_empty() {
+        return Duration::ZERO;
+    }
     let busy = app.has_pending_work() || !pending_emits.is_empty();
     let mut timeout = {
         #[cfg(feature = "video")]
@@ -254,6 +258,9 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     };
     if waits_for_a_fast_shape(app.cell_shape_running_for(Instant::now())) {
         timeout = timeout.min(SHAPE_POLL);
+    }
+    if app.cache_reads_pending() {
+        timeout = timeout.min(CACHE_READ_POLL);
     }
     if let Some(remaining) = app.slideshow_timeout() {
         timeout = timeout.min(remaining);
@@ -276,11 +283,39 @@ fn waits_for_a_fast_shape(running: Option<Duration>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW, mouse_capture_wanted, next_timeout,
-        sync_mouse_capture, waits_for_a_fast_shape,
+        CACHE_READ_POLL, LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW, mouse_capture_wanted,
+        next_timeout, sync_mouse_capture, waits_for_a_fast_shape,
     };
+    use crate::app::ViewMode;
     use crate::config::Config;
-    use crate::test_support::{app, test_dir, wait_until};
+    use crate::test_support::{app, app_with, app_with_files, test_dir, wait_until};
+    use ratatui::layout::Rect;
+    use std::time::Duration;
+
+    #[test]
+    fn the_emits_that_a_pass_left_go_out_without_a_wait() {
+        let mut app = app_with(&["a.png"]);
+        app.scan_complete = true;
+        assert_eq!(next_timeout(&app, &[0]), Duration::ZERO);
+        app.mode = ViewMode::Fullscreen;
+        assert!(
+            next_timeout(&app, &[0]) > Duration::ZERO,
+            "the fullscreen view writes no grid pictures"
+        );
+    }
+
+    #[test]
+    fn the_loop_looks_every_two_milliseconds_while_the_grid_reads_the_disk_cache() {
+        let dir = test_dir();
+        let names = ["a.png", "b.png", "c.png", "d.png", "e.png"];
+        let mut app = app_with_files(dir.path(), &names);
+        app.scan_complete = true;
+        for index in 0..names.len() {
+            app.spawn_thumb_decode(index, Rect::new(0, 0, 1, 1));
+        }
+        assert!(app.cache_reads_pending(), "the fifth cell waits and reads");
+        assert_eq!(next_timeout(&app, &[]), CACHE_READ_POLL);
+    }
 
     #[test]
     fn the_loop_looks_every_millisecond_while_the_cell_shape_is_on_its_way() {
@@ -303,7 +338,7 @@ mod tests {
     #[test]
     fn a_slow_shape_read_gets_the_normal_wait_after_the_window() {
         assert!(!waits_for_a_fast_shape(None), "no read runs");
-        assert!(waits_for_a_fast_shape(Some(std::time::Duration::ZERO)));
+        assert!(waits_for_a_fast_shape(Some(Duration::ZERO)));
         assert!(!waits_for_a_fast_shape(Some(SHAPE_POLL_WINDOW)));
     }
 
@@ -358,7 +393,7 @@ mod tests {
         use std::path::Path;
 
         let mut app = video_app();
-        app.image_rect = ratatui::layout::Rect::new(0, 0, 100, 40);
+        app.image_rect = Rect::new(0, 0, 100, 40);
         let decoder = fake_decoder(clip_info());
         app.video = Some(
             Player::open(

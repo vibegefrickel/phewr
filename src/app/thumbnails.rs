@@ -15,6 +15,7 @@ use ratatui::layout::Rect;
 use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// The thumbnail decodes that run at once. 24 parallel decodes of 24 MP HEIC frames held
 /// 2 GB of pixels and ran 40 libheif threads on 10 cores, so the first thumbnail took 1 s.
@@ -26,6 +27,15 @@ const MAX_THUMB_JOBS: usize = 4;
 /// decodes wait until every preview is out.
 const MAX_PREVIEW_JOBS: usize = 4;
 
+/// The disk cache reads that run at once. A hit costs about 0.75 ms (a QOI read and decode),
+/// so a warm grid reads all its cells at once instead of 4 at a time behind the decode slots.
+/// The cap bounds the pictures that wait in the channel for the next poll.
+const MAX_CACHE_READS: usize = 64;
+
+/// The threads of the disk cache reads, at most the threads of the global pool. A QOI read
+/// takes one core, so more threads than cores give nothing.
+const MAX_CACHE_READ_THREADS: usize = 8;
+
 /// The most animation flags that the app keeps. One flag holds a path and a bool, so the map
 /// stays below about 10 MB.
 const MAX_ANIMATION_FLAGS: usize = 65_536;
@@ -33,6 +43,7 @@ const MAX_ANIMATION_FLAGS: usize = 65_536;
 /// The job that produced a thumbnail result, so that `poll_thumbnails` frees the right slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThumbPhase {
+    CacheRead,
     Preview,
     Sharp,
 }
@@ -70,6 +81,12 @@ impl JobSlots {
         self.running.contains(&index) || self.waiting.iter().any(|job| job.index == index)
     }
 
+    /// The images that run or wait in this phase, as one set for many lookups.
+    fn indices(&self) -> HashSet<usize> {
+        let waiting = self.waiting.iter().map(|job| job.index);
+        self.running.iter().copied().chain(waiting).collect()
+    }
+
     fn is_idle(&self) -> bool {
         self.running.is_empty() && self.waiting.is_empty()
     }
@@ -102,11 +119,17 @@ impl App {
         JobSlots::new(MAX_PREVIEW_JOBS)
     }
 
+    pub(super) fn cache_read_slots() -> JobSlots {
+        JobSlots::new(MAX_CACHE_READS)
+    }
+
     /// Drop every thumbnail and every job, so that a new list or a new size starts clean.
     pub(super) fn forget_thumbnails(&mut self) {
         self.thumb_cache.clear();
         self.thumb_jobs.clear();
         self.preview_jobs.clear();
+        self.cache_reads.clear();
+        self.cache_misses.clear();
         self.thumb_generation += 1;
     }
 
@@ -114,49 +137,71 @@ impl App {
     pub(crate) fn clear_thumb_queue(&mut self) {
         self.thumb_jobs.waiting.clear();
         self.preview_jobs.waiting.clear();
+        self.cache_reads.waiting.clear();
     }
 
-    /// True while a thumbnail job runs or waits in either phase.
+    /// True while a thumbnail job or a disk cache read runs or waits.
     pub(super) fn thumbnails_pending(&self) -> bool {
-        !self.thumb_jobs.is_idle() || self.previews_pending()
+        !self.thumb_jobs.is_idle() || self.previews_pending() || self.cache_reads_pending()
     }
 
     /// Take the finished thumbnails and start the waiting jobs. Returns the cells with a new
     /// image, a preview or a sharp one. The sharp jobs wait until every preview is done, so
-    /// that a cold HEIC grid shows all its previews first.
+    /// that a cold HEIC grid shows all its previews first. A missed disk cache read leaves
+    /// its cell in the decode queue.
     pub(crate) fn poll_thumbnails(&mut self) -> Vec<usize> {
         let mut new_indices = Vec::new();
         while let Ok(result) = self.thumb_rx.try_recv() {
             self.slots_of(result.phase).running.remove(&result.img_idx);
-            if result.generation == self.thumb_generation {
-                self.store_animation_flag(result.img_idx, result.animated);
+            if result.generation != self.thumb_generation {
+                continue;
             }
-            if result.generation == self.thumb_generation
-                && let Some(image) = result.image
-                && self.store_thumbnail(result.img_idx, image, result.sharp)
-            {
-                new_indices.push(result.img_idx);
+            self.store_animation_flag(result.img_idx, result.animated);
+            if let Some(image) = result.image {
+                if self.store_thumbnail(result.img_idx, image, result.sharp) {
+                    new_indices.push(result.img_idx);
+                }
+            } else if result.phase == ThumbPhase::CacheRead {
+                self.cache_misses.insert(result.img_idx);
             }
+        }
+        self.start_waiting_jobs();
+        new_indices
+    }
+
+    /// Start the waiting jobs while their phase has free slots: the disk cache reads first,
+    /// then the previews, then the sharp decodes of the cells without a cache read on its way.
+    /// A preview does not wait for the cache read of its cell, because it reads the cache
+    /// itself and a cold cell would lose one poll.
+    fn start_waiting_jobs(&mut self) {
+        while self.cache_reads.has_free_slot()
+            && let Some(job) = self.cache_reads.waiting.pop_front()
+        {
+            self.start_thumb_job(ThumbPhase::CacheRead, job);
         }
         while self.preview_jobs.has_free_slot()
             && let Some(job) = self.preview_jobs.waiting.pop_front()
         {
             self.start_thumb_job(ThumbPhase::Preview, job);
         }
+        if !self.thumb_jobs.has_free_slot() {
+            return;
+        }
+        let reading = self.cache_reads.indices();
         while self.thumb_jobs.has_free_slot()
-            && let Some(position) = self.next_sharp_job()
+            && let Some(position) = self.next_sharp_job(&reading)
             && let Some(job) = self.thumb_jobs.waiting.remove(position)
         {
             self.start_thumb_job(ThumbPhase::Sharp, job);
         }
-        new_indices
     }
 
     /// The position of the next sharp job in the queue: the first one of a cell that shows
     /// nothing yet, before the first one that only replaces a preview. A mixed folder then
-    /// shows every cell before the slow HEIC decodes start.
-    fn next_sharp_job(&self) -> Option<usize> {
-        let ready = |job: &ThumbJob| !self.waiting_job_holds(job);
+    /// shows every cell before the slow HEIC decodes start. `reading` holds the cells with a
+    /// cache read on its way, as one set, so that a large grid costs one lookup per job.
+    fn next_sharp_job(&self, reading: &HashSet<usize>) -> Option<usize> {
+        let ready = |job: &ThumbJob| !reading.contains(&job.index) && !self.waiting_job_holds(job);
         let waiting = &self.thumb_jobs.waiting;
         waiting
             .iter()
@@ -166,13 +211,14 @@ impl App {
 
     fn slots_of(&mut self, phase: ThumbPhase) -> &mut JobSlots {
         match phase {
+            ThumbPhase::CacheRead => &mut self.cache_reads,
             ThumbPhase::Preview => &mut self.preview_jobs,
             ThumbPhase::Sharp => &mut self.thumb_jobs,
         }
     }
 
-    /// True while a waiting sharp job must stay in the queue. A job whose index left the list
-    /// comes out at once, and `start_thumb_job` drops it.
+    /// True while a waiting sharp job must stay in the queue for the previews. A job whose
+    /// index left the list comes out at once, and `start_thumb_job` drops it.
     fn waiting_job_holds(&self, job: &ThumbJob) -> bool {
         self.images
             .get(job.index)
@@ -186,8 +232,8 @@ impl App {
     }
 
     /// Put a decoded thumbnail into the cache. A sharp image replaces a preview and drops the
-    /// waiting sharp job of the cell. A preview never replaces an image. `false` when the cache
-    /// keeps what it has.
+    /// waiting preview and sharp jobs of the cell. A preview never replaces an image. `false`
+    /// when the cache keeps what it has.
     pub(crate) fn store_thumbnail(
         &mut self,
         img_idx: usize,
@@ -199,6 +245,9 @@ impl App {
                 return false;
             }
             self.thumb_jobs.waiting.retain(|job| job.index != img_idx);
+            self.preview_jobs.waiting.retain(|job| job.index != img_idx);
+            self.cache_reads.waiting.retain(|job| job.index != img_idx);
+            self.cache_misses.remove(&img_idx);
             if let Some(old_id) = self.thumb_cache.insert(img_idx, picture) {
                 self.stale_image_ids.push((img_idx, old_id));
             }
@@ -242,6 +291,12 @@ impl App {
         }
     }
 
+    /// True while a disk cache read runs or waits. The run loop then looks more often, because
+    /// a read takes about 1 ms.
+    pub(crate) fn cache_reads_pending(&self) -> bool {
+        !self.cache_reads.is_idle()
+    }
+
     pub(super) fn previews_pending(&self) -> bool {
         !self.preview_jobs.is_idle()
     }
@@ -249,7 +304,8 @@ impl App {
     /// Decode the thumbnail of `img_idx` for the cell `rect`, or queue it while `MAX_THUMB_JOBS`
     /// run. A sharp thumbnail in the cache, in a job or in the queue starts nothing, and a
     /// parked thumbnail of the folder before goes into the cache at once. A HEIC, RAW or PSD
-    /// cell without an image gets a preview job first.
+    /// cell without an image gets a preview job first. A cell that waits reads the disk cache
+    /// at once, so that a hit never waits behind a slow decode.
     pub(crate) fn spawn_thumb_decode(&mut self, img_idx: usize, rect: Rect) {
         if self.is_folder(img_idx)
             || self.thumb_cache.is_sharp(img_idx)
@@ -278,9 +334,28 @@ impl App {
         }
         if self.sharp_job_waits(&self.images[img_idx]) || !self.thumb_jobs.has_free_slot() {
             self.thumb_jobs.waiting.push_back(job);
+            self.read_cache_ahead(job);
             return;
         }
         self.start_thumb_job(ThumbPhase::Sharp, job);
+    }
+
+    /// Read the disk cache for a cell whose sharp job waits. A running preview job reads the
+    /// cache itself, and a cell that missed in this generation reads nothing. A waiting read
+    /// always has a waiting sharp job, and `spawn_thumb_decode` stops for that, so only the
+    /// running reads need a lookup here.
+    fn read_cache_ahead(&mut self, job: ThumbJob) {
+        if self.preview_jobs.running.contains(&job.index)
+            || self.cache_reads.running.contains(&job.index)
+            || self.cache_misses.contains(&job.index)
+        {
+            return;
+        }
+        if self.cache_reads.has_free_slot() {
+            self.start_thumb_job(ThumbPhase::CacheRead, job);
+        } else {
+            self.cache_reads.waiting.push_back(job);
+        }
     }
 
     /// True for a file with an embedded preview, when the cell has no image and no preview job.
@@ -293,8 +368,10 @@ impl App {
     /// Decode `job` on the thread pool. The preview phase of a cold cell takes the embedded
     /// thumbnail at its own size. A disk cache hit, or an embedded JPEG that covers the box,
     /// sends the sharp image instead, so the cell skips the sharp phase. The sharp phase decodes
-    /// the file and writes the result into the disk cache. The job pads the result for the
-    /// grid, so the UI thread copies no pixels.
+    /// the file and writes the result into the disk cache. A cache read only reads the disk
+    /// cache, on its own threads, and sends `None` on a miss. A preview or a sharp job of a
+    /// cell whose cache read missed does not read the cache again. The job pads the result
+    /// for the grid, so the UI thread copies no pixels.
     /// A job that waited across a list change has no file any more and starts nothing.
     fn start_thumb_job(&mut self, phase: ThumbPhase, job: ThumbJob) {
         let Some(path) = self.images.get(job.index).cloned() else {
@@ -306,13 +383,23 @@ impl App {
         let cell_px = self.cell_px;
         let generation = self.thumb_generation;
         let cache_dir = self.disk_cache_dir.clone();
-        rayon::spawn(move || {
+        let missed = self.cache_misses.contains(&job.index);
+        spawn_job(phase, move || {
             let (image, sharp) = match phase {
-                ThumbPhase::Preview => preview_or_cached(&cache_dir, &path, target),
+                ThumbPhase::CacheRead => {
+                    (try_load_from_disk_cache(&cache_dir, &path, target), true)
+                }
+                ThumbPhase::Preview => preview_or_cached(&cache_dir, &path, target, !missed),
+                ThumbPhase::Sharp if missed => (decode_into_cache(&cache_dir, &path, target), true),
                 ThumbPhase::Sharp => (sharp_thumbnail(&cache_dir, &path, target), true),
             };
+            // A missed cache read leaves the header read to the decode job of the cell.
+            let animated = if phase == ThumbPhase::CacheRead && image.is_none() {
+                None
+            } else {
+                animation_flag(&path)
+            };
             let image = image.map(|image| pad_for_grid(image, target, cell_px, sharp));
-            let animated = animation_flag(&path);
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
@@ -327,6 +414,32 @@ impl App {
             });
         });
     }
+}
+
+/// Run a thumbnail job: a disk cache read on the threads of the cache reads, a decode on the
+/// global pool. The cache reads do not share the queue of the decodes, so a hit never waits
+/// until a cold HEIC or sips decode frees a thread.
+fn spawn_job(phase: ThumbPhase, job: impl FnOnce() + Send + 'static) {
+    match cache_read_pool() {
+        Some(pool) if phase == ThumbPhase::CacheRead => pool.spawn(job),
+        _ => rayon::spawn(job),
+    }
+}
+
+/// The threads of the disk cache reads, built at the first read. `None` when the build failed,
+/// then the reads share the global pool. `LibheifSlot` and `MAX_THUMB_JOBS` do not count these
+/// threads. A miss holds a thread for a `stat` only, so they take cores from a cold decode only
+/// for the hits of a mixed grid.
+fn cache_read_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(rayon::current_num_threads().min(MAX_CACHE_READ_THREADS))
+            .thread_name(|index| format!("viewr-cache-read-{index}"))
+            .build()
+            .ok()
+    })
+    .as_ref()
 }
 
 /// The animation flag of a file that can hold an animation, `None` for the other formats. The
@@ -355,21 +468,27 @@ pub(super) fn warm_disk_cache(cache_dir: &Path, path: &Path, target: (u32, u32))
 
 /// The sharp thumbnail from the disk cache, or from a decode that then fills the cache.
 fn sharp_thumbnail(cache_dir: &Path, path: &Path, target: (u32, u32)) -> Option<RgbaImage> {
-    try_load_from_disk_cache(cache_dir, path, target).or_else(|| {
-        let image = decode_thumbnail(cache_dir, path, target).ok()?;
-        try_save_to_disk_cache(cache_dir, path, target, &image);
-        Some(image)
-    })
+    try_load_from_disk_cache(cache_dir, path, target)
+        .or_else(|| decode_into_cache(cache_dir, path, target))
+}
+
+/// The sharp thumbnail from a decode, which then goes into the disk cache.
+fn decode_into_cache(cache_dir: &Path, path: &Path, target: (u32, u32)) -> Option<RgbaImage> {
+    let image = decode_thumbnail(cache_dir, path, target).ok()?;
+    try_save_to_disk_cache(cache_dir, path, target, &image);
+    Some(image)
 }
 
 /// The sharp thumbnail from the disk cache (`true`), or the embedded preview. An embedded
-/// JPEG that covers the box is sharp too, and goes into the disk cache.
+/// JPEG that covers the box is sharp too, and goes into the disk cache. Without
+/// `read_cache`, the cache read of the cell missed, and the job reads the cache no more.
 fn preview_or_cached(
     cache_dir: &Path,
     path: &Path,
     target: (u32, u32),
+    read_cache: bool,
 ) -> (Option<RgbaImage>, bool) {
-    if let Some(image) = try_load_from_disk_cache(cache_dir, path, target) {
+    if read_cache && let Some(image) = try_load_from_disk_cache(cache_dir, path, target) {
         return (Some(image), true);
     }
     match decode_preview(path, target) {
@@ -538,7 +657,9 @@ mod tests {
     use crate::app::App;
     use crate::test_support::{app_with, app_with_files, test_dir, wait_until};
 
-    use super::{ThumbJob, ThumbPhase, ThumbResult, pad_for_grid};
+    use super::{
+        ThumbJob, ThumbPhase, ThumbResult, pad_for_grid, preview_or_cached, warm_disk_cache,
+    };
     use crate::app::disk_cache::{get_cache_file_path, try_load_from_disk_cache};
     use crate::decode::libheif::decode_heif_preview;
     use crate::image_list::SharedImageList;
@@ -547,6 +668,7 @@ mod tests {
     use image::RgbaImage;
     use libheif_rs::{CompressionFormat, ImageOrientation};
     use ratatui::layout::Rect;
+    use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::thread;
@@ -657,6 +779,11 @@ mod tests {
         }
         assert_eq!(app.thumb_jobs.running.len(), 4, "four jobs run");
         assert_eq!(app.thumb_jobs.waiting.len(), 2, "two jobs wait");
+        assert_eq!(
+            app.cache_reads.running.len(),
+            2,
+            "the waiting cells read the disk cache"
+        );
         assert!(app.has_pending_work());
         // A second request for a waiting thumbnail queues nothing.
         app.spawn_thumb_decode(5, rect);
@@ -685,6 +812,127 @@ mod tests {
             arrived.extend(app.poll_thumbnails());
             arrived.len() == 4
         });
+    }
+
+    #[test]
+    fn a_disk_cache_hit_never_waits_behind_the_decode_slots() {
+        let dir = test_dir();
+        let cache = dir.path().join("cache");
+        let names = ["a.png", "b.png", "c.png", "d.png", "warm.png", "cold.png"];
+        let mut app = app_with_files(dir.path(), &names);
+        app.disk_cache_dir = cache.clone();
+        // 3x2 cells of 8x16 px: a box of 24x32 px. The folder prefetch fills the cache so.
+        let rect = Rect::new(0, 0, 3, 2);
+        warm_disk_cache(&cache, &app.images[4], (24, 32));
+        // Four slow decodes that never finish hold every decode slot.
+        app.thumb_jobs.running.extend(0..4);
+
+        app.spawn_thumb_decode(4, rect);
+        app.spawn_thumb_decode(5, rect);
+        assert_eq!(app.thumb_jobs.waiting.len(), 2, "both decodes wait");
+        assert!(app.cache_reads.running.contains(&4) && app.cache_reads.running.contains(&5));
+        assert!(app.cache_reads_pending());
+        let mut arrived = Vec::new();
+        wait_until(|| {
+            arrived.extend(app.poll_thumbnails());
+            !app.cache_reads_pending()
+        });
+
+        assert_eq!(arrived, vec![4], "the hit comes while the slots are full");
+        assert!(app.thumb_cache.is_sharp(4));
+        assert_eq!(app.thumb_jobs.running.len(), 4, "the cold cap holds");
+        assert_eq!(
+            app.thumb_jobs.waiting,
+            [ThumbJob { index: 5, rect }],
+            "the miss waits for a decode slot, the hit needs none"
+        );
+        // A new render of the grid reads the missed cell again only after its decode.
+        app.clear_thumb_queue();
+        app.spawn_thumb_decode(5, rect);
+        assert!(!app.cache_reads_pending(), "the miss is known");
+        assert_eq!(app.thumb_jobs.waiting.len(), 1);
+    }
+
+    #[test]
+    fn a_waiting_decode_starts_after_the_cache_read_of_its_cell() {
+        let mut app = app_with(&["a.png", "b.png"]);
+        let rect = Rect::new(0, 0, 1, 1);
+        app.thumb_jobs
+            .waiting
+            .push_back(ThumbJob { index: 0, rect });
+        app.thumb_jobs
+            .waiting
+            .push_back(ThumbJob { index: 1, rect });
+        app.cache_reads.running.insert(0);
+
+        app.poll_thumbnails();
+        assert_eq!(
+            app.thumb_jobs.waiting,
+            [ThumbJob { index: 0, rect }],
+            "the cell without a cache read starts first"
+        );
+        assert!(app.thumb_jobs.running.contains(&1));
+
+        // The miss frees the cell for a decode slot.
+        let generation = app.thumb_generation;
+        app.thumb_tx
+            .send(ThumbResult {
+                generation,
+                img_idx: 0,
+                phase: ThumbPhase::CacheRead,
+                image: None,
+                sharp: true,
+                animated: None,
+            })
+            .unwrap();
+        assert!(app.poll_thumbnails().is_empty());
+        assert!(app.cache_misses.contains(&0));
+        assert!(app.thumb_jobs.running.contains(&0) && app.thumb_jobs.waiting.is_empty());
+    }
+
+    #[test]
+    fn a_job_after_a_missed_cache_read_does_not_read_the_cache_again() {
+        let dir = test_dir();
+        let cache = dir.path().join("cache");
+        let app = app_with_files(dir.path(), &["a.png"]);
+        let path = &app.images[0];
+        warm_disk_cache(&cache, path, (24, 32));
+
+        let (image, sharp) = preview_or_cached(&cache, path, (24, 32), true);
+        assert!(
+            image.is_some() && sharp,
+            "a job without a known miss reads the cache"
+        );
+        let (image, sharp) = preview_or_cached(&cache, path, (24, 32), false);
+        assert!(
+            image.is_none() && !sharp,
+            "after a miss, only the embedded preview counts, and a PNG has none"
+        );
+    }
+
+    #[test]
+    fn a_sharp_thumbnail_drops_the_waiting_preview_and_cache_read_of_its_cell() {
+        let mut app = app_with(&["a.heic", "b.heic"]);
+        let rect = Rect::new(0, 0, 1, 1);
+        app.preview_jobs
+            .waiting
+            .push_back(ThumbJob { index: 0, rect });
+        app.preview_jobs
+            .waiting
+            .push_back(ThumbJob { index: 1, rect });
+        app.cache_misses.insert(0);
+
+        app.cache_reads
+            .waiting
+            .push_back(ThumbJob { index: 0, rect });
+
+        assert!(app.store_thumbnail(0, RgbaImage::new(1, 1), true));
+        assert_eq!(app.preview_jobs.waiting, [ThumbJob { index: 1, rect }]);
+        assert!(app.cache_reads.waiting.is_empty(), "the read is not needed");
+        assert!(
+            !app.cache_misses.contains(&0),
+            "a cell that leaves the cache reads it again"
+        );
     }
 
     #[test]
@@ -1068,19 +1316,37 @@ mod tests {
         }
         app.thumb_jobs.running.extend(10..13);
 
-        assert_eq!(app.next_sharp_job(), Some(1), "b.jpg shows nothing yet");
+        assert_eq!(
+            app.next_sharp_job(&HashSet::new()),
+            Some(1),
+            "b.jpg shows nothing yet"
+        );
         app.thumb_jobs.waiting.remove(1);
-        assert_eq!(app.next_sharp_job(), Some(2), "d.png, now at position 2");
+        assert_eq!(
+            app.next_sharp_job(&HashSet::new()),
+            Some(2),
+            "d.png, now at position 2"
+        );
         app.thumb_jobs.waiting.remove(2);
         assert_eq!(
-            app.next_sharp_job(),
+            app.next_sharp_job(&HashSet::new()),
             Some(0),
             "then the HEIC cells in grid order"
         );
 
         // A HEIC cell whose preview is still on its way holds its place in the queue.
         app.preview_jobs.running.insert(2);
-        assert_eq!(app.next_sharp_job(), None, "every HEIC sharp job waits");
+        assert_eq!(
+            app.next_sharp_job(&HashSet::new()),
+            None,
+            "every HEIC sharp job waits"
+        );
+        app.preview_jobs.running.clear();
+        assert_eq!(
+            app.next_sharp_job(&HashSet::from([0])),
+            Some(1),
+            "cell 0 reads the cache, so cell 2 at position 1 goes first"
+        );
     }
 }
 

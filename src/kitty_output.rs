@@ -173,22 +173,43 @@ impl TerminalImages {
     }
 }
 
-pub(crate) fn emit_new_thumbnails(app: &mut App, new_indices: &[usize]) -> io::Result<()> {
-    app.with_graphics_out(|app, out| emit_new_thumbnails_to(app, new_indices, out))
+/// The pixel bytes of new thumbnails that one pass of the run loop writes, about 9 sharp cells
+/// of the Retina grid of the bench. The write of 36 cells takes about 11 ms, and one write
+/// would hold the first picture and the keys for that time. The loop writes the rest in the
+/// next passes, without a wait.
+///
+/// The count is the RGBA bytes of the cache, not the bytes on the wire: an opaque picture
+/// goes out as RGB (3/4 of the count), and the direct medium adds base64 (4/3 of its data).
+/// The first picture of a pass always goes out, so a pass can end one picture above the
+/// limit. The temp file medium writes one file per picture.
+const EMIT_PASS_BYTES: usize = 4 * 1024 * 1024;
+
+/// Write the new thumbnails of `pending` that fit into one pass, and keep the visible rest in
+/// `pending` for the next pass.
+pub(crate) fn emit_new_thumbnails(app: &mut App, pending: &mut Vec<usize>) -> io::Result<()> {
+    app.with_graphics_out(|app, out| {
+        *pending = emit_new_thumbnails_to(app, pending, out)?;
+        Ok(())
+    })
 }
 
-/// Write the new thumbnails to `out`, so that the tests can read the escape sequences. The
-/// synchronized update swaps the preview for the sharp image without a blank cell between.
+/// Write the new thumbnails to `out` in grid order, so that the tests can read the escape
+/// sequences. The synchronized update swaps the preview for the sharp image without a blank
+/// cell between. After `EMIT_PASS_BYTES`, the visible cells that are left come back for the
+/// next pass. A cell that left the screen gets its picture from the next render of the grid.
 fn emit_new_thumbnails_to(
     app: &mut App,
     new_indices: &[usize],
     out: &mut impl Write,
-) -> io::Result<()> {
+) -> io::Result<Vec<usize>> {
     use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 
     queue!(out, BeginSynchronizedUpdate)?;
     delete_evicted_images_to(app, out)?;
+    let new_indices: HashSet<usize> = new_indices.iter().copied().collect();
     let mut shown = HashSet::new();
+    let mut written = 0;
+    let mut left = Vec::new();
     for (vis_idx, position) in app.gallery.visible_range().enumerate() {
         let img_idx = app.gallery.filtered_indices[position];
         if let Some((_, id)) = app.thumb_cache.peek(img_idx) {
@@ -197,24 +218,29 @@ fn emit_new_thumbnails_to(
         if !new_indices.contains(&img_idx) {
             continue;
         }
+        if written >= EMIT_PASS_BYTES {
+            left.push(img_idx);
+            continue;
+        }
         delete_stale_images_to(app, out, |cell| cell == img_idx)?;
-        transmit_cell(app, out, vis_idx, img_idx)?;
+        written += transmit_cell(app, out, vis_idx, img_idx)?;
     }
     trim_to_budget(app, out, &shown)?;
     queue!(out, EndSynchronizedUpdate)?;
-    out.flush()
+    out.flush()?;
+    Ok(left)
 }
 
 /// Transmit the thumbnail of the cell `img_idx` into the visible cell `vis_idx`, and record its
-/// id and its bytes. A cell without a thumbnail writes nothing.
+/// id and its bytes. Returns the bytes. A cell without a thumbnail writes nothing.
 fn transmit_cell(
     app: &mut App,
     out: &mut impl Write,
     vis_idx: usize,
     img_idx: usize,
-) -> io::Result<()> {
+) -> io::Result<usize> {
     let Some((picture, id)) = app.thumb_cache.peek(img_idx) else {
-        return Ok(());
+        return Ok(0);
     };
     let bytes = picture.image.as_raw().len();
     let (origin, cell_box) = grid_placement(app, vis_idx, picture.cells);
@@ -228,7 +254,7 @@ fn transmit_cell(
         },
     )?;
     app.terminal_images.insert(id, bytes);
-    Ok(())
+    Ok(bytes)
 }
 
 /// Delete the previews that a sharp thumbnail replaced, for the cells that `select` picks. The
@@ -643,6 +669,43 @@ mod tests {
     }
 
     #[test]
+    fn a_pass_writes_the_new_thumbnails_up_to_its_byte_budget_and_keeps_the_rest() {
+        let mut app = thumbnail_app(8);
+        let mut out = Vec::new();
+        let left = emit_new_thumbnails_to(&mut app, &[7, 0, 1, 2, 3, 4, 5, 6, 30], &mut out);
+        assert!(
+            left.unwrap().is_empty(),
+            "8 cells of 60 KB fit into one pass"
+        );
+        let text = text(&out);
+        assert_eq!(text.matches(TRANSMIT).count(), 8);
+        assert_eq!(
+            text.matches(BEGIN_SYNC).count(),
+            1,
+            "in one synchronized update"
+        );
+
+        // Pictures of 2 MB: the third one waits for the next pass.
+        let mut app = grid_app(3);
+        for index in 0..3 {
+            let picture = GridPicture {
+                image: RgbaImage::new(1024, 512),
+                cells: (20, 6),
+            };
+            app.thumb_cache.insert(index, picture);
+        }
+        let mut out = Vec::new();
+        let left = emit_new_thumbnails_to(&mut app, &[2, 0, 1], &mut out).unwrap();
+        assert_eq!(left, vec![2], "the cells go out in grid order");
+        assert_eq!(text_of(&out).matches(TRANSMIT).count(), 2);
+        let mut out = Vec::new();
+        let left = emit_new_thumbnails_to(&mut app, &left, &mut out).unwrap();
+        assert!(left.is_empty());
+        assert_eq!(text_of(&out).matches(TRANSMIT).count(), 1);
+        assert_eq!(app.terminal_images.len(), 3);
+    }
+
+    #[test]
     fn a_sharp_thumbnail_deletes_its_preview_before_the_transmit() {
         let mut app = thumbnail_app(2);
         app.images.push(PathBuf::from("/photos/2.heic"));
@@ -881,9 +944,9 @@ mod tests {
         pad_for_grid(image, target, app.cell_px, true)
     }
 
-    /// One pass of the run loop after a key: the grid write when a render is due, then the
-    /// decodes of the visible cells arrive and go out. Then every visible cell must show a
-    /// stored image.
+    /// The passes of the run loop after a key: the grid write when a render is due, then the
+    /// decodes of the visible cells arrive and go out, in as many passes as their bytes need.
+    /// Then every visible cell must show a stored image.
     fn settle_grid(app: &mut App, terminal: &mut FakeTerminal, step: &str) {
         if app.needs_render {
             render_gallery_images(app).unwrap();
@@ -900,9 +963,12 @@ mod tests {
             let image = thumbnail_for_grid(app, index);
             assert!(app.store_thumbnail(index, image, true));
         }
-        let mut out = Vec::new();
-        emit_new_thumbnails_to(app, &fresh, &mut out).unwrap();
-        terminal.feed(&out);
+        let mut pending = fresh;
+        while !pending.is_empty() {
+            let mut out = Vec::new();
+            pending = emit_new_thumbnails_to(app, &pending, &mut out).unwrap();
+            terminal.feed(&out);
+        }
         assert!(terminal.black_cells.is_empty(), "{step}: black cells");
         assert_eq!(terminal.synchronized_depth, 0, "{step}");
         for (_, index) in app.gallery.visible_items() {

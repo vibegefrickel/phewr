@@ -168,6 +168,12 @@ pub(crate) struct App {
     thumb_jobs: JobSlots,
     /// The HEIC preview decodes, at most `MAX_PREVIEW_JOBS` at once.
     preview_jobs: JobSlots,
+    /// The disk cache reads of the cells that wait for a decode slot, at most
+    /// `MAX_CACHE_READS` at once.
+    cache_reads: JobSlots,
+    /// The cells whose disk cache read missed in this generation. They read again only after
+    /// their sharp decode.
+    cache_misses: HashSet<usize>,
     thumb_generation: u32,
     /// The Kitty ids of previews that a sharp thumbnail replaced, with their cell. The next
     /// write of the grid deletes them in the terminal.
@@ -284,6 +290,8 @@ impl App {
             thumb_rx,
             thumb_jobs: Self::thumb_slots(),
             preview_jobs: Self::preview_slots(),
+            cache_reads: Self::cache_read_slots(),
+            cache_misses: HashSet::new(),
             thumb_generation: 0,
             stale_image_ids: Vec::new(),
             animated: HashMap::new(),
