@@ -15,7 +15,7 @@ viewr is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork 
 
 ## Install
 
-viewr is for macOS on Apple Silicon. The binary links the Homebrew libraries libheif and FFmpeg.
+viewr is for macOS on Apple Silicon. The binary links the Homebrew library libheif. viewr starts `ffmpeg`, `ffprobe` and `mpv` when they are installed: they are optional, and without them videos have no thumbnails and play only in the mpv window, or not at all.
 
 ### Homebrew
 
@@ -50,7 +50,7 @@ Feature flags:
 |---------|---------|-------|
 | `turbo` | on | libjpeg-turbo, fast JPEG decoding with downscaling |
 | `heic` | on | libheif >= 1.19 |
-| `video` | on | FFmpeg >= 7, plays MP4/MOV/MKV/AVI/WebM/M4V |
+| `video` | on | plays MP4/MOV/MKV/AVI/WebM/M4V; needs `ffmpeg` and `ffprobe` 7 or later on PATH at run time, not at build time |
 | `sips` | on | macOS `/usr/bin/sips`, opens camera RAW, PSD, PDF, SVG and other ImageIO formats |
 
 ```bash
@@ -205,7 +205,7 @@ player = "terminal"
 colorspace = "display-p3"
 ```
 
-The terminal player needs `ffmpeg` on PATH. Without the temp file medium or ffmpeg, a video opens in the mpv window. Without mpv, a note shows.
+The terminal player and the video thumbnails need `ffmpeg` and `ffprobe` on PATH. Without them, a video cell shows `▶`, and a video opens in the mpv window. Without the temp file medium, a video also opens in the mpv window. Without mpv, a note shows.
 
 When you zoom the grid with `+` / `-`, viewr remembers the size for the current folder and as the last size in `~/.local/state/viewr/state.toml`. A folder opens with its own size. A folder without one opens with the last size, or with `[gallery] visible_rows`. `0` returns the current folder to the configured size and erases its entry. viewr keeps the sizes of the last 200 folders.
 
@@ -237,7 +237,7 @@ At start, viewr asks the terminal whether it reads image data from a temp file. 
 
 viewr applies the EXIF orientation of JPEG, TIFF, WebP and PNG files, so portrait photos show upright.
 
-**Video** (feature `video`): MP4, MOV, MKV, AVI, WebM, M4V. mpv plays the video in a loop. Gallery thumbnails use the first frame, which FFmpeg decodes.
+**Video** (feature `video`): MP4, MOV, MKV, AVI, WebM, M4V. The terminal player plays the video in a loop. Gallery thumbnails use the first frame, which `ffmpeg` decodes with the rotation and the HDR tone mapping.
 
 ## Development
 

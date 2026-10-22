@@ -19,10 +19,10 @@ imgrrr before 2026-10-17.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
 
 The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
-serde/toml, jxl-oxide. The features `turbo` (libjpeg-turbo), `heic` (libheif) and `video` (FFmpeg)
-link native Homebrew libraries. The feature `sips` runs the macOS tool `/usr/bin/sips`. All four
-features are on by default. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew
-dependency.
+serde/toml, jxl-oxide, moxcms. The features `turbo` (libjpeg-turbo) and `heic` (libheif) link
+native Homebrew libraries. The feature `video` links no library: it starts `ffmpeg`, `ffprobe` and
+`mpv` from PATH when they exist, and reads ffprobe's JSON with serde_json. The feature `sips` runs
+the macOS tool `/usr/bin/sips`. All four features are on by default.
 
 ## Build, test, run
 
@@ -85,9 +85,10 @@ For each release:
 2. Run `just release`. It runs `just check`, builds the binary, tags, creates the Codeberg
    release with the asset and `install.sh`, and pushes the formula to the tap.
 
-The release binary is arm64 only, because Homebrew's libheif and FFmpeg are arm64 libraries.
-The formula depends on libheif, ffmpeg and mpv. `install.sh` stops if libheif or ffmpeg is
-missing.
+The release binary is arm64 only, because Homebrew's libheif is an arm64 library. The formula
+depends on libheif, ffmpeg and mpv. `install.sh` stops if libheif or ffmpeg is missing. Before the
+next release, make ffmpeg a recommendation in the formula and drop the `libavcodec` check from
+`install.sh`: viewr runs without ffmpeg.
 
 ## Rules
 
@@ -159,7 +160,8 @@ missing.
 
 ## Layout
 
-- `main.rs`: the module list and `main`: the FFmpeg init, the CLI checks, the terminal
+- `main.rs`: the module list and `main`: the lookup of ffmpeg and ffprobe
+  (`video::find_session_tools`), the CLI checks, the terminal
   session and the start of the run loop.
 - `cli.rs`: the clap arguments (`Cli`) and the start directory.
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
@@ -231,7 +233,8 @@ missing.
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config.rs`: `config.toml` and the state file.
-- `video.rs` (feature `video`): the first-frame thumbnails and the video extensions.
+- `video.rs` (feature `video`): `Tools`, the session lookup of ffmpeg and ffprobe, the first-frame
+  thumbnails and the video extensions.
 - `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
   and the `Runner` trait for the process start.
 - `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
@@ -319,8 +322,15 @@ missing.
   in `ui.rs`). There is no directory picker. A start with several paths lists no
   folders. A symlink to a folder stays out. One image next to folders opens the fullscreen view
   at once, as in a flat folder.
-- **FFmpeg log:** `main` sets the FFmpeg log level to `Quiet` directly after `ffmpeg::init()`, so
-  no libav warning reaches the screen of the TUI.
+- **Video programs:** viewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
+  time, and the tests never do, so `session_first_frame` gives `NotFound` in a test. The probe
+  (`player/probe.rs`) is one `ffprobe -of json` process of about 32 ms with a 2 s timeout
+  (`output_within`). A probe cache keys each `VideoInfo` by path, mtime and length, so
+  `Player::open` after a cold thumbnail starts no ffprobe. An animation reads 17 packets, an
+  `.avif` file 34. The first frame runs the player GPU chain with `-frames:v 1`, with the
+  rotation and the cube, and waits at most 5 s. The player maps the probed stream with
+  `-map 0:N` for every video. Without the programs, a video cell keeps its `▶` icon, and
+  `Enter` opens the mpv window with a note.
 - **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
   that does not answer cannot hold viewr. Tests pass a closure and never start `ya`.
@@ -415,10 +425,7 @@ missing.
   switch, so the columns never move while the user browses.
 - **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `decode/resize.rs`). It is one
   third faster than Lanczos3, and the difference is not visible.
-- **FFmpeg versions:** `ffmpeg-next` must match the major version of Homebrew's FFmpeg.
-  ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
-  release binary that links the old `libavcodec.<major>.dylib` does not start.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v9` (`THUMBNAIL_CACHE_VERSION`), the
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v10` (`THUMBNAIL_CACHE_VERSION`), the
   path, the size, the mtime, the target size and the color target. Change the version string when the thumbnail
   output changes. The folder prefetch writes the same key (`warm_disk_cache` calls
   `sharp_thumbnail`). The prune removes temp files of the cache that are older than 1 hour.
