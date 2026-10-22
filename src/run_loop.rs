@@ -19,6 +19,12 @@ use std::time::{Duration, Instant};
 
 /// The wait of the loop while a background result is on its way.
 const BUSY_POLL: Duration = Duration::from_millis(10);
+/// The wait of the loop during the first `SHAPE_POLL_WINDOW` of the header read for the cell
+/// shape. A local read takes 2 ms to 4 ms, and the first screen of a folder waits for it.
+const SHAPE_POLL: Duration = Duration::from_millis(1);
+/// After this time, the header read is slow (a network share, an external disk), and the loop
+/// waits `BUSY_POLL` again, so that it does not draw 1000 times per second.
+const SHAPE_POLL_WINDOW: Duration = Duration::from_millis(20);
 /// The wait of the loop when nothing runs in the background.
 const IDLE_POLL: Duration = Duration::from_millis(250);
 /// The wait of the loop while an mpv window plays: the latency of `n` and `N` in the window.
@@ -230,7 +236,8 @@ fn finish_render(app: &mut App, pending_emits: &mut Vec<usize>) {
 ///
 /// No event wakes the loop when a decode finishes, so the wait is the latency of every
 /// background result. While a result is on its way, or thumbnails wait for their emit, the
-/// loop looks every 10 ms. Otherwise it looks every 250 ms.
+/// loop looks every 10 ms, and every 1 ms during the first 20 ms of the cell shape read.
+/// Otherwise it looks every 250 ms.
 pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     let busy = app.has_pending_work() || !pending_emits.is_empty();
     let mut timeout = {
@@ -245,6 +252,9 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
         #[cfg(not(feature = "video"))]
         if busy { BUSY_POLL } else { IDLE_POLL }
     };
+    if waits_for_a_fast_shape(app.cell_shape_running_for(Instant::now())) {
+        timeout = timeout.min(SHAPE_POLL);
+    }
     if let Some(remaining) = app.slideshow_timeout() {
         timeout = timeout.min(remaining);
     }
@@ -258,10 +268,44 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     timeout
 }
 
+/// True during the first `SHAPE_POLL_WINDOW` of a header read that runs for `running`.
+fn waits_for_a_fast_shape(running: Option<Duration>) -> bool {
+    running.is_some_and(|running| running < SHAPE_POLL_WINDOW)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LoopState, mouse_capture_wanted, sync_mouse_capture};
+    use super::{
+        LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW, mouse_capture_wanted, next_timeout,
+        sync_mouse_capture, waits_for_a_fast_shape,
+    };
     use crate::config::Config;
+    use crate::test_support::{app, test_dir, wait_until};
+
+    #[test]
+    fn the_loop_looks_every_millisecond_while_the_cell_shape_is_on_its_way() {
+        let dir = test_dir();
+        let mut app = app();
+        let path = dir.path().join("a.png");
+        image::RgbaImage::new(30, 40).save(&path).unwrap();
+        app.images.push(path);
+        app.filenames.push("a.png".to_owned());
+
+        app.request_cell_shape();
+        assert_eq!(next_timeout(&app, &[]), SHAPE_POLL);
+        wait_until(|| {
+            app.poll_cell_shape();
+            !app.cell_shape_pending()
+        });
+        assert!(next_timeout(&app, &[]) > SHAPE_POLL);
+    }
+
+    #[test]
+    fn a_slow_shape_read_gets_the_normal_wait_after_the_window() {
+        assert!(!waits_for_a_fast_shape(None), "no read runs");
+        assert!(waits_for_a_fast_shape(Some(std::time::Duration::ZERO)));
+        assert!(!waits_for_a_fast_shape(Some(SHAPE_POLL_WINDOW)));
+    }
 
     #[test]
     fn the_loop_releases_the_mouse_while_a_window_plays_and_takes_it_back() {

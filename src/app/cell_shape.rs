@@ -5,6 +5,7 @@ use crate::decode;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 /// The files whose headers decide the cell shape of the grid: the first screen, or the first
 /// files of a large folder.
@@ -28,6 +29,7 @@ impl App {
             .collect();
         let (tx, rx) = mpsc::channel();
         self.shape_rx = Some(rx);
+        self.shape_started = Some(Instant::now());
         // A thread of its own: the rayon pool can be full of decodes of the old folder after a
         // directory switch, and the first screen of the new folder waits for this read.
         thread::spawn(move || {
@@ -43,6 +45,13 @@ impl App {
     /// twice for two cell sizes.
     pub(crate) fn cell_shape_pending(&self) -> bool {
         self.shape_rx.is_some()
+    }
+
+    /// How long the running header read takes so far, `None` when no read runs. The run loop
+    /// waits less during the first milliseconds, because a local read takes 2 ms to 4 ms.
+    pub(crate) fn cell_shape_running_for(&self, now: Instant) -> Option<Duration> {
+        self.shape_rx.as_ref()?;
+        Some(now.saturating_duration_since(self.shape_started?))
     }
 
     /// Take the folder shape. A changed grid drops the thumbnails. The gallery draws again,
@@ -87,9 +96,15 @@ mod tests {
         let landscape_cols = app.gallery.grid_cols;
         assert!(!app.cell_shape_pending());
 
+        assert_eq!(app.cell_shape_running_for(std::time::Instant::now()), None);
         app.request_cell_shape();
         assert!(app.cell_shape_pending());
         assert!(app.has_pending_work());
+        let later = std::time::Instant::now() + std::time::Duration::from_millis(30);
+        assert!(
+            app.cell_shape_running_for(later)
+                .is_some_and(|running| running >= std::time::Duration::from_millis(30))
+        );
         wait_until(|| {
             app.poll_cell_shape();
             !app.cell_shape_pending()

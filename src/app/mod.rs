@@ -151,6 +151,8 @@ pub(crate) struct App {
 
     /// The header read for the cell shape, while it runs. The thumbnail decodes wait for it.
     shape_rx: Option<mpsc::Receiver<f64>>,
+    /// The start of the last header read, for the short wait of the run loop.
+    shape_started: Option<std::time::Instant>,
     /// True after the header read started for this scan. The shape stays until the next scan.
     shape_requested: bool,
 
@@ -273,6 +275,7 @@ impl App {
             known_len: 0,
             scan_complete: false,
             shape_rx: None,
+            shape_started: None,
             shape_requested: false,
             folder_prefetch: folder_prefetch::FolderPrefetch::default(),
             filter_rx: None,

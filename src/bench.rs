@@ -332,6 +332,289 @@ fn grid_first_thumbnail_and_full_grid() {
     ));
 }
 
+/// The median time of 10 runs of `program` with `args`, from the spawn to the exit.
+fn median_process_time(program: &Path, args: &[&str]) -> Duration {
+    let mut times: Vec<Duration> = (0..10)
+        .map(|_| {
+            let start = Instant::now();
+            let status = std::process::Command::new(program)
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "{} did not run", program.display());
+            start.elapsed()
+        })
+        .collect();
+    times.sort();
+    times[times.len() / 2]
+}
+
+/// The times of one start. The first three are the times of their steps, the others count from
+/// the entry into `main`.
+#[derive(Default)]
+struct StartTimes {
+    config: Duration,
+    probe: Duration,
+    app: Duration,
+    first_file: Duration,
+    scan: Duration,
+    shape: Duration,
+    first_picture: Duration,
+    all_shown: Duration,
+    all_sharp: Duration,
+}
+
+impl StartTimes {
+    fn report(&self, label: &str) {
+        report(&format!(
+            "start {label}: config {}, probe without the terminal {}, app {}, first file {}, scan {}, cell shape {}, first picture {}, all cells shown {}, all cells sharp {}",
+            exact_millis(self.config),
+            exact_millis(self.probe),
+            exact_millis(self.app),
+            millis(self.first_file),
+            millis(self.scan),
+            millis(self.shape),
+            millis(self.first_picture),
+            millis(self.all_shown),
+            millis(self.all_sharp)
+        ));
+    }
+}
+
+/// A short time with two decimals.
+fn exact_millis(duration: Duration) -> String {
+    format!("{:.2} ms", duration.as_secs_f64() * 1000.0)
+}
+
+/// The steps of `main` and of the run loop up to the first picture of the grid, with the disk
+/// cache in `cache_dir`. A `TestBackend` stands in for the terminal, so the round trips of the
+/// cell size query and of the Kitty probe are not in the numbers. The probe time is its temp
+/// file only.
+fn start_once(dir: &Path, cache_dir: &Path) -> StartTimes {
+    let mut times = StartTimes::default();
+    let start = Instant::now();
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[gallery]\nmouse = true\n[slideshow]\ninterval = 5.0\n",
+    )
+    .unwrap();
+    let step = Instant::now();
+    let config = crate::config::load_at(&config_path, &config_dir.path().join("state.toml"));
+    times.config = step.elapsed();
+
+    let list = SharedImageList::new();
+    scanner::spawn(vec![dir.to_path_buf()], list.clone());
+
+    let step = Instant::now();
+    let transfer = crate::encoder::kitty::detect_transfer(None, false, |_| None);
+    times.probe = step.elapsed();
+
+    let step = Instant::now();
+    let mut app = App::new_with_config(CELL_PX, list, &config);
+    app.graphics = KittyBackend::new(transfer);
+    app.disk_cache_dir = cache_dir.to_path_buf();
+    let initial_dir = scanner::canonicalize_or_self(dir);
+    app.initial_dir = Some(initial_dir.clone());
+    app.current_dir = Some(initial_dir.clone());
+    app.apply_folder_zoom(&initial_dir);
+    times.app = step.elapsed();
+
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(COLS, ROWS)).unwrap();
+    let mut pending = Vec::new();
+    loop {
+        poll_background(&mut app, &mut pending);
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app, None))
+            .unwrap();
+        render_images(&mut app, &mut pending).unwrap();
+        let now = start.elapsed();
+        if times.first_file.is_zero() && !app.images.is_empty() {
+            times.first_file = now;
+        }
+        if times.scan.is_zero() && app.scan_complete {
+            times.scan = now;
+        }
+        if times.shape.is_zero() && app.scan_complete && !app.cell_shape_pending() {
+            times.shape = now;
+        }
+        if times.first_picture.is_zero() && count_transmissions(&app.graphics_out.take_bytes()) > 0
+        {
+            times.first_picture = now;
+        }
+        let cells: Vec<usize> = app
+            .gallery
+            .visible_items()
+            .map(|(_, index)| index)
+            .filter(|&index| index >= app.first_file())
+            .collect();
+        let shown = !times.first_picture.is_zero()
+            && pending.is_empty()
+            && cells.iter().all(|&index| app.thumb_cache.contains(index));
+        if shown && times.all_shown.is_zero() {
+            times.all_shown = now;
+        }
+        // The next start begins without the decodes of this one.
+        if shown
+            && !app.has_pending_work()
+            && cells.iter().all(|&index| app.thumb_cache.is_sharp(index))
+        {
+            times.all_sharp = now;
+            return times;
+        }
+        assert!(now < LIMIT, "the grid did not fill");
+        thread::sleep(next_timeout(&app, &pending));
+    }
+}
+
+/// The start of viewr up to the first picture of the grid, with a cold and a warm disk cache.
+/// The process start runs the test binary itself, which links the same libraries as viewr.
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn start_to_the_first_grid_picture() {
+    let Some(dir) = test_dir() else {
+        report("skipped: VIEWR_TEST_DIR is not set");
+        return;
+    };
+    let test_binary = std::env::current_exe().unwrap();
+    report(&format!(
+        "start: process start {} (/usr/bin/true {}), the test binary without a test",
+        exact_millis(median_process_time(
+            &test_binary,
+            &["--exact", "bench::no_such_test"]
+        )),
+        exact_millis(median_process_time(Path::new("/usr/bin/true"), &[]))
+    ));
+    let cache = tempfile::tempdir().unwrap();
+    start_once(&dir, cache.path()).report("cold");
+    start_once(&dir, cache.path()).report("warm");
+}
+
+/// One candidate file format of the thumbnail disk cache: its name, its encode and its decode.
+struct CacheFormat {
+    name: &'static str,
+    encode: fn(&image::RgbaImage) -> Vec<u8>,
+    decode: fn(&[u8]) -> image::RgbaImage,
+}
+
+fn encode_with(image: &image::RgbaImage, format: image::ImageFormat) -> Vec<u8> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, format).unwrap();
+    bytes.into_inner()
+}
+
+fn decode_with(bytes: &[u8], format: image::ImageFormat) -> image::RgbaImage {
+    image::load_from_memory_with_format(bytes, format)
+        .unwrap()
+        .into_rgba8()
+}
+
+fn raw_header(image: &image::RgbaImage) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(8 + image.as_raw().len());
+    bytes.extend_from_slice(&image.width().to_le_bytes());
+    bytes.extend_from_slice(&image.height().to_le_bytes());
+    bytes
+}
+
+fn raw_dimensions(bytes: &[u8]) -> (u32, u32) {
+    (
+        u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
+        u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+    )
+}
+
+/// PNG is the format of v10 and older, QOI the format of v11. Raw RGBA is the lower bound of
+/// the read, at 2.3 times the bytes of QOI. LZ4 (`lz4_flex` 0.14, not a dependency) measured
+/// 0.3 ms to 0.5 ms for the read and the decode, at 76 % of the pixel bytes.
+const CACHE_FORMATS: [CacheFormat; 3] = [
+    CacheFormat {
+        name: "png",
+        encode: |image| encode_with(image, image::ImageFormat::Png),
+        decode: |bytes| decode_with(bytes, image::ImageFormat::Png),
+    },
+    CacheFormat {
+        name: "qoi",
+        encode: |image| encode_with(image, image::ImageFormat::Qoi),
+        decode: |bytes| decode_with(bytes, image::ImageFormat::Qoi),
+    },
+    CacheFormat {
+        name: "raw rgba",
+        encode: |image| {
+            let mut bytes = raw_header(image);
+            bytes.extend_from_slice(image.as_raw());
+            bytes
+        },
+        decode: |bytes| {
+            let (width, height) = raw_dimensions(bytes);
+            image::RgbaImage::from_raw(width, height, bytes[8..].to_vec()).unwrap()
+        },
+    },
+];
+
+/// The file formats of the thumbnail disk cache on the sharp thumbnails of the first screen:
+/// the encode and the write of a cold grid, the read and the decode of a warm grid, and the
+/// bytes on the disk.
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn disk_cache_formats() {
+    let Some(dir) = test_dir() else {
+        report("skipped: VIEWR_TEST_DIR is not set");
+        return;
+    };
+    let bench = scanned_app(&dir);
+    let app = &bench.app;
+    let target = crate::app::thumbnails::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+    let thumbnails: Vec<image::RgbaImage> = app
+        .gallery
+        .visible_items()
+        .filter_map(|(_, index)| {
+            crate::decode::resize::load_and_resize_px(
+                &app.images[index],
+                target,
+                crate::decode::EmbeddedThumbnail::Allow,
+            )
+            .ok()
+        })
+        .collect();
+    let pixel_bytes: usize = thumbnails.iter().map(|image| image.as_raw().len()).sum();
+    report(&format!(
+        "cache formats: {} thumbnails for a box of {target:?}, {} KB of pixels each on average",
+        thumbnails.len(),
+        pixel_bytes / thumbnails.len().max(1) / 1024
+    ));
+    for format in &CACHE_FORMATS {
+        let files = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        let encoded: Vec<Vec<u8>> = thumbnails.iter().map(format.encode).collect();
+        let encode = start.elapsed();
+        for (index, bytes) in encoded.iter().enumerate() {
+            std::fs::write(files.path().join(index.to_string()), bytes).unwrap();
+        }
+        let write = start.elapsed();
+        let start = Instant::now();
+        for (index, image) in thumbnails.iter().enumerate() {
+            let bytes = std::fs::read(files.path().join(index.to_string())).unwrap();
+            assert_eq!((format.decode)(&bytes).as_raw(), image.as_raw());
+        }
+        let read = start.elapsed();
+        let size: usize = encoded.iter().map(Vec::len).sum();
+        let count = thumbnails.len().max(1) as f64;
+        report(&format!(
+            "cache format {}: encode {:.2} ms, with the write {:.2} ms, read and decode {:.2} ms per thumbnail, {} KB per file ({:.0} % of the pixels)",
+            format.name,
+            encode.as_secs_f64() * 1000.0 / count,
+            write.as_secs_f64() * 1000.0 / count,
+            read.as_secs_f64() * 1000.0 / count,
+            size / thumbnails.len().max(1) / 1024,
+            size as f64 * 100.0 / pixel_bytes.max(1) as f64
+        ));
+    }
+}
+
 /// The embedded JPEG previews of RAW and PSD files: the find, the decode for a grid cell and
 /// for the fullscreen box, against the sips decode. Synthetic files stand in for a camera: a
 /// 6000x4000 full-size preview in a TIFF, and a 1620x1080 preview in a CR3. The folder adds the

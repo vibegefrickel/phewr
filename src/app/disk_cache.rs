@@ -10,8 +10,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// rotated JPEG gets the DCT scale of its turned box, and RAW and PSD files take their
 /// embedded JPEG. v9: each thumbnail is in the color space of the terminal. The key also holds
 /// the color target, so a change of `[terminal] colorspace` decodes again. v10: the first frame
-/// of a video gets the rotation and the HDR tone mapping.
-const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v10";
+/// of a video gets the rotation and the HDR tone mapping. v11: the cache files are QOI, not PNG.
+const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v11";
+
+/// The file format of the cache. QOI decodes twice as fast as PNG at the same file size.
+const CACHE_FORMAT: image::ImageFormat = image::ImageFormat::Qoi;
+
+/// The extension of a cache file.
+const CACHE_EXTENSION: &str = "qoi";
+
+/// The extension of the PNG files of the older versions. Their keys never hit again, so the
+/// prune removes them.
+const OLD_CACHE_EXTENSION: &str = "png";
 
 /// The thumbnail disk cache below the user's cache directory, or a temp directory without one.
 pub(super) fn default_disk_cache_dir() -> PathBuf {
@@ -49,7 +59,7 @@ pub(super) fn get_cache_file_path(
     mtime.subsec_nanos().hash(&mut hasher);
     target.0.hash(&mut hasher);
     target.1.hash(&mut hasher);
-    let filename = format!("{:016x}.png", hasher.finish());
+    let filename = format!("{:016x}.{CACHE_EXTENSION}", hasher.finish());
 
     Some(cache_dir.join(filename))
 }
@@ -60,18 +70,15 @@ pub(super) fn try_load_from_disk_cache(
     target: (u32, u32),
 ) -> Option<RgbaImage> {
     let cache_path = get_cache_file_path(cache_dir, path, target)?;
-    if cache_path.exists() {
-        if let Ok(image) = image::open(&cache_path) {
-            Some(image.to_rgba8())
-        } else {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "a cache file that stays is only disk space, the cache prunes it"
-            )]
-            let _ = std::fs::remove_file(cache_path);
-            None
-        }
+    let bytes = std::fs::read(&cache_path).ok()?;
+    if let Ok(image) = image::load_from_memory_with_format(&bytes, CACHE_FORMAT) {
+        Some(image.into_rgba8())
     } else {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a cache file that stays is only disk space, the cache prunes it"
+        )]
+        let _ = std::fs::remove_file(cache_path);
         None
     }
 }
@@ -101,10 +108,7 @@ pub(super) fn try_save_to_disk_cache(
         std::process::id(),
         sequence
     ));
-    if img
-        .save_with_format(&temp_path, image::ImageFormat::Png)
-        .is_err()
-    {
+    if img.save_with_format(&temp_path, CACHE_FORMAT).is_err() {
         #[expect(
             clippy::let_underscore_must_use,
             reason = "a cache file that stays is only disk space, the cache prunes it"
@@ -133,7 +137,7 @@ pub(super) fn try_save_to_disk_cache(
 const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Remove a temp file of `try_save_to_disk_cache` that is older than `STALE_TEMP_AGE`. A quit
-/// during a cache write leaves one, and the size prune only counts the `.png` files.
+/// during a cache write leaves one, and the size prune only counts the cache files.
 fn remove_stale_temp_file(entry: &std::fs::DirEntry) {
     let path = entry.path();
     let is_temp = path.extension().and_then(|ext| ext.to_str()) == Some("tmp")
@@ -160,14 +164,24 @@ fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
     let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = entries
         .flatten()
         .filter_map(|entry| {
-            if entry.path().extension().and_then(|ext| ext.to_str()) != Some("png") {
+            let path = entry.path();
+            let extension = path.extension().and_then(|ext| ext.to_str());
+            if extension == Some(OLD_CACHE_EXTENSION) {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "an old file that stays is only disk space, the next prune tries again"
+                )]
+                let _ = std::fs::remove_file(&path);
+                return None;
+            }
+            if extension != Some(CACHE_EXTENSION) {
                 remove_stale_temp_file(&entry);
                 return None;
             }
             let metadata = entry.metadata().ok()?;
             metadata.is_file().then(|| {
                 (
-                    entry.path(),
+                    path,
                     metadata.len(),
                     metadata.modified().unwrap_or(std::time::UNIX_EPOCH),
                 )
@@ -217,9 +231,10 @@ mod tests {
         assert_ne!(first, changed);
         assert_eq!(
             super::THUMBNAIL_CACHE_VERSION,
-            "viewr-thumbnail-v10",
-            "the tone mapped and turned first frames of videos need a new cache generation"
+            "viewr-thumbnail-v11",
+            "the QOI files need a new cache generation"
         );
+        assert_eq!(first.extension().and_then(|ext| ext.to_str()), Some("qoi"));
     }
 
     #[test]
@@ -228,7 +243,8 @@ mod tests {
         let cache = dir.path().join("cache");
         let source = dir.path().join("a.png");
         RgbaImage::new(4, 4).save(&source).unwrap();
-        let thumb = RgbaImage::new(2, 3);
+        let mut thumb = RgbaImage::new(2, 3);
+        thumb.put_pixel(1, 2, image::Rgba([10, 20, 30, 128]));
 
         assert!(get_cache_file_path(&cache, &dir.path().join("missing.png"), (1, 1)).is_none());
         assert!(try_load_from_disk_cache(&cache, &source, (2, 3)).is_none());
@@ -241,14 +257,13 @@ mod tests {
             Some(())
         );
         assert_eq!(
-            try_load_from_disk_cache(&cache, &source, (2, 3))
-                .unwrap()
-                .dimensions(),
-            (2, 3)
+            try_load_from_disk_cache(&cache, &source, (2, 3)),
+            Some(thumb.clone()),
+            "the pixels come back without a loss"
         );
 
         let entry = get_cache_file_path(&cache, &source, (2, 3)).unwrap();
-        fs::write(&entry, b"not a png").unwrap();
+        fs::write(&entry, b"not a qoi").unwrap();
         assert!(try_load_from_disk_cache(&cache, &source, (2, 3)).is_none());
         assert!(!entry.exists(), "a broken entry goes away");
 
@@ -263,7 +278,7 @@ mod tests {
         let dir = test_dir();
         let cache = dir.path();
         let base = SystemTime::now() - Duration::from_secs(1000);
-        for (index, name) in ["old.png", "middle.png", "new.png"].iter().enumerate() {
+        for (index, name) in ["old.qoi", "middle.qoi", "new.qoi"].iter().enumerate() {
             let path = cache.join(name);
             fs::write(&path, [0_u8; 100]).unwrap();
             let file = fs::File::options().write(true).open(&path).unwrap();
@@ -271,21 +286,36 @@ mod tests {
                 .unwrap();
         }
         fs::write(cache.join("notes.txt"), [0_u8; 500]).unwrap();
-        fs::create_dir(cache.join("folder.png")).unwrap();
+        fs::create_dir(cache.join("folder.qoi")).unwrap();
 
         prune_disk_cache(cache, 1000);
         assert!(
-            cache.join("old.png").exists(),
+            cache.join("old.qoi").exists(),
             "under the limit, nothing goes"
         );
 
         prune_disk_cache(cache, 150);
-        assert!(!cache.join("old.png").exists());
-        assert!(!cache.join("middle.png").exists());
-        assert!(cache.join("new.png").exists());
+        assert!(!cache.join("old.qoi").exists());
+        assert!(!cache.join("middle.qoi").exists());
+        assert!(cache.join("new.qoi").exists());
         assert!(cache.join("notes.txt").exists());
 
         prune_disk_cache(&cache.join("missing"), 0);
+    }
+
+    #[test]
+    fn prune_removes_the_png_files_of_the_older_versions_under_the_limit() {
+        let dir = test_dir();
+        let cache = dir.path();
+        fs::write(cache.join("old.png"), [0_u8; 10]).unwrap();
+        fs::write(cache.join("new.qoi"), [0_u8; 10]).unwrap();
+
+        prune_disk_cache(cache, 1000);
+        assert!(
+            !cache.join("old.png").exists(),
+            "an old PNG never hits again"
+        );
+        assert!(cache.join("new.qoi").exists());
     }
 
     #[test]

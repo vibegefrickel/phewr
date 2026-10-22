@@ -130,26 +130,70 @@ impl Drop for TerminalSession {
 /// How long the start waits for the answer of the terminal to the Kitty probe.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// Send `sequence` to the terminal and return its answer, or `None` after `PROBE_TIMEOUT`.
+/// The answers of the terminal at the start: the cell size and the answer to the Kitty probe.
+/// `None` for an answer that did not come in time.
+pub(crate) struct StartAnswers {
+    pub(crate) cell_px: Option<(u32, u32)>,
+    pub(crate) probe: Option<Vec<u8>>,
+}
+
+/// Send the cell size query and the Kitty `probe` in one write and wait for both answers, so
+/// the start waits for one round trip instead of two. A terminal that does not answer one of
+/// them costs `PROBE_TIMEOUT` one time.
 ///
-/// The answer must not reach crossterm, which would read it as key presses. The function runs
-/// before the first `event::poll`, reads the tty itself and stops at the string terminator.
-pub(crate) fn query_terminal(sequence: &[u8]) -> Option<Vec<u8>> {
-    query_terminal_until(sequence, |answer| {
-        answer
-            .windows(2)
-            .position(|pair| pair == b"\x1b\\")
-            .map(|end| end + 2)
-    })
+/// The answers must not reach crossterm, which would read them as key presses. The function
+/// runs before the first `event::poll` and reads the tty itself.
+pub(crate) fn query_cell_size_and_probe(probe: &[u8]) -> StartAnswers {
+    let mut sequence = CELL_SIZE_QUERY.to_vec();
+    sequence.extend_from_slice(probe);
+    let mut answer = Vec::new();
+    // After a timeout, the answers that came in time are in `answer`.
+    query_terminal_into(&sequence, &mut answer, start_answers_end);
+    start_answers(&answer)
+}
+
+/// The length of both start answers in `answer`, once both are complete. They can come in any
+/// order.
+fn start_answers_end(answer: &[u8]) -> Option<usize> {
+    Some(cell_size_report_end(answer)?.max(string_terminator_end(answer)?))
+}
+
+/// The answers in the bytes that the terminal sent at the start.
+fn start_answers(answer: &[u8]) -> StartAnswers {
+    StartAnswers {
+        cell_px: parse_cell_size_report(answer),
+        probe: string_terminator_end(answer).map(|end| answer[..end].to_vec()),
+    }
+}
+
+/// The length of an answer that ends with the string terminator `ESC \`, such as the answer
+/// to a Kitty query.
+fn string_terminator_end(answer: &[u8]) -> Option<usize> {
+    answer
+        .windows(2)
+        .position(|pair| pair == b"\x1b\\")
+        .map(|end| end + 2)
 }
 
 /// Send `sequence` to the terminal and read until `end` finds the length of the complete
 /// answer, or `None` after `PROBE_TIMEOUT`.
+fn query_terminal_until(sequence: &[u8], end: impl Fn(&[u8]) -> Option<usize>) -> Option<Vec<u8>> {
+    let mut answer = Vec::new();
+    query_terminal_into(sequence, &mut answer, end)?;
+    Some(answer)
+}
+
+/// Send `sequence` to the terminal and read into `answer` until `end` finds the length of the
+/// complete answer. `None` after `PROBE_TIMEOUT`, and `answer` keeps the bytes that came.
 ///
 /// The read takes every byte that the tty holds, so a key pressed before the answer is lost.
 /// The caller asks only when the user does not type: at start, and after a resize when the
 /// terminal answered at start, so no timeout can block the loop.
-fn query_terminal_until(sequence: &[u8], end: impl Fn(&[u8]) -> Option<usize>) -> Option<Vec<u8>> {
+fn query_terminal_into(
+    sequence: &[u8],
+    answer: &mut Vec<u8>,
+    end: impl Fn(&[u8]) -> Option<usize>,
+) -> Option<()> {
     use rustix::event::{PollFd, PollFlags};
     use std::io::Read;
 
@@ -162,7 +206,6 @@ fn query_terminal_until(sequence: &[u8], end: impl Fn(&[u8]) -> Option<usize>) -
     tty.flush().ok()?;
 
     let deadline = Instant::now() + PROBE_TIMEOUT;
-    let mut answer = Vec::new();
     loop {
         let remaining = deadline.checked_duration_since(Instant::now())?;
         let timeout = rustix::event::Timespec::try_from(remaining).ok()?;
@@ -176,9 +219,9 @@ fn query_terminal_until(sequence: &[u8], end: impl Fn(&[u8]) -> Option<usize>) -
             return None;
         }
         answer.extend_from_slice(&buf[..count]);
-        if let Some(length) = end(&answer) {
+        if let Some(length) = end(answer) {
             answer.truncate(length);
-            return Some(answer);
+            return Some(());
         }
     }
 }
@@ -246,7 +289,7 @@ fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
 mod tests {
     use super::{
         CELL_SIZE_QUERY, cell_pixel_size, cell_size_report_end, disable_mouse, enable_mouse,
-        parse_cell_size_report,
+        parse_cell_size_report, start_answers, start_answers_end,
     };
     use crossterm::terminal::WindowSize;
 
@@ -290,6 +333,38 @@ mod tests {
         assert_eq!(cell_size_report_end(b"\x1b[6;43;18tj"), Some(10));
         assert_eq!(cell_size_report_end(b"\x1b[6;43;1"), None);
         assert_eq!(cell_size_report_end(b"tt"), None);
+    }
+
+    #[test]
+    fn the_start_read_waits_for_both_answers_in_any_order() {
+        let cell = b"\x1b[6;43;18t".as_slice();
+        let probe = b"\x1b_Gi=31;OK\x1b\\".as_slice();
+        for answer in [[cell, probe].concat(), [probe, cell].concat()] {
+            assert_eq!(start_answers_end(&answer), Some(answer.len()));
+            let answers = start_answers(&answer);
+            assert_eq!(answers.cell_px, Some((18, 43)));
+            let probe_answer = answers.probe.unwrap();
+            assert!(probe_answer.ends_with(probe), "{probe_answer:?}");
+        }
+        let typed = [cell, probe, b"j"].concat();
+        assert_eq!(start_answers_end(&typed), Some(typed.len() - 1));
+        assert_eq!(start_answers_end(cell), None, "the probe answer is missing");
+        assert_eq!(start_answers_end(probe), None, "the cell size is missing");
+    }
+
+    #[test]
+    fn a_timeout_keeps_the_answer_that_came_in_time() {
+        let only_cell = start_answers(b"\x1b[6;43;18t");
+        assert_eq!(only_cell.cell_px, Some((18, 43)));
+        assert_eq!(only_cell.probe, None);
+        let only_probe = start_answers(b"\x1b_Gi=31;OK\x1b\\");
+        assert_eq!(only_probe.cell_px, None);
+        assert_eq!(
+            only_probe.probe.as_deref(),
+            Some(b"\x1b_Gi=31;OK\x1b\\".as_slice())
+        );
+        let nothing = start_answers(b"");
+        assert_eq!((nothing.cell_px, nothing.probe), (None, None));
     }
 
     fn window(columns: u16, rows: u16, width: u16, height: u16) -> WindowSize {

@@ -37,7 +37,9 @@ use run_loop::{LoopState, run};
 use scanner::canonicalize_or_self;
 use std::io;
 use std::path::PathBuf;
-use terminal::{TerminalSession, query_cell_pixel_size, query_terminal, window_cell_pixel_size};
+use terminal::{
+    TerminalSession, query_cell_pixel_size, query_cell_size_and_probe, window_cell_pixel_size,
+};
 use yazi::{reveal_in_yazi, run_briefly};
 
 fn main() -> io::Result<()> {
@@ -104,10 +106,10 @@ fn main() -> io::Result<()> {
 
     let mut session = TerminalSession::enter(config.mouse)?;
 
-    // A terminal that answers the cell size query at start gets it again after each resize.
-    let cell_size_answer = query_cell_pixel_size();
-    state.cell_size_from_terminal = cell_size_answer.is_some();
-    let cell_px = cell_size_answer.unwrap_or_else(window_cell_pixel_size);
+    // The cell size query goes out with the probe, in one round trip. Without a probe, it goes
+    // out alone.
+    let mut cell_size_answer = None;
+    let mut asked_cell_size = false;
     // A probe without an answer in time can still get one: it then arrives as key presses.
     let mut probe_unanswered = false;
     let transfer = encoder::kitty::detect_transfer(
@@ -116,11 +118,19 @@ fn main() -> io::Result<()> {
             .as_deref(),
         encoder::kitty::is_ssh(),
         |sequence| {
-            let answer = query_terminal(sequence);
-            probe_unanswered = answer.is_none();
-            answer
+            let answers = query_cell_size_and_probe(sequence);
+            asked_cell_size = true;
+            cell_size_answer = answers.cell_px;
+            probe_unanswered = answers.probe.is_none();
+            answers.probe
         },
     );
+    if !asked_cell_size {
+        cell_size_answer = query_cell_pixel_size();
+    }
+    // A terminal that answers the cell size query at start gets it again after each resize.
+    state.cell_size_from_terminal = cell_size_answer.is_some();
+    let cell_px = cell_size_answer.unwrap_or_else(window_cell_pixel_size);
     state.late_answers = keys::LateAnswerFilter::new(probe_unanswered);
     let mut app = App::with_config(cell_px, shared_list, &config);
     app.graphics = encoder::KittyBackend::new(transfer);
