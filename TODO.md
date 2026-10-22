@@ -6,39 +6,40 @@ Scope:
 
 - Speed comes first: every change must make opening, scrolling or switching files faster, or it must add a common image/video format.
 - Full mouse support is a first-class input method, on par with the keyboard. Every view and overlay must be usable with the mouse.
-- Viewer only: viewr does not trash, delete, move, rename or otherwise modify files. Remove the remaining delete code once the terminal tests are done.
+- Viewer only: viewr does not trash, delete, move, rename or otherwise modify files. After the terminal tests, remove the remaining delete code.
 - Target terminal: Ghostty on macOS Apple Silicon, using the Kitty graphics protocol.
 - Measure speed changes with `just bench` on `VIEWR_TEST_DIR`.
 
-Implications for the current structure:
+State of the main goal:
 
-- The built-in terminal video player (Route 3) becomes the default video path, because mpv `--vo=kitty` is too slow in Ghostty (4K HLG plays at 2.4 fps). mpv window mode can stay as an option.
-- HEIC two-phase thumbnails, prefetch, disk cache and the temp-file Kitty medium are the right architecture. Extend the preview pattern to other formats that have embedded thumbnails, and keep the caches hot.
-- Format support must be verified on real files: JPEG XL, camera RAW and animated image formats are the biggest gaps.
-- Mouse support is not optional polish: grid selection, scrolling, zoom, pan, fullscreen stepping and overlay dismissal all need mouse handlers.
-- Window-slideshow IPC and moving thumbnails improve UX but are lower priority than decode/render speed, format coverage and core mouse interactions.
+- Speed: the grid, the fullscreen view, the prefetch, the disk cache (QOI) and the Kitty temp file medium are in place. The open speed items are in "Next".
+- Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations and videos open. JPEG XL and camera RAW have no test on real files yet.
+- Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
+- Mouse: every view and overlay works with the mouse. The maintainer test is open.
 
 ## Now
 
-- Animation test (maintainer), in Ghostty: open an animated GIF, WebP and APNG from `~/Pictures` or the web, check the `▶` marker in the grid, the loop, `p`, and a slideshow with a short GIF.
-- Mouse test (maintainer), in Ghostty: click, double-click and right click in the grid, wheel and Shift+wheel (does Shift+wheel-up zoom in, like `+`?), a sideways trackpad swipe, fullscreen wheel zoom, drag pan and edge clicks, player clicks and wheel, the picker, Shift+drag text selection. Watch the CPU while you move the mouse over a large grid.
-- Real RAW test (maintainer): put a portrait DNG, CR2, CR3, NEF, ARW and RAF into a folder, run `VIEWR_TEST_RAW=<file> just test-real` and open the folder in the grid. The embedded previews have only synthetic tests.
-- Terminal tests (maintainer), in Ghostty:
-  - Batch 6: read the first status note (`Kitty transfer: ...`). After quitting, make sure that `ls $TMPDIR/tty-graphics-protocol-viewr-*` lists nothing. Check the dim text on cendre. If it is too dark, change the `dim` role in `src/styles.rs` to ANSI `Gray`. Then remove the start note (the three lines after `App::with_config` in `main`).
-  - Batch 7: the mpv window (`p`, or `[video] player = "window"`) with an HDR clip, and `n` / `N` between videos and images in the window. The yazi reveal: start viewr with `g v` in yazi, quit, and make sure that the yazi cursor is on the last file.
-  - Batch 8: a portrait folder gets narrow cells and more columns, a landscape folder wide cells.
-  - After the terminal player merge: play HDR and SDR videos, seek, pause, `n` / `N`, `p`, and a slideshow with videos.
-- VFR test (maintainer), in Ghostty: a 4K phone clip with a variable frame rate (r=60, avg=30) plays without stutter. If it stutters, take the average rate in `variable_rate_fps` when r_frame_rate is more than 1.5 times the average.
-- RGB frames test (maintainer), in Ghostty and in herdr: after the `viewr-png-rgb` merge, opaque fullscreen images and player frames go out as `f=24`. Make sure that they look right, also a transparent PNG in fullscreen.
-- Color test (maintainer), in Ghostty: after the P3 merge, sRGB images (screenshots, web images, Android photos) look less saturated than before, and iPhone photos look unchanged. Compare with `[terminal] colorspace = "srgb"`.
-- Warm grid test (maintainer), in Ghostty and in herdr: a warm grid of 36 or more cells fills at once, without a stall or a flicker.
+Maintainer tests in Ghostty. Run the tests marked "herdr" in herdr too.
+
+- Start note: read the first status note (`Kitty transfer: ...`). After you quit, make sure that `ls $TMPDIR/tty-graphics-protocol-viewr-*` lists nothing. If the dim text on cendre is too dark, change the `dim` role in `src/styles.rs` to ANSI `Gray`. Then remove the start note (`src/main.rs`, near line 139).
+- Player: play HDR and SDR videos. Seek, pause, `n` / `N`, `p`, and a slideshow with videos.
+- VFR: a 4K phone clip with a variable frame rate (r=60, avg=30) plays without stutter. If it stutters, take the average rate in `variable_rate_fps` when r_frame_rate is more than 1.5 times the average.
+- mpv window: `p`, or `[video] player = "window"`, with an HDR clip, and `n` / `N` between videos and images in the window.
+- yazi reveal: start viewr with `g v` in yazi, quit, and make sure that the yazi cursor is on the last file.
+- Animation: open an animated GIF, WebP and APNG. Look at the `▶` marker in the grid, the loop, `p`, and a slideshow with a short GIF.
+- Mouse: click, double-click and right click in the grid, wheel and Shift+wheel (does Shift+wheel-up zoom in, like `+`?), a sideways trackpad swipe, fullscreen wheel zoom, drag pan and edge clicks, player clicks and wheel, Shift+drag text selection. Watch the CPU while you move the mouse over a large grid.
+- Grid shape: a portrait folder gets narrow cells and more columns, a landscape folder gets wide cells.
+- Warm grid (also herdr): a warm grid of 36 or more cells fills at once, without a stall or a flicker.
+- RGB frames (also herdr): opaque fullscreen images and player frames go out as `f=24`. Make sure that they look right, also a transparent PNG in fullscreen.
+- Color: sRGB images (screenshots, web images, Android photos) look less saturated than before, and iPhone photos look unchanged. Compare with `[terminal] colorspace = "srgb"`.
+- Real RAW: put a portrait DNG, CR2, CR3, NEF, ARW and RAF into a folder. Run `VIEWR_TEST_RAW=<file> just test-real` and open the folder in the grid. The embedded previews have only synthetic tests.
 
 ## Next
 
-Order: speed first, then formats, then mouse support, then the delete removal, then the first release.
+Order: speed first, then formats, then the delete removal, then the first release.
 
 1. Speed
-   - The benches leave background decodes running into the next bench. A wait for idle work at the end of each bench would make the cold numbers of the full `just bench` comparable.
+   - The benches leave background decodes running into the next bench. Wait for idle work at the end of each bench. Then the cold numbers of the full `just bench` are comparable.
    - The cold grid still waits `BUSY_POLL` (10 ms) for its first decode result.
    - Process start: libheif costs about 20 ms of dylib load before `main`. The delete removal takes `trash` and Foundation out (about 3.5 ms).
    - Keep the fullscreen image as RGB from the decode on and build the zoom crop as RGB. That removes the `to_rgba8` copy and the RGB step of each fullscreen write and each pan step (a type change of `App::loaded`, the prefetch and the zoom).
@@ -57,22 +58,20 @@ Order: speed first, then formats, then mouse support, then the delete removal, t
      - Measure whether `sips -Z` on a RAW uses the embedded preview, and measure the `sips` times with a real RAW.
    - The PQ cube has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
    - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.
-3. Mouse support: done (see Done).
-4. Delete removal, after the terminal tests in "Now"
+3. Delete removal, after the terminal tests in "Now"
    - viewr is a viewer only. Remove trash, permanent delete, the delete question, the `d` / `D` keys, their tests and docs, and the `trash` crate if nothing else needs it.
    - Keep the marks (`Space`, `a`, `A`) for a later use, for example a slideshow of the marked images.
-5. First release: make ffmpeg a recommendation in the formula and drop the `libavcodec` check from `install.sh`, because viewr runs without ffmpeg. Then create the Codeberg repository `viewr`, then `just render` and `just release`. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
+4. First release: make ffmpeg a recommendation in the formula and drop the `libavcodec` check from `install.sh`, because viewr runs without ffmpeg. Then create the Codeberg repository `viewr`, then `just render` and `just release`. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 
 ## Later
 
 - Live Photo pairing: an iPhone still (HEIC or JPEG) and a `.mov` with the same base name share an Apple content identifier. The identifier lives in the EXIF MakerNote of the still and in the QuickTime metadata of the movie.
 - Window slideshow: read the `end-file` reason through the mpv IPC socket, so that Cmd+Q stops the slideshow
   - Start mpv with `--input-ipc-server=<unix-socket>` and read newline-delimited JSON events.
-  - The `end-file` event has a `reason` field with values `eof`, `stop`, `quit`, `error`, `redirect` or `unknown`. Natural end-of-file reports `eof`; Cmd+Q or the app-menu quit reports `quit` or `stop`.
+  - The `end-file` event has a `reason` field with values `eof`, `stop`, `quit`, `error`, `redirect` or `unknown`. Natural end-of-file reports `eof`. Cmd+Q or the app-menu quit reports `quit` or `stop`.
   - In `Playback::Once` for a slideshow, treat `reason == "eof"` as "continue" and every other reason as "stop slideshow". Today both EOF and Cmd+Q exit with code 0.
   - Open the socket in a thread, parse events, and send the final reason back through the existing `Runner::spawn` channel or a new one. Remove the socket file before start.
   - Low priority: the terminal player is the slideshow video path now.
-
 
 - Moving thumbnails: the selected grid cell plays a short loop for GIF, WebP, APNG, AVIF and video files when the cell is active
   - Extract 12 frames with FFmpeg for each animated file. Space the frames evenly across the video duration. You can also sample the first 4 seconds.
@@ -83,7 +82,6 @@ Order: speed first, then formats, then mouse support, then the delete removal, t
   - Stop the animation and remove the image when the cursor leaves the cell.
   - Add a config key to disable moving thumbnails.
   - Lowest priority: it is visual polish, not decode/render speed or format coverage.
-
 
 ## Done
 
@@ -123,7 +121,6 @@ Order: speed first, then formats, then mouse support, then the delete removal, t
 - Camera RAW, PSD, JPEG 2000, PDF, SVG and other ImageIO formats through `sips` (TIFF output)
 - HEIC grid thumbnails: a safe ISOBMFF reader compares `irot` and `imir` with the primary image
 - No unsafe code: the `sips` route and the box reader replace ImageIO and libheif-sys
-
 - Fork of rview, first as imgrrr, then renamed to viewr
 - Tooling from schnattr: justfile, lint table, cargo deny, nextest, Codeberg release flow
 - Configurable, zoomable thumbnail size (`+` / `-` / `0`, remembered in state file)
