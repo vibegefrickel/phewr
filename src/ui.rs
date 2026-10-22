@@ -16,6 +16,9 @@ const IMAGE_LOADING_ICON: &str = "\u{25cc}";
 const VIDEO_LOADING_ICON: &str = "\u{25b6}";
 /// The symbol in the center of a folder cell: a small right-pointing triangle, one cell wide.
 const FOLDER_ICON: &str = "\u{25b8}";
+/// The marker of an animated image in the grid: a play symbol before the label, or in the gap
+/// below the cell when the labels are off.
+const ANIMATION_MARKER: &str = "\u{25b6}";
 
 /// Draw the whole frame. `status` is a one-line note of the run loop, in place of the key hints.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
@@ -543,6 +546,27 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
             grid_rect,
         );
     }
+    if !app.gallery.show_filenames {
+        for (vis_idx, img_idx) in app.gallery.visible_items() {
+            if app.is_animated_at(img_idx) {
+                draw_animation_marker(frame, app, vis_idx, grid_rect);
+            }
+        }
+    }
+}
+
+/// The play symbol of an animated image, in the middle of the gap below its cell. It comes
+/// after the borders, so the border of the selected cell does not cover it. Kitty draws the
+/// picture only inside the cell, so the gap stays visible.
+fn draw_animation_marker(frame: &mut Frame<'_>, app: &App, vis_idx: usize, grid_rect: Rect) {
+    let cell = app.gallery.cell_rect(vis_idx).intersection(grid_rect);
+    let marker = Position::new(cell.x + cell.width / 2, cell.y + cell.height);
+    if cell.width == 0 || !grid_rect.contains(marker) {
+        return;
+    }
+    frame
+        .buffer_mut()
+        .set_string(marker.x, marker.y, ANIMATION_MARKER, STYLES.dim);
 }
 
 /// A dim icon in the center of a cell without a thumbnail. Kitty draws the thumbnail above the
@@ -665,11 +689,13 @@ fn draw_label(
     );
 }
 
-/// The label of the entry `img_idx`, cut to `width` with a margin, with a dot for a mark.
+/// The label of the entry `img_idx`, cut to `width` with a margin, with a dot for a mark and a
+/// play symbol for an animated image.
 fn label_text(app: &App, img_idx: usize, width: u16) -> String {
     let is_marked = app.is_marked(img_idx);
+    let is_animated = app.is_animated_at(img_idx);
     let raw_filename = app.filenames[img_idx].clone();
-    let prefix_len = if is_marked { 2 } else { 0 };
+    let prefix_len = 2 * (usize::from(is_marked) + usize::from(is_animated));
     let max_label = usize::from(width).saturating_sub(2 + prefix_len);
     let trimmed = if raw_filename.chars().count() > max_label {
         let head: String = raw_filename
@@ -680,11 +706,16 @@ fn label_text(app: &App, img_idx: usize, width: u16) -> String {
     } else {
         raw_filename
     };
+    let mut label = String::new();
     if is_marked {
-        format!("\u{25cf} {trimmed}")
-    } else {
-        trimmed
+        label.push_str("\u{25cf} ");
     }
+    if is_animated {
+        label.push_str(ANIMATION_MARKER);
+        label.push(' ');
+    }
+    label.push_str(&trimmed);
+    label
 }
 
 fn draw_help_popup(frame: &mut Frame<'_>) {
@@ -1428,6 +1459,48 @@ mod tests {
         app.error = Some("scan failed".to_owned());
         let buffer = render_buffer(&mut app, None, 100, 30);
         assert_ansi(cell_of(&buffer, "Error: scan failed"), Color::Red);
+    }
+
+    #[test]
+    #[cfg(feature = "video")]
+    fn gallery_marks_an_animated_image_in_the_label_or_in_the_gap_below_the_cell() {
+        use crate::test_support::fixture;
+        let anim = fixture("anim.gif");
+        let still = fixture("still.gif");
+        let mut app = app_with(&[anim.to_str().unwrap(), still.to_str().unwrap()]);
+        app.filenames = vec!["anim.gif".to_owned(), "still.gif".to_owned()];
+        app.gallery.show_filenames = true;
+        let screen = render(&mut app, None, 100, 30);
+        assert!(
+            !screen.contains('\u{25b6}'),
+            "the draw reads no header, no marker before the thumbnail job: {screen}"
+        );
+
+        let rect = app.gallery.thumb_box();
+        app.spawn_thumb_decode(0, rect);
+        app.spawn_thumb_decode(1, rect);
+        crate::test_support::wait_until(|| {
+            app.poll_thumbnails();
+            app.animated.len() == 2
+        });
+        app.mark_dirty();
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, "\u{25b6} anim.gif");
+        assert!(!screen.contains("\u{25b6} still.gif"), "{screen}");
+
+        app.gallery.show_filenames = false;
+        app.mark_dirty();
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let cell = app.gallery.cell_rect(0);
+        let below = buffer[(cell.x + cell.width / 2, cell.y + cell.height)].symbol();
+        assert_eq!(below, "\u{25b6}", "{}", screen_rows(&buffer).join("\n"));
+        let still_cell = app.gallery.cell_rect(1);
+        let below_still = buffer[(
+            still_cell.x + still_cell.width / 2,
+            still_cell.y + still_cell.height,
+        )]
+            .symbol();
+        assert_ne!(below_still, "\u{25b6}");
     }
 
     #[test]

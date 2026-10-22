@@ -34,7 +34,7 @@ use disk_cache::default_disk_cache_dir;
 use image::{DynamicImage, RgbaImage};
 use lru::LruCache;
 use ratatui::layout::Rect;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -171,6 +171,9 @@ pub(crate) struct App {
     /// The Kitty ids of previews that a sharp thumbnail replaced, with their cell. The next
     /// write of the grid deletes them in the terminal.
     pub stale_image_ids: Vec<(usize, u32)>,
+    /// The animation flag of each file that a thumbnail job read: true for an animated GIF,
+    /// WebP, APNG or AVIS. The grid marker reads it, so the draw reads no file header.
+    pub(crate) animated: HashMap<PathBuf, bool>,
 
     /// The images that the terminal stores, so a cell can place one by its id instead of a
     /// transmit. The grid keeps their bytes below a budget.
@@ -281,6 +284,7 @@ impl App {
             preview_jobs: Self::preview_slots(),
             thumb_generation: 0,
             stale_image_ids: Vec::new(),
+            animated: HashMap::new(),
             terminal_images: TerminalImages::new(),
             graphics_storage_dirty: false,
         }

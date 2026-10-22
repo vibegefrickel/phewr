@@ -28,6 +28,10 @@ const MAX_THUMB_JOBS: usize = 4;
 /// decodes wait until every preview is out.
 const MAX_PREVIEW_JOBS: usize = 4;
 
+/// The most animation flags that the app keeps. One flag holds a path and a bool, so the map
+/// stays below about 10 MB.
+const MAX_ANIMATION_FLAGS: usize = 65_536;
+
 /// The job that produced a thumbnail result, so that `poll_thumbnails` frees the right slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThumbPhase {
@@ -80,13 +84,15 @@ impl JobSlots {
 
 /// The result of a thumbnail job. `image` is `None` when the decode failed, so the slot still
 /// comes free. `sharp` is false for a preview from an embedded thumbnail. A preview job sends a
-/// sharp image when the disk cache has it.
+/// sharp image when the disk cache has it. `animated` is the header check of a file that can
+/// hold an animation.
 pub(super) struct ThumbResult {
     generation: u32,
     img_idx: usize,
     phase: ThumbPhase,
     image: Option<GridPicture>,
     sharp: bool,
+    animated: Option<bool>,
 }
 
 impl App {
@@ -124,6 +130,9 @@ impl App {
         let mut new_indices = Vec::new();
         while let Ok(result) = self.thumb_rx.try_recv() {
             self.slots_of(result.phase).running.remove(&result.img_idx);
+            if result.generation == self.thumb_generation {
+                self.store_animation_flag(result.img_idx, result.animated);
+            }
             if result.generation == self.thumb_generation
                 && let Some(image) = result.image
                 && self.store_thumbnail(result.img_idx, image, result.sharp)
@@ -219,6 +228,22 @@ impl App {
         self.thumb_cache.park(&self.images, key);
     }
 
+    /// Keep the animation flag of a file that can hold an animation, for the grid marker.
+    ///
+    /// The flags outlive a folder switch, because a parked thumbnail comes back without a job.
+    /// Each job reads the flag again, and a changed file gets a job, so a flag is as fresh as
+    /// its thumbnail. Above `MAX_ANIMATION_FLAGS` entries, the map starts again.
+    fn store_animation_flag(&mut self, img_idx: usize, animated: Option<bool>) {
+        if let Some(animated) = animated
+            && let Some(path) = self.images.get(img_idx)
+        {
+            if self.animated.len() >= MAX_ANIMATION_FLAGS && !self.animated.contains_key(path) {
+                self.animated.clear();
+            }
+            self.animated.insert(path.clone(), animated);
+        }
+    }
+
     pub(super) fn previews_pending(&self) -> bool {
         !self.preview_jobs.is_idle()
     }
@@ -289,6 +314,7 @@ impl App {
                 ThumbPhase::Sharp => (sharp_thumbnail(&cache_dir, &path, target), true),
             };
             let image = image.map(|image| pad_for_grid(image, target, cell_px, sharp));
+            let animated = animation_flag(&path);
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
@@ -299,9 +325,24 @@ impl App {
                 phase,
                 image,
                 sharp,
+                animated,
             });
         });
     }
+}
+
+/// The animation flag of a file that can hold an animation, `None` for the other formats. The
+/// job reads it, because the draw must read no file.
+#[cfg(feature = "video")]
+fn animation_flag(path: &Path) -> Option<bool> {
+    crate::player::animation::has_animation_extension(path)
+        .then(|| crate::player::is_animated(path))
+}
+
+/// Without the `video` feature, an animated image is a still image.
+#[cfg(not(feature = "video"))]
+fn animation_flag(_path: &Path) -> Option<bool> {
+    None
 }
 
 /// The sharp thumbnail from the disk cache, or from a decode that then fills the cache.
@@ -508,6 +549,7 @@ mod tests {
             phase,
             image: Some(RgbaImage::new(1, 1).into()),
             sharp,
+            animated: None,
         }
     }
 
@@ -686,6 +728,7 @@ mod tests {
                 phase: ThumbPhase::Sharp,
                 image: None,
                 sharp: true,
+                animated: None,
             })
             .unwrap();
 
@@ -1163,6 +1206,55 @@ mod folder_switch_tests {
             app.poll_thumbnails();
             app.thumb_cache.is_sharp(index)
         });
+    }
+
+    /// A parked thumbnail comes back without a job, so its animation flag must survive the
+    /// folder switch, or the grid marker goes away.
+    #[test]
+    #[cfg(feature = "video")]
+    fn a_parked_animation_keeps_its_grid_marker_on_the_way_back() {
+        let dir = test_dir();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let other = root.join("other");
+        fs::create_dir(&other).unwrap();
+        fs::copy(
+            crate::test_support::fixture("anim.gif"),
+            root.join("anim.gif"),
+        )
+        .unwrap();
+        fs::copy(
+            crate::test_support::fixture("still.gif"),
+            other.join("still.gif"),
+        )
+        .unwrap();
+        let mut app = crate::test_support::app();
+        let cache = test_dir();
+        app.disk_cache_dir = cache.path().join("cache");
+        let scan = |app: &mut crate::app::App, dir: &std::path::Path| {
+            app.switch_to_dir(dir);
+            wait_until(|| {
+                app.refresh_from_scanner();
+                !app.is_scanning()
+            });
+        };
+        let position =
+            |app: &crate::app::App| app.filenames.iter().position(|n| n == "anim.gif").unwrap();
+        scan(&mut app, &root);
+        let rect = app.gallery.thumb_box();
+        let anim = position(&app);
+        decode_sharp(&mut app, anim, rect);
+        assert!(app.is_animated_at(anim), "the job reads the flag");
+
+        scan(&mut app, &other);
+        scan(&mut app, &root);
+        let anim = position(&app);
+        app.spawn_thumb_decode(anim, rect);
+        assert!(app.thumb_cache.is_sharp(anim), "the parked picture, no job");
+        assert!(!app.thumbnails_pending());
+        assert!(
+            app.is_animated_at(anim),
+            "the marker comes back with the picture"
+        );
     }
 
     #[test]

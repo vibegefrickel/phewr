@@ -6,8 +6,10 @@ use std::thread;
 const BATCH_SIZE: usize = 64;
 
 /// The formats of the `image` crate. JPEG and PNG come first, because most files are JPEG or PNG.
+/// An `.apng` file is a PNG: the decode guesses the format from the bytes.
 pub(crate) const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "ico", "exr", "hdr", "qoi", "tga",
+    "jpg", "jpeg", "png", "apng", "gif", "webp", "bmp", "tiff", "tif", "ico", "exr", "hdr", "qoi",
+    "tga",
 ];
 
 /// JPEG XL, decoded by `jxl-oxide`.
@@ -222,7 +224,7 @@ mod tests {
 
     #[test]
     fn the_formats_of_image_and_jpeg_xl_are_supported() {
-        for name in ["a.exr", "a.HDR", "a.qoi", "a.tga", "a.jxl"] {
+        for name in ["a.exr", "a.HDR", "a.qoi", "a.tga", "a.jxl", "a.APNG"] {
             assert!(is_supported(Path::new(name)), "{name}");
         }
     }

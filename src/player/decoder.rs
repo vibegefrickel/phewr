@@ -4,6 +4,11 @@
 //! the frame on the GPU (`scale_vt`, `transpose_vt`), maps an HDR signal to SDR with the tone
 //! mapping cube (`lut3d`) and writes raw RGBA frames into a pipe. A thread reads the pipe one
 //! frame at a time, so the run loop never waits for ffmpeg.
+//!
+//! An animated image decodes in software without the hardware flags, because the AV1 decoder
+//! of an AVIS stops with an error when `-hwaccel videotoolbox` is on. Its output is a constant
+//! rate (`-fps_mode cfr -r`) at the rate of the probe, so a frame with a long delay goes out
+//! more than one time and the pacing of the player stays exact.
 
 use super::probe::VideoInfo;
 use super::tone_map::Hdr;
@@ -46,12 +51,13 @@ pub(crate) fn args(
         "-nostats",
         "-nostdin",
         "-noautorotate",
-        "-hwaccel",
-        "videotoolbox",
     ]
     .into_iter()
     .map(OsString::from)
     .collect();
+    if !info.animation {
+        args.extend(["-hwaccel", "videotoolbox"].map(OsString::from));
+    }
     if pipeline == Pipeline::Gpu {
         args.extend(["-hwaccel_output_format", "videotoolbox_vld"].map(OsString::from));
     }
@@ -59,6 +65,11 @@ pub(crate) fn args(
         args.extend([OsString::from("-ss"), OsString::from(format!("{seek:.3}"))]);
     }
     args.extend([OsString::from("-i"), video.as_os_str().to_owned()]);
+    if info.animation {
+        let stream = format!("0:{}", info.stream);
+        let rate = format!("{:.4}", info.fps);
+        args.extend(["-map", &stream, "-fps_mode", "cfr", "-r", &rate].map(OsString::from));
+    }
     args.extend(
         [
             "-an",
@@ -258,7 +269,53 @@ mod tests {
             duration: 10.0,
             hdr,
             ten_bit,
+            animation: false,
+            stream: 0,
         }
+    }
+
+    #[test]
+    fn an_animated_image_maps_its_stream_and_decodes_in_software_at_a_constant_rate() {
+        let mut info = info(0, None, false);
+        info.animation = true;
+        info.stream = 1;
+        info.fps = 12.5;
+        let args = args(
+            Path::new("/v/anim.avif"),
+            &info,
+            (640, 360),
+            None,
+            0.0,
+            Pipeline::Software,
+        );
+        assert_eq!(
+            strings(&args),
+            [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostats",
+                "-nostdin",
+                "-noautorotate",
+                "-i",
+                "/v/anim.avif",
+                "-map",
+                "0:1",
+                "-fps_mode",
+                "cfr",
+                "-r",
+                "12.5000",
+                "-an",
+                "-sn",
+                "-vf",
+                "scale=w=640:h=360:flags=bilinear",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
+                "pipe:1",
+            ]
+        );
     }
 
     /// The `-vf` graph of `args`.
@@ -266,6 +323,68 @@ mod tests {
         let args = strings(args);
         let position = args.iter().position(|arg| arg == "-vf").unwrap();
         args[position + 1].clone()
+    }
+
+    /// True when the ffmpeg `program` lists the decoder `name`.
+    fn has_decoder(program: &Path, name: &str) -> bool {
+        std::process::Command::new(program)
+            .args(["-hide_banner", "-decoders"])
+            .output()
+            .is_ok_and(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .any(|word| word == name)
+            })
+    }
+
+    /// Decode the animated fixtures with the real ffmpeg. Without ffmpeg on PATH, the test
+    /// skips with a note.
+    #[test]
+    fn the_real_ffmpeg_decodes_every_frame_of_the_animated_fixtures() {
+        use crate::test_support::fixture;
+        ffmpeg::init().unwrap();
+        let Some(program) =
+            crate::yazi::find_on_path("ffmpeg", std::env::var_os("PATH").as_deref())
+        else {
+            println!("note: skipped, because ffmpeg is not on PATH");
+            return;
+        };
+        // The GIF holds 3 frames with delays of 100, 500 and 200 ms: 8 frames at 10 per second.
+        for (name, expected) in [
+            ("anim.gif", 8),
+            ("anim.webp", 3),
+            ("anim.png", 3),
+            ("anim.avif", 3),
+        ] {
+            if name == "anim.webp" && !has_decoder(&program, "webp_anim") {
+                println!("note: skipped {name}, because ffmpeg below 9.0 has no webp_anim decoder");
+                continue;
+            }
+            let path = fixture(name);
+            let info = SystemDecoder.probe(&path).unwrap();
+            assert!(info.animation, "{name}: {info:?}");
+            let args = args(&path, &info, (16, 12), None, 0.0, Pipeline::Software);
+            let mut stream = SystemDecoder.start(&program, &args, 16 * 12 * 4).unwrap();
+            let mut frames = Vec::new();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                match stream.try_next() {
+                    Ok(frame) => frames.push(frame),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        assert!(std::time::Instant::now() < deadline, "{name}: ffmpeg hangs");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+            assert_eq!(frames.len(), expected, "{name}");
+            assert!(
+                frames
+                    .first()
+                    .is_some_and(|frame| frame.iter().any(|&byte| byte != 0)),
+                "{name}: the first frame is black"
+            );
+        }
     }
 
     #[test]

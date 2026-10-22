@@ -5,11 +5,13 @@
 //! temp file medium with one image id. The terminal scales the frame to the window with `c=`
 //! and `r=`. There is no sound: `p` opens the video in the mpv window.
 
+pub(crate) mod animation;
 mod decoder;
 mod layout;
 mod probe;
 pub(crate) mod tone_map;
 
+pub(crate) use animation::is_animated;
 pub(crate) use decoder::{Decoder, FrameStream, Pipeline, SystemDecoder, args, cube_for};
 pub(crate) use layout::{cell_box, frame_box, frame_limit};
 pub(crate) use probe::VideoInfo;
@@ -57,6 +59,11 @@ pub(crate) struct Player {
     /// The note of a failed decode.
     pub(crate) error: Option<String>,
     repeat: bool,
+    /// The clip starts again at its end until this much time passed since the open, also
+    /// without `repeat`. A slideshow sets it for a short animation.
+    min_play: Option<Duration>,
+    /// The time of the open.
+    opened: Instant,
     interval: Duration,
     /// The time of the first frame of this run. `None` until it arrives.
     start: Option<Instant>,
@@ -86,6 +93,11 @@ impl Player {
         let frame = frame_box((info.width, info.height), limit);
         let cube = cube_for(&info, cube_dirs);
         let interval = info.frame_interval();
+        let pipeline = if info.animation {
+            Pipeline::Software
+        } else {
+            Pipeline::Gpu
+        };
         let mut player = Self {
             path: path.to_path_buf(),
             program: program.to_path_buf(),
@@ -94,12 +106,14 @@ impl Player {
             frame,
             cube,
             stream: None,
-            pipeline: Pipeline::Gpu,
+            pipeline,
             pending: None,
             current_frame: None,
             state: State::Playing,
             error: None,
             repeat,
+            min_play: None,
+            opened: Instant::now(),
             interval,
             start: None,
             due_frames: 0,
@@ -149,7 +163,7 @@ impl Player {
                     Some(Ok(frame)) => self.pending = Some(frame),
                     Some(Err(TryRecvError::Empty)) => return false,
                     Some(Err(TryRecvError::Disconnected)) | None => {
-                        self.end_of_run();
+                        self.end_of_run(now);
                         return false;
                     }
                 }
@@ -187,8 +201,23 @@ impl Player {
         self.poll_at(Instant::now())
     }
 
-    /// ffmpeg ended: the clip is over, or the decode failed before its first frame.
-    fn end_of_run(&mut self) {
+    /// Play the clip again at its end until `duration` passed since the open. A slideshow
+    /// holds a short animation for its interval this way, instead of a flash of one loop.
+    pub(crate) fn play_at_least(&mut self, duration: Duration) {
+        self.min_play = Some(duration);
+    }
+
+    /// True when the clip starts again at its end: always with `repeat`, and until
+    /// `min_play` passed at `now` without it.
+    fn repeats_at(&self, now: Instant) -> bool {
+        self.repeat
+            || self
+                .min_play
+                .is_some_and(|min_play| now.saturating_duration_since(self.opened) < min_play)
+    }
+
+    /// ffmpeg ended at `now`: the clip is over, or the decode failed before its first frame.
+    fn end_of_run(&mut self, now: Instant) {
         // A run from the start without a frame failed. A run after a seek without a frame
         // began past the end of the stream, which can be shorter than the container says.
         let failed = !self.delivered && self.base == 0.0;
@@ -207,7 +236,7 @@ impl Player {
             ));
             return;
         }
-        if self.repeat {
+        if self.repeats_at(now) {
             let started = self.start_run(0.0);
             self.fail_if_error(started);
         } else {
@@ -263,7 +292,7 @@ impl Player {
         let mut target = (self.position() + seconds).max(0.0);
         let end = (self.info.duration - END_MARGIN).max(0.0);
         if self.info.duration > 0.0 && target > end {
-            if !self.repeat {
+            if !self.repeats_at(Instant::now()) {
                 self.stream = None;
                 self.state = State::Finished;
                 return;
@@ -278,6 +307,11 @@ impl Player {
     /// The position in seconds: the time of the last due frame.
     pub(crate) fn position(&self) -> f64 {
         self.base + f64::from(self.due_frames) / self.info.fps
+    }
+
+    /// True for an animated image, which a slideshow holds for its interval.
+    pub(crate) fn is_animation(&self) -> bool {
+        self.info.animation
     }
 
     /// The length of the clip in seconds, or 0 when the container does not tell it.
@@ -504,6 +538,47 @@ mod tests {
         }
         assert_eq!(player.position(), 0.0);
         assert_eq!(decoder.starts().len(), 8);
+    }
+
+    #[test]
+    fn an_animation_decodes_in_software_and_holds_for_the_minimum_play_time() {
+        use crate::test_support::video::animation_info;
+        let decoder = fake_decoder(animation_info());
+        let mut player = player(&decoder, false);
+        let args = decoder.last_args();
+        assert!(
+            args.contains(" -map 0:0 -fps_mode cfr -r 10.0000 "),
+            "{args}"
+        );
+        assert!(args.contains("scale=w=64:h=48:flags=bilinear"), "{args}");
+        assert!(!args.contains("-hwaccel"), "{args}");
+
+        player.play_at_least(Duration::from_millis(300));
+        let clock = Instant::now();
+        decoder.feed(frame(1));
+        assert!(player.poll_at(clock));
+        decoder.end();
+        assert!(!player.poll_at(clock + FRAME));
+        assert!(
+            player.playing(),
+            "the loop starts again before the hold passed"
+        );
+        assert_eq!(decoder.starts().len(), 2);
+        assert!(
+            !decoder.last_args().contains("hwaccel_output_format"),
+            "no GPU retry for an animation"
+        );
+
+        decoder.feed(frame(2));
+        assert!(player.poll_at(clock + 2 * FRAME));
+        decoder.end();
+        assert!(!player.poll_at(clock + Duration::from_millis(400)));
+        assert!(
+            player.finished(),
+            "the end of the loop after the hold ends the playback"
+        );
+        assert_eq!(decoder.starts().len(), 2);
+        assert_eq!(player.error, None);
     }
 
     #[test]

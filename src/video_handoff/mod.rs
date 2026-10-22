@@ -98,7 +98,15 @@ fn open_terminal_player(app: &mut App, state: &LoopState) {
         &[&app.disk_cache_dir, &temp],
         repeat,
     ) {
-        Ok(player) => app.video = Some(player),
+        Ok(mut player) => {
+            // A slideshow holds an animation for its interval, so a short loop does not flash.
+            if let Some(interval) = app.slideshow_interval_running()
+                && player.is_animation()
+            {
+                player.play_at_least(interval);
+            }
+            app.video = Some(player);
+        }
         Err(error) => {
             app.error = Some(error.to_string());
             app.mode = ViewMode::Fullscreen;
@@ -252,6 +260,36 @@ mod tests {
             app.slideshow_timeout().unwrap() > interval / 2,
             "the next slide gets the full interval"
         );
+    }
+
+    #[test]
+    fn a_slideshow_holds_an_animation_for_its_interval_and_loops_it_until_then() {
+        use crate::test_support::video::{animation_info, with_temp_file_medium};
+        use crate::test_support::{app_with, fixture};
+        let decoder = fake_decoder(animation_info());
+        let still = fixture("still.png");
+        let anim = fixture("anim.gif");
+        let mut app =
+            with_temp_file_medium(app_with(&[still.to_str().unwrap(), anim.to_str().unwrap()]));
+        app.enter_fullscreen_at(0);
+        app.start_slideshow();
+        app.next();
+        assert_eq!(app.mode, ViewMode::Video);
+        let mut state = state_with(VideoPlayer::Terminal, std::rc::Rc::clone(&decoder));
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
+
+        decoder.feed(vec![0; 64 * 48 * 4]);
+        assert!(app.video.as_mut().unwrap().poll());
+        decoder.end();
+        assert!(!app.video.as_mut().unwrap().poll());
+        assert!(
+            app.video.as_ref().unwrap().playing(),
+            "a loop of 0.3 s starts again inside the slideshow interval"
+        );
+        assert_eq!(decoder.starts().len(), 2);
+        app.slideshow_tick();
+        assert_eq!(app.mode, ViewMode::Video, "the animation holds the slide");
     }
 
     #[test]

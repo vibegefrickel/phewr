@@ -67,6 +67,16 @@ fn is_video(_path: &Path) -> bool {
     false
 }
 
+#[cfg(feature = "video")]
+fn is_animated(path: &Path) -> bool {
+    crate::player::is_animated(path)
+}
+
+#[cfg(not(feature = "video"))]
+fn is_animated(_path: &Path) -> bool {
+    false
+}
+
 /// Scan `dir` into an app with the Retina grid. Videos leave the list, so that `next` never
 /// starts a player.
 fn scanned_app(dir: &Path) -> Bench {
@@ -85,11 +95,12 @@ fn scanned_app(dir: &Path) -> Bench {
     Bench { app, _cache: cache }
 }
 
-/// Drop the folder entries and the videos from the scanned list, wait for the cell shape and
-/// lay out the grid. The bench measures the files only.
+/// Drop the folder entries, the videos and the animated images from the scanned list, wait
+/// for the cell shape and lay out the grid. The bench measures the still images only, because
+/// a video and an animation open in the player.
 fn keep_files_only(app: &mut App, deadline: Instant) {
     let keep: Vec<usize> = (app.first_file()..app.images.len())
-        .filter(|&index| !is_video(&app.images[index]))
+        .filter(|&index| !is_video(&app.images[index]) && !is_animated(&app.images[index]))
         .collect();
     app.folder_count = 0;
     app.images = keep
@@ -952,4 +963,44 @@ fn terminal_player_realtime_into_the_buffer() {
         },
         player.position(),
     ));
+}
+
+/// The cost of an animated file before its first frame: the header check of the route and the
+/// probe of `Player::open`, both on the UI thread, for each animated file in the folder.
+#[test]
+#[cfg(feature = "video")]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn animation_open() {
+    let Some(dir) = test_dir() else {
+        report("animation open: skipped, VIEWR_TEST_DIR is not set");
+        return;
+    };
+    ffmpeg::init().unwrap();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| crate::player::is_animated(path))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        report("animation open: no animated file in the folder");
+    }
+    for path in files {
+        let size = std::fs::metadata(&path).map_or(0, |meta| meta.len());
+        let start = Instant::now();
+        assert!(crate::player::is_animated(&path));
+        let check = start.elapsed();
+        let start = Instant::now();
+        let info = crate::player::Decoder::probe(&crate::player::SystemDecoder, &path).unwrap();
+        let probe = start.elapsed();
+        report(&format!(
+            "animation open {}: {} MB, header check {:.2} ms, probe {:.1} ms, {:.1} fps, {:.2} s",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            size / 1_000_000,
+            check.as_secs_f64() * 1000.0,
+            probe.as_secs_f64() * 1000.0,
+            info.fps,
+            info.duration,
+        ));
+    }
 }

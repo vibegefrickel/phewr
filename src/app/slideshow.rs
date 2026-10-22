@@ -55,6 +55,15 @@ impl App {
         self.slideshow.as_ref().is_some_and(|show| !show.paused)
     }
 
+    /// The interval of a running slideshow that is not paused, for the hold of an animation.
+    #[cfg(feature = "video")]
+    pub(crate) fn slideshow_interval_running(&self) -> Option<Duration> {
+        self.slideshow
+            .as_ref()
+            .filter(|show| !show.paused)
+            .map(|show| show.interval)
+    }
+
     pub(crate) fn stop_slideshow(&mut self) {
         if self.slideshow.take().is_some() {
             self.needs_render = true;

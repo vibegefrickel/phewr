@@ -256,13 +256,49 @@ impl App {
             .is_some_and(|path| crate::video::is_video(path))
     }
 
-    /// True when the gallery cursor is on a video, for `p` in the gallery.
+    /// True when a thumbnail job found the image `index` to be an animated GIF, WebP, APNG or
+    /// AVIS. The grid marker reads it in the draw, so the draw reads no file. Until the job
+    /// is done, the cell shows no marker.
+    pub(crate) fn is_animated_at(&self, index: usize) -> bool {
+        self.animation_flag_at(index).unwrap_or(false)
+    }
+
+    /// The stored animation flag of the image `index`, `None` before a thumbnail job read it.
+    fn animation_flag_at(&self, index: usize) -> Option<bool> {
+        let path = self.images.get(index)?;
+        self.animated.get(path).copied()
+    }
+
+    /// True when the image `index` is animated now. The header check reads the one file after
+    /// a key press, so a file that an export tool rewrote in place takes the right route. The
+    /// stored flag of the grid marker can be older.
+    #[cfg(feature = "video")]
+    fn reads_as_animated_at(&self, index: usize) -> bool {
+        self.images
+            .get(index)
+            .is_some_and(|path| crate::player::is_animated(path))
+    }
+
+    /// True when the image `index` opens in a player: a video or an animated image.
+    #[cfg(feature = "video")]
+    pub(crate) fn plays_at(&self, index: usize) -> bool {
+        self.is_video_at(index) || self.reads_as_animated_at(index)
+    }
+
+    /// True in the fullscreen view on the still frame of an animated image, where Enter
+    /// plays it and `p` opens the mpv window.
+    #[cfg(feature = "video")]
+    pub(crate) fn fullscreen_on_animation(&self) -> bool {
+        self.mode == ViewMode::Fullscreen && self.reads_as_animated_at(self.current)
+    }
+
+    /// True when the gallery cursor is on a video or an animated image, for `p` in the gallery.
     #[cfg(feature = "video")]
     pub(crate) fn selected_is_video(&self) -> bool {
         self.gallery
             .filtered_indices
             .get(self.gallery.cursor)
-            .is_some_and(|&index| self.is_video_at(index))
+            .is_some_and(|&index| self.plays_at(index))
     }
 
     /// Without the `video` feature, the scan lists no videos.
@@ -346,6 +382,60 @@ mod tests {
         assert_eq!(app.mode, ViewMode::Video);
         assert_eq!(app.video_return, VideoReturn::Fullscreen);
         assert!(app.take_video_window_request());
+    }
+
+    #[test]
+    fn an_animated_image_opens_in_the_player_and_its_still_frame_in_fullscreen() {
+        use crate::test_support::{char_key, fixture, press};
+        use crossterm::event::KeyCode;
+        let still = fixture("still.gif");
+        let anim = fixture("anim.webp");
+        let mut app = app_with(&[still.to_str().unwrap(), anim.to_str().unwrap()]);
+        assert!(!app.plays_at(0));
+        assert!(
+            app.plays_at(1),
+            "a key press reads the header of the one file"
+        );
+        assert!(
+            !app.is_animated_at(1),
+            "the draw reads no header, so the grid marker waits for the thumbnail job"
+        );
+        assert!(
+            !app.is_video_at(1),
+            "the loading icon and the placeholder are for videos"
+        );
+
+        app.enter_fullscreen_at(0);
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+        app.next();
+        assert_eq!(
+            app.mode,
+            ViewMode::Video,
+            "a step plays the animation at once"
+        );
+        assert_eq!(app.video_return, VideoReturn::Fullscreen);
+
+        // Esc lands on the still first frame, which the image decode reads.
+        app.return_from_video();
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+        assert!(!app.shows_video_placeholder());
+        assert!(app.fullscreen_on_animation());
+        app.load_if_needed();
+        assert_eq!(app.fullscreen_target.map(|(index, _)| index), Some(1));
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.mode, ViewMode::Video, "Enter plays it again");
+        app.return_from_video();
+        char_key(&mut app, 'p');
+        assert_eq!(app.mode, ViewMode::Video);
+        assert!(app.take_video_window_request(), "p opens the mpv window");
+
+        app.exit_video();
+        app.gallery.cursor = 1;
+        assert!(app.selected_is_video());
+        app.enter_fullscreen_selected();
+        assert_eq!(app.mode, ViewMode::Video);
+        assert_eq!(app.video_return, VideoReturn::Gallery);
     }
 
     #[test]

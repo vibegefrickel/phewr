@@ -157,6 +157,7 @@ mod tests {
         let route = |name: &str| Route::for_path(Path::new(name));
         assert_eq!(route("a.JPG"), Route::Raster);
         assert_eq!(route("a.exr"), Route::Raster);
+        assert_eq!(route("a.APNG"), Route::Raster);
         assert_eq!(route("a.JXL"), Route::Jxl);
         assert_eq!(route("unknown.xyz"), Route::Raster);
         assert_eq!(route("no-extension"), Route::Raster);

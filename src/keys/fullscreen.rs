@@ -27,7 +27,13 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.enter_fullscreen_at(app.current);
         }
         #[cfg(feature = "video")]
-        KeyCode::Char('p') if app.shows_video_placeholder() => {
+        KeyCode::Enter if app.fullscreen_on_animation() => {
+            app.graphics_delete_all()?;
+            app.stop_slideshow();
+            app.enter_fullscreen_at(app.current);
+        }
+        #[cfg(feature = "video")]
+        KeyCode::Char('p') if app.shows_video_placeholder() || app.fullscreen_on_animation() => {
             app.enter_video(app.current);
             app.request_video_window();
         }

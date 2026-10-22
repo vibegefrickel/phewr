@@ -179,6 +179,15 @@ pub(crate) fn test_dir() -> TempDir {
     tempfile::tempdir().unwrap()
 }
 
+/// A checked-in file below `tests/fixtures`. The animated images there (`anim.gif`,
+/// `anim.webp`, `anim.png`, `anim.avif`) hold 3 frames of 16x12 pixels, the stills one.
+#[cfg(feature = "video")]
+pub(crate) fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
 pub(crate) fn assert_close(pixel: [u8; 4], expected: [u8; 3]) {
     let close = pixel
         .iter()
@@ -671,6 +680,17 @@ pub(crate) mod video {
             duration: 2.0,
             hdr: None,
             ten_bit: false,
+            animation: false,
+            stream: 0,
+        }
+    }
+
+    /// The header of an animated image of 3 frames at 10 frames per second: 0.3 seconds.
+    pub(crate) fn animation_info() -> VideoInfo {
+        VideoInfo {
+            duration: 0.3,
+            animation: true,
+            ..info_of(64, 48, 10.0)
         }
     }
 

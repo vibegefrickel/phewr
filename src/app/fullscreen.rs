@@ -20,7 +20,7 @@ impl App {
             return;
         }
         #[cfg(feature = "video")]
-        if crate::video::is_video(&self.images[idx]) {
+        if self.plays_at(idx) {
             self.enter_video(idx);
             return;
         }
@@ -134,7 +134,7 @@ impl App {
         self.reset_zoom_state();
 
         #[cfg(feature = "video")]
-        if crate::video::is_video(&self.images[self.current]) {
+        if self.plays_at(self.current) {
             self.mode = ViewMode::Video;
             self.video_return = VideoReturn::Fullscreen;
             self.loaded = None;

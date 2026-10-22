@@ -1,5 +1,8 @@
 //! The facts about a video that the player needs before the first frame: the size after the
 //! rotation, the frame rate, the duration, the HDR curve and the bit depth.
+//!
+//! An animated image (GIF, WebP, APNG, AVIS) gets its rate and its length from the packet
+//! durations, because the containers tell no frame rate that fits the frame delays.
 
 use super::tone_map::Hdr;
 use std::io;
@@ -18,6 +21,11 @@ pub(crate) struct VideoInfo {
     pub hdr: Option<Hdr>,
     /// A 10 bit stream. The frames that the Mac hardware decoder gives back are `p010le` then.
     pub ten_bit: bool,
+    /// An animated image. ffmpeg decodes it in software at the exact rate `fps`.
+    pub animation: bool,
+    /// The index of the stream that ffmpeg maps. An AVIS file holds the still item as its
+    /// first stream and the image sequence as its second.
+    pub stream: usize,
 }
 
 impl VideoInfo {
@@ -30,14 +38,34 @@ impl VideoInfo {
 /// The frame rate when the container gives none, or a rate that makes no sense.
 const FALLBACK_FPS: f64 = 24.0;
 
+/// The highest rate of an animated image. The player shows the frames at the rate of the
+/// shortest common delay, so that each frame holds for its own delay. Above this rate, the
+/// player takes the mean rate of the frames instead.
+const MAX_ANIMATION_FPS: f64 = 50.0;
+
+/// How many packets the timing walk reads. The walk runs on the UI thread before the first
+/// frame: 16 frames of a 181 MB GIF of 1280x720 pixels cost about 15 ms, all 300 cost 250 ms.
+const TIMING_PACKETS: usize = 16;
+
+/// The packet durations of an animated image: the rate and, after a walk to the end, the length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Timing {
+    fps: f64,
+    /// The sum of the durations, or `None` when the walk stopped before the end.
+    duration: Option<f64>,
+}
+
 /// Read the header of `path` with the `FFmpeg` library. No frame is decoded.
 pub(crate) fn probe(path: &Path) -> io::Result<VideoInfo> {
     let invalid = |text: String| io::Error::new(io::ErrorKind::InvalidData, text);
-    let input = ffmpeg::format::input(path).map_err(|error| invalid(error.to_string()))?;
-    let stream = input
-        .streams()
-        .best(ffmpeg::media::Type::Video)
+    let mut input = ffmpeg::format::input(path).map_err(|error| invalid(error.to_string()))?;
+    let animation = super::animation::has_animation_extension(path);
+    let stream = animation
+        .then(|| animation_stream(&input))
+        .flatten()
+        .or_else(|| input.streams().best(ffmpeg::media::Type::Video))
         .ok_or_else(|| invalid("no video stream".to_owned()))?;
+    let stream_index = stream.index();
     let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|error| invalid(error.to_string()))?;
     let decoder = context
@@ -45,12 +73,12 @@ pub(crate) fn probe(path: &Path) -> io::Result<VideoInfo> {
         .video()
         .map_err(|error| invalid(error.to_string()))?;
     let rate = stream.avg_frame_rate();
-    let fps = if rate.denominator() > 0 {
+    let mut fps = if rate.denominator() > 0 {
         sanitize_fps(f64::from(rate.numerator()) / f64::from(rate.denominator()))
     } else {
         FALLBACK_FPS
     };
-    let duration = if input.duration() > 0 {
+    let mut duration = if input.duration() > 0 {
         input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
     } else {
         0.0
@@ -65,15 +93,99 @@ pub(crate) fn probe(path: &Path) -> io::Result<VideoInfo> {
         (decoder.height(), decoder.width())
     };
     let pixel_format = format!("{:?}", decoder.format()).to_ascii_lowercase();
+    let hdr = Hdr::of_transfer(decoder.color_transfer_characteristic());
+    let ten_bit = pixel_format.contains("10") || pixel_format.contains("12");
+    let time_base = stream.time_base();
+    if animation && let Some(timing) = animation_timing(&mut input, stream_index, time_base) {
+        fps = timing.fps;
+        if let Some(sum) = timing.duration {
+            duration = sum;
+        }
+    }
     Ok(VideoInfo {
         width,
         height,
         rotation,
         fps,
         duration,
-        hdr: Hdr::of_transfer(decoder.color_transfer_characteristic()),
-        ten_bit: pixel_format.contains("10") || pixel_format.contains("12"),
+        hdr,
+        ten_bit,
+        animation,
+        stream: stream_index,
     })
+}
+
+/// The video stream with the most frames, when an animated file holds more than one video
+/// stream. An AVIS file lists its still item first and its sequence second. A normal video
+/// never comes here: `best()` skips its cover art, and a fragmented MP4 counts 0 frames.
+fn animation_stream(input: &ffmpeg::format::context::Input) -> Option<ffmpeg::Stream<'_>> {
+    let videos: Vec<ffmpeg::Stream<'_>> = input
+        .streams()
+        .filter(|stream| stream.parameters().medium() == ffmpeg::media::Type::Video)
+        .collect();
+    if videos.len() < 2 {
+        return None;
+    }
+    videos.into_iter().max_by_key(ffmpeg::Stream::frames)
+}
+
+/// Walk the first [`TIMING_PACKETS`] packets of `stream_index` and read the rate from their
+/// durations, and the length when the walk reaches the end. See [`timing_of`].
+fn animation_timing(
+    input: &mut ffmpeg::format::context::Input,
+    stream_index: usize,
+    time_base: ffmpeg::Rational,
+) -> Option<Timing> {
+    let mut durations = Vec::with_capacity(TIMING_PACKETS);
+    let mut complete = true;
+    for (stream, packet) in input.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+        if durations.len() == TIMING_PACKETS {
+            complete = false;
+            break;
+        }
+        durations.push(packet.duration().max(0));
+    }
+    if time_base.numerator() <= 0 || time_base.denominator() <= 0 {
+        return None;
+    }
+    let seconds_per_unit = f64::from(time_base.numerator()) / f64::from(time_base.denominator());
+    timing_of(&durations, seconds_per_unit, complete)
+}
+
+/// The rate and the length of the frame `durations`, in units of `seconds_per_unit`.
+///
+/// The rate is the inverse of the greatest common divisor of the delays, so a GIF with delays
+/// of 100 ms and 500 ms plays at 10 frames per second, with each long frame sent 5 times.
+/// Above [`MAX_ANIMATION_FPS`], the rate is the mean rate, so that each frame shows one time:
+/// a GIF of 30 frames per second alternates delays of 30 and 40 ms (gcd 10 ms), and a cap
+/// would round them to 20 and 40 ms. The length is the sum, when `complete`.
+fn timing_of(durations: &[i64], seconds_per_unit: f64, complete: bool) -> Option<Timing> {
+    let step = durations
+        .iter()
+        .fold(0, |step, &duration| gcd(step, duration));
+    let total: i64 = durations.iter().sum();
+    if step <= 0 || seconds_per_unit <= 0.0 {
+        return None;
+    }
+    let step_fps = sanitize_fps(1.0 / (step as f64 * seconds_per_unit));
+    let fps = if step_fps > MAX_ANIMATION_FPS {
+        let mean = sanitize_fps(durations.len() as f64 / (total as f64 * seconds_per_unit));
+        mean.min(MAX_ANIMATION_FPS)
+    } else {
+        step_fps
+    };
+    Some(Timing {
+        fps,
+        duration: complete.then_some(total as f64 * seconds_per_unit),
+    })
+}
+
+/// The greatest common divisor of two durations. A zero does not change the other value.
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 /// A frame rate that the pacing can use.
@@ -114,7 +226,8 @@ pub(crate) fn rotation_of(matrix: &[u8]) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{VideoInfo, probe, rotation_of, sanitize_fps};
+    use super::{VideoInfo, gcd, probe, rotation_of, sanitize_fps, timing_of};
+    use crate::test_support::fixture;
     use std::path::Path;
     use std::time::Duration;
 
@@ -153,8 +266,58 @@ mod tests {
             duration: 1.0,
             hdr: None,
             ten_bit: false,
+            animation: false,
+            stream: 0,
         };
         assert_eq!(info.frame_interval(), Duration::from_millis(40));
+    }
+
+    #[test]
+    fn a_fast_animation_plays_at_its_mean_rate_and_a_cut_walk_has_no_length() {
+        // Delays of 30 and 40 ms in 10 ms units: gcd 10 ms is 100 fps, above the cap.
+        let fast = timing_of(&[3, 4, 3, 4, 3, 4], 0.01, true).unwrap();
+        assert!((fast.fps - 6.0 / 0.21).abs() < 1e-9, "{fast:?}");
+        assert!((fast.duration.unwrap() - 0.21).abs() < 1e-9);
+        // Delays of 100 and 500 ms: the gcd rate of 10 fps.
+        let slow = timing_of(&[10, 50, 20], 0.01, false).unwrap();
+        assert_eq!(slow.fps, 10.0);
+        assert_eq!(slow.duration, None, "the walk stopped before the end");
+        // A mean above the cap stays at the cap. No duration gives no timing.
+        assert_eq!(timing_of(&[1, 1, 1], 0.001, true).unwrap().fps, 50.0);
+        assert_eq!(timing_of(&[0, 0], 0.01, true), None);
+        assert_eq!(timing_of(&[], 0.01, true), None);
+    }
+
+    #[test]
+    fn the_shortest_common_delay_gives_the_rate() {
+        assert_eq!(gcd(10, 50), 10);
+        assert_eq!(gcd(0, 20), 20);
+        assert_eq!(gcd(20, 0), 20);
+        assert_eq!(gcd(3, 5), 1);
+    }
+
+    /// The animated fixtures: 3 frames of 16x12 pixels each.
+    #[test]
+    fn animated_images_report_their_rate_and_length_from_the_packets() {
+        ffmpeg::init().unwrap();
+        // The GIF has delays of 100, 500 and 200 ms: the rate is 10 and the length 0.8.
+        let gif = probe(&fixture("anim.gif")).unwrap();
+        assert!(gif.animation, "{gif:?}");
+        assert_eq!((gif.width, gif.height, gif.stream), (16, 12, 0));
+        assert_eq!(gif.fps, 10.0);
+        assert!((gif.duration - 0.8).abs() < 1e-9, "{gif:?}");
+        // The others hold 3 frames of 200 ms.
+        for name in ["anim.webp", "anim.png"] {
+            let info = probe(&fixture(name)).unwrap();
+            assert!(info.animation, "{name}: {info:?}");
+            assert_eq!((info.fps, info.stream), (5.0, 0), "{name}");
+            assert!((info.duration - 0.6).abs() < 1e-9, "{name}: {info:?}");
+        }
+        // The AVIS lists its still item first; the sequence is the second stream.
+        let avis = probe(&fixture("anim.avif")).unwrap();
+        assert!(avis.animation, "{avis:?}");
+        assert_eq!((avis.fps, avis.stream), (5.0, 1));
+        assert!((avis.duration - 0.6).abs() < 1e-9, "{avis:?}");
     }
 
     #[test]
