@@ -191,7 +191,9 @@ missing.
   (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and
   `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell shape),
   `embedded_jpeg.rs` (the safe reader for the JPEG inside camera RAW and PSD files).
-- `ui.rs`: the ratatui drawing of each view, the help popup and the pickers. The gallery, the
+- `ui.rs`: the ratatui drawing of each view, the help popup and the pickers. The help popup has
+  two columns from 100 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, rows in `help_gallery_rows`
+  and `help_viewer_rows`), else one column that clips. The gallery, the
   fullscreen view and the video view have no frame. They use the full area minus 1 status row
   (`content_area`, `status_area`). The help popup, the pickers and the info panel keep their
   borders.
@@ -251,7 +253,8 @@ missing.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
   video. The thumbnail job reads the animation flag into `App::animated`, and the grid marker
   (a dim `▶` in the label, or in the gap below the cell) reads only that flag, so the draw
-  reads no file. The route (`App::plays_at`) reads the header of the one file after a key
+  reads no file. A video gets the same marker once its thumbnail is in `thumb_cache`
+  (`shows_play_marker` in `ui.rs`). The route (`App::plays_at`) reads the header of the one file after a key
   press. `App::is_video_at` still drives the placeholder and the loading icon. The probe reads
   at most 16 packets: the rate is the GCD of the frame delays, or the mean rate above 50 fps,
   and the length comes from the container. An AVIS file holds two video streams, and the probe
