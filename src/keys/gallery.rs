@@ -61,6 +61,12 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
                 app.start_slideshow();
             }
         }
+        #[cfg(feature = "video")]
+        KeyCode::Char('p') if app.selected_is_video() => {
+            app.graphics_delete_all()?;
+            app.enter_fullscreen_selected();
+            app.request_video_window();
+        }
         KeyCode::Char('i') => {
             app.graphics_delete_all()?;
             app.toggle_info();

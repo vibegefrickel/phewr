@@ -26,6 +26,11 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.stop_slideshow();
             app.enter_fullscreen_at(app.current);
         }
+        #[cfg(feature = "video")]
+        KeyCode::Char('p') if app.shows_video_placeholder() => {
+            app.enter_video(app.current);
+            app.request_video_window();
+        }
         KeyCode::Char('s') => app.toggle_slideshow(),
         KeyCode::Char(' ') => app.slideshow_toggle_pause(),
         KeyCode::Char('[') => app.slideshow_adjust_interval(-1.0),

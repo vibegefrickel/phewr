@@ -432,14 +432,17 @@ pub(crate) mod kitty {
     }
 }
 
-/// The fakes and the app builders of the mpv hand-off tests. No test starts a real mpv.
+/// The fakes and the app builders of the video tests. No test starts a real mpv or ffmpeg.
 #[cfg(feature = "video")]
 pub(crate) mod video {
     use crate::app::{App, ViewMode};
+    use crate::config::VideoPlayer;
+    use crate::encoder::{KittyBackend, Transfer};
     use crate::image_list::SharedImageList;
     use crate::mpv;
+    use crate::player::{Decoder, FrameStream, VideoInfo};
     use crate::run_loop::LoopState;
-    use crate::video_handoff::{TerminalHandoff, VideoState};
+    use crate::video_handoff::VideoState;
     use std::cell::{Cell, RefCell};
     use std::ffi::OsString;
     use std::io;
@@ -449,107 +452,194 @@ pub(crate) mod video {
 
     pub(crate) type Log = Rc<RefCell<Vec<String>>>;
 
-    /// A terminal that records each step. `raw` is the raw mode that the runner sees.
-    pub(crate) struct FakeTerminal {
-        pub(crate) log: Log,
-        pub(crate) raw: Rc<Cell<bool>>,
-        pub(crate) fail_suspend: bool,
-        pub(crate) resized: bool,
-    }
-
-    impl TerminalHandoff for FakeTerminal {
-        fn geometry(&self, _cell_px: (u32, u32)) -> Option<mpv::Geometry> {
-            None
-        }
-
-        fn longest_side(&self, _cell_px: (u32, u32)) -> u32 {
-            1600
-        }
-
-        fn suspend(&mut self, _app: &mut App) -> io::Result<()> {
-            self.log.borrow_mut().push("suspend".to_owned());
-            if self.fail_suspend {
-                return Err(io::Error::other("broken pipe"));
-            }
-            Ok(())
-        }
-
-        fn ensure_raw_mode(&mut self) -> io::Result<()> {
-            self.log.borrow_mut().push("raw mode".to_owned());
-            self.raw.set(true);
-            Ok(())
-        }
-
-        fn resume(&mut self, _app: &mut App) -> io::Result<()> {
-            self.log.borrow_mut().push("resume".to_owned());
-            Ok(())
-        }
-
-        fn discard_input(&mut self) -> io::Result<bool> {
-            self.log.borrow_mut().push("discard input".to_owned());
-            Ok(self.resized)
-        }
-    }
-
-    /// Records each start; `exit` is the exit code of mpv or the error of the start.
-    /// `window` sends the exit code of the last window, so that the test closes it.
-    /// `exits` holds the exit codes of the next runs in the terminal; `exit` comes after.
+    /// Records each mpv start. `fails` makes each start fail. `window` sends the exit code of
+    /// the last window, so that the test closes it.
     pub(crate) struct FakeRunner {
         pub(crate) log: Log,
-        pub(crate) raw: Rc<Cell<bool>>,
-        pub(crate) exit: Result<Option<i32>, io::ErrorKind>,
-        pub(crate) exits: Vec<Option<i32>>,
+        pub(crate) fails: bool,
         pub(crate) window: Option<mpsc::Sender<Option<i32>>>,
     }
 
-    impl FakeRunner {
-        fn record(&self, verb: &str, program: &Path, args: &[OsString]) -> io::Result<()> {
-            let args: Vec<String> = args
-                .iter()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect();
-            let mode = if self.raw.get() { "raw" } else { "cooked" };
-            self.log.borrow_mut().push(format!(
-                "{verb} ({mode}) {} {}",
-                program.display(),
-                args.join(" ")
-            ));
-            self.exit.map(drop).map_err(io::Error::from)
-        }
-    }
-
     impl mpv::Runner for FakeRunner {
-        fn run(&mut self, program: &Path, args: &[OsString]) -> io::Result<Option<i32>> {
-            self.record("run", program, args)?;
-            if !self.exits.is_empty() {
-                return Ok(self.exits.remove(0));
-            }
-            Ok(self.exit?)
-        }
-
         fn spawn(
             &mut self,
             program: &Path,
             args: &[OsString],
         ) -> io::Result<mpsc::Receiver<Option<i32>>> {
-            self.record("spawn", program, args)?;
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            self.log
+                .borrow_mut()
+                .push(format!("spawn {} {}", program.display(), args.join(" ")));
+            if self.fails {
+                return Err(io::Error::from(io::ErrorKind::NotFound));
+            }
             let (exit_tx, exit_rx) = mpsc::channel();
             self.window = Some(exit_tx);
             Ok(exit_rx)
         }
     }
 
+    /// A runner that records its starts in the returned log.
+    pub(crate) fn fake_runner() -> (Log, FakeRunner) {
+        let log = Log::default();
+        let runner = FakeRunner {
+            log: Rc::clone(&log),
+            fails: false,
+            window: None,
+        };
+        (log, runner)
+    }
+
+    /// A decoder that records each ffmpeg start and feeds the frames that the test gives it.
+    pub(crate) struct FakeDecoder {
+        pub(crate) info: VideoInfo,
+        pub(crate) fail_probe: Cell<bool>,
+        pub(crate) fail_start: Cell<bool>,
+        starts: RefCell<Vec<String>>,
+        sender: RefCell<Option<mpsc::SyncSender<Vec<u8>>>>,
+    }
+
+    impl FakeDecoder {
+        /// The command lines of the ffmpeg starts so far.
+        pub(crate) fn starts(&self) -> Vec<String> {
+            self.starts.borrow().clone()
+        }
+
+        /// The command line of the last ffmpeg start.
+        pub(crate) fn last_args(&self) -> String {
+            self.starts.borrow().last().cloned().unwrap()
+        }
+
+        /// Give the player one decoded frame.
+        pub(crate) fn feed(&self, frame: Vec<u8>) {
+            self.sender
+                .borrow()
+                .as_ref()
+                .expect("no ffmpeg run to feed")
+                .send(frame)
+                .expect("the player dropped its stream");
+        }
+
+        /// End the current ffmpeg run, as the end of the clip does.
+        pub(crate) fn end(&self) {
+            self.sender.borrow_mut().take();
+        }
+
+        /// True while a player still reads the current run. The check sends an empty frame, so
+        /// call it only at the end of a test.
+        pub(crate) fn streaming(&self) -> bool {
+            self.sender
+                .borrow()
+                .as_ref()
+                .is_some_and(|sender| sender.try_send(Vec::new()).is_ok())
+        }
+    }
+
+    impl Decoder for FakeDecoder {
+        fn probe(&self, _video: &Path) -> io::Result<VideoInfo> {
+            if self.fail_probe.get() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "no video stream",
+                ));
+            }
+            Ok(self.info.clone())
+        }
+
+        fn start(
+            &self,
+            program: &Path,
+            args: &[OsString],
+            _frame_bytes: usize,
+        ) -> io::Result<FrameStream> {
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            self.starts
+                .borrow_mut()
+                .push(format!("{} {}", program.display(), args.join(" ")));
+            if self.fail_start.get() {
+                return Err(io::Error::from(io::ErrorKind::NotFound));
+            }
+            let (frame_tx, frame_rx) = mpsc::sync_channel(64);
+            *self.sender.borrow_mut() = Some(frame_tx);
+            Ok(FrameStream::new(frame_rx, None))
+        }
+    }
+
+    /// A fake decoder whose probe answers `info`.
+    pub(crate) fn fake_decoder(info: VideoInfo) -> Rc<FakeDecoder> {
+        Rc::new(FakeDecoder {
+            info,
+            fail_probe: Cell::new(false),
+            fail_start: Cell::new(false),
+            starts: RefCell::new(Vec::new()),
+            sender: RefCell::new(None),
+        })
+    }
+
+    /// The decoder as the player takes it.
+    pub(crate) fn shared(decoder: &Rc<FakeDecoder>) -> Rc<dyn Decoder> {
+        let decoder: Rc<FakeDecoder> = Rc::clone(decoder);
+        decoder
+    }
+
+    /// The header of an SDR clip of 2 seconds without a rotation.
+    pub(crate) fn info_of(width: u32, height: u32, fps: f64) -> VideoInfo {
+        VideoInfo {
+            width,
+            height,
+            rotation: 0,
+            fps,
+            duration: 2.0,
+            hdr: None,
+            ten_bit: false,
+        }
+    }
+
+    /// The header of the test clip: 640x480 at 10 frames per second.
+    pub(crate) fn clip_info() -> VideoInfo {
+        info_of(640, 480, 10.0)
+    }
+
+    /// The loop state with `player` configured, mpv and ffmpeg on PATH, and `decoder`.
+    pub(crate) fn state_with(player: VideoPlayer, decoder: Rc<FakeDecoder>) -> LoopState {
+        LoopState {
+            status: None,
+            late_answers: crate::keys::LateAnswerFilter::default(),
+            cell_size_from_terminal: false,
+            video: VideoState {
+                player,
+                mpv: Some(PathBuf::from("/bin/mpv")),
+                ffmpeg: Some(PathBuf::from("/bin/ffmpeg")),
+                decoder,
+            },
+        }
+    }
+
+    /// The loop state of the terminal player, with a fake decoder for the test clip.
+    pub(crate) fn terminal_state() -> LoopState {
+        state_with(VideoPlayer::Terminal, fake_decoder(clip_info()))
+    }
+
+    /// The loop state of the mpv window.
+    pub(crate) fn window_state() -> LoopState {
+        state_with(VideoPlayer::Window, fake_decoder(clip_info()))
+    }
+
+    /// Give `app` the temp file medium, which the terminal player needs.
+    pub(crate) fn with_temp_file_medium(mut app: App) -> App {
+        app.graphics = KittyBackend::new(Transfer::TempFile);
+        app
+    }
+
     /// An app with a photo and a video, in video mode for the video.
     pub(crate) fn video_app() -> App {
-        let mut app = App::new((8, 16), SharedImageList::new());
-        app.images = vec![
-            PathBuf::from("/videos/a.jpg"),
-            PathBuf::from("/videos/clip.mp4"),
-        ];
-        app.filenames = vec!["a.jpg".to_owned(), "clip.mp4".to_owned()];
-        app.gallery.filtered_indices = vec![0, 1];
-        app.enter_video(1);
-        app
+        gallery_app_on_video(&["a.jpg", "clip.mp4"], 1)
     }
 
     /// An app in the fullscreen view that steps from a photo onto a video.
@@ -565,7 +655,7 @@ pub(crate) mod video {
     /// An app with `names` below `/videos` that steps from the first file onto the second,
     /// a video, in the fullscreen view. `slideshow` starts a slideshow on the first file.
     pub(crate) fn fullscreen_app_on_video(names: &[&str], slideshow: bool) -> App {
-        let mut app = App::new((8, 16), SharedImageList::new());
+        let mut app = with_temp_file_medium(App::new((8, 16), SharedImageList::new()));
         app.images = names
             .iter()
             .map(|name| Path::new("/videos").join(name))
@@ -581,61 +671,9 @@ pub(crate) mod video {
         app
     }
 
-    pub(crate) fn state(player: mpv::Player) -> LoopState {
-        LoopState {
-            status: None,
-            late_answers: crate::keys::LateAnswerFilter::default(),
-            cell_size_from_terminal: false,
-            video: VideoState {
-                player,
-                fallback_note: None,
-            },
-        }
-    }
-
-    /// The fakes start in cooked mode, so the log shows that the hand-off turns raw mode on.
-    pub(crate) fn fakes(
-        exit: Result<Option<i32>, io::ErrorKind>,
-    ) -> (Log, FakeTerminal, FakeRunner) {
-        let log = Log::default();
-        let raw = Rc::new(Cell::new(false));
-        let terminal = FakeTerminal {
-            log: Rc::clone(&log),
-            raw: Rc::clone(&raw),
-            fail_suspend: false,
-            resized: false,
-        };
-        let runner = FakeRunner {
-            log: Rc::clone(&log),
-            raw,
-            exit,
-            exits: Vec::new(),
-            window: None,
-        };
-        (log, terminal, runner)
-    }
-
-    pub(crate) fn terminal_state() -> LoopState {
-        state(mpv::Player::Terminal(PathBuf::from("/bin/mpv")))
-    }
-
-    pub(crate) fn window_state() -> LoopState {
-        state(mpv::Player::Window(PathBuf::from("/bin/mpv")))
-    }
-
-    /// The arguments of the last mpv start in `log`.
-    pub(crate) fn last_start(log: &Log) -> String {
-        log.borrow()
-            .iter()
-            .rev()
-            .find(|entry| entry.starts_with("run ") || entry.starts_with("spawn "))
-            .cloned()
-            .unwrap()
-    }
-
     /// An app with `names` below `/videos` in the gallery, in the video view of `index`.
     pub(crate) fn gallery_app_on_video(names: &[&str], index: usize) -> App {
-        let mut app = App::new((8, 16), SharedImageList::new());
+        let mut app = with_temp_file_medium(App::new((8, 16), SharedImageList::new()));
         app.images = names
             .iter()
             .map(|name| Path::new("/videos").join(name))
@@ -646,11 +684,16 @@ pub(crate) mod video {
         app
     }
 
+    /// The arguments of the last mpv start in `log`.
+    pub(crate) fn last_start(log: &Log) -> String {
+        starts(log).last().cloned().unwrap()
+    }
+
     /// The mpv starts in `log`.
     pub(crate) fn starts(log: &Log) -> Vec<String> {
         log.borrow()
             .iter()
-            .filter(|entry| entry.starts_with("run ") || entry.starts_with("spawn "))
+            .filter(|entry| entry.starts_with("spawn "))
             .cloned()
             .collect()
     }

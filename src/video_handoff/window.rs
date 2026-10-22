@@ -19,19 +19,18 @@ mod tests {
     use crate::app::{VideoReturn, ViewMode};
     use crate::mpv;
     use crate::test_support::video::{
-        fakes, fullscreen_app_on_video, fullscreen_video_app, gallery_app_on_video, last_start,
-        slideshow_video_app, state, video_app, window_state,
+        fake_runner, fullscreen_app_on_video, gallery_app_on_video, last_start,
+        slideshow_video_app, video_app, window_state,
     };
-    use crate::video_handoff::{hand_off_video, hand_off_videos};
-    use std::path::PathBuf;
+    use crate::video_handoff::play_videos;
 
     #[test]
     fn a_window_holds_the_slideshow_until_the_end_of_the_clip() {
         let mut app = slideshow_video_app();
         let mut state = window_state();
-        let (log, mut terminal, mut runner) = fakes(Ok(None));
+        let (log, mut runner) = fake_runner();
 
-        hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        play_videos(&mut app, &mut state, &mut runner);
 
         let start = last_start(&log);
         assert!(start.contains(" --loop-file=no "), "{start}");
@@ -56,8 +55,8 @@ mod tests {
         for close in [Some(Some(mpv::USER_QUIT)), Some(None), None] {
             let mut app = slideshow_video_app();
             let mut state = window_state();
-            let (_log, mut terminal, mut runner) = fakes(Ok(None));
-            hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+            let (_log, mut runner) = fake_runner();
+            play_videos(&mut app, &mut state, &mut runner);
 
             let window = runner.window.take().unwrap();
             match close {
@@ -78,8 +77,8 @@ mod tests {
     fn a_step_away_from_the_window_forgets_it() {
         let mut app = slideshow_video_app();
         let mut state = window_state();
-        let (_log, mut terminal, mut runner) = fakes(Ok(None));
-        hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
 
         app.next();
         let late_quit = runner.window.take().unwrap().send(Some(mpv::USER_QUIT));
@@ -96,38 +95,19 @@ mod tests {
     #[test]
     fn window_player_starts_mpv_without_the_terminal() {
         let mut app = video_app();
-        let mut state = state(mpv::Player::Window(PathBuf::from("/bin/mpv")));
-        let (log, mut terminal, mut runner) = fakes(Ok(None));
+        let mut state = window_state();
+        let (log, mut runner) = fake_runner();
 
-        hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        play_videos(&mut app, &mut state, &mut runner);
 
         assert_eq!(
             *log.borrow(),
-            [
-                "spawn (cooked) /bin/mpv --no-terminal --force-window=immediate \
+            ["spawn /bin/mpv --no-terminal --force-window=immediate \
                  --fs --native-fs=no --hwdec=auto-safe --loop-file=inf \
                  --input-commands=keybind n \"quit 10\",keybind N \"quit 11\" \
-                 -- /videos/clip.mp4"
-            ]
+                 -- /videos/clip.mp4"]
         );
         assert_eq!(app.mode, ViewMode::Gallery);
-        assert_eq!(
-            state.status.as_deref(),
-            Some("clip.mp4 plays in an mpv window")
-        );
-    }
-
-    #[test]
-    fn window_player_keeps_the_fullscreen_view_on_the_video() {
-        let mut app = fullscreen_video_app();
-        let mut state = window_state();
-        let (_log, mut terminal, mut runner) = fakes(Ok(None));
-
-        hand_off_video(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
-
-        assert_eq!(app.mode, ViewMode::Fullscreen);
-        assert_eq!(app.current, 1);
-        assert!(app.shows_video_placeholder());
         assert_eq!(
             state.status.as_deref(),
             Some("clip.mp4 plays in an mpv window")
@@ -138,8 +118,8 @@ mod tests {
     fn n_and_shift_n_in_a_window_open_the_neighbor_video_in_a_new_window() {
         let mut app = gallery_app_on_video(&["clip.mp4", "next.mov", "b.jpg"], 0);
         let mut state = window_state();
-        let (log, mut terminal, mut runner) = fakes(Ok(None));
-        hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        let (log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
         assert_eq!(app.mode, ViewMode::Gallery);
         assert!(app.watches_video_window());
 
@@ -152,7 +132,7 @@ mod tests {
         poll_mpv_window(&mut app, &mut state);
         assert_eq!(app.mode, ViewMode::Video);
         assert_eq!(app.video_return, VideoReturn::Gallery);
-        hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        play_videos(&mut app, &mut state, &mut runner);
         assert!(last_start(&log).ends_with(" -- /videos/next.mov"));
         assert_eq!(app.mode, ViewMode::Gallery);
         assert_eq!(app.gallery.cursor, 1);
@@ -176,8 +156,8 @@ mod tests {
     fn a_step_in_a_window_onto_an_image_opens_the_fullscreen_view() {
         let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], false);
         let mut state = window_state();
-        let (_log, mut terminal, mut runner) = fakes(Ok(None));
-        hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
 
         runner
             .window
@@ -196,8 +176,8 @@ mod tests {
     fn a_window_that_fails_shows_the_exit_code() {
         let mut app = video_app();
         let mut state = window_state();
-        let (_log, mut terminal, mut runner) = fakes(Ok(None));
-        hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
 
         runner.window.take().unwrap().send(Some(2)).unwrap();
         poll_mpv_window(&mut app, &mut state);
@@ -214,8 +194,8 @@ mod tests {
     fn a_window_step_behind_an_overlay_does_nothing() {
         let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], false);
         let mut state = window_state();
-        let (_log, mut terminal, mut runner) = fakes(Ok(None));
-        hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
         app.help_visible = true;
 
         runner
@@ -235,8 +215,8 @@ mod tests {
     fn the_loop_looks_for_the_window_exit_every_100_ms() {
         let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4"], false);
         let mut state = window_state();
-        let (_log, mut terminal, mut runner) = fakes(Ok(None));
-        hand_off_videos(&mut app, &mut state, &mut terminal, &mut runner).unwrap();
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
 
         assert!(crate::run_loop::next_timeout(&app, &[]) <= crate::run_loop::WINDOW_POLL);
     }

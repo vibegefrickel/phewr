@@ -13,6 +13,8 @@ mod kitty_output;
 #[cfg(feature = "video")]
 mod mpv;
 mod picker;
+#[cfg(feature = "video")]
+mod player;
 mod prefetch;
 mod run_loop;
 mod scanner;

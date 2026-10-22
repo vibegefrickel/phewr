@@ -36,22 +36,21 @@ pub(crate) struct Config {
 /// The value of `[video] player`: how viewr plays a video file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum VideoPlayer {
-    /// mpv draws into this terminal with `--vo=kitty`.
-    Terminal,
-    /// mpv opens a fullscreen window of its own, and viewr keeps running.
+    /// The player of viewr draws the frames into this terminal, without sound.
     #[default]
+    Terminal,
+    /// mpv opens a fullscreen window of its own, with sound, and viewr keeps running.
     Window,
-    /// The built-in player of viewr (`video.rs`).
-    Builtin,
 }
 
 impl VideoPlayer {
     /// Read the config value; an unknown value returns `None`, so the rest of the file still counts.
+    ///
+    /// `builtin` was the name of the player in the terminal before 0.3, so it still means `terminal`.
     fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "terminal" => Some(Self::Terminal),
+            "terminal" | "builtin" => Some(Self::Terminal),
             "window" => Some(Self::Window),
-            "builtin" => Some(Self::Builtin),
             _ => None,
         }
     }
@@ -336,7 +335,7 @@ mod tests {
             &root.path().join("state.toml"),
         );
         assert_eq!(config, Config::default());
-        assert_eq!(config.video_player, VideoPlayer::Window);
+        assert_eq!(config.video_player, VideoPlayer::Terminal);
     }
 
     #[test]
@@ -398,9 +397,9 @@ mod tests {
         for (value, expected) in [
             ("terminal", VideoPlayer::Terminal),
             ("window", VideoPlayer::Window),
-            ("builtin", VideoPlayer::Builtin),
+            ("builtin", VideoPlayer::Terminal),
             (" Window ", VideoPlayer::Window),
-            ("vlc", VideoPlayer::Window),
+            ("vlc", VideoPlayer::Terminal),
         ] {
             std::fs::write(
                 &config_path,

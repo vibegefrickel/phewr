@@ -670,3 +670,172 @@ fn resize_filters_on_a_24_mp_frame() {
         ));
     }
 }
+
+/// The decode side of the terminal player: ffmpeg frames into a sink, for the first video of
+/// the folder, at a frame box of 1280x720 and of 1920x1080.
+#[cfg(feature = "video")]
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn terminal_player_decode_rate() {
+    use crate::player::{Decoder, Pipeline, SystemDecoder, VideoInfo, frame_box};
+    use crate::yazi::find_on_path;
+    use std::sync::mpsc::TryRecvError;
+
+    const FRAMES: usize = 300;
+
+    let Some(dir) = test_dir() else {
+        return;
+    };
+    let Some(ffmpeg) = find_on_path("ffmpeg", std::env::var_os("PATH").as_deref()) else {
+        report("terminal player: no ffmpeg on PATH");
+        return;
+    };
+    ffmpeg::init().unwrap();
+    let mut videos: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| is_video(path))
+        .collect();
+    videos.sort();
+    let Some(video) = videos.first() else {
+        report("terminal player: no video in the folder");
+        return;
+    };
+    let info: VideoInfo = SystemDecoder.probe(video).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let cube = crate::player::cube_for(&info, &[cache.path()]);
+    report(&format!(
+        "terminal player: {} {}x{} {:.2} fps, hdr {:?}, rotation {}",
+        video.file_name().unwrap().to_string_lossy(),
+        info.width,
+        info.height,
+        info.fps,
+        info.hdr,
+        info.rotation
+    ));
+    for limit in [(1280, 720), (1920, 1080)] {
+        let frame = frame_box((info.width, info.height), limit);
+        let args = crate::player::args(video, &info, frame, cube.as_deref(), 0.0, Pipeline::Gpu);
+        let bytes = frame.0 as usize * frame.1 as usize * 4;
+        let start = Instant::now();
+        let mut stream = SystemDecoder.start(&ffmpeg, &args, bytes).unwrap();
+        let mut first = None;
+        let mut frames = 0;
+        while frames < FRAMES {
+            match stream.try_next() {
+                Ok(_) => {
+                    frames += 1;
+                    first.get_or_insert_with(Instant::now);
+                }
+                Err(TryRecvError::Empty) => {
+                    assert!(start.elapsed() < LIMIT, "ffmpeg did not deliver");
+                    thread::sleep(Duration::from_micros(200));
+                }
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        let first = first.unwrap_or_else(Instant::now);
+        let decode = first.elapsed();
+        let fps = if decode.is_zero() {
+            0.0
+        } else {
+            (frames.saturating_sub(1)) as f64 / decode.as_secs_f64()
+        };
+        report(&format!(
+            "terminal player decode {}x{}: first frame after {}, {frames} frames in {} = {fps:.0} fps",
+            frame.0,
+            frame.1,
+            millis(first - start),
+            millis(decode)
+        ));
+    }
+}
+
+/// The whole terminal player without a terminal: the real ffmpeg, the pacing and the Kitty
+/// writes into the buffer of the test app, for 5 seconds of the first video of the folder.
+/// The result is the number of frames on the screen and the number of dropped frames.
+#[cfg(feature = "video")]
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn terminal_player_realtime_into_the_buffer() {
+    use crate::encoder::{KittyBackend, Transfer};
+    use crate::player::{Player, SystemDecoder};
+    use crate::yazi::find_on_path;
+    use std::rc::Rc;
+
+    const PLAY: Duration = Duration::from_secs(5);
+
+    let Some(dir) = test_dir() else {
+        return;
+    };
+    let Some(ffmpeg) = find_on_path("ffmpeg", std::env::var_os("PATH").as_deref()) else {
+        report("terminal player: no ffmpeg on PATH");
+        return;
+    };
+    ffmpeg::init().unwrap();
+    let list = SharedImageList::new();
+    scanner::spawn(vec![dir], list.clone());
+    let mut app = App::new(CELL_PX, list);
+    app.graphics = KittyBackend::new(Transfer::TempFile);
+    let deadline = Instant::now() + LIMIT;
+    while !app.scan_complete {
+        assert!(Instant::now() < deadline, "the scan did not finish");
+        app.refresh_from_scanner();
+        thread::sleep(Duration::from_millis(5));
+    }
+    let Some(index) = app.images.iter().position(|path| is_video(path)) else {
+        report("terminal player: no video in the folder");
+        return;
+    };
+    let cache = tempfile::tempdir().unwrap();
+    app.enter_video(index);
+    app.image_rect = fullscreen_rect();
+    let limit = crate::player::frame_limit(fullscreen_rect(), CELL_PX);
+    let player = Player::open(
+        Rc::new(SystemDecoder),
+        &ffmpeg,
+        &app.images[index],
+        limit,
+        &[cache.path()],
+        true,
+    )
+    .unwrap();
+    app.video = Some(player);
+    let start = Instant::now();
+    let mut pending = Vec::new();
+    let mut frames = 0;
+    let mut bytes = 0;
+    let mut first = None;
+    while start.elapsed() < PLAY {
+        run_pass(&mut app, &mut pending);
+        let out = app.graphics_out.take_bytes();
+        for path in crate::encoder::kitty::temp_file_paths(&out) {
+            std::fs::remove_file(path).unwrap();
+        }
+        if !out.is_empty() {
+            frames += count_transmissions(&out);
+            bytes += out.len();
+            first.get_or_insert_with(Instant::now);
+        }
+        thread::sleep(next_timeout(&app, &pending));
+    }
+    let player = app.video.as_ref().unwrap();
+    let shown = first.map_or(Duration::ZERO, |first| first.elapsed());
+    report(&format!(
+        "terminal player realtime {}x{} in {}x{} cells: {frames} frames in {}, {} dropped, \
+         {:.1} fps on the screen, position {:.1} s, {bytes} bytes of sequences",
+        limit.0,
+        limit.1,
+        fullscreen_rect().width,
+        fullscreen_rect().height,
+        millis(shown),
+        player.dropped,
+        if shown.is_zero() {
+            0.0
+        } else {
+            (frames.saturating_sub(1)) as f64 / shown.as_secs_f64()
+        },
+        player.position(),
+    ));
+}

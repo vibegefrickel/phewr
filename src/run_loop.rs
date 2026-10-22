@@ -11,7 +11,7 @@ use crate::mpv;
 use crate::terminal::query_cell_pixel_size;
 use crate::ui;
 #[cfg(feature = "video")]
-use crate::video_handoff::{VideoState, hand_off_videos, poll_mpv_window};
+use crate::video_handoff::{VideoState, play_videos, poll_mpv_window};
 use crossterm::event::{self, Event};
 use ratatui::prelude::*;
 use std::io;
@@ -22,6 +22,7 @@ const BUSY_POLL: Duration = Duration::from_millis(10);
 /// The wait of the loop when nothing runs in the background.
 const IDLE_POLL: Duration = Duration::from_millis(250);
 /// The wait of the loop while an mpv window plays: the latency of `n` and `N` in the window.
+/// The terminal player sets its own wait, see [`crate::player::Player::time_until_next_frame`].
 #[cfg(feature = "video")]
 pub(crate) const WINDOW_POLL: Duration = Duration::from_millis(100);
 
@@ -91,9 +92,9 @@ pub(crate) fn run(
         poll_mpv_window(app, state);
         poll_background(app, &mut pending_emits);
 
-        // mpv takes the video before the draw, so that the gallery comes back in this pass.
+        // The player starts before the draw, so that a fallback view comes back in this pass.
         #[cfg(feature = "video")]
-        hand_off_videos(app, state, terminal, &mut mpv::SystemRunner)?;
+        play_videos(app, state, &mut mpv::SystemRunner);
 
         if app.scan_complete
             && app.images.is_empty()
@@ -140,9 +141,11 @@ pub(crate) fn poll_background(app: &mut App, pending_emits: &mut Vec<usize>) {
     pending_emits.extend(app.poll_thumbnails());
     app.slideshow_tick();
 
+    // The help popup sits above the pictures, so no frame moves while it is open.
     #[cfg(feature = "video")]
-    if let Some(ref mut v) = app.video
-        && v.poll_frame()
+    if !app.help_visible
+        && let Some(ref mut v) = app.video
+        && v.poll()
     {
         app.needs_render = true;
     }
@@ -172,7 +175,6 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
         }
         #[cfg(feature = "video")]
         ViewMode::Video if draws => {
-            app.open_video_if_needed();
             render_video_frame(app)?;
             finish_render(app, pending_emits);
         }
@@ -226,10 +228,62 @@ mod tests {
     use super::LoopState;
     use crate::config::Config;
 
+    #[cfg(feature = "video")]
+    #[test]
+    fn the_help_popup_holds_the_player_and_the_frame_write() {
+        use crate::app::ViewMode;
+        use crate::player::Player;
+        use crate::test_support::video::{clip_info, fake_decoder, shared, video_app};
+        use std::path::Path;
+
+        let mut app = video_app();
+        app.image_rect = ratatui::layout::Rect::new(0, 0, 100, 40);
+        let decoder = fake_decoder(clip_info());
+        app.video = Some(
+            Player::open(
+                shared(&decoder),
+                Path::new("/bin/ffmpeg"),
+                Path::new("/videos/clip.mp4"),
+                (64, 48),
+                &[],
+                true,
+            )
+            .unwrap(),
+        );
+        assert!(!crate::test_support::char_key(&mut app, '?'));
+        assert!(app.help_visible);
+        assert!(
+            crate::test_support::text(&app.graphics_out.take_bytes()).contains("a=d"),
+            "the help deletes the pictures first"
+        );
+        decoder.feed(vec![1; 64 * 48 * 4]);
+        app.needs_render = false;
+        let mut pending = Vec::new();
+
+        super::poll_background(&mut app, &mut pending);
+        assert!(!app.needs_render, "no frame while the help is open");
+        assert!(app.video.as_ref().unwrap().current_frame.is_none());
+        app.needs_render = true;
+        super::render_images(&mut app, &mut pending).unwrap();
+        assert!(app.graphics_out.take_bytes().is_empty());
+
+        assert!(!crate::test_support::char_key(&mut app, 'x'));
+        assert!(!app.help_visible);
+        assert_eq!(app.mode, ViewMode::Video);
+        super::poll_background(&mut app, &mut pending);
+        assert!(app.needs_render, "the frame comes after the help");
+        super::render_images(&mut app, &mut pending).unwrap();
+        let out = app.graphics_out.take_bytes();
+        for path in crate::encoder::kitty::temp_file_paths(&out) {
+            std::fs::remove_file(path).unwrap();
+        }
+        assert!(crate::test_support::text(&out).contains("a=T,"));
+    }
+
     #[test]
     fn the_loop_state_starts_without_a_status() {
         let config = Config {
-            video_player: crate::config::VideoPlayer::Builtin,
+            video_player: crate::config::VideoPlayer::Window,
             ..Config::default()
         };
 
@@ -237,12 +291,6 @@ mod tests {
 
         assert_eq!(state.status, None);
         #[cfg(feature = "video")]
-        {
-            assert_eq!(state.video.player, crate::mpv::Player::Builtin);
-            assert_eq!(
-                state.video.fallback_note, None,
-                "the user chose the built-in player"
-            );
-        }
+        assert_eq!(state.video.player, crate::config::VideoPlayer::Window);
     }
 }

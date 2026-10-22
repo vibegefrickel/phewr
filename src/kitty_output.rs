@@ -44,8 +44,11 @@ fn centered_cell(rect: Rect, cell_px: (u32, u32), img: &RgbaImage) -> (u16, u16)
     )
 }
 
+/// The one image id of the terminal player. Each frame replaces the last one under this id,
+/// so the terminal never shows an empty box between two frames. The id sits at the top of
+/// the range, far from the ids of the grid, which count up from 1 (`ThumbnailCache::next_id`).
 #[cfg(feature = "video")]
-const VIDEO_IMAGE_ID: u32 = 900;
+const VIDEO_IMAGE_ID: u32 = u32::MAX - 1;
 
 #[cfg(feature = "video")]
 pub(crate) fn render_video_frame(app: &mut App) -> io::Result<()> {
@@ -53,22 +56,31 @@ pub(crate) fn render_video_frame(app: &mut App) -> io::Result<()> {
 }
 
 /// Write the current video frame to `out`, so that the tests can read the escape sequences.
+///
+/// The frame is small. The terminal scales it to the cell box (`c=`, `r=`) in the middle of
+/// the view, in whole cells and without a pixel offset, inside a synchronized update. The
+/// help popup gets no frame, because Kitty draws a picture above the text. The key that
+/// closes the help writes the frame again.
 #[cfg(feature = "video")]
-fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
+pub(crate) fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
     use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 
-    if let Some(v) = &app.video
+    if !app.help_visible
+        && let Some(v) = &app.video
         && let Some(img) = &v.current_frame
     {
-        let (column, row) = centered_cell(app.image_rect, app.cell_px, img);
+        let cells = crate::player::cell_box(img.dimensions(), app.image_rect, app.cell_px);
+        if cells.width == 0 || cells.height == 0 {
+            return Ok(());
+        }
         queue!(out, BeginSynchronizedUpdate)?;
-        queue!(out, cursor::MoveTo(column, row))?;
+        queue!(out, cursor::MoveTo(cells.x, cells.y))?;
         app.graphics.transmit(
             out,
             img,
             &encoder::DisplayOptions {
                 id: Some(VIDEO_IMAGE_ID),
-                ..encoder::DisplayOptions::default()
+                cell_box: Some((cells.width, cells.height)),
             },
         )?;
         queue!(out, EndSynchronizedUpdate)?;
@@ -918,6 +930,83 @@ mod tests {
     #[test]
     fn a_video_without_a_frame_writes_nothing() {
         let app = App::new((8, 16), SharedImageList::new());
+        let mut out = Vec::new();
+
+        super::render_video_frame_to(&app, &mut out).unwrap();
+
+        assert!(out.is_empty());
+    }
+
+    /// A player on a 640x480 clip with a 64x48 frame, with one frame on the screen.
+    #[cfg(feature = "video")]
+    fn playing_app() -> App {
+        use crate::player::Player;
+        use crate::test_support::video::{clip_info, fake_decoder, shared, with_temp_file_medium};
+        use std::path::Path;
+
+        let mut app = with_temp_file_medium(App::new((8, 16), SharedImageList::new()));
+        app.images = vec![PathBuf::from("/videos/clip.mp4")];
+        app.filenames = vec!["clip.mp4".to_owned()];
+        app.gallery.filtered_indices = vec![0];
+        app.enter_video(0);
+        app.image_rect = Rect::new(0, 0, 100, 40);
+        let decoder = fake_decoder(clip_info());
+        let mut player = Player::open(
+            shared(&decoder),
+            Path::new("/bin/ffmpeg"),
+            Path::new("/videos/clip.mp4"),
+            (64, 48),
+            &[],
+            true,
+        )
+        .unwrap();
+        decoder.feed(vec![7; 64 * 48 * 4]);
+        assert!(player.poll());
+        app.video = Some(player);
+        app
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_video_frame_goes_out_as_a_temp_file_scaled_to_the_cell_box() {
+        let app = playing_app();
+        let mut out = Vec::new();
+
+        super::render_video_frame_to(&app, &mut out).unwrap();
+
+        for path in crate::encoder::kitty::temp_file_paths(&out) {
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), 64 * 48 * 4);
+            std::fs::remove_file(path).unwrap();
+        }
+        let text = text(&out);
+        assert!(text.starts_with("\x1b[?2026h"), "{text}");
+        assert!(text.ends_with("\x1b[?2026l"), "{text}");
+        // 64x48 in 100x40 cells of 8x16: the 100 columns take 38 rows, from row 1.
+        assert!(text.contains("\x1b[2;1H"), "{text}");
+        assert!(
+            text.contains("\x1b_Ga=T,q=2,C=1,f=32,s=64,v=48,i=4294967294,c=100,r=38,t=t;"),
+            "{text}"
+        );
+        assert!(!text.contains("X=") && !text.contains("Y="), "{text}");
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn the_help_popup_gets_no_video_frame_above_it() {
+        let mut app = playing_app();
+        app.help_visible = true;
+        let mut out = Vec::new();
+
+        super::render_video_frame_to(&app, &mut out).unwrap();
+
+        assert!(out.is_empty());
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_video_frame_in_a_view_without_cells_writes_nothing() {
+        let mut app = playing_app();
+        app.image_rect = Rect::default();
         let mut out = Vec::new();
 
         super::render_video_frame_to(&app, &mut out).unwrap();

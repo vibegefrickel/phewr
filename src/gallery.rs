@@ -360,6 +360,8 @@ pub(crate) const THUMB_CACHE_BYTE_LIMIT: usize = 512 * 1024 * 1024;
 
 pub(crate) struct ThumbnailCache {
     cache: LruCache<usize, CachedThumb>,
+    /// The next Kitty id of a thumbnail. The ids count up from 1 and never reset. The video
+    /// frame uses `u32::MAX - 1` (`kitty_output::VIDEO_IMAGE_ID`), so the two never meet.
     next_id: u32,
     /// The Kitty ids of the thumbnails that the cache dropped. The next write of the grid
     /// deletes them in the terminal, so its storage does not grow without end.

@@ -288,8 +288,11 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
             ..inner
         };
         frame.render_widget(
-            Paragraph::new(Span::styled("video: press Enter to play", STYLES.dim))
-                .alignment(Alignment::Center),
+            Paragraph::new(Span::styled(
+                "video: Enter plays, p opens the mpv window",
+                STYLES.dim,
+            ))
+            .alignment(Alignment::Center),
             middle,
         );
     }
@@ -305,40 +308,46 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Opt
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let (status, pts, duration, fps) = match &app.video {
+    let (status, position, duration) = match &app.video {
         Some(v) => {
-            let status = if v.playing { "\u{25b6}" } else { "\u{23f8}" };
-            (status, v.current_pts, v.duration, v.fps)
+            let status = if v.playing() { "\u{25b6}" } else { "\u{23f8}" };
+            (status, v.position(), v.duration())
         }
-        None => ("\u{25b6}", 0.0, 0.0, 0.0),
+        None => ("\u{25b6}", 0.0, 0.0),
+    };
+    // The dropped frames show in a debug build only, so the maintainer sees a slow terminal.
+    let dropped = app.video.as_ref().map_or(0, |v| v.dropped);
+    let drops = if cfg!(debug_assertions) && dropped > 0 {
+        format!("[dropped {dropped}] ")
+    } else {
+        String::new()
     };
 
-    let fmt_time = |secs: f64| -> String {
-        let s = secs as u64;
-        format!("{:02}:{:02}", s / 60, s % 60)
-    };
-
-    let bottom_line = if let Some(err) = &app.error {
+    let error = app
+        .error
+        .as_deref()
+        .or_else(|| app.video.as_ref().and_then(|v| v.error.as_deref()));
+    let bottom_line = if let Some(err) = error {
         Line::from(Span::styled(format!(" Error: {err} "), STYLES.error))
     } else {
         Line::from(vec![
             Span::styled(
                 format!(
-                    " {} {} {}/{} [{:.0}fps] [{}/{}] ",
+                    " {} {} {}/{} [{}/{}] {}",
                     status,
                     filename,
-                    fmt_time(pts),
-                    fmt_time(duration),
-                    fps,
+                    format_time(position),
+                    format_time(duration),
                     app.current + 1,
                     app.images.len(),
+                    drops,
                 ),
                 STYLES.text,
             ),
             status_note.map_or_else(
                 || {
                     Span::styled(
-                        " Space: pause  \u{2190}/\u{2192}: navigate  ?: help  q: back ",
+                        " Space: pause  \u{2190}/\u{2192}: seek  n/N: next/prev  p: mpv                           ?: help  q: back ",
                         STYLES.key,
                     )
                 },
@@ -349,6 +358,23 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Opt
 
     frame.render_widget(Paragraph::new(bottom_line), status_area(area));
     app.image_rect = content_area(area);
+}
+
+/// Seconds as `mm:ss`, or `h:mm:ss` from one hour on.
+#[cfg(feature = "video")]
+fn format_time(seconds: f64) -> String {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a position is never negative, and a clip never runs for 2^64 seconds"
+    )]
+    let whole = seconds.max(0.0) as u64;
+    let (hours, minutes, seconds) = (whole / 3600, whole / 60 % 60, whole % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
 }
 
 fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
@@ -673,6 +699,8 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         ("n", "Toggle filename labels"),
         ("i", "Toggle info panel"),
         ("s", "Start slideshow from cursor"),
+        #[cfg(feature = "video")]
+        ("p", "Play video in the mpv window"),
         ("Space", "Toggle selection"),
         ("a / A", "Select all / clear all"),
         ("d / D", "Trash / permanently delete selection"),
@@ -696,6 +724,8 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         ("h/j/k/l", "Pan when zoomed"),
         ("i", "Toggle info panel"),
         ("s", "Start / stop slideshow"),
+        #[cfg(feature = "video")]
+        ("p", "Play video in the mpv window"),
         ("Space", "Pause / resume slideshow"),
         ("[ / ]", "Shorter / longer slide interval"),
         ("d / D", "Trash / permanently delete image"),
@@ -704,27 +734,19 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         #[cfg(feature = "video")]
         ("", ""),
         #[cfg(feature = "video")]
-        ("", "Video in mpv ([video] player)"),
-        #[cfg(feature = "video")]
-        ("q", "Back to gallery"),
+        ("", "Video player (no sound)"),
         #[cfg(feature = "video")]
         ("Space", "Pause / resume"),
         #[cfg(feature = "video")]
-        ("\u{2190} / \u{2192}", "Seek back / forward"),
+        ("\u{2190} / \u{2192}, h / l", "Seek 5 s back / forward"),
         #[cfg(feature = "video")]
-        ("f", "Fullscreen (window player)"),
+        ("n / N", "Next / previous file"),
         #[cfg(feature = "video")]
-        ("", ""),
+        ("Home / End", "First / last file"),
         #[cfg(feature = "video")]
-        ("", "Video in the built-in player"),
+        ("p", "Play in the mpv window, with sound"),
         #[cfg(feature = "video")]
-        ("Space", "Pause / resume"),
-        #[cfg(feature = "video")]
-        ("\u{2190} / \u{2192}", "Previous / next file"),
-        #[cfg(feature = "video")]
-        ("h / l", "Previous / next file"),
-        #[cfg(feature = "video")]
-        ("q / Esc", "Back to gallery"),
+        ("q / Esc", "Back"),
         ("", ""),
         ("", "Directory picker"),
         ("j / k", "Move cursor"),
@@ -1530,10 +1552,11 @@ mod tests {
         app.mode = ViewMode::Video;
         let screen = render(&mut app, None, 100, 30);
         assert!(
-            status_row(&screen).starts_with(" \u{25b6} clip.mp4 00:00/00:00 [0fps] [1/2] "),
+            status_row(&screen).starts_with(" \u{25b6} clip.mp4 00:00/00:00 [1/2] "),
             "{screen}"
         );
         assert_shows(&screen, "Space: pause");
+        assert_shows(&screen, "p: mpv");
         assert_eq!(
             app.image_rect,
             Rect::new(0, 0, 100, 29),
@@ -1547,6 +1570,57 @@ mod tests {
         app.error = Some("no video stream".to_owned());
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, " Error: no video stream ");
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn video_status_bar_shows_the_player_position_and_its_error() {
+        use crate::player::Player;
+        use crate::test_support::video::{clip_info, fake_decoder, shared};
+
+        let mut app = app_with(&["clip.mp4", "b.jpg"]);
+        app.mode = ViewMode::Video;
+        let mut info = clip_info();
+        info.duration = 3725.0;
+        let decoder = fake_decoder(info);
+        let mut player = Player::open(
+            shared(&decoder),
+            std::path::Path::new("/bin/ffmpeg"),
+            std::path::Path::new("/videos/clip.mp4"),
+            (64, 48),
+            &[],
+            true,
+        )
+        .unwrap();
+        decoder.feed(vec![0; 64 * 48 * 4]);
+        assert!(player.poll());
+        player.toggle_pause();
+        app.video = Some(player);
+        let screen = render(&mut app, None, 100, 30);
+        assert!(
+            status_row(&screen).starts_with(" \u{23f8} clip.mp4 00:00/1:02:05 [1/2] "),
+            "{screen}"
+        );
+        assert_eq!(super::format_time(65.9), "01:05");
+
+        app.video.as_mut().unwrap().toggle_pause();
+        decoder.end();
+        assert!(
+            !app.video.as_mut().unwrap().poll(),
+            "the end of the clip: a repeat"
+        );
+        decoder.end();
+        assert!(
+            !app.video.as_mut().unwrap().poll(),
+            "no frame: the software retry"
+        );
+        decoder.end();
+        assert!(
+            !app.video.as_mut().unwrap().poll(),
+            "no frame again: the error"
+        );
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Error: ffmpeg could not decode clip.mp4 ");
     }
 
     #[test]

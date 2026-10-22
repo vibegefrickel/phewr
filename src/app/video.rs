@@ -1,4 +1,4 @@
-//! Videos in the view: the built-in player, the way back after a video and the mpv window.
+//! Videos in the view: the terminal player, the way back after a video and the mpv window.
 
 use super::{App, ViewMode};
 #[cfg(feature = "video")]
@@ -47,27 +47,23 @@ impl App {
         self.video = None;
     }
 
+    /// Ask the run loop to open the current video in the mpv window, see
+    /// [`crate::video_handoff::play_videos`]. The terminal player stops first.
     #[cfg(feature = "video")]
-    pub(crate) fn open_video_if_needed(&mut self) {
-        if self.video.is_some() {
-            return;
-        }
-        let path = &self.images[self.current];
-        let repeat = !self.slideshow_advancing();
-        match crate::video::VideoPlayback::open(path, self.image_rect, self.cell_px, repeat) {
-            Ok(v) => self.video = Some(v),
-            Err(e) => {
-                self.error = Some(e.to_string());
-                self.mode = ViewMode::Fullscreen;
-            }
-        }
+    pub(crate) fn request_video_window(&mut self) {
+        self.video = None;
+        self.video_window_request = true;
+    }
+
+    /// Take the request of [`App::request_video_window`].
+    #[cfg(feature = "video")]
+    pub(crate) fn take_video_window_request(&mut self) -> bool {
+        std::mem::take(&mut self.video_window_request)
     }
 
     #[cfg(feature = "video")]
     pub(crate) fn exit_video(&mut self) {
-        if let Some(v) = self.video.take() {
-            v.stop();
-        }
+        self.video = None;
         self.mode = ViewMode::Gallery;
         self.needs_render = true;
     }
@@ -82,9 +78,7 @@ impl App {
             self.exit_video();
             return;
         }
-        if let Some(v) = self.video.take() {
-            v.stop();
-        }
+        self.video = None;
         self.mode = ViewMode::Fullscreen;
         self.loaded = None;
         self.fullscreen_rx = None;
@@ -95,13 +89,17 @@ impl App {
 
     /// A slideshow video holds the slide until its end. Returns true while it holds.
     ///
-    /// The built-in player ends the clip and the slideshow moves on. An mpv window holds the
+    /// The terminal player ends the clip and the slideshow moves on. An mpv window holds the
     /// placeholder until the window closes, see [`App::poll_video_window`]. If the user leaves
     /// the placeholder, the slideshow forgets the window.
     #[cfg(feature = "video")]
     pub(super) fn slideshow_video_holds(&mut self) -> bool {
         if self.mode == ViewMode::Video {
-            if self.video.as_ref().is_some_and(|video| video.finished) {
+            if self
+                .video
+                .as_ref()
+                .is_some_and(super::super::player::Player::finished)
+            {
                 self.return_from_video();
                 self.slideshow_step();
             }
@@ -258,6 +256,15 @@ impl App {
             .is_some_and(|path| crate::video::is_video(path))
     }
 
+    /// True when the gallery cursor is on a video, for `p` in the gallery.
+    #[cfg(feature = "video")]
+    pub(crate) fn selected_is_video(&self) -> bool {
+        self.gallery
+            .filtered_indices
+            .get(self.gallery.cursor)
+            .is_some_and(|&index| self.is_video_at(index))
+    }
+
     /// Without the `video` feature, the scan lists no videos.
     #[cfg(not(feature = "video"))]
     #[expect(clippy::unused_self, reason = "the same signature as the video build")]
@@ -312,13 +319,33 @@ mod tests {
     }
 
     #[test]
-    fn a_video_that_does_not_open_shows_its_error() {
-        let mut app = app_with(&["/nowhere/clip.mp4"]);
+    fn p_asks_for_the_mpv_window_from_the_grid_and_from_the_placeholder() {
+        use crate::test_support::char_key;
+
+        let mut app = app_with(&["a.png", "clip.mp4"]);
+        app.gallery.cursor = 0;
+        assert!(!app.selected_is_video());
+        char_key(&mut app, 'p');
+        assert_eq!(app.mode, ViewMode::Gallery, "p on a photo does nothing");
+        assert!(!app.take_video_window_request());
+
+        app.gallery.cursor = 1;
+        assert!(app.selected_is_video());
+        char_key(&mut app, 'p');
+        assert_eq!(app.mode, ViewMode::Video);
+        assert_eq!(app.current, 1);
+        assert_eq!(app.video_return, VideoReturn::Gallery);
+        assert!(app.take_video_window_request());
+
+        app.return_from_video();
         app.enter_fullscreen_at(0);
-        app.open_video_if_needed();
-        assert_eq!(app.mode, ViewMode::Fullscreen);
-        assert!(app.error.is_some());
-        assert!(!app.shows_video_placeholder());
+        app.next();
+        app.return_from_video();
+        assert!(app.shows_video_placeholder());
+        char_key(&mut app, 'p');
+        assert_eq!(app.mode, ViewMode::Video);
+        assert_eq!(app.video_return, VideoReturn::Fullscreen);
+        assert!(app.take_video_window_request());
     }
 
     #[test]

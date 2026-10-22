@@ -130,9 +130,12 @@ pub(crate) struct App {
     source_target: Option<usize>,
 
     #[cfg(feature = "video")]
-    pub video: Option<crate::video::VideoPlayback>,
+    pub video: Option<crate::player::Player>,
     #[cfg(feature = "video")]
     pub video_return: VideoReturn,
+    /// `p` asked for the mpv window. The run loop takes the request.
+    #[cfg(feature = "video")]
+    video_window_request: bool,
     /// The mpv window that plays the current video, until it exits.
     #[cfg(feature = "video")]
     video_window: Option<VideoWindow>,
@@ -254,6 +257,8 @@ impl App {
             video: None,
             #[cfg(feature = "video")]
             video_return: VideoReturn::Gallery,
+            #[cfg(feature = "video")]
+            video_window_request: false,
             #[cfg(feature = "video")]
             video_window: None,
             shared_list,
