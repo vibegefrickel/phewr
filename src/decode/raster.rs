@@ -150,6 +150,7 @@ mod tests {
     fn halves(name: &str) -> ([u8; 4], [u8; 4]) {
         let decoded = decode_raster(&fixture(&format!("png/{name}")), None)
             .unwrap()
+            .image
             .to_rgba8();
         assert_eq!(decoded.dimensions(), (32, 16), "{name}");
         (decoded.get_pixel(8, 8).0, decoded.get_pixel(24, 8).0)
@@ -183,6 +184,7 @@ mod tests {
     fn a_png_with_exif_orientation_6_decodes_upright() {
         let decoded = decode_raster(&fixture("png/orientation-6.png"), None)
             .unwrap()
+            .image
             .to_rgba8();
         assert_eq!(decoded.dimensions(), (16, 32));
         assert_eq!(decoded.get_pixel(8, 4).0, RED);

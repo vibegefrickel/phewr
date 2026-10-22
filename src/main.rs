@@ -41,14 +41,10 @@ use terminal::{TerminalSession, query_cell_pixel_size, query_terminal, window_ce
 use yazi::{reveal_in_yazi, run_briefly};
 
 fn main() -> io::Result<()> {
-    #[cfg(feature = "video")]
-    ffmpeg::init()
-        .map_err(|error| io::Error::other(format!("failed to initialize ffmpeg: {error}")))?;
-    // A libav warning on stderr breaks the screen of the TUI.
-    #[cfg(feature = "video")]
-    ffmpeg::util::log::set_level(ffmpeg::util::log::Level::Quiet);
-
     let cli = Cli::parse();
+    // The thumbnails and the terminal player start ffmpeg and ffprobe when PATH has them.
+    #[cfg(feature = "video")]
+    video::find_session_tools();
     let paths = if cli.files.is_empty() {
         vec![PathBuf::from(".")]
     } else {

@@ -5,6 +5,10 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Numbers the temp files of the cube, so that two threads never write the same file.
+static PARTIAL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// The transfer curve of an HDR video, which the terminal cannot show without a tone mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,14 +20,11 @@ pub(crate) enum Hdr {
 }
 
 impl Hdr {
-    /// The HDR curve behind a transfer characteristic of `FFmpeg`, or `None` for SDR.
-    pub(crate) fn of_transfer(
-        transfer: ffmpeg::util::color::TransferCharacteristic,
-    ) -> Option<Self> {
-        use ffmpeg::util::color::TransferCharacteristic;
+    /// The HDR curve behind a `color_transfer` name of `ffprobe`, or `None` for SDR.
+    pub(crate) fn of_transfer(transfer: &str) -> Option<Self> {
         match transfer {
-            TransferCharacteristic::ARIB_STD_B67 => Some(Self::Hlg),
-            TransferCharacteristic::SMPTE2084 => Some(Self::Pq),
+            "arib-std-b67" => Some(Self::Hlg),
+            "smpte2084" => Some(Self::Pq),
             _ => None,
         }
     }
@@ -147,8 +148,13 @@ fn tone_map_file_in(dir: &Path, hdr: Hdr) -> Option<PathBuf> {
     }
     if !file.is_file() {
         std::fs::create_dir_all(dir).ok()?;
-        // Write to a temp file and rename it, so that a second viewr never reads half a cube.
-        let partial = dir.join(format!("{name}.{}.partial", std::process::id()));
+        // Write to a temp file and rename it, so that a second viewr or a parallel thumbnail
+        // job never reads half a cube.
+        let partial = dir.join(format!(
+            "{name}.{}.{}.partial",
+            std::process::id(),
+            PARTIAL_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::write(&partial, tone_map_cube(hdr)).ok()?;
         std::fs::rename(&partial, &file).ok()?;
     }

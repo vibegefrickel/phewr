@@ -115,7 +115,8 @@ tap_dir   := "../homebrew-tap"
 stage     := "dist/stage"
 
 # The archive is a prefix (bin/) with LICENSE, README.md and its checksum. The binary is Apple
-# Silicon only, ad-hoc signed, in the `dist` profile. It links Homebrew's libheif and FFmpeg.
+# Silicon only, ad-hoc signed, in the `dist` profile. It links Homebrew's libheif. ffmpeg, ffprobe
+# and mpv are programs on PATH at run time.
 # Ad-hoc signed arm64 binary, packed as a prefix archive with its checksum.
 dist:
     cargo build --profile dist --target aarch64-apple-darwin

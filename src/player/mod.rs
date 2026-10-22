@@ -13,10 +13,12 @@ pub(crate) mod tone_map;
 
 pub(crate) use animation::is_animated;
 pub(crate) use decoder::{
-    Decoder, FrameStream, Pipeline, SystemDecoder, args, cube_for, pixel_format,
+    Decoder, FrameStream, Pipeline, SystemDecoder, args, cube_for, first_frame_args, pixel_format,
 };
 pub(crate) use layout::{cell_box, frame_box, frame_limit};
 pub(crate) use probe::VideoInfo;
+#[cfg(test)]
+pub(crate) use probe::probe as probe_file;
 
 use crate::encoder::Pixels;
 use std::path::{Path, PathBuf};
@@ -640,7 +642,7 @@ mod tests {
         let mut player = player(&decoder, true);
         let args = decoder.last_args();
         assert!(
-            args.contains(" -i /videos/clip.mp4 -fps_mode cfr -r 20.0000 "),
+            args.contains(" -i /videos/clip.mp4 -map 0:0 -fps_mode cfr -r 20.0000 "),
             "{args}"
         );
         assert!(args.contains("-hwaccel videotoolbox"), "{args}");
@@ -665,7 +667,7 @@ mod tests {
         player.seek_by(1.0);
         let args = decoder.last_args();
         assert!(
-            args.contains("-ss 1.500 -i /videos/clip.mp4 -fps_mode cfr -r 20.0000 "),
+            args.contains("-ss 1.500 -i /videos/clip.mp4 -map 0:0 -fps_mode cfr -r 20.0000 "),
             "{args}"
         );
         decoder.feed(frame(11));
@@ -676,9 +678,8 @@ mod tests {
     /// The played clips of the real tests: the name, the player at the end, the frames that
     /// ffmpeg wrote and the played time in seconds. Empty without ffmpeg or libx264.
     fn play_real_clips(real_clock: bool) -> Vec<(&'static str, Player, u32, f64)> {
-        use crate::test_support::video::{real_ffmpeg, write_clip};
-        ffmpeg::init().unwrap();
-        let Some(program) = real_ffmpeg() else {
+        use crate::test_support::video::{real_ffmpeg, real_ffprobe, write_clip};
+        let (Some(program), Some(ffprobe)) = (real_ffmpeg(), real_ffprobe()) else {
             return Vec::new();
         };
         let dir = tempfile::tempdir().unwrap();
@@ -692,7 +693,7 @@ mod tests {
             let Some(path) = write_clip(&program, &dir.path().join(name), variable) else {
                 return Vec::new();
             };
-            let (player, frames, seconds) = play_to_end(&program, &path, real_clock);
+            let (player, frames, seconds) = play_to_end(&program, &ffprobe, &path, real_clock);
             println!(
                 "{name}: {frames} frames at {:.2} fps ({} dropped): played {seconds:.3} s, \
                  container {:.3} s",
@@ -705,11 +706,18 @@ mod tests {
         played
     }
 
-    /// Play `path` to its end with the real ffmpeg. With `real_clock`, the player runs at the
-    /// real clock. Else a virtual clock jumps to each due frame, so the scheduler cannot change
-    /// the result. Gives the player, the frames that ffmpeg wrote and the played seconds.
-    fn play_to_end(program: &Path, path: &Path, real_clock: bool) -> (Player, u32, f64) {
-        let decoder: Rc<dyn super::Decoder> = Rc::new(super::SystemDecoder);
+    /// Play `path` to its end with the real ffmpeg and ffprobe. With `real_clock`, the player
+    /// runs at the real clock. Else a virtual clock jumps to each due frame, so the scheduler
+    /// cannot change the result. Gives the player, the frames that ffmpeg wrote and the played
+    /// seconds.
+    fn play_to_end(
+        program: &Path,
+        ffprobe: &Path,
+        path: &Path,
+        real_clock: bool,
+    ) -> (Player, u32, f64) {
+        let decoder: Rc<dyn super::Decoder> =
+            Rc::new(super::SystemDecoder::new(Some(ffprobe.to_path_buf())));
         let mut player = Player::open(decoder, program, path, (32, 24), &[], false).unwrap();
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut clock = Instant::now();

@@ -126,7 +126,6 @@ clap = { version = "4.6", features = ["derive"] }
 crossterm = "0.29"
 directories = "6"
 fast_image_resize = "6.1"
-ffmpeg = { version = "9", optional = true, package = "ffmpeg-next" }
 # Only the decoders for the formats that the scanner lists. AVIF goes through libheif.
 image = { version = "0.25.10", default-features = false, features = ["bmp", "exr", "gif", "hdr", "ico", "jpeg", "png", "qoi", "tga", "tiff", "webp"] }
 # JPEG XL in pure Rust. The default feature `rayon` decodes on the shared rayon pool. `moxcms`
@@ -144,6 +143,8 @@ rayon = "1.12"
 # `poll` on the tty for the answer of the Kitty probe. crossterm uses the same version.
 rustix = { version = "1", features = ["event"] }
 serde = { version = "1", features = ["derive"] }
+# The JSON output of `ffprobe`.
+serde_json = { version = "1", optional = true }
 # The temp TIFF of the `sips` route.
 tempfile = { version = "3.27", optional = true }
 toml = "1"
@@ -159,8 +160,9 @@ default = ["turbo", "heic", "video", "sips"]
 turbo = ["dep:turbojpeg"]
 # HEIC / HEIF and AVIF through the system libheif (>= 1.19).
 heic = ["dep:libheif-rs"]
-# Video playback and first-frame thumbnails through the system FFmpeg (>= 7).
-video = ["dep:ffmpeg"]
+# Video playback and first-frame thumbnails through the `ffmpeg` and `ffprobe` programs on PATH,
+# and the mpv window. viewr links no FFmpeg library.
+video = ["dep:serde_json"]
 # Camera RAW, PSD, PDF, SVG and the other ImageIO formats through macOS `/usr/bin/sips`. The
 # feature has no effect on other systems.
 sips = ["dep:tempfile"]

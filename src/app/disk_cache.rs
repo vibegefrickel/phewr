@@ -8,10 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The version in the disk cache key. Change it when the thumbnail output changes. v7: a
 /// rotated JPEG gets the DCT scale of its turned box, and RAW and PSD files take their
-/// embedded JPEG. v9: each thumbnail is in the color space of the terminal. v8 stays free for
-/// a parallel change. The key also holds the color target, so a change of `[terminal] colorspace` decodes
-/// again.
-const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v9";
+/// embedded JPEG. v9: each thumbnail is in the color space of the terminal. The key also holds
+/// the color target, so a change of `[terminal] colorspace` decodes again. v10: the first frame
+/// of a video gets the rotation and the HDR tone mapping.
+const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v10";
 
 /// The thumbnail disk cache below the user's cache directory, or a temp directory without one.
 pub(super) fn default_disk_cache_dir() -> PathBuf {
@@ -217,8 +217,8 @@ mod tests {
         assert_ne!(first, changed);
         assert_eq!(
             super::THUMBNAIL_CACHE_VERSION,
-            "viewr-thumbnail-v9",
-            "the color conversion into the terminal space needs a new cache generation"
+            "viewr-thumbnail-v10",
+            "the tone mapped and turned first frames of videos need a new cache generation"
         );
     }
 

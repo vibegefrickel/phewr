@@ -16,24 +16,27 @@ pub(crate) use window::poll_mpv_window;
 /// The status note when a video needs mpv and PATH has none.
 pub(crate) const MPV_MISSING_NOTE: &str = "mpv not found on PATH";
 
-/// The video player of the session, after the PATH lookups for mpv and ffmpeg.
+/// The video player of the session, after the PATH lookups for mpv, ffmpeg and ffprobe.
 pub(crate) struct VideoState {
     pub(crate) player: VideoPlayer,
     pub(crate) mpv: Option<PathBuf>,
     pub(crate) ffmpeg: Option<PathBuf>,
-    /// Starts ffmpeg for the terminal player. The tests put a fake here.
+    pub(crate) ffprobe: Option<PathBuf>,
+    /// Starts ffmpeg and ffprobe for the terminal player. The tests put a fake here.
     pub(crate) decoder: Rc<dyn Decoder>,
 }
 
 impl VideoState {
-    /// Look up mpv and ffmpeg once at the start, so that a missing program costs no video start.
+    /// Look up mpv once at the start, so that a missing program costs no video start. ffmpeg
+    /// and ffprobe come from the lookup of the session, see [`crate::video::session_tools`].
     pub(crate) fn new(config: &Config) -> Self {
-        let path = std::env::var_os("PATH");
+        let tools = crate::video::session_tools();
         Self {
             player: config.video_player,
-            mpv: find_on_path("mpv", path.as_deref()),
-            ffmpeg: find_on_path("ffmpeg", path.as_deref()),
-            decoder: Rc::new(SystemDecoder),
+            mpv: find_on_path("mpv", std::env::var_os("PATH").as_deref()),
+            ffmpeg: tools.ffmpeg.clone(),
+            ffprobe: tools.ffprobe.clone(),
+            decoder: Rc::new(SystemDecoder::new(tools.ffprobe.clone())),
         }
     }
 }
@@ -41,7 +44,7 @@ impl VideoState {
 /// Start the player for the current video, when the view waits for one.
 ///
 /// The video view without a player asks for a start. `p` asks for the mpv window. The terminal
-/// player needs the temp file medium and ffmpeg. Without them, the video goes to the mpv
+/// player needs the temp file medium, ffmpeg and ffprobe. Without them, the video goes to the mpv
 /// window with a note. Without mpv, the note stays and the view goes back.
 pub(crate) fn play_videos(app: &mut App, state: &mut LoopState, runner: &mut impl mpv::Runner) {
     if app.mode != ViewMode::Video || app.video.is_some() {
@@ -76,6 +79,9 @@ fn terminal_player_blocker(app: &App, state: &LoopState) -> Option<Blocker> {
     }
     if state.video.ffmpeg.is_none() {
         return Some(Blocker::Missing("ffmpeg not found on PATH"));
+    }
+    if state.video.ffprobe.is_none() {
+        return Some(Blocker::Missing("ffprobe not found on PATH"));
     }
     None
 }
@@ -419,6 +425,23 @@ mod tests {
         assert_eq!(
             state.status.as_deref(),
             Some("ffmpeg not found on PATH: clip.mp4 plays in an mpv window")
+        );
+    }
+
+    #[test]
+    fn without_ffprobe_the_video_goes_to_the_window_with_a_note() {
+        let mut app = video_app();
+        let mut state = terminal_state();
+        state.video.ffprobe = None;
+        let (log, mut runner) = fake_runner();
+
+        play_videos(&mut app, &mut state, &mut runner);
+
+        assert_eq!(starts(&log).len(), 1);
+        assert!(app.video.is_none());
+        assert_eq!(
+            state.status.as_deref(),
+            Some("ffprobe not found on PATH: clip.mp4 plays in an mpv window")
         );
     }
 

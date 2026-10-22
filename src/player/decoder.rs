@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 /// How many decoded frames wait in the channel. Two frames keep the pacing exact and hold
 /// ffmpeg back during a pause, because the pipe fills up after them.
@@ -83,10 +84,9 @@ pub(crate) fn args(
         args.extend([OsString::from("-ss"), OsString::from(format!("{seek:.3}"))]);
     }
     args.extend([OsString::from("-i"), video.as_os_str().to_owned()]);
-    if info.animation {
-        let stream = format!("0:{}", info.stream);
-        args.extend(["-map", &stream].map(OsString::from));
-    }
+    // The probe read the size of this stream, so ffmpeg must not pick another one.
+    let stream = format!("0:{}", info.stream);
+    args.extend(["-map", &stream].map(OsString::from));
     if info.animation || info.variable_rate {
         let rate = format!("{:.4}", info.fps);
         args.extend(["-fps_mode", "cfr", "-r", &rate].map(OsString::from));
@@ -102,6 +102,26 @@ pub(crate) fn args(
     );
     let (pixels, _) = pixel_format(info);
     args.extend(["-f", "rawvideo", "-pix_fmt", pixels, "pipe:1"].map(OsString::from));
+    args
+}
+
+/// The command line of [`args`] that writes only the first frame, for a grid thumbnail. The
+/// frame is RGBA also for a video, because the grid pads each thumbnail with transparent pixels.
+pub(crate) fn first_frame_args(
+    video: &Path,
+    info: &VideoInfo,
+    frame: (u32, u32),
+    cube: Option<&Path>,
+    pipeline: Pipeline,
+) -> Vec<OsString> {
+    let mut args = args(video, info, frame, cube, 0.0, pipeline);
+    let output = args.pop();
+    // [`args`] ends with `-pix_fmt <format> pipe:1`.
+    if let Some(format) = args.last_mut() {
+        *format = OsString::from("rgba");
+    }
+    args.extend(["-frames:v", "1"].map(OsString::from));
+    args.extend(output);
     args
 }
 
@@ -189,6 +209,11 @@ impl FrameStream {
     pub(crate) fn try_next(&mut self) -> Result<Vec<u8>, mpsc::TryRecvError> {
         self.frames.try_recv()
     }
+
+    /// Wait for the next decoded frame, at most `timeout`. `Disconnected` is the end of the run.
+    pub(crate) fn wait_next(&self, timeout: Duration) -> Result<Vec<u8>, mpsc::RecvTimeoutError> {
+        self.frames.recv_timeout(timeout)
+    }
 }
 
 impl Drop for FrameStream {
@@ -208,8 +233,8 @@ impl Drop for FrameStream {
     }
 }
 
-/// Starts ffmpeg and reads the header of a video. The tests swap in a fake that feeds
-/// synthetic frames and never starts ffmpeg.
+/// Starts ffmpeg and reads the header of a video with ffprobe. The tests swap in a fake that
+/// feeds synthetic frames and never starts a process.
 pub(crate) trait Decoder {
     /// The header facts of `video`, see [`super::probe::probe`].
     fn probe(&self, video: &Path) -> io::Result<VideoInfo>;
@@ -222,12 +247,29 @@ pub(crate) trait Decoder {
     ) -> io::Result<FrameStream>;
 }
 
-/// The [`Decoder`] that starts the real ffmpeg.
-pub(crate) struct SystemDecoder;
+/// The [`Decoder`] that starts the real ffmpeg and ffprobe.
+pub(crate) struct SystemDecoder {
+    /// The `ffprobe` program, or `None` when PATH has none.
+    ffprobe: Option<PathBuf>,
+}
+
+impl SystemDecoder {
+    /// A decoder with the `ffprobe` of the lookup, so that a missing program fails the probe
+    /// instead of the start of ffmpeg.
+    pub(crate) fn new(ffprobe: Option<PathBuf>) -> Self {
+        Self { ffprobe }
+    }
+}
 
 impl Decoder for SystemDecoder {
     fn probe(&self, video: &Path) -> io::Result<VideoInfo> {
-        super::probe::probe(video)
+        let Some(program) = self.ffprobe.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "ffprobe not found on PATH",
+            ));
+        };
+        super::probe::probe_cached(program, video)
     }
 
     fn start(
@@ -264,7 +306,9 @@ fn read_frames(mut pipe: impl Read, frame_bytes: usize, frames: &mpsc::SyncSende
 
 #[cfg(test)]
 mod tests {
-    use super::{Decoder, Pipeline, SystemDecoder, VideoInfo, args, cube_for, read_frames};
+    use super::{
+        Decoder, Pipeline, SystemDecoder, VideoInfo, args, cube_for, first_frame_args, read_frames,
+    };
     use crate::player::tone_map::Hdr;
     use std::ffi::OsString;
     use std::path::Path;
@@ -356,11 +400,19 @@ mod tests {
         ));
         let input = args.iter().position(|arg| arg == "-i").unwrap();
         assert_eq!(
-            args[input..input + 6],
-            ["-i", "/v/screen.mov", "-fps_mode", "cfr", "-r", "60.0000"]
+            args[input..input + 8],
+            [
+                "-i",
+                "/v/screen.mov",
+                "-map",
+                "0:0",
+                "-fps_mode",
+                "cfr",
+                "-r",
+                "60.0000"
+            ]
         );
         assert!(args.contains(&"videotoolbox".to_owned()), "{args:?}");
-        assert!(!args.contains(&"-map".to_owned()), "{args:?}");
         // A constant-rate video gets no `-r`: see the exact line of the SDR test below.
     }
 
@@ -388,10 +440,11 @@ mod tests {
     #[test]
     fn the_real_ffmpeg_decodes_every_frame_of_the_animated_fixtures() {
         use crate::test_support::fixture;
-        ffmpeg::init().unwrap();
-        let Some(program) = crate::test_support::video::real_ffmpeg() else {
+        use crate::test_support::video::{real_ffmpeg, real_ffprobe};
+        let (Some(program), Some(ffprobe)) = (real_ffmpeg(), real_ffprobe()) else {
             return;
         };
+        let decoder = SystemDecoder::new(Some(ffprobe));
         // The GIF holds 3 frames with delays of 100, 500 and 200 ms: 8 frames at 10 per second.
         for (name, expected) in [
             ("anim.gif", 8),
@@ -404,10 +457,10 @@ mod tests {
                 continue;
             }
             let path = fixture(name);
-            let info = SystemDecoder.probe(&path).unwrap();
+            let info = decoder.probe(&path).unwrap();
             assert!(info.animation, "{name}: {info:?}");
             let args = args(&path, &info, (16, 12), None, 0.0, Pipeline::Software);
-            let mut stream = SystemDecoder.start(&program, &args, 16 * 12 * 4).unwrap();
+            let mut stream = decoder.start(&program, &args, 16 * 12 * 4).unwrap();
             let mut frames = Vec::new();
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             loop {
@@ -455,6 +508,8 @@ mod tests {
                 "videotoolbox_vld",
                 "-i",
                 "/v/clip.mp4",
+                "-map",
+                "0:0",
                 "-an",
                 "-sn",
                 "-vf",
@@ -605,7 +660,7 @@ mod tests {
     fn the_system_decoder_streams_the_output_of_a_program_and_ends_with_it() {
         let shell = Path::new("/bin/sh");
         let args = [OsString::from("-c"), OsString::from("printf 'abcdefgh'")];
-        let mut stream = SystemDecoder.start(shell, &args, 4).unwrap();
+        let mut stream = SystemDecoder::new(None).start(shell, &args, 4).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut frames = Vec::new();
         loop {
@@ -620,9 +675,68 @@ mod tests {
         }
         assert_eq!(frames, [b"abcd".to_vec(), b"efgh".to_vec()]);
         assert!(
-            SystemDecoder
+            SystemDecoder::new(None)
                 .start(Path::new("/nonexistent/ffmpeg"), &[], 4)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn the_wait_for_a_frame_gives_the_first_frame_and_then_the_end() {
+        let shell = Path::new("/bin/sh");
+        let args = [OsString::from("-c"), OsString::from("printf 'abcd'")];
+        let stream = SystemDecoder::new(None).start(shell, &args, 4).unwrap();
+        let wait = Duration::from_secs(10);
+        assert_eq!(stream.wait_next(wait), Ok(b"abcd".to_vec()));
+        assert_eq!(
+            stream.wait_next(wait),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        );
+    }
+
+    #[test]
+    fn the_probe_without_ffprobe_is_a_not_found_error() {
+        let error = SystemDecoder::new(None)
+            .probe(Path::new("clip.mp4"))
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(error.to_string(), "ffprobe not found on PATH");
+    }
+
+    #[test]
+    fn the_first_frame_command_line_stops_after_one_frame() {
+        let args = strings(&first_frame_args(
+            Path::new("/v/clip.mov"),
+            &info(90, Some(Hdr::Hlg), true),
+            (320, 180),
+            Some(Path::new("/c/hlg.cube")),
+            Pipeline::Gpu,
+        ));
+        assert_eq!(
+            args[args.len() - 7..],
+            [
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
+                "-frames:v",
+                "1",
+                "pipe:1"
+            ]
+        );
+        let player = strings(&super::args(
+            Path::new("/v/clip.mov"),
+            &info(90, Some(Hdr::Hlg), true),
+            (320, 180),
+            Some(Path::new("/c/hlg.cube")),
+            0.0,
+            Pipeline::Gpu,
+        ));
+        assert_eq!(args[..args.len() - 7], player[..player.len() - 5]);
+        assert_eq!(
+            player[player.len() - 2],
+            "rgb24",
+            "the player writes RGB for a video"
         );
     }
 
@@ -630,7 +744,7 @@ mod tests {
     fn a_dropped_stream_kills_its_process() {
         let shell = Path::new("/bin/sh");
         let args = [OsString::from("-c"), OsString::from("sleep 30")];
-        let stream = SystemDecoder.start(shell, &args, 4).unwrap();
+        let stream = SystemDecoder::new(None).start(shell, &args, 4).unwrap();
         let started = std::time::Instant::now();
         drop(stream);
         assert!(

@@ -356,7 +356,7 @@ pub(super) fn warm_disk_cache(cache_dir: &Path, path: &Path, target: (u32, u32))
 /// The sharp thumbnail from the disk cache, or from a decode that then fills the cache.
 fn sharp_thumbnail(cache_dir: &Path, path: &Path, target: (u32, u32)) -> Option<RgbaImage> {
     try_load_from_disk_cache(cache_dir, path, target).or_else(|| {
-        let image = decode_thumbnail(path, target).ok()?;
+        let image = decode_thumbnail(cache_dir, path, target).ok()?;
         try_save_to_disk_cache(cache_dir, path, target, &image);
         Some(image)
     })
@@ -481,12 +481,15 @@ fn pad_centered(image: RgbaImage, canvas: (u32, u32)) -> RgbaImage {
     padded
 }
 
-/// The sharp thumbnail of a grid cell: the first frame of a video, or the fitted image.
-fn decode_thumbnail(path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
+/// The sharp thumbnail of a grid cell: the first frame of a video, or the fitted image. The
+/// tone mapping cube of an HDR video goes into `cache_dir`.
+fn decode_thumbnail(cache_dir: &Path, path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
     #[cfg(feature = "video")]
     if crate::video::is_video(path) {
-        return crate::video::decode_first_frame(path, target);
+        return crate::video::session_first_frame(path, target, cache_dir);
     }
+    #[cfg(not(feature = "video"))]
+    let _ = cache_dir;
     load_and_resize_px(path, target, EmbeddedThumbnail::Allow)
 }
 
@@ -744,6 +747,22 @@ mod tests {
         assert!(!app.thumb_cache.contains(0), "the stale preview is dropped");
         assert!(app.thumb_cache.contains(1) && !app.thumb_cache.is_sharp(1));
         assert!(!app.has_pending_work(), "a failed decode frees its slot");
+    }
+
+    /// The tests never look up ffmpeg and ffprobe for the session, as a session without them.
+    #[test]
+    #[cfg(feature = "video")]
+    fn without_ffmpeg_a_video_cell_gets_no_thumbnail_and_frees_its_slot() {
+        let dir = test_dir();
+        let clip = dir.path().join("clip.mp4");
+        fs::write(&clip, "not decoded").unwrap();
+        let mut app = grid_app(&clip, dir.path());
+        wait_until(|| {
+            app.poll_thumbnails();
+            !app.has_pending_work()
+        });
+        assert!(!app.thumb_cache.contains(0));
+        assert!(app.is_video_at(0), "the cell shows the play icon");
     }
 
     #[test]

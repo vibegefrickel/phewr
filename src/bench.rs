@@ -108,6 +108,17 @@ fn is_animated(_path: &Path) -> bool {
     false
 }
 
+/// The real ffmpeg and a decoder with the real ffprobe, or `None` with a note.
+#[cfg(feature = "video")]
+fn video_programs(label: &str) -> Option<(PathBuf, crate::player::SystemDecoder)> {
+    let tools = crate::video::Tools::find(std::env::var_os("PATH").as_deref());
+    let (Some(ffmpeg), Some(ffprobe)) = (tools.ffmpeg, tools.ffprobe) else {
+        report(&format!("{label}: no ffmpeg or ffprobe on PATH"));
+        return None;
+    };
+    Some((ffmpeg, crate::player::SystemDecoder::new(Some(ffprobe))))
+}
+
 /// Scan `dir` into an app with the Retina grid. Videos leave the list, so that `next` never
 /// starts a player.
 fn scanned_app(dir: &Path) -> Bench {
@@ -1055,8 +1066,7 @@ fn color_conversion_cost() {
 #[test]
 #[ignore = "reads the folder VIEWR_TEST_DIR"]
 fn terminal_player_decode_rate() {
-    use crate::player::{Decoder, Pipeline, SystemDecoder, VideoInfo, frame_box};
-    use crate::yazi::find_on_path;
+    use crate::player::{Decoder, Pipeline, VideoInfo, frame_box};
     use std::sync::mpsc::TryRecvError;
 
     const FRAMES: usize = 300;
@@ -1064,11 +1074,9 @@ fn terminal_player_decode_rate() {
     let Some(dir) = test_dir() else {
         return;
     };
-    let Some(ffmpeg) = find_on_path("ffmpeg", std::env::var_os("PATH").as_deref()) else {
-        report("terminal player: no ffmpeg on PATH");
+    let Some((ffmpeg, decoder)) = video_programs("terminal player") else {
         return;
     };
-    ffmpeg::init().unwrap();
     let mut videos: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap()
         .filter_map(Result::ok)
@@ -1080,7 +1088,7 @@ fn terminal_player_decode_rate() {
         report("terminal player: no video in the folder");
         return;
     };
-    let info: VideoInfo = SystemDecoder.probe(video).unwrap();
+    let info: VideoInfo = decoder.probe(video).unwrap();
     let cache = tempfile::tempdir().unwrap();
     let cube = crate::player::cube_for(&info, &[cache.path()]);
     report(&format!(
@@ -1097,7 +1105,7 @@ fn terminal_player_decode_rate() {
         let args = crate::player::args(video, &info, frame, cube.as_deref(), 0.0, Pipeline::Gpu);
         let bytes = frame.0 as usize * frame.1 as usize * crate::player::pixel_format(&info).1;
         let start = Instant::now();
-        let mut stream = SystemDecoder.start(&ffmpeg, &args, bytes).unwrap();
+        let mut stream = decoder.start(&ffmpeg, &args, bytes).unwrap();
         let mut first = None;
         let mut frames = 0;
         while frames < FRAMES {
@@ -1138,8 +1146,7 @@ fn terminal_player_decode_rate() {
 #[ignore = "reads the folder VIEWR_TEST_DIR"]
 fn terminal_player_realtime_into_the_buffer() {
     use crate::encoder::{KittyBackend, Transfer};
-    use crate::player::{Player, SystemDecoder};
-    use crate::yazi::find_on_path;
+    use crate::player::Player;
     use std::rc::Rc;
 
     const PLAY: Duration = Duration::from_secs(5);
@@ -1147,11 +1154,9 @@ fn terminal_player_realtime_into_the_buffer() {
     let Some(dir) = test_dir() else {
         return;
     };
-    let Some(ffmpeg) = find_on_path("ffmpeg", std::env::var_os("PATH").as_deref()) else {
-        report("terminal player: no ffmpeg on PATH");
+    let Some((ffmpeg, decoder)) = video_programs("terminal player") else {
         return;
     };
-    ffmpeg::init().unwrap();
     let list = SharedImageList::new();
     scanner::spawn(vec![dir], list.clone());
     let mut app = App::new(CELL_PX, list);
@@ -1171,7 +1176,7 @@ fn terminal_player_realtime_into_the_buffer() {
     app.image_rect = fullscreen_rect();
     let limit = crate::player::frame_limit(fullscreen_rect(), CELL_PX);
     let player = Player::open(
-        Rc::new(SystemDecoder),
+        Rc::new(decoder),
         &ffmpeg,
         &app.images[index],
         limit,
@@ -1248,7 +1253,9 @@ fn animation_open() {
         report("animation open: skipped, VIEWR_TEST_DIR is not set");
         return;
     };
-    ffmpeg::init().unwrap();
+    let Some((_, decoder)) = video_programs("animation open") else {
+        return;
+    };
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap()
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
@@ -1264,7 +1271,7 @@ fn animation_open() {
         assert!(crate::player::is_animated(&path));
         let check = start.elapsed();
         let start = Instant::now();
-        let info = crate::player::Decoder::probe(&crate::player::SystemDecoder, &path).unwrap();
+        let info = crate::player::Decoder::probe(&decoder, &path).unwrap();
         let probe = start.elapsed();
         report(&format!(
             "animation open {}: {} MB, header check {:.2} ms, probe {:.1} ms, {:.1} fps, {:.2} s",
@@ -1274,6 +1281,62 @@ fn animation_open() {
             probe.as_secs_f64() * 1000.0,
             info.fps,
             info.duration,
+        ));
+    }
+}
+
+/// The probe and the first-frame thumbnail of each video in the folder, process start included.
+#[test]
+#[cfg(feature = "video")]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn video_probe_and_first_frame() {
+    let Some(dir) = test_dir() else {
+        report("video probe: skipped, VIEWR_TEST_DIR is not set");
+        return;
+    };
+    let Some((ffmpeg, decoder)) = video_programs("video probe") else {
+        return;
+    };
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| is_video(path))
+        .collect();
+    files.sort();
+    let target = crate::app::thumbnails::thumb_target_px(Rect::new(0, 0, 40, 9), CELL_PX);
+    let cache = tempfile::tempdir().unwrap();
+    let cube_dirs = [cache.path()];
+    let wait = Duration::from_secs(10);
+    let ffprobe = crate::yazi::find_on_path("ffprobe", std::env::var_os("PATH").as_deref());
+    let Some(ffprobe) = ffprobe else {
+        return;
+    };
+    for path in files {
+        // The probe without the cache of the session, as at the first open of a video.
+        let start = Instant::now();
+        let info = crate::player::probe_file(&ffprobe, &path).unwrap();
+        let probe = start.elapsed();
+        // The thumbnail job: the probe misses the cache and fills it.
+        let start = Instant::now();
+        let frame =
+            crate::video::decode_first_frame(&decoder, &ffmpeg, &path, target, &cube_dirs, wait)
+                .unwrap();
+        let first = start.elapsed();
+        // The probe of `Player::open` after the thumbnail: a cache hit.
+        let start = Instant::now();
+        crate::player::Decoder::probe(&decoder, &path).unwrap();
+        let cached = start.elapsed();
+        report(&format!(
+            "video {}: probe {:.1} ms, first frame {:.1} ms (probe included), probe after \
+             the thumbnail {:.2} ms, {}x{} hdr {:?} -> {:?}",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            probe.as_secs_f64() * 1000.0,
+            first.as_secs_f64() * 1000.0,
+            cached.as_secs_f64() * 1000.0,
+            info.width,
+            info.height,
+            info.hdr,
+            frame.dimensions(),
         ));
     }
 }

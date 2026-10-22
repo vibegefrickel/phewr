@@ -582,6 +582,9 @@ pub(crate) mod video {
         pub(crate) fail_start: Cell<bool>,
         starts: RefCell<Vec<String>>,
         sender: RefCell<Option<mpsc::SyncSender<Vec<u8>>>>,
+        /// The frames of the next runs, one list per start. A start with a list sends its
+        /// frames and ends the run. A start without one waits for [`FakeDecoder::feed`].
+        runs: RefCell<std::collections::VecDeque<Vec<Vec<u8>>>>,
     }
 
     impl FakeDecoder {
@@ -593,6 +596,11 @@ pub(crate) mod video {
         /// The command line of the last ffmpeg start.
         pub(crate) fn last_args(&self) -> String {
             self.starts.borrow().last().cloned().unwrap()
+        }
+
+        /// Let the next start send `frames` and then end its run.
+        pub(crate) fn queue_run(&self, frames: Vec<Vec<u8>>) {
+            self.runs.borrow_mut().push_back(frames);
         }
 
         /// Give the player one decoded frame.
@@ -648,6 +656,12 @@ pub(crate) mod video {
                 return Err(io::Error::from(io::ErrorKind::NotFound));
             }
             let (frame_tx, frame_rx) = mpsc::sync_channel(64);
+            if let Some(frames) = self.runs.borrow_mut().pop_front() {
+                for frame in frames {
+                    frame_tx.send(frame).map_err(io::Error::other)?;
+                }
+                return Ok(FrameStream::new(frame_rx, None));
+            }
             *self.sender.borrow_mut() = Some(frame_tx);
             Ok(FrameStream::new(frame_rx, None))
         }
@@ -661,6 +675,7 @@ pub(crate) mod video {
             fail_start: Cell::new(false),
             starts: RefCell::new(Vec::new()),
             sender: RefCell::new(None),
+            runs: RefCell::new(std::collections::VecDeque::new()),
         })
     }
 
@@ -709,6 +724,15 @@ pub(crate) mod video {
         program
     }
 
+    /// The real ffprobe on PATH, or `None` with a note, so that the test skips.
+    pub(crate) fn real_ffprobe() -> Option<PathBuf> {
+        let program = crate::yazi::find_on_path("ffprobe", std::env::var_os("PATH").as_deref());
+        if program.is_none() {
+            println!("note: skipped, because ffprobe is not on PATH");
+        }
+        program
+    }
+
     /// Write an H.264 clip of 40 frames of 160x120 pixels with the ffmpeg `program` to `path`
     /// (MP4 or MOV). A `variable` clip holds 20 frames at 60 and 20 frames at 15 frames per
     /// second: `r_frame_rate` 60, average 24. The other clip has 24 frames per second. Both
@@ -740,7 +764,7 @@ pub(crate) mod video {
         written.then(|| path.to_path_buf())
     }
 
-    /// The loop state with `player` configured, mpv and ffmpeg on PATH, and `decoder`.
+    /// The loop state with `player` configured, mpv, ffmpeg and ffprobe on PATH, and `decoder`.
     pub(crate) fn state_with(player: VideoPlayer, decoder: Rc<FakeDecoder>) -> LoopState {
         LoopState {
             status: None,
@@ -752,6 +776,7 @@ pub(crate) mod video {
                 player,
                 mpv: Some(PathBuf::from("/bin/mpv")),
                 ffmpeg: Some(PathBuf::from("/bin/ffmpeg")),
+                ffprobe: Some(PathBuf::from("/bin/ffprobe")),
                 decoder,
             },
         }
