@@ -220,6 +220,8 @@ At start, viewr asks the terminal whether it reads image data from a temp file. 
 
 **Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, TGA.
 
+**Animated images:** animated GIF, WebP, APNG (`.png`, `.apng`) and AVIF image sequences (AVIS) play in the terminal player, in a loop. The grid shows the first frame with a dim `▶` marker. `Enter` plays the animation, and `p` opens it in the mpv window. In a slideshow, the terminal player plays an animation for at least the slideshow interval. Animated WebP needs FFmpeg 9 or later (the `webp_anim` decoder).
+
 **JPEG XL:** viewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors to sRGB and applies the orientation of the file. An animated JPEG XL shows its first frame.
 
 **EXR and HDR:** viewr maps the float values to 8 bit with an extended Reinhard tone map. The white point is the brightest value of the image.

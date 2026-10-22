@@ -124,6 +124,9 @@ missing.
 - Tests that need a real file are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
   `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW`, `VIEWR_TEST_PSD`,
   `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`.
+- `tests/fixtures/` holds 8 small animated and still files (GIF, WebP, APNG, AVIF), and
+  `test_support::fixture(name)` finds them. `avifenc` makes a new AVIS fixture. The real ffmpeg
+  test skips WebP without FFmpeg 9 (`webp_anim` decoder).
   `just test-real` runs them. A test without its variable skips with a note.
 - The `sips` tests run `/usr/bin/sips` to write synthetic PSD and PDF files.
 - The synthetic libheif tests encode with the aom (AVIF) and x265 (HEIC) encoder plugins of
@@ -166,7 +169,8 @@ missing.
   `poll_mpv_window`.
 - `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` and the pacing,
   `decoder.rs` the ffmpeg command line and the `Decoder` trait, `probe.rs` `VideoInfo`,
-  `layout.rs` the frame box and the cell box, `tone_map.rs` the HDR curve and the cube.
+  `layout.rs` the frame box and the cell box, `tone_map.rs` the HDR curve and the cube,
+  `animation.rs` the header check for animated GIF, WebP, APNG and AVIS.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
   construction. One file per topic: `info_panel.rs`, `grid_zoom.rs` (the cell size and the
@@ -244,6 +248,17 @@ missing.
   view. A video in `ViewMode::Fullscreen` is a placeholder (`shows_video_placeholder`).
   `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because the image decode cannot read
   a video. `p` on the placeholder opens the mpv window.
+- **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
+  video. The thumbnail job reads the animation flag into `App::animated`, and the grid marker
+  (a dim `▶` in the label, or in the gap below the cell) reads only that flag, so the draw
+  reads no file. The route (`App::plays_at`) reads the header of the one file after a key
+  press. `App::is_video_at` still drives the placeholder and the loading icon. The probe reads
+  at most 16 packets: the rate is the GCD of the frame delays, or the mean rate above 50 fps,
+  and the length comes from the container. An AVIS file holds two video streams, and the probe
+  maps the one with the most frames. ffmpeg gets no `-hwaccel` for an animation, because the
+  AV1 decoder stops with it. Esc from an animation returns to its still frame in the fullscreen
+  view. In a running slideshow, the terminal player holds an animation for at least the
+  slideshow interval (`Player::play_at_least`). The mpv window has no such hold.
 - **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
   terminal player reports `finished`, and the slideshow moves on. Outside a slideshow, the clip
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
