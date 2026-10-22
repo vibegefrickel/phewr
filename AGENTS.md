@@ -183,7 +183,8 @@ missing.
   and the core share `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom), `jxl.rs`
   (JPEG XL), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
   (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and
-  `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell shape).
+  `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell shape),
+  `embedded_jpeg.rs` (the safe reader for the JPEG inside camera RAW and PSD files).
 - `ui.rs`: the ratatui drawing of each view, the help popup and the pickers. The gallery, the
   fullscreen view and the video view have no frame. They use the full area minus 1 status row
   (`content_area`, `status_area`). The help popup, the pickers and the info panel keep their
@@ -305,11 +306,12 @@ missing.
 - **Grid gaps and borders:** the cells of the grid have 1-cell gaps (`GAP` in `gallery.rs`). A
   line of n cells takes n + 1 gaps: one between two neighbors and one at each edge.
   `update_grid` subtracts the gaps first and gives the remainder to the first columns and rows.
-  The decode job pads every grid picture with transparent pixels to the pixel size of the base
-  cell (`pad_for_grid` in `app/thumbnails.rs`), with the content centered inside. The picture
-  starts at a whole cell and goes out with `c=` and `r=` of the base cell and no `X=` / `Y=`.
-  herdr relays a pixel offset as a stretched picture, and a rounded cell size cannot push a
-  padded picture into the gap. The selected cell gets a thick border
+  The decode job pads every grid picture with transparent pixels to whole cells, at most the
+  base cell box (`pad_for_grid` in `app/thumbnails.rs` gives a `GridPicture` with its cell
+  count). The grid places it centered in its cell in whole cells, with `c=` and `r=` of that
+  count and no `X=` / `Y=`, so the content is centered to within half a cell. herdr relays a
+  pixel offset as a stretched picture, and a rounded cell size cannot push a padded picture
+  into the gap. The selected cell gets a thick border
   (`BorderType::Thick`, `STYLES.cursor_cell`) in the gaps around the cell and its label
   (`GalleryState::border_rect`). Each marked cell gets a plain yellow border (`STYLES.marked`).
   Neighbors share the gap line. The selected border is drawn last, so it wins. A border that the
@@ -321,7 +323,10 @@ missing.
   unplaced images at 320 MB, and herdr stores each image twice. A trimmed cell sends its
   picture again with `a=T`. The in-memory cache holds `max(200, 2 * visible cells)` entries
   and at most `THUMB_CACHE_BYTE_LIMIT` (512 MB) of padded pixels. It never evicts a visible
-  cell. The grid writes run in a synchronized update.
+  cell. The cache also holds the parked sharp thumbnails of the folders that the grid left
+  (`ThumbnailCache::park`, `take_parked`), keyed by path and decode size, with the mtime and
+  the length of the file. A changed file decodes again. Parked pictures count against the limit
+  and go first. The grid writes run in a synchronized update.
 - **Cell size:** `query_cell_pixel_size` asks with `CSI 16 t`, because TIOCGWINSZ includes the
   window padding of Ghostty (2258 px / 52 rows = 43.42 px). If the terminal answered at
   start, the run loop asks again after each resize. The read takes every byte of the tty, so
@@ -343,7 +348,8 @@ missing.
   animation. A HEIC preview counts as a thumbnail.
 - **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64)
   files on a thread, one time per scan (`decode/shape.rs`). JPEG and PNG swap for the EXIF
-  orientation, HEIC and AVIF read `ispe` and swap for `irot`. RAW, PSD, PDF and video count as
+  orientation, HEIC and AVIF read `ispe` and swap for `irot`. A RAW or PSD file gives the size of its
+  embedded JPEG after the orientation. PDF, SVG, the other ImageIO formats and video count as
   3:2. The median snaps to one of 7 buckets (9:16, 2:3, 3:4, 1:1, 4:3, 3:2, 16:9). The column
   count includes 1 gap per column plus the edge gap. The first
   screen waits for the shape (2 ms to 4 ms), and the shape stays until the next directory
@@ -353,7 +359,7 @@ missing.
 - **FFmpeg versions:** `ffmpeg-next` must match the major version of Homebrew's FFmpeg.
   ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
   release binary that links the old `libavcodec.<major>.dylib` does not start.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v6` (`THUMBNAIL_CACHE_VERSION`), the
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v7` (`THUMBNAIL_CACHE_VERSION`), the
   path, the size, the mtime and the target size. Change the version string when the thumbnail output changes.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature
@@ -376,7 +382,16 @@ missing.
 - **The `sips` route:** sips writes an uncompressed TIFF with the Orientation tag into a temp
   file. The grid and the fullscreen view ask for a copy at the size of their box (`-Z`), and the
   zoom gets the full image. A relative path gets `./` in front, because sips reads `-x` as a
-  function name. JPEG, PNG and HEIC never take this route.
+  function name. JPEG, PNG and HEIC never take this route. RAW and PSD try the embedded JPEG
+  first (`decode/embedded_jpeg.rs`): the largest JPEG of the TIFF IFDs, the CR3 boxes, the RAF
+  header or PSD resource 1036. It is the grid preview. A JPEG that covers the box is the sharp
+  thumbnail and goes into the disk cache, so sips does not run for the cell. The fullscreen view
+  and the prefetch also take a JPEG that covers their box. The zoom keeps sips. ORF has no
+  reachable preview.
+- **Embedded JPEG orientation:** the container orientation (IFD0 of a TIFF RAW, `CMT1` of a
+  CR3) wins over the EXIF of the embedded JPEG. Without a container orientation, the EXIF of
+  the JPEG applies (RAF). The turbo path, the `image` fallback and the cell shape use this one
+  rule. The DCT scaling of a rotated JPEG compares against the turned box.
 
 ## Workflow for agents
 

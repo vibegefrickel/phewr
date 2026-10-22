@@ -91,7 +91,7 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `g` `G`, `Home` `End` | First / last |
 | `Ctrl-b` `Ctrl-f`, `PgUp` `PgDn` | Page up / down |
 | `Enter` | Open fullscreen, play a video, or open a folder |
-| `Backspace` | Go to the parent folder |
+| `Backspace` | Go to the parent folder. The way back takes the thumbnails from memory |
 | `p` | Play the video under the cursor in the mpv window, with sound |
 | `s` | Start a slideshow from the cursor |
 | `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows, remembered per folder, `Enter` opens the larger view) |
@@ -203,7 +203,7 @@ At start, viewr asks the terminal whether it reads image data from a temp file. 
 
 **EXR and HDR:** viewr maps the float values to 8 bit with an extended Reinhard tone map. The white point is the brightest value of the image.
 
-**Camera RAW, PSD, JPEG 2000, PDF, SVG, ICNS, SGI, DDS and PICT** (feature `sips`, macOS only): viewr converts these files with the built-in macOS tool `sips`. The grid and the fullscreen view get a copy at the size of their box. The zoom gets the full image. A PDF shows its first page.
+**Camera RAW, PSD, JPEG 2000, PDF, SVG, ICNS, SGI, DDS and PICT** (feature `sips`, macOS only): viewr converts these files with the built-in macOS tool `sips`. The grid and the fullscreen view get a copy at the size of their box. The zoom gets the full image. A PDF shows its first page. Camera RAW and PSD files show the JPEG preview that they carry at once in the grid. If that preview is large enough, viewr uses it instead of `sips` for the grid and the fullscreen view.
 
 **HEIC, HEIF and AVIF** (feature `heic`): viewr decodes these files through libheif. Without `heic`, viewr does not open AVIF. A cold HEIC grid shows the thumbnails that the files hold at once, then replaces them with sharp thumbnails. viewr uses such a thumbnail only if it has the rotation and the mirror of the main image.
 
