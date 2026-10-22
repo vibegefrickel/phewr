@@ -1,0 +1,2 @@
+# The command that merge.sh of the herdr-worktrees skill runs on a rebased branch before the fast-forward.
+just check

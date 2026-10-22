@@ -445,9 +445,11 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
 - **Thumbnail cache key:** the key hashes `viewr-thumbnail-v12` (`THUMBNAIL_CACHE_VERSION`), the
-  path, the size, the mtime, the target size and the color target. Change the version string when the thumbnail
-  output changes. The folder prefetch writes the same key (`warm_disk_cache` calls
-  `sharp_thumbnail`). The prune removes temp files of the cache that are older than 1 hour.
+  path, the size, the mtime, the target size and the color target. Change the version string when
+  the thumbnail output changes. If several workers change the thumbnail output at the same time,
+  each takes its own version, higher than main and than every branch in flight. The folder prefetch
+  writes the same key (`warm_disk_cache` calls `sharp_thumbnail`). The prune removes temp files of
+  the cache that are older than 1 hour.
 - **Folder prefetch:** after the cursor rests on a folder cell for `FOLDER_PREFETCH_DELAY`
   (300 ms) and `App::has_pending_work` is false, one thread decodes the first screen of that
   folder into the disk cache (`app/folder_prefetch.rs`). It computes what Enter computes, with
