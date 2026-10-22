@@ -339,7 +339,7 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
-    use super::{DECODE_POLL, PAUSED_POLL, Player, SEEK_STEP};
+    use super::{DECODE_POLL, PAUSED_POLL, Player, SEEK_STEP, VideoInfo};
     use crate::test_support::video::{FakeDecoder, fake_decoder, info_of, shared};
     use std::path::Path;
     use std::rc::Rc;
@@ -579,6 +579,149 @@ mod tests {
         );
         assert_eq!(decoder.starts().len(), 2);
         assert_eq!(player.error, None);
+    }
+
+    #[test]
+    fn a_variable_rate_clip_paces_at_the_constant_rate_that_ffmpeg_writes() {
+        let decoder = fake_decoder(VideoInfo {
+            variable_rate: true,
+            ..info_of(640, 480, 20.0)
+        });
+        let mut player = player(&decoder, true);
+        let args = decoder.last_args();
+        assert!(
+            args.contains(" -i /videos/clip.mp4 -fps_mode cfr -r 20.0000 "),
+            "{args}"
+        );
+        assert!(args.contains("-hwaccel videotoolbox"), "{args}");
+        let step = Duration::from_millis(50);
+        let clock = Instant::now();
+        for value in 1..=10 {
+            decoder.feed(frame(value));
+            let due = clock + step * u32::from(value - 1);
+            if value > 1 {
+                assert!(
+                    !player.poll_at(due.checked_sub(step / 2).unwrap()),
+                    "frame {value} is not due"
+                );
+            }
+            assert!(player.poll_at(due), "frame {value}");
+        }
+        assert_eq!(player.dropped, 0);
+        assert!((player.position() - 0.5).abs() < 1e-9);
+
+        player.toggle_pause();
+        player.toggle_pause();
+        player.seek_by(1.0);
+        let args = decoder.last_args();
+        assert!(
+            args.contains("-ss 1.500 -i /videos/clip.mp4 -fps_mode cfr -r 20.0000 "),
+            "{args}"
+        );
+        decoder.feed(frame(11));
+        assert!(player.poll_at(clock + step * 20));
+        assert!((player.position() - 1.55).abs() < 1e-9);
+    }
+
+    /// The played clips of the real tests: the name, the player at the end, the frames that
+    /// ffmpeg wrote and the played time in seconds. Empty without ffmpeg or libx264.
+    fn play_real_clips(real_clock: bool) -> Vec<(&'static str, Player, u32, f64)> {
+        use crate::test_support::video::{real_ffmpeg, write_clip};
+        ffmpeg::init().unwrap();
+        let Some(program) = real_ffmpeg() else {
+            return Vec::new();
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut played = Vec::new();
+        for (name, variable) in [
+            ("vfr.mp4", true),
+            ("vfr.mov", true),
+            ("cfr.mp4", false),
+            ("cfr.mov", false),
+        ] {
+            let Some(path) = write_clip(&program, &dir.path().join(name), variable) else {
+                return Vec::new();
+            };
+            let (player, frames, seconds) = play_to_end(&program, &path, real_clock);
+            println!(
+                "{name}: {frames} frames at {:.2} fps ({} dropped): played {seconds:.3} s, \
+                 container {:.3} s",
+                player.info.fps,
+                player.dropped,
+                player.duration()
+            );
+            played.push((name, player, frames, seconds));
+        }
+        played
+    }
+
+    /// Play `path` to its end with the real ffmpeg. With `real_clock`, the player runs at the
+    /// real clock. Else a virtual clock jumps to each due frame, so the scheduler cannot change
+    /// the result. Gives the player, the frames that ffmpeg wrote and the played seconds.
+    fn play_to_end(program: &Path, path: &Path, real_clock: bool) -> (Player, u32, f64) {
+        let decoder: Rc<dyn super::Decoder> = Rc::new(super::SystemDecoder);
+        let mut player = Player::open(decoder, program, path, (32, 24), &[], false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut clock = Instant::now();
+        let (mut first, mut last, mut shown) = (None, None, 0_u32);
+        while !player.finished() {
+            assert!(
+                Instant::now() < deadline,
+                "{}: the player hangs",
+                path.display()
+            );
+            if real_clock {
+                clock = Instant::now();
+            }
+            if player.poll_at(clock) {
+                first.get_or_insert(clock);
+                last = Some(clock);
+                shown += 1;
+            } else if !real_clock && player.pending.is_some() {
+                clock += player.time_until_next_frame_at(clock);
+            } else {
+                let wait = player.time_until_next_frame_at(clock);
+                std::thread::sleep(wait.min(Duration::from_millis(2)));
+            }
+        }
+        assert_eq!(player.error, None, "{}", path.display());
+        let (Some(first), Some(last)) = (first, last) else {
+            panic!("{}: no frame", path.display());
+        };
+        let seconds = (last - first + player.interval).as_secs_f64();
+        let frames = shown + player.dropped;
+        (player, frames, seconds)
+    }
+
+    /// Play a variable and a constant-rate clip that the real ffmpeg writes, at a virtual
+    /// clock. The frames times the interval must match the container length. Without ffmpeg
+    /// on PATH, the test skips with a note.
+    #[test]
+    fn the_real_ffmpeg_plays_variable_and_constant_rate_clips_at_their_length() {
+        for (name, player, frames, seconds) in play_real_clips(false) {
+            let paced = (player.interval * frames).as_secs_f64();
+            let length = player.duration();
+            assert!(
+                (paced - length).abs() < 0.1 * length,
+                "{name}: paced {paced}"
+            );
+            assert!((seconds - paced).abs() < 1e-6, "{name}: played {seconds}");
+            assert_eq!(player.dropped, 0, "{name}: the virtual clock is never late");
+        }
+    }
+
+    /// The same clips at the real clock: the wall time must match the container length. It
+    /// takes about 7 s and depends on the scheduler, so it runs only in `just test-real`.
+    #[test]
+    #[ignore = "plays 4 clips at the real clock for about 7 s"]
+    fn the_real_ffmpeg_plays_variable_rate_clips_at_their_length_in_wall_time() {
+        for (name, player, _, seconds) in play_real_clips(true) {
+            let length = player.duration();
+            assert!(
+                (seconds - length).abs() < 0.25 * length,
+                "{name}: wall {seconds}"
+            );
+        }
     }
 
     #[test]

@@ -9,6 +9,10 @@
 //! of an AVIS stops with an error when `-hwaccel videotoolbox` is on. Its output is a constant
 //! rate (`-fps_mode cfr -r`) at the rate of the probe, so a frame with a long delay goes out
 //! more than one time and the pacing of the player stays exact.
+//!
+//! A video with a variable frame rate gets the same constant output rate at the rate of the
+//! probe, see [`super::probe`]. A video with a constant rate gets no `-r`, and ffmpeg writes
+//! its frames as they are.
 
 use super::probe::VideoInfo;
 use super::tone_map::Hdr;
@@ -67,8 +71,11 @@ pub(crate) fn args(
     args.extend([OsString::from("-i"), video.as_os_str().to_owned()]);
     if info.animation {
         let stream = format!("0:{}", info.stream);
+        args.extend(["-map", &stream].map(OsString::from));
+    }
+    if info.animation || info.variable_rate {
         let rate = format!("{:.4}", info.fps);
-        args.extend(["-map", &stream, "-fps_mode", "cfr", "-r", &rate].map(OsString::from));
+        args.extend(["-fps_mode", "cfr", "-r", &rate].map(OsString::from));
     }
     args.extend(
         [
@@ -270,6 +277,7 @@ mod tests {
             hdr,
             ten_bit,
             animation: false,
+            variable_rate: false,
             stream: 0,
         }
     }
@@ -318,6 +326,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_variable_rate_video_decodes_on_the_gpu_at_a_constant_rate() {
+        let mut info = info(0, None, false);
+        info.variable_rate = true;
+        info.fps = 60.0;
+        let args = strings(&args(
+            Path::new("/v/screen.mov"),
+            &info,
+            (1280, 720),
+            None,
+            0.0,
+            Pipeline::Gpu,
+        ));
+        let input = args.iter().position(|arg| arg == "-i").unwrap();
+        assert_eq!(
+            args[input..input + 6],
+            ["-i", "/v/screen.mov", "-fps_mode", "cfr", "-r", "60.0000"]
+        );
+        assert!(args.contains(&"videotoolbox".to_owned()), "{args:?}");
+        assert!(!args.contains(&"-map".to_owned()), "{args:?}");
+        // A constant-rate video gets no `-r`: see the exact line of the SDR test below.
+    }
+
     /// The `-vf` graph of `args`.
     fn graph(args: &[OsString]) -> String {
         let args = strings(args);
@@ -343,10 +374,7 @@ mod tests {
     fn the_real_ffmpeg_decodes_every_frame_of_the_animated_fixtures() {
         use crate::test_support::fixture;
         ffmpeg::init().unwrap();
-        let Some(program) =
-            crate::yazi::find_on_path("ffmpeg", std::env::var_os("PATH").as_deref())
-        else {
-            println!("note: skipped, because ffmpeg is not on PATH");
+        let Some(program) = crate::test_support::video::real_ffmpeg() else {
             return;
         };
         // The GIF holds 3 frames with delays of 100, 500 and 200 ms: 8 frames at 10 per second.

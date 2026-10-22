@@ -23,6 +23,9 @@ pub(crate) struct VideoInfo {
     pub ten_bit: bool,
     /// An animated image. ffmpeg decodes it in software at the exact rate `fps`.
     pub animation: bool,
+    /// A video with a variable frame rate. ffmpeg duplicates or drops frames to the constant
+    /// rate `fps`, see [`variable_rate_fps`].
+    pub variable_rate: bool,
     /// The index of the stream that ffmpeg maps. An AVIS file holds the still item as its
     /// first stream and the image sequence as its second.
     pub stream: usize,
@@ -42,6 +45,14 @@ const FALLBACK_FPS: f64 = 24.0;
 /// shortest common delay, so that each frame holds for its own delay. Above this rate, the
 /// player takes the mean rate of the frames instead.
 const MAX_ANIMATION_FPS: f64 = 50.0;
+
+/// The highest output rate of a video with a variable frame rate. The terminal player shows
+/// no more frames than this.
+const MAX_VARIABLE_FPS: f64 = 60.0;
+
+/// The share by which the average rate can differ from the real base rate of a constant-rate
+/// video. iPhone clips have an average rate of 29.99 at a base rate of 30 (0.03 %).
+const VARIABLE_RATE_TOLERANCE: f64 = 0.01;
 
 /// How many packets the timing walk reads. The walk runs on the UI thread before the first
 /// frame: 16 frames of a 181 MB GIF of 1280x720 pixels cost about 15 ms, all 300 cost 250 ms.
@@ -72,12 +83,11 @@ pub(crate) fn probe(path: &Path) -> io::Result<VideoInfo> {
         .decoder()
         .video()
         .map_err(|error| invalid(error.to_string()))?;
-    let rate = stream.avg_frame_rate();
-    let mut fps = if rate.denominator() > 0 {
-        sanitize_fps(f64::from(rate.numerator()) / f64::from(rate.denominator()))
-    } else {
-        FALLBACK_FPS
-    };
+    let (mut fps, variable_rate) = pacing_rate(
+        rate_of(stream.rate()),
+        rate_of(stream.avg_frame_rate()),
+        animation,
+    );
     let mut duration = if input.duration() > 0 {
         input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
     } else {
@@ -111,8 +121,55 @@ pub(crate) fn probe(path: &Path) -> io::Result<VideoInfo> {
         hdr,
         ten_bit,
         animation,
+        variable_rate,
         stream: stream_index,
     })
+}
+
+/// The value of a rate, or `None` when the container tells no rate.
+fn rate_of(rate: ffmpeg::Rational) -> Option<f64> {
+    (rate.numerator() > 0 && rate.denominator() > 0)
+        .then(|| f64::from(rate.numerator()) / f64::from(rate.denominator()))
+}
+
+/// The rate that the player paces at, and `true` when ffmpeg must get it as `-r`, from
+/// `r_frame_rate` (`real`) and `avg_frame_rate` (`average`).
+///
+/// A video with a variable frame rate gets [`variable_rate_fps`]. Another video paces at its
+/// average rate. Without an average rate, it paces at `real`, because ffmpeg writes raw frames
+/// at `real` then. An animation gets its rate from the packets later, see [`timing_of`].
+fn pacing_rate(real: Option<f64>, average: Option<f64>, animation: bool) -> (f64, bool) {
+    let variable = (!animation)
+        .then(|| variable_rate_fps(real?, average?))
+        .flatten();
+    match variable {
+        Some(rate) => (rate, true),
+        None => (average.or(real).map_or(FALLBACK_FPS, sanitize_fps), false),
+    }
+}
+
+/// The constant output rate of a video with a variable frame rate, or `None` for a video with
+/// a constant rate.
+///
+/// `real` is `r_frame_rate`, the rate of the shortest frame spacing that `FFmpeg` finds in
+/// the first packets. `average` is the frame count over the length. A video is variable when
+/// the two differ by more than [`VARIABLE_RATE_TOLERANCE`]. Without `-r`, ffmpeg writes raw
+/// frames at `real`, but the player paced them at `average`: a screen recording at 25 and
+/// 7.7 played 3.2 times too slow. The output rate is `real` up to [`MAX_VARIABLE_FPS`], so no
+/// frame drops and the still parts repeat their frame. Above it, `real` is a fast burst (an
+/// iPhone slow motion clip at 120 and 29.6) or a time base guess, and the output rate is
+/// `average`, capped at [`MAX_VARIABLE_FPS`].
+fn variable_rate_fps(real: f64, average: f64) -> Option<f64> {
+    let valid = |rate: f64| rate.is_finite() && rate > 0.0;
+    if !valid(real) || !valid(average) || (real - average).abs() <= real * VARIABLE_RATE_TOLERANCE {
+        return None;
+    }
+    let rate = if real <= MAX_VARIABLE_FPS {
+        real
+    } else {
+        average
+    };
+    Some(rate.min(MAX_VARIABLE_FPS))
 }
 
 /// The video stream with the most frames, when an animated file holds more than one video
@@ -226,7 +283,9 @@ pub(crate) fn rotation_of(matrix: &[u8]) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{VideoInfo, gcd, probe, rotation_of, sanitize_fps, timing_of};
+    use super::{
+        VideoInfo, gcd, pacing_rate, probe, rotation_of, sanitize_fps, timing_of, variable_rate_fps,
+    };
     use crate::test_support::fixture;
     use std::path::Path;
     use std::time::Duration;
@@ -267,9 +326,90 @@ mod tests {
             hdr: None,
             ten_bit: false,
             animation: false,
+            variable_rate: false,
             stream: 0,
         };
         assert_eq!(info.frame_interval(), Duration::from_millis(40));
+    }
+
+    #[test]
+    fn a_variable_rate_plays_at_its_base_rate_up_to_60_and_else_at_its_average() {
+        assert_eq!(variable_rate_fps(30.0, 30.0), None, "a constant rate");
+        assert_eq!(
+            variable_rate_fps(30.0, 100_080.0 / 3337.0),
+            None,
+            "an iPhone clip at 29.99 is constant"
+        );
+        assert_eq!(
+            variable_rate_fps(25.0, 7.7),
+            Some(25.0),
+            "a screen recording"
+        );
+        assert_eq!(variable_rate_fps(60.0, 24.0), Some(60.0));
+        assert_eq!(
+            variable_rate_fps(120.0, 29.6),
+            Some(29.6),
+            "an iPhone slow motion clip"
+        );
+        assert_eq!(
+            variable_rate_fps(90_000.0, 75.0),
+            Some(60.0),
+            "a time base guess, capped"
+        );
+        for (real, average) in [
+            (0.0, 24.0),
+            (24.0, 0.0),
+            (f64::NAN, 24.0),
+            (24.0, f64::INFINITY),
+        ] {
+            assert_eq!(variable_rate_fps(real, average), None);
+        }
+    }
+
+    #[test]
+    fn the_pacing_rate_follows_the_rate_that_ffmpeg_writes() {
+        assert_eq!(pacing_rate(Some(30.0), Some(30.0), false), (30.0, false));
+        assert_eq!(pacing_rate(Some(25.0), Some(7.7), false), (25.0, true));
+        assert_eq!(
+            pacing_rate(Some(25.0), Some(7.7), true),
+            (7.7, false),
+            "an animation gets no variable rate"
+        );
+        assert_eq!(
+            pacing_rate(Some(30.0), None, false),
+            (30.0, false),
+            "without an average rate, ffmpeg writes at the real rate"
+        );
+        assert_eq!(pacing_rate(None, Some(25.0), false), (25.0, false));
+        assert_eq!(pacing_rate(None, None, false), (24.0, false));
+    }
+
+    /// Probe a variable and a constant-rate clip that the real ffmpeg writes. Without ffmpeg
+    /// on PATH, the test skips with a note.
+    #[test]
+    fn a_variable_rate_clip_probes_as_variable_and_a_constant_one_does_not() {
+        ffmpeg::init().unwrap();
+        let Some(program) = crate::test_support::video::real_ffmpeg() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        for (name, variable) in [
+            ("vfr.mp4", true),
+            ("vfr.mov", true),
+            ("cfr.mp4", false),
+            ("cfr.mov", false),
+        ] {
+            let path = dir.path().join(name);
+            let Some(path) = crate::test_support::video::write_clip(&program, &path, variable)
+            else {
+                return;
+            };
+            let info = probe(&path).unwrap();
+            assert_eq!(info.variable_rate, variable, "{name}: {info:?}");
+            let fps = if variable { 60.0 } else { 24.0 };
+            assert!((info.fps - fps).abs() < 1e-9, "{name}: {info:?}");
+            assert!(!info.animation, "{name}");
+        }
     }
 
     #[test]

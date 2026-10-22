@@ -681,6 +681,7 @@ pub(crate) mod video {
             hdr: None,
             ten_bit: false,
             animation: false,
+            variable_rate: false,
             stream: 0,
         }
     }
@@ -697,6 +698,46 @@ pub(crate) mod video {
     /// The header of the test clip: 640x480 at 10 frames per second.
     pub(crate) fn clip_info() -> VideoInfo {
         info_of(640, 480, 10.0)
+    }
+
+    /// The real ffmpeg on PATH, or `None` with a note, so that the test skips.
+    pub(crate) fn real_ffmpeg() -> Option<PathBuf> {
+        let program = crate::yazi::find_on_path("ffmpeg", std::env::var_os("PATH").as_deref());
+        if program.is_none() {
+            println!("note: skipped, because ffmpeg is not on PATH");
+        }
+        program
+    }
+
+    /// Write an H.264 clip of 40 frames of 160x120 pixels with the ffmpeg `program` to `path`
+    /// (MP4 or MOV). A `variable` clip holds 20 frames at 60 and 20 frames at 15 frames per
+    /// second: `r_frame_rate` 60, average 24. The other clip has 24 frames per second. Both
+    /// last 1.67 seconds. `None` with a note when ffmpeg has no libx264.
+    pub(crate) fn write_clip(program: &Path, path: &Path, variable: bool) -> Option<PathBuf> {
+        let source = if variable {
+            "testsrc=size=160x120:rate=60"
+        } else {
+            "testsrc=size=160x120:rate=24"
+        };
+        let mut command = std::process::Command::new(program);
+        command.args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"]);
+        command.args(["-i", source, "-frames:v", "40"]);
+        if variable {
+            command.args(["-vf", "setpts='if(lt(N,20),N/60,20/60+(N-20)/15)/TB'"]);
+            command.args(["-fps_mode", "passthrough"]);
+        }
+        command.args(["-c:v", "libx264", "-preset", "ultrafast"]);
+        command.args(["-pix_fmt", "yuv420p"]);
+        let written = command
+            .arg(path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !written {
+            println!("note: skipped, because ffmpeg could not write an H.264 clip");
+        }
+        written.then(|| path.to_path_buf())
     }
 
     /// The loop state with `player` configured, mpv and ffmpeg on PATH, and `decoder`.
