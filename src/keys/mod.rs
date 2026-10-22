@@ -3,7 +3,6 @@
 pub(crate) mod fullscreen;
 pub(crate) mod gallery;
 pub(crate) mod mouse;
-pub(crate) mod picker;
 #[cfg(feature = "video")]
 pub(crate) mod video;
 
@@ -12,7 +11,6 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use fullscreen::handle_fullscreen_key;
 use gallery::{handle_gallery_key, handle_search_key};
 use mouse::handle_mouse;
-use picker::handle_picker_key;
 use std::io;
 use std::time::Instant;
 #[cfg(feature = "video")]
@@ -115,7 +113,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
                 Ok(false)
             }
             ViewMode::Gallery => handle_gallery_key(app, key),
-            ViewMode::Picker => Ok(handle_picker_key(app, key.code)),
         };
     }
     Ok(false)

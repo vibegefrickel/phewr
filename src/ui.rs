@@ -28,7 +28,6 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     match app.mode {
         ViewMode::Gallery => draw_gallery(frame, app, main, status),
         ViewMode::Fullscreen => draw_fullscreen(frame, app, main, status),
-        ViewMode::Picker => draw_picker(frame, app),
         #[cfg(feature = "video")]
         ViewMode::Video => draw_video(frame, app, main, status),
     }
@@ -41,9 +40,9 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
 }
 
 /// Reserve the right-hand column for the info panel when it is open.
-/// The picker never shows it, and very narrow terminals keep the full width.
+/// Very narrow terminals keep the full width.
 pub(crate) fn split_info(area: Rect, app: &App) -> (Rect, Option<Rect>) {
-    if !app.info_visible || app.mode == ViewMode::Picker {
+    if !app.info_visible {
         return (area, None);
     }
     let width = INFO_PANEL_WIDTH.min(area.width / 3);
@@ -94,114 +93,6 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         }
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-}
-
-fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
-    let area = frame.area();
-    let has_photos = !app.images.is_empty();
-
-    let Some(picker) = app.picker.as_mut() else {
-        return;
-    };
-
-    let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
-    let filter_rect = chunks[0];
-    let list_area = chunks[1];
-    app.layout.picker_filter = filter_rect;
-
-    let filter_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(STYLES.border)
-        .title(Line::from(Span::styled(" Filter ", STYLES.title)));
-    let filter_inner = filter_block.inner(filter_rect);
-    frame.render_widget(filter_block, filter_rect);
-
-    if picker.filter_active {
-        let match_count = picker.filtered_indices.len();
-        let total = picker.entries.len();
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(format!("/{}\u{2588}", picker.filter), STYLES.text),
-                Span::styled(format!("  {match_count}/{total} matches"), STYLES.dim),
-            ])),
-            filter_inner,
-        );
-    } else if !picker.filter.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(format!(" /{}", picker.filter), STYLES.text),
-                Span::styled(
-                    format!(
-                        "  {}/{} matches",
-                        picker.filtered_indices.len(),
-                        picker.entries.len()
-                    ),
-                    STYLES.dim,
-                ),
-            ])),
-            filter_inner,
-        );
-    } else {
-        frame.render_widget(Paragraph::new(""), filter_inner);
-    }
-
-    let title_path = picker.current_dir.display().to_string();
-    let count = picker.filtered_indices.len();
-    let list_title = format!(" Directory: {title_path} [{count}] ");
-
-    let hint = if picker.filter_active {
-        " Esc: cancel  Enter: confirm  Backspace: delete "
-    } else if has_photos {
-        " Enter: choose  /: filter  ?: help  q: back "
-    } else {
-        " Enter: choose  /: filter  ?: help  q: quit "
-    };
-
-    let bottom_line = if let Some(err) = &picker.error {
-        Line::from(Span::styled(format!(" {err} "), STYLES.error))
-    } else {
-        Line::from(Span::styled(hint, STYLES.key))
-    };
-
-    let list_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(STYLES.border)
-        .title(Line::from(Span::styled(list_title, STYLES.title)))
-        .title_bottom(bottom_line);
-
-    let list_inner = list_block.inner(list_area);
-    app.layout.picker_list = list_inner;
-    frame.render_widget(list_block, list_area);
-
-    let visible_height = list_inner.height as usize;
-    picker.adjust_scroll(visible_height);
-
-    let lines: Vec<Line<'_>> = picker
-        .visible_slice(visible_height)
-        .iter()
-        .enumerate()
-        .map(|(vis, &real)| {
-            let entry = &picker.entries[real];
-            let is_cursor = picker.scroll_offset + vis == picker.cursor;
-            let marker = if is_cursor { "\u{25b6} " } else { "  " };
-            let label = if entry.is_parent {
-                "..".to_owned()
-            } else {
-                format!("{}/", entry.name)
-            };
-            let style = if is_cursor {
-                STYLES.selection
-            } else {
-                STYLES.text
-            };
-            Line::from(vec![
-                Span::styled(marker.to_owned(), style),
-                Span::styled(label, style),
-            ])
-        })
-        .collect();
-
-    frame.render_widget(Paragraph::new(lines), list_inner);
 }
 
 fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Option<&str>) {
@@ -454,6 +345,11 @@ fn gallery_status_line(app: &App, filtered_count: usize, status: Option<&str>) -
         Span::styled(" Esc: cancel  Enter: confirm ", STYLES.key)
     } else if let Some(status) = status {
         Span::styled(format!(" {status} "), STYLES.text)
+    } else if is_empty_folder(app) {
+        Span::styled(
+            " No images or folders here. Backspace: parent folder  q: quit ",
+            STYLES.text,
+        )
     } else {
         Span::styled(
             " Enter: open  +/-: zoom  n: names  i: info  /: search  ?: help  q: quit ",
@@ -476,10 +372,20 @@ fn selected_position(app: &App, filtered_count: usize) -> Vec<Span<'static>> {
 }
 
 /// The folder and the image count of a grid with folders. `..` does not count.
-fn entry_counts(app: &App) -> String {
-    let folders = app.folder_count.saturating_sub(usize::from(
+/// The folder cells without the `..` cell.
+fn subfolder_count(app: &App) -> usize {
+    app.folder_count.saturating_sub(usize::from(
         app.filenames.first().is_some_and(|name| name == ".."),
-    ));
+    ))
+}
+
+/// A finished scan that found no file and no subfolder. The `..` cell does not count.
+fn is_empty_folder(app: &App) -> bool {
+    !app.is_scanning() && app.file_count() == 0 && subfolder_count(app) == 0
+}
+
+fn entry_counts(app: &App) -> String {
+    let folders = subfolder_count(app);
     let folder_word = if folders == 1 { "folder" } else { "folders" };
     let images = app.file_count();
     let image_word = if images == 1 { "image" } else { "images" };
@@ -754,7 +660,6 @@ fn help_gallery_rows() -> Vec<HelpRow> {
         ("Space", "Toggle selection"),
         ("a / A", "Select all / clear all"),
         ("d / D", "Trash / delete for good"),
-        ("o", "Open directory picker"),
         ("/", "Search"),
         ("?", "Toggle help"),
         ("q / Esc", "Quit"),
@@ -762,15 +667,6 @@ fn help_gallery_rows() -> Vec<HelpRow> {
         ("", "Search"),
         ("<type>, Backspace", "Filter by filename"),
         ("Enter / Esc", "Confirm / cancel"),
-        ("", ""),
-        ("", "Directory picker"),
-        ("j / k, click", "Move cursor"),
-        ("Enter, double-click", "Choose and open gallery"),
-        ("l / Right", "Descend into directory"),
-        ("h", "Parent directory"),
-        ("g / G", "First / last"),
-        ("/", "Filter names"),
-        ("q / Esc", "Back to gallery"),
     ]
 }
 
@@ -894,7 +790,6 @@ mod tests {
     use super::draw;
     use crate::app::{App, DeleteMode, PendingDelete, ViewMode};
     use crate::image_list::SharedImageList;
-    use crate::picker::PickerState;
     use crate::test_support::folder_app;
     use image::RgbaImage;
     use ratatui::Terminal;
@@ -1097,11 +992,37 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_gallery_shows_the_hints_without_a_position() {
+    fn an_empty_folder_shows_a_note_and_the_parent_cell_does_not_hide_it() {
+        let temp = tempfile::tempdir().unwrap();
         let mut app = app_with(&[]);
+        app.scan_complete = true;
         let screen = render(&mut app, None, 100, 30);
-        assert!(status_row(&screen).starts_with(" Enter: open"), "{screen}");
+        assert!(
+            status_row(&screen).starts_with(" No images or folders here"),
+            "{screen}"
+        );
         assert_hides(&screen, "[1/");
+
+        app.switch_to_dir(temp.path());
+        crate::test_support::wait_until(|| {
+            app.refresh_from_scanner();
+            !app.is_scanning()
+        });
+        assert_eq!(app.filenames, [".."], "the scan lists only the parent");
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(
+            &screen,
+            "No images or folders here. Backspace: parent folder",
+        );
+
+        std::fs::create_dir(temp.path().join("sub")).unwrap();
+        app.switch_to_dir(temp.path());
+        crate::test_support::wait_until(|| {
+            app.refresh_from_scanner();
+            !app.is_scanning()
+        });
+        let screen = render(&mut app, None, 100, 30);
+        assert_hides(&screen, "No images or folders here");
     }
 
     #[test]
@@ -1799,7 +1720,6 @@ mod tests {
         assert_shows(&screen, "Open image or folder");
         assert_shows(&screen, "Backspace  Parent folder");
         assert_shows(&screen, "Trash / delete for good");
-        assert_shows(&screen, " Directory picker");
         assert_shows(&screen, " Fullscreen");
         assert_shows(&screen, "Pan when zoomed");
         assert_shows(&screen, "Shorter / longer interval");
@@ -1905,55 +1825,5 @@ mod tests {
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, "\u{25b6} clip.mp4");
         assert!(!screen.contains("\u{25b6} a.jpg"), "{screen}");
-    }
-
-    #[test]
-    fn directory_picker_lists_the_directories_filter_and_error() {
-        let temp = tempfile::tempdir().unwrap();
-        let dir = temp.path().to_path_buf();
-        std::fs::create_dir(dir.join("alpha")).unwrap();
-        std::fs::create_dir(dir.join("beta")).unwrap();
-        let mut app = app_with(&["a.jpg"]);
-        app.info_visible = true;
-        app.mode = ViewMode::Picker;
-        app.picker = Some(PickerState::new(dir.clone()));
-
-        let width = u16::try_from(dir.as_os_str().len()).unwrap() + 60;
-        let screen = render(&mut app, None, width, 20);
-        assert_shows(&screen, " Filter ");
-        assert_shows(&screen, &format!(" Directory: {} [3] ", dir.display()));
-        assert_shows(&screen, "\u{25b6} ..");
-        assert_shows(&screen, "  alpha/");
-        assert_shows(&screen, "  beta/");
-        assert_shows(&screen, " Enter: choose  /: filter");
-        assert_hides(&screen, " Info ");
-        let buffer = render_buffer(&mut app, None, width, 20);
-        assert_terminal_background(&buffer);
-        assert_default_fg(cell_of(&buffer, "\u{25b6} .."), Modifier::REVERSED);
-        assert_default_fg(cell_of(&buffer, "alpha/"), Modifier::empty());
-        assert_ansi(cell_of(&buffer, "Enter: choose"), Color::Cyan);
-
-        let picker = app.picker.as_mut().unwrap();
-        picker.filter = "bet".to_owned();
-        picker.filter_active = true;
-        picker.rebuild_filter();
-        let screen = render(&mut app, None, width, 20);
-        assert_shows(&screen, "/bet\u{2588}  1/3 matches");
-        assert_shows(&screen, " Esc: cancel  Enter: confirm  Backspace: delete ");
-        assert_shows(&screen, "\u{25b6} beta/");
-
-        let picker = app.picker.as_mut().unwrap();
-        picker.filter_active = false;
-        picker.error = Some("permission denied".to_owned());
-        let screen = render(&mut app, None, width, 20);
-        assert_shows(&screen, " /bet  1/3 matches");
-        assert_shows(&screen, " permission denied ");
-        let buffer = render_buffer(&mut app, None, width, 20);
-        assert_ansi(cell_of(&buffer, "permission denied"), Color::Red);
-        assert_ansi(cell_of(&buffer, "1/3 matches"), Color::DarkGray);
-
-        app.picker = None;
-        let screen = render(&mut app, None, width, 20);
-        assert_hides(&screen, " Filter ");
     }
 }

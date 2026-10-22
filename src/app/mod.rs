@@ -29,7 +29,6 @@ pub(crate) use crate::image_list::EntryKind;
 use crate::image_list::SharedImageList;
 use crate::info::ImageInfo;
 use crate::kitty_output::TerminalImages;
-use crate::picker::PickerState;
 use crate::prefetch::Prefetcher;
 use disk_cache::default_disk_cache_dir;
 use image::{DynamicImage, RgbaImage};
@@ -51,7 +50,6 @@ const INFO_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 pub(crate) enum ViewMode {
     Gallery,
     Fullscreen,
-    Picker,
     #[cfg(feature = "video")]
     Video,
 }
@@ -96,8 +94,6 @@ pub(crate) struct App {
     pub pending_delete: Option<PendingDelete>,
     pub delete_error: Option<String>,
 
-    // Directory picker state
-    pub picker: Option<PickerState>,
     pub current_dir: Option<PathBuf>,
     pub initial_dir: Option<PathBuf>,
     /// The entry that the cursor lands on when the next scan ends: the folder that the user
@@ -241,7 +237,6 @@ impl App {
             selection: HashSet::new(),
             pending_delete: None,
             delete_error: None,
-            picker: None,
             current_dir: None,
             initial_dir: None,
             return_to: None,

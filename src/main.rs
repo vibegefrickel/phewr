@@ -12,7 +12,6 @@ mod keys;
 mod kitty_output;
 #[cfg(feature = "video")]
 mod mpv;
-mod picker;
 #[cfg(feature = "video")]
 mod player;
 mod prefetch;
@@ -34,8 +33,8 @@ use app::App;
 use clap::Parser;
 use cli::{Cli, initial_dir_from_paths};
 use image_list::SharedImageList;
-use picker::canonicalize_or_self;
 use run_loop::{LoopState, run};
+use scanner::canonicalize_or_self;
 use std::io;
 use std::path::PathBuf;
 use terminal::{TerminalSession, query_cell_pixel_size, query_terminal, window_cell_pixel_size};

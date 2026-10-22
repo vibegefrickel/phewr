@@ -1,27 +1,12 @@
-//! The directory picker, and the switch of the gallery to another directory.
+//! The switch of the gallery to another directory.
 
-use super::{App, ViewMode};
+use super::App;
 use crate::config;
 use crate::image_list::SharedImageList;
-use crate::picker::{self, PickerState};
-use crate::scanner;
+use crate::scanner::{self, canonicalize_or_self};
 use std::path::Path;
 
 impl App {
-    pub(crate) fn open_picker(&mut self) {
-        let start = self.gallery_dir();
-        self.current_dir = Some(start.clone());
-        self.picker = Some(PickerState::new(start));
-        self.mode = ViewMode::Picker;
-        self.needs_render = true;
-    }
-
-    pub(crate) fn close_picker(&mut self) {
-        self.picker = None;
-        self.mode = ViewMode::Gallery;
-        self.needs_render = true;
-    }
-
     /// Replace image list with the contents of `dir` and reset all view state.
     /// Spawns a fresh scanner thread; the previous scanner (if any) is orphaned
     /// against an unused `SharedImageList` clone and will be dropped as it completes.
@@ -29,7 +14,7 @@ impl App {
         // The thumbnails of this folder stay parked for the way back, keyed by the size that
         // this folder decoded them for, so the park comes before the zoom of the new folder.
         self.park_thumbnails();
-        let canonical = picker::canonicalize_or_self(dir);
+        let canonical = canonicalize_or_self(dir);
         self.current_dir = Some(canonical.clone());
         self.apply_folder_zoom(&canonical);
 
@@ -66,12 +51,6 @@ impl App {
         self.loaded = None;
         self.error = None;
 
-        if let Some(ref mut p) = self.picker {
-            p.current_dir = canonical;
-            p.load_dir();
-            p.adjust_scroll(p.filtered_indices.len().max(1));
-        }
-
         self.needs_render = true;
     }
 
@@ -97,54 +76,11 @@ impl App {
 #[cfg(test)]
 mod tests {
 
-    use crate::app::ViewMode;
     use crate::config;
-    use crate::test_support::{app_with, test_dir, wait_until};
+    use crate::test_support::{app_with, test_dir};
     use image::RgbaImage;
 
     use std::fs;
-    use std::path::PathBuf;
-
-    #[test]
-    fn picker_opens_at_the_known_directory_and_switches() {
-        let dir = test_dir();
-        let root = fs::canonicalize(dir.path()).unwrap();
-        let photos = root.join("photos");
-        fs::create_dir(&photos).unwrap();
-        RgbaImage::new(4, 4).save(photos.join("b.png")).unwrap();
-        RgbaImage::new(4, 4).save(photos.join("a.png")).unwrap();
-
-        let mut app = app_with(&["/nowhere/x.png"]);
-        app.initial_dir = Some(root.clone());
-        app.open_picker();
-        assert_eq!(app.mode, ViewMode::Picker);
-        assert_eq!(app.current_dir.as_deref(), Some(root.as_path()));
-        app.close_picker();
-        assert_eq!(app.mode, ViewMode::Gallery);
-        assert!(app.picker.is_none());
-
-        app.open_picker();
-        app.selection.insert(PathBuf::from("/nowhere/x.png"));
-        app.gallery.search_query = "x".to_owned();
-        app.switch_to_dir(&photos);
-        assert_eq!(app.current_dir.as_deref(), Some(photos.as_path()));
-        assert_eq!(app.picker.as_ref().unwrap().current_dir, photos);
-        assert!(app.images.is_empty());
-        assert!(app.selection.is_empty());
-        assert!(app.gallery.search_query.is_empty());
-
-        wait_until(|| {
-            app.refresh_from_scanner();
-            !app.is_scanning()
-        });
-        assert_eq!(app.filenames, ["..", "a.png", "b.png"]);
-        assert_eq!(app.folder_count, 1);
-
-        // Without a known directory, the picker starts at the folder of the first image.
-        let mut app = app_with(&[photos.join("a.png").to_str().unwrap()]);
-        app.open_picker();
-        assert_eq!(app.current_dir.as_deref(), Some(photos.as_path()));
-    }
 
     #[test]
     fn switching_to_a_folder_applies_its_saved_zoom_level() {

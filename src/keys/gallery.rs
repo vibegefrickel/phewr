@@ -127,10 +127,6 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             app.clear_selection();
         }
         KeyCode::Char('d' | 'D') => delete_key(app, key.code),
-        KeyCode::Char('o') => {
-            app.graphics_delete_all()?;
-            app.open_picker();
-        }
         _ => {}
     }
     if app.gallery.scroll_offset != prev_offset {
@@ -144,8 +140,7 @@ mod tests {
     use crate::app::ViewMode;
 
     use crate::test_support::{
-        char_key, folder_app, gallery_app, photo_paths, press, press_with, synthetic_tree,
-        wait_until,
+        char_key, folder_app, gallery_app, photo_paths, press, press_with, wait_until,
     };
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::fs;
@@ -407,35 +402,5 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert!(!app.gallery.search_active);
         assert_eq!(app.mode, ViewMode::Gallery);
-    }
-
-    #[test]
-    fn gallery_o_opens_the_directory_picker() {
-        let (_temp, root, _child) = synthetic_tree();
-        let mut app = gallery_app(2);
-        app.initial_dir = Some(root.clone());
-
-        char_key(&mut app, 'o');
-
-        assert_eq!(app.mode, ViewMode::Picker);
-        assert_eq!(app.picker.as_ref().unwrap().current_dir, root);
-        press(&mut app, KeyCode::Esc);
-        assert_eq!(
-            app.mode,
-            ViewMode::Gallery,
-            "Esc closes the picker over photos"
-        );
-    }
-
-    #[test]
-    fn gallery_o_then_q_goes_back_over_photos() {
-        let (_temp, root, _child) = synthetic_tree();
-        let mut app = gallery_app(2);
-        app.initial_dir = Some(root);
-
-        char_key(&mut app, 'o');
-        assert!(!char_key(&mut app, 'q'), "q in the picker goes back");
-        assert_eq!(app.mode, ViewMode::Gallery);
-        assert!(char_key(&mut app, 'q'), "q in the grid quits viewr");
     }
 }

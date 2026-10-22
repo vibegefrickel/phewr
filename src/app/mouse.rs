@@ -13,17 +13,13 @@ pub(crate) const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 pub(crate) struct ScreenLayout {
     /// The whole terminal.
     pub screen: Rect,
-    /// The filter box of the directory picker.
-    pub picker_filter: Rect,
-    /// The rows of the directory picker, inside the border.
-    pub picker_list: Rect,
 }
 
 /// The click before the current one, for the double-click.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LastClick {
     pub at: Instant,
-    /// The cell position in the gallery, or the entry row in the picker.
+    /// The cell position in the gallery.
     pub target: usize,
 }
 

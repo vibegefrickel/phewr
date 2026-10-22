@@ -22,8 +22,6 @@ pub(crate) struct Styles {
     pub marked: Style,
     /// Errors and the delete question.
     pub error: Style,
-    /// The selected row of a picker or a list.
-    pub selection: Style,
     /// Secondary text: counts, notes and the labels of the info panel.
     pub dim: Style,
     /// Key hints and the key column of the help popup.
@@ -39,7 +37,6 @@ pub(crate) const STYLES: Styles = Styles {
     cursor_cell: Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD),
     marked: Style::new().fg(Color::Yellow),
     error: Style::new().fg(Color::Red),
-    selection: Style::new().add_modifier(Modifier::REVERSED),
     dim: Style::new().fg(Color::DarkGray),
     key: Style::new().fg(Color::Cyan),
 };

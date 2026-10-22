@@ -32,7 +32,6 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent, now: Instant) -> io
     match app.mode {
         ViewMode::Gallery => gallery_mouse(app, mouse, at, now),
         ViewMode::Fullscreen => fullscreen_mouse(app, mouse, at),
-        ViewMode::Picker => Ok(picker_mouse(app, mouse, at, now)),
         #[cfg(feature = "video")]
         ViewMode::Video => video_mouse(app, mouse, at),
     }
@@ -221,65 +220,6 @@ fn edge_step(app: &mut App, content: Rect, at: Position) {
     app.slideshow_touch();
 }
 
-fn picker_mouse(app: &mut App, mouse: MouseEvent, at: Position, now: Instant) -> bool {
-    let layout = app.layout;
-    match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) if layout.picker_filter.contains(at) => {
-            with_picker(app, |picker| {
-                if !picker.filter_active {
-                    picker.filter_active = true;
-                    picker.filter.clear();
-                    picker.rebuild_filter();
-                }
-            });
-        }
-        MouseEventKind::Down(MouseButton::Left) if layout.picker_list.contains(at) => {
-            picker_click(app, usize::from(at.y - layout.picker_list.y), now);
-        }
-        MouseEventKind::Down(MouseButton::Right) if !app.images.is_empty() => {
-            app.close_picker();
-        }
-        MouseEventKind::ScrollUp => with_picker(app, crate::picker::PickerState::move_up),
-        MouseEventKind::ScrollDown => with_picker(app, crate::picker::PickerState::move_down),
-        _ => {}
-    }
-    false
-}
-
-/// A click on a row of the picker selects it. A double-click chooses it, like Enter.
-fn picker_click(app: &mut App, row: usize, now: Instant) {
-    let Some(picker) = app.picker.as_mut() else {
-        return;
-    };
-    let index = picker.scroll_offset + row;
-    if index >= picker.filtered_indices.len() {
-        app.mouse.last_click = None;
-        return;
-    }
-    picker.cursor = index;
-    picker.filter_active = false;
-    app.needs_render = true;
-    if !app.mouse.double_click(index, now) {
-        return;
-    }
-    let target = app
-        .picker
-        .as_ref()
-        .and_then(|picker| picker.selected())
-        .map(|entry| entry.path.clone());
-    if let Some(target) = target {
-        app.switch_to_dir(&target);
-        app.close_picker();
-    }
-}
-
-fn with_picker(app: &mut App, change: impl FnOnce(&mut crate::picker::PickerState)) {
-    if let Some(picker) = app.picker.as_mut() {
-        change(picker);
-        app.needs_render = true;
-    }
-}
-
 /// The player: a click on the picture pauses, a click beside it or a right click goes back like
 /// `q`, and the wheel seeks. The status row and the info panel act as in the other views.
 #[cfg(feature = "video")]
@@ -327,7 +267,7 @@ mod tests {
     use crate::run_loop::LoopState;
     use crate::test_support::{
         char_key, click, click_at, click_cell, draw_frame, fullscreen_app, gallery_app,
-        gallery_app_with, mouse, mouse_at, mouse_cell, synthetic_tree, text, wait_until,
+        gallery_app_with, mouse, mouse_at, mouse_cell, text, wait_until,
     };
     use crate::ui;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
@@ -602,101 +542,6 @@ mod tests {
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
         mouse(&mut app, RIGHT, (10, 10));
         assert!(!app.info_visible);
-    }
-
-    /// A picker on `root`, drawn one time so that the app knows the list area.
-    fn picker_app(root: &std::path::Path) -> crate::app::App {
-        let mut app = gallery_app(2);
-        app.initial_dir = Some(root.to_owned());
-        app.open_picker();
-        draw_frame(&mut app, 80, 24);
-        app
-    }
-
-    #[test]
-    fn a_picker_click_selects_the_row_and_a_double_click_chooses_it() {
-        let (temp, root, child) = synthetic_tree();
-        let mut app = picker_app(&root);
-        let list = app.layout.picker_list;
-        let names: Vec<String> = app
-            .picker
-            .as_ref()
-            .unwrap()
-            .entries
-            .iter()
-            .map(|entry| entry.name.clone())
-            .collect();
-        let row = names
-            .iter()
-            .position(|name| name == "synthetic-images")
-            .unwrap() as u16;
-        let start = Instant::now();
-
-        click_at(&mut app, (list.x + 2, list.y + row), start);
-        assert_eq!(app.mode, ViewMode::Picker);
-        assert_eq!(app.picker.as_ref().unwrap().cursor, usize::from(row));
-        assert!(app.needs_render);
-
-        click_at(&mut app, (list.x + 2, list.y + list.height - 1), start);
-        assert_eq!(
-            app.picker.as_ref().unwrap().cursor,
-            usize::from(row),
-            "a click below the last row does nothing"
-        );
-        click_at(&mut app, (list.x + 2, list.y + row), start);
-        assert_eq!(
-            app.mode,
-            ViewMode::Picker,
-            "a click below the last row breaks the double-click"
-        );
-
-        click_at(
-            &mut app,
-            (list.x + 2, list.y + row),
-            start + Duration::from_millis(10),
-        );
-        assert_eq!(app.mode, ViewMode::Gallery);
-        assert_eq!(app.current_dir.as_deref(), Some(child.as_path()));
-        std::thread::sleep(Duration::from_millis(20));
-        drop(temp);
-    }
-
-    #[test]
-    fn the_picker_wheel_moves_and_the_filter_box_and_right_click_act_like_their_keys() {
-        let (_temp, root, _child) = synthetic_tree();
-        let mut app = picker_app(&root);
-        let filter = app.layout.picker_filter;
-
-        mouse(&mut app, MouseEventKind::ScrollDown, (5, 10));
-        assert_eq!(app.picker.as_ref().unwrap().cursor, 1);
-        mouse(&mut app, MouseEventKind::ScrollUp, (5, 10));
-        assert_eq!(app.picker.as_ref().unwrap().cursor, 0);
-
-        click(&mut app, (filter.x + 1, filter.y + 1));
-        assert!(app.picker.as_ref().unwrap().filter_active);
-        let list = app.layout.picker_list;
-        click(&mut app, (list.x + 2, list.y));
-        assert!(
-            !app.picker.as_ref().unwrap().filter_active,
-            "a click on a row ends the typing"
-        );
-
-        mouse(&mut app, RIGHT, (5, 10));
-        assert_eq!(
-            app.mode,
-            ViewMode::Gallery,
-            "a right click goes back like q"
-        );
-    }
-
-    #[test]
-    fn a_right_click_in_a_picker_without_photos_does_nothing() {
-        let (_temp, root, _child) = synthetic_tree();
-        let mut app = gallery_app(0);
-        app.initial_dir = Some(root);
-        app.open_picker();
-        mouse(&mut app, RIGHT, (5, 10));
-        assert_eq!(app.mode, ViewMode::Picker);
     }
 
     #[cfg(feature = "video")]

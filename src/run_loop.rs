@@ -98,14 +98,6 @@ pub(crate) fn run(
         #[cfg(feature = "video")]
         play_videos(app, state, &mut mpv::SystemRunner);
 
-        if app.scan_complete
-            && app.images.is_empty()
-            && app.error.is_none()
-            && app.mode != ViewMode::Picker
-        {
-            app.open_picker();
-        }
-
         // 3. Draw UI chrome (always fast — ratatui only)
         terminal.draw(|frame| draw_ui(frame, app, state))?;
 
@@ -197,7 +189,6 @@ pub(crate) fn poll_background(app: &mut App, pending_emits: &mut Vec<usize>) {
 pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io::Result<bool> {
     let draws = app.needs_render && !app.images.is_empty();
     match app.mode {
-        ViewMode::Picker => finish_render(app, pending_emits),
         ViewMode::Fullscreen if draws => {
             app.load_if_needed();
             render_fullscreen_image(app)?;

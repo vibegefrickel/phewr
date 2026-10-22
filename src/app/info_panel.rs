@@ -15,7 +15,7 @@ impl App {
     /// The image that the view is on: the fullscreen file, or the gallery cursor.
     fn view_index(&self) -> Option<usize> {
         match self.mode {
-            ViewMode::Gallery | ViewMode::Picker => self.gallery.selected_index(),
+            ViewMode::Gallery => self.gallery.selected_index(),
             ViewMode::Fullscreen => Some(self.current),
             #[cfg(feature = "video")]
             ViewMode::Video => Some(self.current),
@@ -33,12 +33,8 @@ impl App {
         self.images.get(index).cloned()
     }
 
-    /// Path the info panel describes: the fullscreen image, or the hovered thumbnail. The
-    /// picker covers the grid, so it shows no info. A folder has no info.
+    /// Path the info panel describes: the fullscreen image, or the hovered thumbnail. A folder has no info.
     pub(crate) fn info_path(&self) -> Option<PathBuf> {
-        if self.mode == ViewMode::Picker {
-            return None;
-        }
         let index = self.view_index()?;
         if self.is_folder(index) {
             return None;
@@ -89,8 +85,6 @@ mod tests {
         app.mode = ViewMode::Fullscreen;
         app.current = 0;
         assert_eq!(app.info_path(), Some(app.images[0].clone()));
-        app.mode = ViewMode::Picker;
-        assert_eq!(app.info_path(), None);
 
         let path = app.images[0].clone();
         let first = app.info_for(&path);

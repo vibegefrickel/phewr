@@ -1,8 +1,8 @@
 //! The folder entries of the grid: the kinds, the step into a folder and the step to the parent.
 
 use super::{App, EntryKind};
-use crate::picker;
-use std::path::PathBuf;
+use crate::scanner::canonicalize_or_self;
+use std::path::{Path, PathBuf};
 
 impl App {
     /// The kind of the entry `index`. The folders are the first `folder_count` entries.
@@ -44,12 +44,11 @@ impl App {
     pub(crate) fn gallery_dir(&self) -> PathBuf {
         self.current_dir
             .clone()
-            .or_else(|| {
-                self.initial_dir
-                    .as_deref()
-                    .map(picker::canonicalize_or_self)
+            .or_else(|| self.initial_dir.as_deref().map(canonicalize_or_self))
+            .unwrap_or_else(|| {
+                let first_parent = self.images.first().and_then(|path| path.parent());
+                canonicalize_or_self(first_parent.unwrap_or_else(|| Path::new(".")))
             })
-            .unwrap_or_else(|| picker::initial_picker_dir(&self.images))
     }
 
     /// Enter on a folder cell: the grid switches to that folder. `false` on a file.

@@ -1,5 +1,4 @@
 use crate::image_list::{FolderEntry, SharedImageList};
-use crate::picker::canonicalize_or_self;
 use std::path::{Path, PathBuf};
 use std::thread;
 
@@ -98,6 +97,11 @@ pub(crate) fn files_of(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
         flush_batch(&list, &mut batch);
     }
     list.drain_since(0)
+}
+
+/// The canonical form of `p`, or `p` itself when the file system cannot resolve it.
+pub(crate) fn canonicalize_or_self(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// The entries of the subfolders of `dir`, sorted by name, after `..` for the parent. A hidden

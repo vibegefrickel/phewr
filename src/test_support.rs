@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 /// A temp directory with the subdirectory `synthetic-images`. The tree goes away on drop.
-/// Both paths are canonical, because the picker canonicalizes its directories.
+/// Both paths are canonical, because the scanner canonicalizes its directories.
 pub(crate) fn synthetic_tree() -> (TempDir, PathBuf, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(temp.path()).unwrap();
