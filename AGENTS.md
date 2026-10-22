@@ -182,7 +182,8 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   `poll_mpv_window`.
 - `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` and the pacing,
   `decoder.rs` the ffmpeg command line and the `Decoder` trait, `probe.rs` `VideoInfo`,
-  `layout.rs` the frame box and the cell box, `tone_map.rs` the HDR curve and the cube,
+  `layout.rs` the frame box and the cell box, `tone_map.rs` the color cubes (the HDR tone mapping, the SDR
+  primaries conversion and the cube files),
   `animation.rs` the header check for animated GIF, WebP, APNG and AVIS.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
@@ -310,10 +311,13 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   the file of the window forgets the window. The window gets `--fs --native-fs=no` and
   `--hwdec=auto-safe`. `--fs` overrides `fs=no` of a user `mpv.conf`.
 - **HDR in the terminal:** `player::probe` reads the transfer curve. For HLG and PQ,
-  `player::tone_map::tone_map_file` writes a 3D cube (`tonemap-hlg-v2.cube`,
-  `tonemap-pq-v2.cube`) into the thumbnail cache directory, or into `$TMPDIR/viewr` if the cache
-  path holds filter graph syntax. If the cube output changes, change the version in the file
-  names. `SDR_WHITE_NITS = 500` matches the macOS SDR export on three iPhone clips. The PQ cube
+  `player::tone_map::cube_file` writes a 3D cube into the thumbnail cache directory, or into
+  `$TMPDIR/viewr` if the cache path holds filter graph syntax. `Cube::for_video` picks the cube,
+  and the decoder calls it through `cube_for(info, target, dirs)`. The names are
+  `tonemap-hlg-{p3,srgb}-v3.cube`, `tonemap-pq-{p3,srgb}-v3.cube` and, for SDR,
+  `color-<primaries>-<target>-v3.cube`. `CUBE_VERSION` is the one version for all cube names:
+  change it when the cube output changes. The tone mapping writes the target primaries. ffmpeg
+  parses a cube at each start: 33 points take about 42 ms, 17 points about 16 ms. `SDR_WHITE_NITS = 500` matches the macOS SDR export on three iPhone clips. The PQ cube
   has no test on a real PQ file.
 - **Entry kinds:** the first `App::folder_count` entries of `images` are folders, `..` first.
   The scanner pushes them before the first file batch, and the sort at the end of the scan sorts
@@ -330,7 +334,9 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   (`output_within`). A probe cache keys each `VideoInfo` by path, mtime and length, so
   `Player::open` after a cold thumbnail starts no ffprobe. An animation reads 17 packets, an
   `.avif` file 34. The first frame runs the player GPU chain with `-frames:v 1`, with the
-  rotation and the cube, and waits at most 5 s. The player maps the probed stream with
+  rotation and, for HLG and PQ, the tone mapping cube, and waits at most 5 s. An SDR first frame
+  converts after the decode with `color::convert` (`convert_first_frame` in `video.rs`), so it
+  pays no cube parse. The player maps the probed stream with
   `-map 0:N` for every video. Without the programs, a video cell keeps its `▶` icon, and
   `Enter` opens the mpv window with a note.
 - **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
@@ -438,7 +444,7 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v11` (`THUMBNAIL_CACHE_VERSION`), the
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v12` (`THUMBNAIL_CACHE_VERSION`), the
   path, the size, the mtime, the target size and the color target. Change the version string when the thumbnail
   output changes. The folder prefetch writes the same key (`warm_disk_cache` calls
   `sharp_thumbnail`). The prune removes temp files of the cache that are older than 1 hour.
@@ -462,8 +468,13 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   parallel. A source in the target space converts nothing, so iPhone photos (Display P3) cost
   nothing. A source that cannot convert (an unreadable or non-RGB ICC profile, unknown CICP
   codes) converts as sRGB. PQ and HLG sources keep their values. `main` sets the target, and
-  tests keep sRGB. Videos, video thumbnails and the frames of animations in the terminal player
-  do not convert yet.
+  tests keep sRGB. The terminal player converts with a `lut3d` cube (`player/tone_map.rs`): an
+  SDR video or animation gets a 17-point cube from its `color_primaries` (`Primaries::of_name`:
+  BT.709, SMPTE 170M, BT.470 BG, Display P3, DCI-P3 with a Bradford adaptation, BT.2020) into
+  the target. An untagged stream, GIF, WebP and APNG count as BT.709 with the sRGB curve. A
+  source in the target space gets no cube. The SDR cube runs in 8 bit (`rgb24`, `rgba`), and
+  its values hold half a level, because `lut3d` truncates to 8 bit. A real ffmpeg test fails if
+  `lut3d` starts to round. At 1080p, the SDR cube costs 1.4 ms to 2 ms per frame.
 - **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
   profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
   of 64 rows). A transform error, XYB, the enum encodings and a PQ or HLG ICC profile stay with

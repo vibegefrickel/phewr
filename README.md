@@ -131,7 +131,7 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 
 ### Video
 
-viewr plays a video in the terminal with its own player. ffmpeg from Homebrew decodes on the media engine of the Mac, scales the frame on the GPU and maps HLG and PQ (iPhone HDR, Dolby Vision 8.4, HDR10) to SDR with a tone mapping cube. viewr sends each frame through the Kitty temp file medium, and the terminal scales it to the window. A 1080p video plays at 30 fps without dropped frames in Ghostty. Opaque images and video frames go to the terminal as RGB, with a quarter fewer bytes than RGBA. Videos with a variable frame rate, for example screen recordings and phone clips, play at their real speed. The terminal player has no sound.
+viewr plays a video in the terminal with its own player. ffmpeg from Homebrew decodes on the media engine of the Mac, scales the frame on the GPU and maps HLG and PQ (iPhone HDR, Dolby Vision 8.4, HDR10) to SDR with a tone mapping cube. Every video and animation converts into the color space of the terminal, like the still images. viewr sends each frame through the Kitty temp file medium, and the terminal scales it to the window. A 1080p video plays at 30 fps without dropped frames in Ghostty. Opaque images and video frames go to the terminal as RGB, with a quarter fewer bytes than RGBA. Videos with a variable frame rate, for example screen recordings and phone clips, play at their real speed. The terminal player has no sound.
 
 | Key | Action |
 |-----|--------|
