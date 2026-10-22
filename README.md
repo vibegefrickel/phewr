@@ -198,6 +198,11 @@ show_on_start = false
 # "window": mpv plays every video in a fullscreen window of its own, with sound.
 # "builtin" from older versions means "terminal".
 player = "terminal"
+
+[terminal]
+# "display-p3" (default): the terminal shows image pixels as Display P3, as Ghostty on macOS does.
+# "srgb": the terminal shows image pixels as sRGB.
+colorspace = "display-p3"
 ```
 
 The terminal player needs `ffmpeg` on PATH. Without the temp file medium or ffmpeg, a video opens in the mpv window. Without mpv, a note shows.
@@ -208,7 +213,7 @@ viewr caches thumbnails in the OS cache directory: `~/Library/Caches/viewr` on m
 
 ### Colors
 
-viewr uses the default foreground and background of the terminal and the 16 ANSI colors. The color scheme of the terminal sets the look of viewr. viewr has no color settings.
+viewr uses the default foreground and background of the terminal and the 16 ANSI colors. The color scheme of the terminal sets the look of viewr. viewr has no settings for these colors.
 
 ### Kitty transfer
 
@@ -218,9 +223,11 @@ At start, viewr asks the terminal whether it reads image data from a temp file. 
 
 **Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, TGA.
 
+**Colors:** viewr converts the colors of each image into the color space of the terminal. Ghostty shows image pixels as Display P3, so that is the default. viewr reads ICC profiles (JPEG, PNG, WebP, TIFF, HEIC, AVIF), the nclx box of HEIC and AVIF, and the cICP, gAMA and cHRM chunks of PNG. An image without color information is sRGB. iPhone photos are already Display P3 and need no conversion.
+
 **Animated images:** animated GIF, WebP, APNG (`.png`, `.apng`) and AVIF image sequences (AVIS) play in the terminal player, in a loop. The grid shows the first frame with a dim `▶` marker. Videos get the same marker. `Enter` plays the animation, and `p` opens it in the mpv window. In a slideshow, the terminal player plays an animation for at least the slideshow interval. Animated WebP needs FFmpeg 9 or later (the `webp_anim` decoder).
 
-**JPEG XL:** viewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors to sRGB, also from ICC profiles and wide gamut, tone-maps PQ and HLG to SDR, and applies the orientation of the file. An animated JPEG XL shows its first frame.
+**JPEG XL:** viewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors into the color space of the terminal, also from ICC profiles and wide gamut, tone-maps PQ and HLG to SDR, and applies the orientation of the file. An animated JPEG XL shows its first frame.
 
 **EXR and HDR:** viewr maps the float values to 8 bit with an extended Reinhard tone map. The white point is the brightest value of the image.
 

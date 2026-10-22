@@ -124,6 +124,10 @@ missing.
 - Tests that need a real file are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
   `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW`, `VIEWR_TEST_PSD`,
   `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`.
+- `tests/fixtures/color/` holds a Display P3 chart as JPEG, PNG, WebP, TIFF and HEIC with an ICC
+  profile, as HEIC and AVIF with nclx, and as PNG with cICP and with gAMA and cHRM, plus an
+  Adobe RGB JPEG and untagged sRGB files. `VIEWR_BENCH_COLORSPACE=srgb just bench` measures with
+  the sRGB target.
 - `tests/fixtures/png/` holds 10 PNG layouts (16 bit, palette, tRNS, gray, gray with alpha,
   RGBA, interlaced, EXIF orientation 6), and `make.sh` rebuilds them with magick and exiftool.
 - `tests/fixtures/` holds 8 small animated and still files (GIF, WebP, APNG, AVIF), and
@@ -197,7 +201,12 @@ missing.
   (JPEG XL, ICC profiles through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
   (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and
   `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell shape),
-  `embedded_jpeg.rs` (the safe reader for the JPEG inside camera RAW and PSD files).
+  `embedded_jpeg.rs` (the safe reader for the JPEG inside camera RAW and PSD files), `color.rs`
+  (the conversion into the color space of the terminal: `ColorTarget`, `SourceColor`, the
+  transform cache, and the ICC and CICP readers for JPEG APP2, the PNG chunks and the TIFF
+  tag). `decode_image` returns `Decoded` (the pixels and their `SourceColor`).
+  `Decoded::fit_within` resizes, then converts. `decode_image_with_hint` converts at the decoded
+  size.
 - `ui.rs`: the ratatui drawing of each view, the help popup and the info panel. The help popup has
   two columns from 100 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, rows in `help_gallery_rows`
   and `help_viewer_rows`), else one column that clips. The gallery, the
@@ -409,8 +418,8 @@ missing.
 - **FFmpeg versions:** `ffmpeg-next` must match the major version of Homebrew's FFmpeg.
   ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
   release binary that links the old `libavcodec.<major>.dylib` does not start.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v7` (`THUMBNAIL_CACHE_VERSION`), the
-  path, the size, the mtime and the target size. Change the version string when the thumbnail
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v9` (`THUMBNAIL_CACHE_VERSION`), the
+  path, the size, the mtime, the target size and the color target. Change the version string when the thumbnail
   output changes. The folder prefetch writes the same key (`warm_disk_cache` calls
   `sharp_thumbnail`). The prune removes temp files of the cache that are older than 1 hour.
 - **Folder prefetch:** after the cursor rests on a folder cell for `FOLDER_PREFETCH_DELAY`
@@ -423,6 +432,18 @@ missing.
   waits for the old thread. `..` takes part only after a real cursor move. A folder that this
   session prefetched, or one with fewer than 2 files, does not start. Only the folder switch
   bench ticks the prefetch.
+- **Image colors:** Ghostty on macOS draws into a Display P3 surface, and its image shader copies
+  the pixels of a Kitty image without a conversion, also with `window-colorspace = srgb` (that
+  setting converts only the text colors). So viewr converts each image into Display P3
+  (`[terminal] colorspace`, default `display-p3`, or `srgb`). Each decoder reports the color of
+  its pixels: ICC from JPEG APP2 (also over several segments), PNG iCCP, WebP ICCP, TIFF tag
+  34675 and HEIF `prof`/`rICC`, CICP from HEIF `nclx` and PNG `cICP`, and PNG `gAMA`/`cHRM`.
+  The conversion runs after the resize, as one cached `moxcms` transform with the rows in
+  parallel. A source in the target space converts nothing, so iPhone photos (Display P3) cost
+  nothing. A source that cannot convert (an unreadable or non-RGB ICC profile, unknown CICP
+  codes) converts as sRGB. PQ and HLG sources keep their values. `main` sets the target, and
+  tests keep sRGB. Videos, video thumbnails and the frames of animations in the terminal player
+  do not convert yet.
 - **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
   profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
   of 64 rows). A transform error, XYB, the enum encodings and a PQ or HLG ICC profile stay with
