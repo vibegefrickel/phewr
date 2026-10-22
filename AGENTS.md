@@ -124,6 +124,8 @@ missing.
 - Tests that need a real file are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
   `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW`, `VIEWR_TEST_PSD`,
   `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`.
+- `tests/fixtures/png/` holds 10 PNG layouts (16 bit, palette, tRNS, gray, gray with alpha,
+  RGBA, interlaced, EXIF orientation 6), and `make.sh` rebuilds them with magick and exiftool.
 - `tests/fixtures/` holds 8 small animated and still files (GIF, WebP, APNG, AVIF), and
   `test_support::fixture(name)` finds them. `avifenc` makes a new AVIS fixture. The real ffmpeg
   test skips WebP without FFmpeg 9 (`webp_anim` decoder). `tests/fixtures/jxl/` holds 18 JPEG XL
@@ -225,7 +227,10 @@ missing.
   and the `Runner` trait for the process start.
 - `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `detect_transfer` probes the terminal at start with `a=q`.
-  `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe.
+  `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe. `Pixels` is a view of RGB or RGBA
+  pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
+  every medium. The check and the copy go in chunks of 4096 pixels and stop at the first
+  transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost.
 - `test_support.rs` (test only): the app builders, the key press helpers and the synthetic
   file writers that the tests of more than one module share. `test_support::video` holds
   `FakeRunner`, `FakeDecoder` and the app builders of the video tests.
@@ -243,7 +248,9 @@ missing.
   by more than 1 %, and the output rate is `r_frame_rate` up to 60 fps, else the average rate
   capped at 60 fps (`pacing_rate`, `variable_rate_fps` in `player/probe.rs`). Without `-r`,
   ffmpeg writes raw frames at `r_frame_rate`, so the pacing uses the same rate. iPhone clips
-  (30 and 29.99) stay constant-rate. One frame per temp file, image id `u32::MAX - 1`
+  (30 and 29.99) stay constant-rate. ffmpeg writes `-pix_fmt rgb24` for a video and `rgba` for an
+  animation, and `pixel_format` in `player/decoder.rs` is the one source for the frame layout
+  (`player::Frame`). One frame per temp file, image id `u32::MAX - 1`
   (the grid ids count up from 1), `c=` / `r=` to the cell box, no `X=` / `Y=`. The frame box is
   the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the cell box. The
   frame size stays until the next ffmpeg start. The reader thread holds 2 frames
@@ -325,7 +332,7 @@ missing.
   receiver.
 - **Kitty temp file medium:** the temp file medium wins only when the probe answer is `OK` and
   the terminal deleted the probe file. A terminal with another `TMPDIR` reads the file but keeps
-  it, and viewr would leave a 22 MB file per frame. The file name contains
+  it, and viewr would leave a 17 MB file per frame. The file name contains
   `tty-graphics-protocol`, as the protocol requires. A terminal that answers the probe later
   than 300 ms sends the answer as key presses.
 - **Kitty images are not ratatui widgets.** ratatui draws the frame and the borders. viewr then
@@ -350,7 +357,8 @@ missing.
   grid edge cuts stays open at that edge. No cell has a background fill. Every thumbnail is
   decoded for the base cell size, so a wider column only has a larger margin.
 - **Terminal storage:** `TerminalImages` in `kitty_output.rs` tracks the images that the
-  terminal stores, with their bytes. The grid deletes evicted and replaced ids with `a=d,d=I`
+  terminal stores, with their bytes (4 bytes per pixel, also for a picture that went out as RGB,
+  so the count is an upper bound). The grid deletes evicted and replaced ids with `a=d,d=I`
   and trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB). Ghostty evicts
   unplaced images at 320 MB, and herdr stores each image twice. A trimmed cell sends its
   picture again with `a=T`. The in-memory cache holds `max(200, 2 * visible cells)` entries
