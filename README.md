@@ -101,7 +101,6 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `Space` | Toggle selection |
 | `a` `A` | Select all / clear selection |
 | `d` `D` | Trash / permanently delete, with confirm |
-| `o` | Directory picker |
 | `q` `Esc` | Quit |
 | `?` | Full help |
 
@@ -157,7 +156,7 @@ In a slideshow, a video plays one time and the slideshow continues. Outside a sl
 
 In fullscreen, a status note (for example "clip.mp4 plays in an mpv window") replaces the key hints until the next key press.
 
-`q` goes back one step in every view. Only `q` in the grid quits viewr. In the directory picker, `q` closes the picker. If the folder has no photos yet, `q` in the picker quits viewr, because there is no view to go back to.
+`q` goes back one step in every view. Only `q` in the grid quits viewr. An empty folder shows a note in the status row: `Backspace` goes up, `q` quits.
 
 ### Mouse
 
@@ -174,7 +173,6 @@ viewr reads the mouse in every view. `[gallery] mouse = false` turns this off, a
 | Fullscreen | Right click | Info panel |
 | Player | Click on the video / beside it or right click | Pause / back |
 | Player | Wheel | Seek 5 s |
-| Picker | Click / double-click / wheel / right click | Select / choose / move / back |
 | Every view | Click on the status row | Help |
 
 A click closes the help and the info panel. While an mpv window plays, viewr releases the mouse.

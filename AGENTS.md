@@ -162,7 +162,7 @@ missing.
   `render_images` and `next_timeout`. The status note lives here, not in `App`.
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
   `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
-  `gallery.rs` (with the search line), `picker.rs`, `video.rs` (feature `video`).
+  `gallery.rs` (with the search line), `video.rs` (feature `video`).
   `mouse.rs` holds the mouse handler per view.
 - `kitty_output.rs`: the Kitty writes per frame: the fullscreen image, the video frame, the
   grid and the new thumbnails. Each `render_*` has a `*_to` twin that writes to any `Write`,
@@ -181,7 +181,7 @@ missing.
   state file), `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter),
   `cell_shape.rs`, `fullscreen.rs` (enter, leave, the steps and the decode), `zoom.rs` (zoom,
   pan and the full-resolution source), `delete.rs` (the marks and the delete question),
-  `directory.rs` (the picker and the directory switch), `folder_prefetch.rs` (the decode of the
+  `directory.rs` (the directory switch), `folder_prefetch.rs` (the decode of the
   first screen of the folder under the cursor into the disk cache), `mouse.rs` (the mouse state and the
   screen layout of the last draw), `folders.rs` (the folder entries of
   the grid, `Enter` into a folder, `go_to_parent`), `video.rs` (the terminal player state, the
@@ -196,11 +196,11 @@ missing.
   (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and
   `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell shape),
   `embedded_jpeg.rs` (the safe reader for the JPEG inside camera RAW and PSD files).
-- `ui.rs`: the ratatui drawing of each view, the help popup and the pickers. The help popup has
+- `ui.rs`: the ratatui drawing of each view, the help popup and the info panel. The help popup has
   two columns from 100 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, rows in `help_gallery_rows`
   and `help_viewer_rows`), else one column that clips. The gallery, the
   fullscreen view and the video view have no frame. They use the full area minus 1 status row
-  (`content_area`, `status_area`). The help popup, the pickers and the info panel keep their
+  (`content_area`, `status_area`). The help popup and the info panel keep their
   borders.
 - `gallery.rs`: the grid geometry, the cursor and the in-memory thumbnail cache.
   `update_grid` gives the remainder of the width and the height to the first columns and rows,
@@ -216,7 +216,7 @@ missing.
   generation. `invalidate()` drops the jobs in flight and forgets the failed indices. Each result
   (`Prefetched`) keeps its decode box. `take_resized` fits the image into the requested box. If
   the decode box is smaller, it returns `None`.
-- `picker.rs`: the directory picker. `search.rs`: fuzzy filename search (nucleo-matcher).
+- `search.rs`: fuzzy filename search (nucleo-matcher).
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config.rs`: `config.toml` and the state file.
@@ -298,8 +298,9 @@ missing.
   The scanner pushes them before the first file batch, and the sort at the end of the scan sorts
   the files only. Every step of the fullscreen view starts at `App::first_file()`, the prefetch
   gets the first file index, and the thumbnail jobs, the marks, the delete, the cell shape and
-  the info panel skip folders. A folder cell has no thumbnail and no Kitty image. The run loop
-  opens the picker only when the list has no entry at all. A start with several paths lists no
+  the info panel skip folders. A folder cell has no thumbnail and no Kitty image. An empty
+  folder (no file, and no folder besides `..`) shows a note in the status row (`is_empty_folder`
+  in `ui.rs`). There is no directory picker. A start with several paths lists no
   folders. A symlink to a folder stays out. One image next to folders opens the fullscreen view
   at once, as in a flat folder.
 - **FFmpeg log:** `main` sets the FFmpeg log level to `Quiet` directly after `ffmpeg::init()`, so
