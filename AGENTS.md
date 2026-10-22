@@ -15,7 +15,8 @@ imgrrr before 2026-10-17.
 - viewr is a viewer only. It does not edit, convert, write, move, rename or delete files. The
   remaining delete code (trash, permanent delete) goes after the open terminal tests. Do not add
   new file operations.
-- The target is macOS on Apple Silicon, in Ghostty. viewr uses the Kitty graphics protocol, not the Kitty terminal. Nobody tests in the Kitty terminal.
+- The target is macOS on Apple Silicon, in Ghostty. viewr uses the Kitty graphics protocol, not the
+  Kitty terminal. Nobody tests in the Kitty terminal.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
 
 The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
@@ -167,8 +168,9 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
   `query_terminal`, `query_cell_size_and_probe` (`CSI 16 t` and the Kitty probe in one write)
   and the cell pixel size.
-- `run_loop.rs`: `LoopState` (the status note and, with the `video` feature, the `VideoState`), `run`, the background polls,
-  `render_images` and `next_timeout`. The status note lives here, not in `App`.
+- `run_loop.rs`: `LoopState` (the status note and, with the `video` feature, the `VideoState`),
+  `run`, the background polls, `render_images` and `next_timeout`. The status note lives here, not
+  in `App`.
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
   `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `video.rs` (feature `video`).
@@ -181,36 +183,34 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   and the way back. `mod.rs` holds `VideoState` and `play_videos`. `window.rs` holds
   `poll_mpv_window`.
 - `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` and the pacing,
-  `decoder.rs` the ffmpeg command line and the `Decoder` trait, `probe.rs` `VideoInfo`,
-  `layout.rs` the frame box and the cell box, `tone_map.rs` the color cubes (the HDR tone mapping, the SDR
-  primaries conversion and the cube files),
-  `animation.rs` the header check for animated GIF, WebP, APNG and AVIS.
+  `decoder.rs` the ffmpeg command line and the `Decoder` trait, `probe.rs` `VideoInfo`, `layout.rs`
+  the frame box and the cell box, `tone_map.rs` the color cubes (the HDR tone mapping, the SDR
+  primaries conversion and the cube files), `animation.rs` the header check for animated GIF, WebP,
+  APNG and AVIS.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
-- `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
-  construction. One file per topic: `info_panel.rs`, `grid_zoom.rs` (the cell size and the
-  state file), `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter),
-  `cell_shape.rs`, `fullscreen.rs` (enter, leave, the steps and the decode), `zoom.rs` (zoom,
-  pan and the full-resolution source), `delete.rs` (the marks and the delete question),
-  `directory.rs` (the directory switch), `folder_prefetch.rs` (the decode of the
-  first screen of the folder under the cursor into the disk cache), `mouse.rs` (the mouse state and the
-  screen layout of the last draw), `folders.rs` (the folder entries of
-  the grid, `Enter` into a folder, `go_to_parent`), `video.rs` (the terminal player state, the
-  return after a video, the mpv window watch), `thumbnails.rs` (the jobs, the queue, the HEIC
-  previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
-- `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the
-  route by extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the
-  user waits for. `raster.rs` (the `image` crate and the EXIF orientation), `turbo.rs`
-  (libjpeg-turbo with DCT scaling), `libheif.rs` (HEIC, HEIF, AVIF, the embedded thumbnails
-  and the core share `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom), `jxl.rs`
-  (JPEG XL, ICC profiles through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
-  (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and
-  `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell shape),
-  `embedded_jpeg.rs` (the safe reader for the JPEG inside camera RAW and PSD files), `color.rs`
-  (the conversion into the color space of the terminal: `ColorTarget`, `SourceColor`, the
-  transform cache, and the ICC and CICP readers for JPEG APP2, the PNG chunks and the TIFF
-  tag). `decode_image` returns `Decoded` (the pixels and their `SourceColor`).
-  `Decoded::fit_within` resizes, then converts. `decode_image_with_hint` converts at the decoded
-  size.
+- `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its construction.
+  One file per topic: `info_panel.rs`, `grid_zoom.rs` (the cell size and the state file),
+  `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter), `cell_shape.rs`,
+  `fullscreen.rs` (enter, leave, the steps and the decode), `zoom.rs` (zoom, pan and the
+  full-resolution source), `delete.rs` (the marks and the delete question), `directory.rs` (the
+  directory switch), `folder_prefetch.rs` (the decode of the first screen of the folder under the
+  cursor into the disk cache), `mouse.rs` (the mouse state and the screen layout of the last draw),
+  `folders.rs` (the folder entries of the grid, `Enter` into a folder, `go_to_parent`), `video.rs`
+  (the terminal player state, the return after a video, the mpv window watch), `thumbnails.rs` (the
+  jobs, the queue, the HEIC previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
+- `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the route by
+  extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the user waits
+  for. `raster.rs` (the `image` crate and the EXIF orientation), `turbo.rs` (libjpeg-turbo with DCT
+  scaling), `libheif.rs` (HEIC, HEIF, AVIF, the embedded thumbnails and the core share
+  `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom), `jxl.rs` (JPEG XL, ICC profiles
+  through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
+  (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and `ispe`),
+  `shape.rs` (the image dimensions from the file headers, for the cell shape), `embedded_jpeg.rs`
+  (the safe reader for the JPEG inside camera RAW and PSD files), `color.rs` (the conversion into
+  the color space of the terminal: `ColorTarget`, `SourceColor`, the transform cache, and the ICC
+  and CICP readers for JPEG APP2, the PNG chunks and the TIFF tag). `decode_image` returns `Decoded`
+  (the pixels and their `SourceColor`). `Decoded::fit_within` resizes, then converts.
+  `decode_image_with_hint` converts at the decoded size.
 - `ui.rs`: the ratatui drawing of each view, the help popup and the info panel. The help popup has
   two columns from 100 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, rows in `help_gallery_rows`
   and `help_viewer_rows`), else one column that clips. The gallery, the
@@ -249,8 +249,10 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   file writers that the tests of more than one module share. `test_support::video` holds
   `FakeRunner`, `FakeDecoder` and the app builders of the video tests.
 - `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
-  terminal and read `VIEWR_TEST_DIR`. `start_to_the_first_grid_picture` measures the process
-  start and the steps of `main`, `disk_cache_formats` the cache formats.
+  terminal and read `VIEWR_TEST_DIR`. `start_to_the_first_grid_picture` measures the process start
+  and the steps of `main`, `disk_cache_formats` the cache formats. `measure_grid` stops the clock at
+  the end of the pass. In `just bench`, the grid bench runs after benches that leave decodes
+  running, so its cold numbers are about 3 times higher than in a run of the grid bench alone.
 
 ## Gotchas
 
@@ -284,17 +286,17 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because the image decode cannot read
   a video. `p` on the placeholder opens the mpv window.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
-  video. The thumbnail job reads the animation flag into `App::animated`, and the grid marker
-  (a dim `▶` in the label, or in the gap below the cell) reads only that flag, so the draw
-  reads no file. A video gets the same marker once its thumbnail is in `thumb_cache`
-  (`shows_play_marker` in `ui.rs`). The route (`App::plays_at`) reads the header of the one file after a key
-  press. `App::is_video_at` still drives the placeholder and the loading icon. The probe reads
-  at most 16 packets: the rate is the GCD of the frame delays, or the mean rate above 50 fps,
-  and the length comes from the container. An AVIS file holds two video streams, and the probe
-  maps the one with the most frames. ffmpeg gets no `-hwaccel` for an animation, because the
-  AV1 decoder stops with it. Esc from an animation returns to its still frame in the fullscreen
-  view. In a running slideshow, the terminal player holds an animation for at least the
-  slideshow interval (`Player::play_at_least`). The mpv window has no such hold.
+  video. The thumbnail job reads the animation flag into `App::animated`, and the grid marker (a dim
+  `▶` in the label, or in the gap below the cell) reads only that flag, so the draw reads no file. A
+  video gets the same marker once its thumbnail is in `thumb_cache` (`shows_play_marker` in
+  `ui.rs`). The route (`App::plays_at`) reads the header of the one file after a key press.
+  `App::is_video_at` still drives the placeholder and the loading icon. The probe reads at most 16
+  packets: the rate is the GCD of the frame delays, or the mean rate above 50 fps, and the length
+  comes from the container. An AVIS file holds two video streams, and the probe maps the one with
+  the most frames. ffmpeg gets no `-hwaccel` for an animation, because the AV1 decoder stops with
+  it. Esc from an animation returns to its still frame in the fullscreen view. In a running
+  slideshow, the terminal player holds an animation for at least the slideshow interval
+  (`Player::play_at_least`). The mpv window has no such hold.
 - **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
   terminal player reports `finished`, and the slideshow moves on. Outside a slideshow, the clip
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
@@ -312,13 +314,13 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   `--hwdec=auto-safe`. `--fs` overrides `fs=no` of a user `mpv.conf`.
 - **HDR in the terminal:** `player::probe` reads the transfer curve. For HLG and PQ,
   `player::tone_map::cube_file` writes a 3D cube into the thumbnail cache directory, or into
-  `$TMPDIR/viewr` if the cache path holds filter graph syntax. `Cube::for_video` picks the cube,
-  and the decoder calls it through `cube_for(info, target, dirs)`. The names are
+  `$TMPDIR/viewr` if the cache path holds filter graph syntax. `Cube::for_video` picks the cube, and
+  the decoder calls it through `cube_for(info, target, dirs)`. The names are
   `tonemap-hlg-{p3,srgb}-v3.cube`, `tonemap-pq-{p3,srgb}-v3.cube` and, for SDR,
-  `color-<primaries>-<target>-v3.cube`. `CUBE_VERSION` is the one version for all cube names:
-  change it when the cube output changes. The tone mapping writes the target primaries. ffmpeg
-  parses a cube at each start: 33 points take about 42 ms, 17 points about 16 ms. `SDR_WHITE_NITS = 500` matches the macOS SDR export on three iPhone clips. The PQ cube
-  has no test on a real PQ file.
+  `color-<primaries>-<target>-v3.cube`. `CUBE_VERSION` is the one version for all cube names: change
+  it when the cube output changes. The tone mapping writes the target primaries. ffmpeg parses a
+  cube at each start: 33 points take about 42 ms, 17 points about 16 ms. `SDR_WHITE_NITS = 500`
+  matches the macOS SDR export on three iPhone clips. The PQ cube has no test on a real PQ file.
 - **Entry kinds:** the first `App::folder_count` entries of `images` are folders, `..` first.
   The scanner pushes them before the first file batch, and the sort at the end of the scan sorts
   the files only. Every step of the fullscreen view starts at `App::first_file()`, the prefetch
@@ -342,14 +344,15 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
 - **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
   that does not answer cannot hold viewr. Tests pass a closure and never start `ya`.
-- **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds no
-  status note. The note shows in the status row at the bottom. The next key press clears it.
+- **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
+  no status note. The note shows in the status row at the bottom. The next key press clears it.
 
 - **The run loop polls every 10 ms while a background job runs** (`App::has_pending_work`:
   a decode, a prefetch, a thumbnail, a filter, the scan or thumbnails that wait for their emit),
   because no event wakes it, and every 1 ms during the first 20 ms of the header read for the
-  cell shape (`SHAPE_POLL`, `SHAPE_POLL_WINDOW`). Otherwise it waits 250 ms (`next_timeout` in
-  `run_loop.rs`).
+  cell shape (`SHAPE_POLL`, `SHAPE_POLL_WINDOW`), and every 2 ms while a cache read runs or waits
+  (`CACHE_READ_POLL`). There is no wait while the grid has emits left from the last pass.
+  Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
 - **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
   and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
@@ -358,7 +361,15 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   thumbnail decode sends `None` and frees its slot. The thumbnail and preview queues are
   `JobSlots` with an image index per job. A job whose index left the list starts nothing.
   `decode::spawn_foreground` runs a foreground decode on the thread pool and returns its
-  receiver.
+  receiver. A cell whose sharp job waits reads the disk cache at once (`ThumbPhase::CacheRead`, at
+  most `MAX_CACHE_READS` = 64) on its own pool of at most 8 threads (`cache_read_pool`), so a hit
+  never waits behind a cold decode. `LibheifSlot` and `MAX_THUMB_JOBS` do not count these threads,
+  and a miss holds one only for a `stat`. A hit drops the waiting jobs of its cell. A miss leaves
+  the cell in the queue and in `App::cache_misses`, and the later jobs of that cell skip their own
+  cache lookup. A waiting sharp decode does not start while the cache read of its cell runs.
+- **Kitty emits:** a pass writes the new thumbnails in grid order, in one synchronized update, up
+  to `EMIT_PASS_BYTES` (4 MB of the RGBA bytes of the cache, not the bytes on the wire). The rest
+  goes out in the next pass. One write of 36 cells takes about 11 ms.
 - **Kitty temp file medium:** the temp file medium wins only when the probe answer is `OK` and
   the terminal deleted the probe file. A terminal with another `TMPDIR` reads the file but keeps
   it, and viewr would leave a 17 MB file per frame. The file name contains
@@ -427,16 +438,15 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   center (`draw_loading_icon` in `ui.rs`, `App::is_video_at`). The icon is text in the ratatui
   frame, so the thumbnail that Kitty draws above it covers it. It needs no redraw and has no
   animation. A HEIC preview counts as a thumbnail.
-- **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64)
-  files on a thread, one time per scan (`decode/shape.rs`). JPEG and PNG swap for the EXIF
-  orientation, HEIC and AVIF read `ispe` and swap for `irot`. A RAW or PSD file gives the size of its
-  embedded JPEG after the orientation. PDF, SVG, the other ImageIO formats and video count as
-  3:2. The median snaps to one of 7 buckets (9:16, 2:3, 3:4, 1:1, 4:3, 3:2, 16:9). The column
-  count includes 1 gap per column plus the edge gap. The first
-  screen waits for the shape (2 ms to 4 ms), and the shape stays until the next directory
-  switch, so the columns never move while the user browses.
-- **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `decode/resize.rs`). It is one
-  third faster than Lanczos3, and the difference is not visible.
+- **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64) files
+  on a thread, one time per scan (`decode/shape.rs`). JPEG and PNG swap for the EXIF orientation,
+  HEIC and AVIF read `ispe` and swap for `irot`. A RAW or PSD file gives the size of its embedded
+  JPEG after the orientation. PDF, SVG, the other ImageIO formats and video count as 3:2. The median
+  snaps to one of 7 buckets (9:16, 2:3, 3:4, 1:1, 4:3, 3:2, 16:9). The column count includes 1 gap
+  per column plus the edge gap. The first screen waits for the shape (2 ms to 4 ms), and the shape
+  stays until the next directory switch, so the columns never move while the user browses.
+- **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `decode/resize.rs`). It is
+  one third faster than Lanczos3, and the difference is not visible.
 - **Process start:** about 30 ms pass before `main`, most of it the dylib load of libheif and its
   codec libraries (a C program that links libheif needs 24.9 ms, with no library 4.6 ms).
   Foundation (the `trash` crate) costs about 3.5 ms. The `dist` profile and `target-cpu` give no
