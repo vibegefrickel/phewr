@@ -9,8 +9,12 @@ viewr is a terminal image and video gallery for the Kitty graphics protocol, wri
 It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork had the name
 imgrrr before 2026-10-17.
 
-- viewr is a viewer only. It does not edit, convert or write images.
-- The only file operations are trash, permanent delete, and (planned) move and rename.
+- The main goal: viewr is a fast viewer for all common image and video formats in the terminal,
+  with full mouse support. Each change makes opening, scrolling or switching files faster, or it
+  adds a common format. `TODO.md` holds the full goal and its scope.
+- viewr is a viewer only. It does not edit, convert, write, move, rename or delete files. The
+  remaining delete code (trash, permanent delete) goes after the open terminal tests. Do not add
+  new file operations.
 - The target is macOS on Apple Silicon, in Ghostty. viewr uses the Kitty graphics protocol, not the Kitty terminal. Nobody tests in the Kitty terminal.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
 
