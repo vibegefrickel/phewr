@@ -125,6 +125,31 @@ pub(super) fn try_save_to_disk_cache(
     Some(())
 }
 
+/// The age after which a temp file of the cache counts as left behind. A write takes
+/// milliseconds, so an older temp file belongs to a viewr that ended during its write.
+const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Remove a temp file of `try_save_to_disk_cache` that is older than `STALE_TEMP_AGE`. A quit
+/// during a cache write leaves one, and the size prune only counts the `.png` files.
+fn remove_stale_temp_file(entry: &std::fs::DirEntry) {
+    let path = entry.path();
+    let is_temp = path.extension().and_then(|ext| ext.to_str()) == Some("tmp")
+        && entry.file_name().to_string_lossy().starts_with('.');
+    let is_stale = entry
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > STALE_TEMP_AGE);
+    if is_temp && is_stale {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a temp file that stays is only disk space, the next prune tries again"
+        )]
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
     let Ok(entries) = std::fs::read_dir(cache_dir) else {
         return;
@@ -133,6 +158,7 @@ fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
         .flatten()
         .filter_map(|entry| {
             if entry.path().extension().and_then(|ext| ext.to_str()) != Some("png") {
+                remove_stale_temp_file(&entry);
                 return None;
             }
             let metadata = entry.metadata().ok()?;
@@ -257,5 +283,30 @@ mod tests {
         assert!(cache.join("notes.txt").exists());
 
         prune_disk_cache(&cache.join("missing"), 0);
+    }
+
+    #[test]
+    fn prune_removes_the_temp_files_that_a_quit_left_behind() {
+        let dir = test_dir();
+        let cache = dir.path();
+        let left = cache.join(".abc.png.1.0.tmp");
+        let writing = cache.join(".def.png.2.0.tmp");
+        let other = cache.join("other.tmp");
+        for path in [&left, &writing, &other] {
+            fs::write(path, [0_u8; 10]).unwrap();
+        }
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(7200);
+        for path in [&left, &other] {
+            let file = fs::File::options().write(true).open(path).unwrap();
+            file.set_modified(two_hours_ago).unwrap();
+        }
+
+        prune_disk_cache(cache, 1000);
+        assert!(
+            !left.exists(),
+            "an old temp file goes, also under the limit"
+        );
+        assert!(writing.exists(), "a write in progress stays");
+        assert!(other.exists(), "only the temp files of the cache go");
     }
 }

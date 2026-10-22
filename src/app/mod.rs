@@ -4,6 +4,7 @@ mod cell_shape;
 mod delete;
 mod directory;
 mod disk_cache;
+mod folder_prefetch;
 mod folders;
 mod fullscreen;
 mod grid_zoom;
@@ -102,6 +103,8 @@ pub(crate) struct App {
     /// The entry that the cursor lands on when the next scan ends: the folder that the user
     /// came from after a step to the parent.
     return_to: Option<PathBuf>,
+    /// The decode of the first screen of the folder under the cursor into the disk cache.
+    folder_prefetch: folder_prefetch::FolderPrefetch,
 
     // Fullscreen state
     pub current: usize,
@@ -276,6 +279,7 @@ impl App {
             scan_complete: false,
             shape_rx: None,
             shape_requested: false,
+            folder_prefetch: folder_prefetch::FolderPrefetch::default(),
             filter_rx: None,
             filter_cursor: None,
             thumb_tx,

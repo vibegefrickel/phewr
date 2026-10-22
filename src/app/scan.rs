@@ -7,6 +7,12 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
+/// The order of the files after a scan: by the lowercase name, then by the path. The folder
+/// prefetch sorts a folder the same way.
+pub(super) fn sort_by_name(media: &mut [(PathBuf, String)]) {
+    media.sort_by_cached_key(|(path, filename)| (filename.to_lowercase(), path.clone()));
+}
+
 impl App {
     pub(crate) fn refresh_from_scanner(&mut self) {
         let scan_errors = self.shared_list.drain_errors();
@@ -71,7 +77,7 @@ impl App {
             .drain(first_file..)
             .zip(self.filenames.drain(first_file..))
             .collect();
-        media.sort_by_cached_key(|(path, filename)| (filename.to_lowercase(), path.clone()));
+        sort_by_name(&mut media);
         let (files, names): (Vec<PathBuf>, Vec<String>) = media.into_iter().unzip();
         self.images.extend(files);
         self.filenames.extend(names);

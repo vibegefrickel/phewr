@@ -28,6 +28,7 @@ const DEFAULT_CELL_RATIO: f64 = 2.0;
 /// The grid always shows at least this many columns.
 const MIN_GRID_COLS: usize = 2;
 
+#[derive(Clone)]
 pub(crate) struct GalleryState {
     pub filtered_indices: Vec<usize>,
     pub cursor: usize,
@@ -108,6 +109,18 @@ impl GalleryState {
         self.cols_per_row = aspect * cell_ratio;
         self.update_grid(self.grid_rect);
         before != (self.grid_cols, self.thumb_cols, self.extra_cols)
+    }
+
+    /// The grid that a switch to another folder starts from on this terminal: `entries` cells
+    /// at the zoom level `zoom_rows`, before the cursor and the photo shape of that folder.
+    pub(crate) fn for_folder(&self, entries: usize, zoom_rows: usize) -> Self {
+        let mut grid = self.clone();
+        grid.search_active = false;
+        grid.search_query.clear();
+        grid.filtered_indices = (0..entries).collect();
+        grid.reset_cursor();
+        grid.set_zoom_rows(zoom_rows);
+        grid
     }
 
     /// The photo shape of the folder that the last `set_cell_shape` took.
@@ -239,7 +252,7 @@ impl GalleryState {
         }
     }
 
-    fn move_cursor_to(&mut self, new: usize) {
+    pub(crate) fn move_cursor_to(&mut self, new: usize) {
         let max = self.filtered_indices.len().saturating_sub(1);
         self.cursor = new.min(max);
         self.ensure_cursor_visible();

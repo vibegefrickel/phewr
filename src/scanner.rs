@@ -87,6 +87,19 @@ pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
     });
 }
 
+/// The supported files of `dir` and their names, in the order that `spawn` pushes them: the
+/// directory order in batches, each batch sorted by name. The folder prefetch lists a folder
+/// as a switch to it would, without a thread and without the errors.
+pub(crate) fn files_of(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
+    let list = SharedImageList::new();
+    let mut batch = Vec::with_capacity(BATCH_SIZE);
+    scan_dir(dir, &list, &mut batch);
+    if !batch.is_empty() {
+        flush_batch(&list, &mut batch);
+    }
+    list.drain_since(0)
+}
+
 /// The entries of the subfolders of `dir`, sorted by name, after `..` for the parent. A hidden
 /// folder, a symlink and a folder that viewr cannot read stay out. The paths are canonical, so
 /// that the cursor can find the folder that the user came from after a step to the parent.
@@ -178,7 +191,7 @@ fn flush_batch(list: &SharedImageList, batch: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BATCH_SIZE, is_supported, parent_entry, scan_dir, spawn, subfolders};
+    use super::{BATCH_SIZE, files_of, is_supported, parent_entry, scan_dir, spawn, subfolders};
     use crate::image_list::SharedImageList;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -426,5 +439,25 @@ mod tests {
         assert!(first_batch.windows(2).all(|pair| pair[0] <= pair[1]));
         assert!(names.iter().any(|name| name == "img000.png"));
         assert!(list.drain_errors().is_empty());
+    }
+
+    #[test]
+    fn files_of_lists_the_files_in_the_order_of_the_scan() {
+        let root = tempfile::tempdir().unwrap();
+        let count = BATCH_SIZE + 5;
+        for index in (0..count).rev() {
+            fs::write(root.path().join(format!("img{index:03}.png")), b"synthetic").unwrap();
+        }
+        fs::write(root.path().join("notes.txt"), b"text").unwrap();
+        fs::create_dir(root.path().join("sub")).unwrap();
+
+        let list = SharedImageList::new();
+        spawn(vec![root.path().to_path_buf()], list.clone());
+        wait_for_complete(&list);
+        let (scanned, scanned_names) = list.drain_since(list.folder_count());
+        let (files, names) = files_of(root.path());
+        assert_eq!(files.len(), count, "no folder, no unsupported file");
+        assert_eq!(files, scanned);
+        assert_eq!(names, scanned_names);
     }
 }

@@ -2,7 +2,7 @@
 //! the padding to whole cells, the parked thumbnails of the folders before, the generations.
 
 use super::App;
-use super::disk_cache::{try_load_from_disk_cache, try_save_to_disk_cache};
+use super::disk_cache::{get_cache_file_path, try_load_from_disk_cache, try_save_to_disk_cache};
 use crate::decode::EmbeddedThumbnail;
 #[cfg(all(feature = "sips", target_os = "macos"))]
 use crate::decode::embedded_jpeg;
@@ -343,6 +343,16 @@ fn animation_flag(path: &Path) -> Option<bool> {
 #[cfg(not(feature = "video"))]
 fn animation_flag(_path: &Path) -> Option<bool> {
     None
+}
+
+/// Put the sharp thumbnail of `path` at `target` into the disk cache, as the sharp job of the
+/// grid does. A file that the cache holds costs one `stat` and no decode. The folder prefetch
+/// calls it.
+pub(super) fn warm_disk_cache(cache_dir: &Path, path: &Path, target: (u32, u32)) {
+    if get_cache_file_path(cache_dir, path, target).is_some_and(|file| file.exists()) {
+        return;
+    }
+    sharp_thumbnail(cache_dir, path, target);
 }
 
 /// The sharp thumbnail from the disk cache, or from a decode that then fills the cache.

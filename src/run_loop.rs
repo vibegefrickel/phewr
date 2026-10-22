@@ -15,7 +15,7 @@ use crate::video_handoff::{VideoState, play_videos, poll_mpv_window};
 use crossterm::event::{self, Event, MouseEventKind};
 use ratatui::prelude::*;
 use std::io::{self, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The wait of the loop while a background result is on its way.
 const BUSY_POLL: Duration = Duration::from_millis(10);
@@ -113,6 +113,8 @@ pub(crate) fn run(
         if render_images(app, &mut pending_emits)? {
             terminal.draw(|frame| draw_ui(frame, app, state))?;
         }
+        // After the render, so that the grid jobs of this pass pause the folder prefetch.
+        app.tick_folder_prefetch(Instant::now());
 
         // 5. Wait for next event (shorter timeout when thumbnails are pending)
         event::poll(next_timeout(app, &pending_emits))?;
@@ -253,6 +255,9 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
         if busy { BUSY_POLL } else { IDLE_POLL }
     };
     if let Some(remaining) = app.slideshow_timeout() {
+        timeout = timeout.min(remaining);
+    }
+    if let Some(remaining) = app.folder_prefetch_timeout(Instant::now()) {
         timeout = timeout.min(remaining);
     }
     #[cfg(feature = "video")]

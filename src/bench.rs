@@ -444,6 +444,98 @@ fn folder_switch_waits_for_the_shape() {
     ));
 }
 
+/// A root with the one subfolder `sub`, whose files are links to the files of `dir`. The scan
+/// follows a linked file, and the disk cache key takes the canonical path of the target.
+fn tree_with_subfolder(dir: &Path) -> (TempDir, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let sub = root.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            std::os::unix::fs::symlink(entry.path(), sub.join(entry.file_name())).unwrap();
+        }
+    }
+    (temp, root)
+}
+
+/// The grid of a root with the folder `sub`, a cold disk cache, and the cursor on `sub`. With
+/// `rest`, the cursor rests on `sub` until its prefetch ends. Then Enter. Returns the time of
+/// the prefetch, the time from Enter until every file cell of the first screen is sharp, and
+/// the count of those cells.
+fn enter_subfolder(dir: &Path, rest: bool) -> (Option<Duration>, Duration, usize) {
+    let (_tree, root) = tree_with_subfolder(dir);
+    let sub = root.join("sub");
+    let cache = tempfile::tempdir().unwrap();
+    let mut app = App::new(CELL_PX, SharedImageList::new());
+    app.disk_cache_dir = cache.path().to_path_buf();
+    app.gallery.update_grid(grid_rect());
+    app.switch_to_dir(&root);
+    run_until(&mut app, |app| app.scan_complete);
+    // The entries are `..` and `sub`.
+    app.gallery.cursor = 1;
+    let prefetch = rest.then(|| rest_until_prefetched(&mut app, &sub));
+
+    assert!(app.enter_selected_folder());
+    let (time, _) = run_until(&mut app, |app| {
+        app.scan_complete && !app.cell_shape_pending() && all_file_cells_sharp(app)
+    });
+    let cells = app
+        .gallery
+        .visible_items()
+        .filter(|&(_, index)| !app.is_folder(index))
+        .count();
+    (prefetch, time, cells)
+}
+
+/// Run passes with the folder prefetch tick of the run loop until the prefetch of `folder`
+/// ends. Only this bench ticks, so that no other bench starts a prefetch.
+fn rest_until_prefetched(app: &mut App, folder: &Path) -> Duration {
+    let start = Instant::now();
+    let mut pending = Vec::new();
+    while !app.folder_prefetched(folder) {
+        assert!(
+            start.elapsed() < LIMIT,
+            "the folder prefetch did not finish"
+        );
+        run_pass(app, &mut pending);
+        app.tick_folder_prefetch(Instant::now());
+        thread::sleep(next_timeout(app, &pending));
+    }
+    start.elapsed()
+}
+
+/// True when the screen shows at least one file cell, and every file cell is sharp.
+fn all_file_cells_sharp(app: &App) -> bool {
+    let mut cells = app
+        .gallery
+        .visible_items()
+        .filter(|&(_, index)| !app.is_folder(index))
+        .peekable();
+    cells.peek().is_some() && cells.all(|(_, index)| app.thumb_cache.is_sharp(index))
+}
+
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn folder_switch_with_and_without_the_prefetch() {
+    let Some(dir) = test_dir() else {
+        report("skipped: VIEWR_TEST_DIR is not set");
+        return;
+    };
+    let (_, cold, cells) = enter_subfolder(&dir, false);
+    report(&format!(
+        "enter a subfolder, cold: all {cells} cells sharp {}",
+        millis(cold)
+    ));
+    let (prefetch, warm, cells) = enter_subfolder(&dir, true);
+    report(&format!(
+        "enter a subfolder after the folder prefetch ({} for the prefetch): all {cells} cells \
+         sharp {}",
+        millis(prefetch.unwrap_or_default()),
+        millis(warm)
+    ));
+}
+
 #[test]
 #[ignore = "reads the folder VIEWR_TEST_DIR"]
 fn fullscreen_open_from_the_grid() {

@@ -41,6 +41,7 @@ impl App {
         self.filenames.clear();
         self.folder_count = 0;
         self.return_to = None;
+        self.folder_prefetch.disarm_parent();
         self.known_len = 0;
         self.scan_complete = false;
         self.selection.clear();
@@ -78,12 +79,18 @@ impl App {
     /// on every folder switch. A folder without its own entry falls back to the global saved
     /// level, then to the configured default.
     pub(crate) fn apply_folder_zoom(&mut self, dir: &Path) {
+        let rows = self.folder_zoom_rows(dir);
+        self.gallery.set_zoom_rows(rows);
+    }
+
+    /// The zoom level that a switch to `dir` applies. The folder prefetch decodes for it too.
+    pub(super) fn folder_zoom_rows(&self, dir: &Path) -> usize {
         let rows = config::load_folder_zoom(&self.state_file, dir)
             .or_else(|| config::load_global_zoom(&self.state_file))
             .unwrap_or_else(|| {
                 u16::try_from(self.gallery.default_zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS)
             });
-        self.gallery.set_zoom_rows(usize::from(rows));
+        usize::from(rows)
     }
 }
 
