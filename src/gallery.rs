@@ -282,6 +282,41 @@ impl GalleryState {
         self.move_cursor_to(0);
     }
 
+    /// Scroll the grid by `delta` rows, as the mouse wheel does. The cursor stays in its
+    /// column and follows the screen, so the next draw does not scroll back to it.
+    pub(crate) fn scroll_rows(&mut self, delta: isize) {
+        let total_rows = self.filtered_indices.len().div_ceil(self.grid_cols.max(1));
+        let max_offset = total_rows.saturating_sub(self.visible_rows);
+        let offset = self
+            .scroll_offset
+            .saturating_add_signed(delta)
+            .min(max_offset);
+        if offset == self.scroll_offset {
+            return;
+        }
+        self.scroll_offset = offset;
+        let row = self
+            .cursor_row()
+            .clamp(offset, offset + self.visible_rows.saturating_sub(1));
+        let max = self.filtered_indices.len().saturating_sub(1);
+        self.cursor = (row * self.grid_cols + self.cursor % self.grid_cols.max(1)).min(max);
+    }
+
+    /// The position in `filtered_indices` of the cell under the screen cell `(column, row)`:
+    /// the thumbnail or its label. A gap or an empty cell gives `None`.
+    pub(crate) fn cell_at(&self, column: u16, row: u16) -> Option<usize> {
+        let range = self.visible_range();
+        (0..range.len()).find_map(|vis| {
+            let cell = self.cell_rect(vis);
+            let hit = Rect {
+                height: cell.height + self.label_rows(),
+                ..cell
+            };
+            hit.contains(ratatui::layout::Position::new(column, row))
+                .then_some(range.start + vis)
+        })
+    }
+
     pub(crate) fn move_to_last(&mut self) {
         let last = self.filtered_indices.len().saturating_sub(1);
         self.move_cursor_to(last);
@@ -1229,5 +1264,80 @@ mod tests {
         cache.park(&paths, key);
         assert_eq!(cache.parked_count(), 0);
         assert_eq!(cache.bytes(), 0);
+    }
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::GalleryState;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn cell_at_finds_the_thumbnail_and_the_label_but_not_the_gap() {
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.show_filenames = true;
+        gallery.update_grid(Rect::new(0, 0, 100, 20));
+        let cols = gallery.grid_cols;
+        assert!((3..=4).contains(&cols), "{cols} columns, 3 rows");
+        let cell = gallery.cell_rect(cols + 1);
+
+        assert_eq!(gallery.cell_at(cell.x, cell.y), Some(cols + 1));
+        assert_eq!(
+            gallery.cell_at(cell.x + cell.width - 1, cell.y + cell.height),
+            Some(cols + 1),
+            "the label row"
+        );
+        assert_eq!(gallery.cell_at(cell.x - 1, cell.y), None, "the gap");
+        assert_eq!(gallery.cell_at(0, 0), None);
+
+        gallery.scroll_offset = 1;
+        assert_eq!(gallery.cell_at(cell.x, cell.y), Some(2 * cols + 1));
+        gallery.scroll_offset = 2;
+        assert_eq!(gallery.cell_at(cell.x, cell.y), None, "no 4th row");
+        let first = gallery.cell_rect(0);
+        assert_eq!(gallery.cell_at(first.x, first.y), Some(2 * cols));
+    }
+
+    #[test]
+    fn cell_at_ignores_the_empty_cells_after_the_last_entry() {
+        let mut gallery = GalleryState::with_zoom_rows(4, 2);
+        gallery.update_grid(Rect::new(0, 0, 100, 20));
+        let empty = gallery.cell_rect(5);
+        assert_eq!(gallery.cell_at(empty.x, empty.y), None);
+        let last = gallery.cell_rect(3);
+        assert_eq!(gallery.cell_at(last.x, last.y), Some(3));
+    }
+
+    #[test]
+    fn scroll_rows_moves_the_screen_and_keeps_the_cursor_on_it() {
+        let mut gallery = GalleryState::with_zoom_rows(12, 2);
+        gallery.update_grid(Rect::new(0, 0, 100, 20));
+        gallery.cursor = 1;
+
+        gallery.scroll_rows(1);
+        assert_eq!(gallery.scroll_offset, 1);
+        assert_eq!(gallery.cursor, 4, "one row down, same column");
+        gallery.scroll_rows(5);
+        assert_eq!(gallery.scroll_offset, 2, "4 rows, 2 visible");
+        assert_eq!(gallery.cursor, 7);
+        gallery.cursor = 11;
+        gallery.scroll_rows(-2);
+        assert_eq!(gallery.scroll_offset, 0);
+        assert_eq!(gallery.cursor, 5, "the last visible row, column 2");
+        gallery.scroll_rows(-1);
+        assert_eq!(gallery.scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_rows_on_a_short_list_changes_nothing() {
+        let mut gallery = GalleryState::with_zoom_rows(3, 2);
+        gallery.update_grid(Rect::new(0, 0, 100, 20));
+        gallery.scroll_rows(1);
+        assert_eq!(gallery.scroll_offset, 0);
+        assert_eq!(gallery.cursor, 0);
+        let mut empty = GalleryState::new(0);
+        empty.update_grid(Rect::new(0, 0, 100, 20));
+        empty.scroll_rows(1);
+        assert_eq!(empty.cell_at(5, 5), None);
     }
 }

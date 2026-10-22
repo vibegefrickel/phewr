@@ -2,6 +2,7 @@
 
 pub(crate) mod fullscreen;
 pub(crate) mod gallery;
+pub(crate) mod mouse;
 pub(crate) mod picker;
 #[cfg(feature = "video")]
 pub(crate) mod video;
@@ -10,8 +11,10 @@ use crate::app::{App, DeleteMode, ViewMode};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use fullscreen::handle_fullscreen_key;
 use gallery::{handle_gallery_key, handle_search_key};
+use mouse::handle_mouse;
 use picker::handle_picker_key;
 use std::io;
+use std::time::Instant;
 #[cfg(feature = "video")]
 use video::handle_video_key;
 
@@ -67,8 +70,14 @@ impl LateAnswerFilter {
 }
 
 pub(crate) fn handle_event(app: &mut App, event: &Event) -> io::Result<bool> {
+    handle_event_at(app, event, Instant::now())
+}
+
+/// `handle_event` with the clock of the double-click, so that a test needs no sleep.
+pub(crate) fn handle_event_at(app: &mut App, event: &Event, now: Instant) -> io::Result<bool> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => handle_key(app, *key),
+        Event::Mouse(mouse) => handle_mouse(app, *mouse, now),
         Event::Resize(_, _) => {
             app.mark_dirty();
             Ok(false)

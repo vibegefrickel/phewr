@@ -22,12 +22,7 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
         }
         KeyCode::Left | KeyCode::Char('h') => seek(app, -SEEK_STEP),
         KeyCode::Right | KeyCode::Char('l') => seek(app, SEEK_STEP),
-        KeyCode::Char('q') | KeyCode::Esc => {
-            app.graphics_delete_all()?;
-            app.stop_slideshow();
-            app.return_from_video();
-            focus_gallery_on_current(app);
-        }
+        KeyCode::Char('q') | KeyCode::Esc => leave_player(app)?,
         KeyCode::Char('p') => {
             app.graphics_delete_all()?;
             app.request_video_window();
@@ -53,8 +48,17 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
     Ok(false)
 }
 
+/// Back to the view that opened the player, with the gallery cursor on the file.
+pub(super) fn leave_player(app: &mut App) -> io::Result<()> {
+    app.graphics_delete_all()?;
+    app.stop_slideshow();
+    app.return_from_video();
+    focus_gallery_on_current(app);
+    Ok(())
+}
+
 /// Move the position of the player by `seconds`.
-fn seek(app: &mut App, seconds: f64) {
+pub(super) fn seek(app: &mut App, seconds: f64) {
     if let Some(ref mut v) = app.video {
         v.seek_by(seconds);
         app.needs_render = true;

@@ -3,14 +3,18 @@
 use crate::app::App;
 use crate::config::Config;
 use crate::image_list::SharedImageList;
-use crate::keys::handle_event;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crate::keys::{handle_event, handle_event_at};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use image::RgbaImage;
 #[cfg(feature = "heic")]
 use libheif_rs::{
     Channel, ColorSpace, CompressionFormat, EncoderQuality, EncodingOptions, HeifContext, Image,
     ImageOrientation, LibHeif, RgbChroma,
 };
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,6 +42,75 @@ pub(crate) fn press_with(app: &mut App, code: KeyCode, modifiers: KeyModifiers) 
 
 pub(crate) fn char_key(app: &mut App, c: char) -> bool {
     press(app, KeyCode::Char(c))
+}
+
+/// A mouse event at the screen cell `(column, row)`, through the real dispatch, with `now` as
+/// the clock of the double-click.
+pub(crate) fn mouse_at(
+    app: &mut App,
+    kind: MouseEventKind,
+    (column, row): (u16, u16),
+    modifiers: KeyModifiers,
+    now: Instant,
+) -> bool {
+    let event = Event::Mouse(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers,
+    });
+    handle_event_at(app, &event, now).unwrap()
+}
+
+pub(crate) fn mouse(app: &mut App, kind: MouseEventKind, at: (u16, u16)) -> bool {
+    mouse_at(app, kind, at, KeyModifiers::NONE, Instant::now())
+}
+
+/// A left click: the button goes down and up at `at`.
+pub(crate) fn click_at(app: &mut App, at: (u16, u16), now: Instant) -> bool {
+    mouse_at(
+        app,
+        MouseEventKind::Down(MouseButton::Left),
+        at,
+        KeyModifiers::NONE,
+        now,
+    ) || mouse_at(
+        app,
+        MouseEventKind::Up(MouseButton::Left),
+        at,
+        KeyModifiers::NONE,
+        now,
+    )
+}
+
+pub(crate) fn click(app: &mut App, at: (u16, u16)) -> bool {
+    click_at(app, at, Instant::now())
+}
+
+/// The center of the visible gallery cell `vis`.
+pub(crate) fn cell_center(app: &App, vis: usize) -> (u16, u16) {
+    let cell = app.gallery.cell_rect(vis);
+    (cell.x + cell.width / 2, cell.y + cell.height / 2)
+}
+
+/// A left click on the center of the visible gallery cell `vis`.
+pub(crate) fn click_cell(app: &mut App, vis: usize, now: Instant) -> bool {
+    let at = cell_center(app, vis);
+    click_at(app, at, now)
+}
+
+/// A mouse event on the center of the visible gallery cell `vis`.
+pub(crate) fn mouse_cell(app: &mut App, kind: MouseEventKind, vis: usize) -> bool {
+    let at = cell_center(app, vis);
+    mouse(app, kind, at)
+}
+
+/// Draw one frame into a test backend, so that the app records the screen layout.
+pub(crate) fn draw_frame(app: &mut App, width: u16, height: u16) {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| crate::ui::draw(frame, app, None))
+        .unwrap();
 }
 
 /// Paths that do not exist: a decode fails in the background and writes no cache.
@@ -612,6 +685,8 @@ pub(crate) mod video {
             status: None,
             late_answers: crate::keys::LateAnswerFilter::default(),
             cell_size_from_terminal: false,
+            mouse: true,
+            mouse_captured: true,
             video: VideoState {
                 player,
                 mpv: Some(PathBuf::from("/bin/mpv")),

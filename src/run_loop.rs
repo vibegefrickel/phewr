@@ -8,13 +8,13 @@ use crate::kitty_output::render_video_frame;
 use crate::kitty_output::{emit_new_thumbnails, render_fullscreen_image, render_gallery_images};
 #[cfg(feature = "video")]
 use crate::mpv;
-use crate::terminal::query_cell_pixel_size;
+use crate::terminal::{disable_mouse, enable_mouse, query_cell_pixel_size};
 use crate::ui;
 #[cfg(feature = "video")]
 use crate::video_handoff::{VideoState, play_videos, poll_mpv_window};
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, MouseEventKind};
 use ratatui::prelude::*;
-use std::io;
+use std::io::{self, Write};
 use std::time::Duration;
 
 /// The wait of the loop while a background result is on its way.
@@ -32,6 +32,10 @@ pub(crate) struct LoopState {
     pub(crate) status: Option<String>,
     /// Drops the answer of a terminal that answered the Kitty probe too late.
     pub(crate) late_answers: LateAnswerFilter,
+    /// `[gallery] mouse`: the terminal reports the mouse while nothing else needs it.
+    pub(crate) mouse: bool,
+    /// True while the terminal reports the mouse. The session captured it at the start.
+    pub(crate) mouse_captured: bool,
     /// True when the terminal answered the cell size query at start, so a resize asks again.
     pub(crate) cell_size_from_terminal: bool,
     #[cfg(feature = "video")]
@@ -40,18 +44,13 @@ pub(crate) struct LoopState {
 
 impl LoopState {
     /// The video player comes from the config. Without the video feature, nothing reads it.
-    #[cfg_attr(
-        not(feature = "video"),
-        expect(
-            unused_variables,
-            reason = "only the video player reads the config here"
-        )
-    )]
     pub(crate) fn new(config: &Config) -> Self {
         Self {
             status: None,
             late_answers: LateAnswerFilter::default(),
             cell_size_from_terminal: false,
+            mouse: config.mouse,
+            mouse_captured: config.mouse,
             #[cfg(feature = "video")]
             video: VideoState::new(config),
         }
@@ -72,7 +71,9 @@ pub(crate) fn run(
             if state.late_answers.swallows(&event) {
                 continue;
             }
-            if matches!(event, Event::Key(_)) {
+            if matches!(event, Event::Key(_))
+                || matches!(event, Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)))
+            {
                 state.status = None;
             }
             if matches!(event, Event::Resize(..)) && state.cell_size_from_terminal {
@@ -90,6 +91,7 @@ pub(crate) fn run(
         // 2. Poll background tasks
         #[cfg(feature = "video")]
         poll_mpv_window(app, state);
+        sync_mouse_capture(terminal.backend_mut(), state, window_open(app))?;
         poll_background(app, &mut pending_emits);
 
         // The player starts before the draw, so that a fallback view comes back in this pass.
@@ -115,6 +117,43 @@ pub(crate) fn run(
         // 5. Wait for next event (shorter timeout when thumbnails are pending)
         event::poll(next_timeout(app, &pending_emits))?;
     }
+}
+
+/// True while an mpv window plays. The mouse then belongs to the window, not to viewr.
+fn window_open(app: &App) -> bool {
+    #[cfg(feature = "video")]
+    {
+        app.watches_video_window()
+    }
+    #[cfg(not(feature = "video"))]
+    {
+        let _ = app;
+        false
+    }
+}
+
+/// Whether the terminal must report the mouse: the config allows it and no mpv window plays.
+pub(crate) fn mouse_capture_wanted(enabled: bool, window_open: bool) -> bool {
+    enabled && !window_open
+}
+
+/// Capture or release the mouse when the wanted state changed since the last loop.
+pub(crate) fn sync_mouse_capture(
+    out: &mut impl Write,
+    state: &mut LoopState,
+    window_open: bool,
+) -> io::Result<()> {
+    let wanted = mouse_capture_wanted(state.mouse, window_open);
+    if wanted == state.mouse_captured {
+        return Ok(());
+    }
+    if wanted {
+        enable_mouse(out)?;
+    } else {
+        disable_mouse(out)?;
+    }
+    state.mouse_captured = wanted;
+    Ok(())
 }
 
 /// Draw the chrome and remember the fullscreen box, so that the gallery pre-decode knows the size.
@@ -225,8 +264,50 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::LoopState;
+    use super::{LoopState, mouse_capture_wanted, sync_mouse_capture};
     use crate::config::Config;
+
+    #[test]
+    fn the_loop_releases_the_mouse_while_a_window_plays_and_takes_it_back() {
+        let mut state = LoopState::new(&Config::default());
+        assert!(state.mouse_captured);
+        let mut out = Vec::new();
+
+        sync_mouse_capture(&mut out, &mut state, false).unwrap();
+        assert!(out.is_empty(), "nothing changed");
+        sync_mouse_capture(&mut out, &mut state, true).unwrap();
+        assert!(!state.mouse_captured);
+        assert!(
+            String::from_utf8_lossy(&out).contains("\x1b[?1000l"),
+            "{out:?}"
+        );
+        out.clear();
+        sync_mouse_capture(&mut out, &mut state, true).unwrap();
+        assert!(out.is_empty(), "released once");
+        sync_mouse_capture(&mut out, &mut state, false).unwrap();
+        assert!(state.mouse_captured);
+        assert!(
+            String::from_utf8_lossy(&out).contains("\x1b[?1000h"),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn without_the_mouse_key_the_loop_never_writes_a_capture() {
+        let config = Config {
+            mouse: false,
+            ..Config::default()
+        };
+        let mut state = LoopState::new(&config);
+        let mut out = Vec::new();
+        for window in [false, true, false] {
+            sync_mouse_capture(&mut out, &mut state, window).unwrap();
+        }
+        assert!(out.is_empty());
+        assert!(!mouse_capture_wanted(false, false));
+        assert!(mouse_capture_wanted(true, false));
+        assert!(!mouse_capture_wanted(true, true));
+    }
 
     #[cfg(feature = "video")]
     #[test]

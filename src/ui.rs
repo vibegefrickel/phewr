@@ -20,6 +20,7 @@ const FOLDER_ICON: &str = "\u{25b8}";
 /// Draw the whole frame. `status` is a one-line note of the run loop, in place of the key hints.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     let area = frame.area();
+    app.layout.screen = area;
     let (main, info) = split_info(area, app);
     match app.mode {
         ViewMode::Gallery => draw_gallery(frame, app, main, status),
@@ -103,6 +104,7 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
     let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
     let filter_rect = chunks[0];
     let list_area = chunks[1];
+    app.layout.picker_filter = filter_rect;
 
     let filter_block = Block::default()
         .borders(Borders::ALL)
@@ -165,6 +167,7 @@ fn draw_picker(frame: &mut Frame<'_>, app: &mut App) {
         .title_bottom(bottom_line);
 
     let list_inner = list_block.inner(list_area);
+    app.layout.picker_list = list_inner;
     frame.render_widget(list_block, list_area);
 
     let visible_height = list_inner.height as usize;
@@ -489,7 +492,7 @@ pub(crate) fn content_area(area: Rect) -> Rect {
 }
 
 /// The status row at the bottom of `area`.
-fn status_area(area: Rect) -> Rect {
+pub(crate) fn status_area(area: Rect) -> Rect {
     Rect {
         y: area.y + content_area(area).height,
         height: area.height.min(STATUS_ROWS),
@@ -756,6 +759,16 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         ("g / G", "First / last"),
         ("/", "Filter names"),
         ("q / Esc", "Back to gallery"),
+        ("", ""),
+        ("", "Mouse"),
+        ("Click", "Select cell, pick entry, pause video"),
+        ("Double-click", "Open cell or folder, choose directory"),
+        ("Right click", "Info panel, or back from the video"),
+        ("Wheel", "Scroll grid, zoom image, seek video"),
+        ("Shift+wheel", "Larger / smaller thumbnails"),
+        ("Drag", "Pan the zoomed image"),
+        ("Edge click", "Previous / next image"),
+        ("Shift+drag", "Select text in the terminal"),
     ];
 
     let height = (help_lines.len() as u16 + 4).min(area.height.saturating_sub(2));
@@ -1669,6 +1682,8 @@ mod tests {
         assert_shows(&screen, "Open fullscreen or folder");
         assert_shows(&screen, "   Backspace  Parent folder");
         assert_shows(&screen, " Directory picker");
+        assert_shows(&screen, " Mouse");
+        assert_shows(&screen, "Shift+drag  Select text in the terminal");
         assert_shows(&screen, " press any key to close");
 
         let buffer = render_buffer(&mut app, None, 100, 120);

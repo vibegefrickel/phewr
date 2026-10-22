@@ -31,6 +31,9 @@ pub(crate) struct Config {
     pub info_panel: bool,
     /// The program that plays a video file.
     pub video_player: VideoPlayer,
+    /// Capture the mouse: clicks, drags and the wheel reach viewr. Off, the terminal keeps its
+    /// own selection and scrolling.
+    pub mouse: bool,
 }
 
 /// The value of `[video] player`: how viewr plays a video file.
@@ -65,6 +68,7 @@ impl Default for Config {
             slideshow_loop: true,
             info_panel: false,
             video_player: VideoPlayer::default(),
+            mouse: true,
         }
     }
 }
@@ -84,6 +88,7 @@ struct ConfigFile {
 #[derive(Default, Deserialize)]
 struct GallerySection {
     visible_rows: Option<u16>,
+    mouse: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -176,6 +181,9 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     }
     if let Some(wrap) = file.slideshow.wrap {
         config.slideshow_loop = wrap;
+    }
+    if let Some(mouse) = file.gallery.mouse {
+        config.mouse = mouse;
     }
     if let Some(show) = file.info.show_on_start {
         config.info_panel = show;
@@ -345,12 +353,13 @@ mod tests {
         let state_path = root.path().join("state.toml");
         std::fs::write(
             &config_path,
-            "[gallery]\nvisible_rows = 6\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
+            "[gallery]\nvisible_rows = 6\nmouse = false\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
         )
         .unwrap();
 
         let config = load_at(&config_path, &state_path);
         assert_eq!(config.visible_rows, 6);
+        assert!(!config.mouse);
         assert_eq!(config.slideshow_interval, 1.5);
         assert!(!config.slideshow_loop);
         assert!(config.info_panel);

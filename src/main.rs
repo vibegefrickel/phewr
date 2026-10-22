@@ -106,7 +106,7 @@ fn main() -> io::Result<()> {
     let shared_list = SharedImageList::new();
     scanner::spawn(paths, shared_list.clone());
 
-    let mut session = TerminalSession::enter()?;
+    let mut session = TerminalSession::enter(config.mouse)?;
 
     // A terminal that answers the cell size query at start gets it again after each resize.
     let cell_size_answer = query_cell_pixel_size();

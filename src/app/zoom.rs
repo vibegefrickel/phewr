@@ -72,6 +72,43 @@ impl App {
         self.needs_render = true;
     }
 
+    /// Move the zoomed view by a fraction of the pan range, as a mouse drag does.
+    pub(crate) fn pan_fraction(&mut self, dx: f64, dy: f64) {
+        if self.zoom <= 1.0 || (dx == 0.0 && dy == 0.0) {
+            return;
+        }
+        self.pan_x += dx;
+        self.pan_y += dy;
+        self.clamp_pan();
+        self.zoom_dirty = true;
+        self.needs_render = true;
+    }
+
+    /// The screen pixels that the pan range spans on each axis: the drawn width at this zoom
+    /// minus the box, as `build_zoom_view` crops. A drag divides by it, so the picture follows
+    /// the pointer also for a letterboxed image. Zero on an axis where the image fits the box.
+    pub(crate) fn pan_range_px(&self) -> (f64, f64) {
+        let (ow, oh) = match (&self.source, &self.loaded) {
+            (Some(source), _) => (source.width(), source.height()),
+            (None, Some(loaded)) => loaded.dimensions(),
+            (None, None) => return (0.0, 0.0),
+        };
+        if ow == 0 || oh == 0 {
+            return (0.0, 0.0);
+        }
+        let vw = f64::from(self.image_rect.width) * f64::from(self.cell_px.0);
+        let vh = f64::from(self.image_rect.height) * f64::from(self.cell_px.1);
+        let (ow, oh) = (f64::from(ow), f64::from(oh));
+        let eff = f64::min(vw / ow, vh / oh).min(1.0) * self.zoom;
+        ((eff * ow - vw).max(0.0), (eff * oh - vh).max(0.0))
+    }
+
+    /// The pan position, for the tests of the mouse drag outside this module.
+    #[cfg(test)]
+    pub(crate) fn pan_position(&self) -> (f64, f64) {
+        (self.pan_x, self.pan_y)
+    }
+
     fn clamp_pan(&mut self) {
         self.pan_x = self.pan_x.clamp(0.0, 1.0);
         self.pan_y = self.pan_y.clamp(0.0, 1.0);
@@ -138,6 +175,48 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn pan_fraction_moves_the_zoomed_view_and_clamps_at_the_edges() {
+        let mut app = app_with(&["a.jpg"]);
+        app.pan_x = 0.5;
+        app.pan_y = 0.5;
+        app.pan_fraction(0.3, 0.0);
+        assert!(
+            (app.pan_x - 0.5).abs() < f64::EPSILON,
+            "no pan without zoom"
+        );
+
+        app.zoom = 2.0;
+        app.needs_render = false;
+        app.pan_fraction(0.3, -0.2);
+        assert!((app.pan_x - 0.8).abs() < 1e-9);
+        assert!((app.pan_y - 0.3).abs() < 1e-9);
+        assert!(app.needs_render);
+        app.pan_fraction(0.5, -0.5);
+        assert!((app.pan_x - 1.0).abs() < f64::EPSILON);
+        assert!(app.pan_y.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_pan_range_is_the_drawn_size_at_the_zoom_minus_the_box() {
+        let mut app = app_with(&["a.jpg"]);
+        app.cell_px = (10, 20);
+        app.image_rect = Rect::new(0, 0, 40, 10);
+        assert_eq!(app.pan_range_px(), (0.0, 0.0), "no image, no range");
+
+        // A 200 x 200 picture in a 400 x 200 box: letterboxed, 200 px wide on the screen.
+        app.loaded = Some(RgbaImage::new(200, 200));
+        assert_eq!(app.pan_range_px(), (0.0, 0.0), "fit view");
+        app.zoom = 2.0;
+        assert_eq!(
+            app.pan_range_px(),
+            (0.0, 200.0),
+            "400 px wide fits the 400 px box"
+        );
+        app.zoom = 4.0;
+        assert_eq!(app.pan_range_px(), (400.0, 600.0));
+    }
 
     use crate::app::ViewMode;
     use crate::test_support::{app, app_with, app_with_files, test_dir, wait_until};

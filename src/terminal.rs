@@ -12,14 +12,23 @@ use std::time::{Duration, Instant};
 pub(crate) struct TerminalSession {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     restored: bool,
+    /// True when the session captured the mouse at the start. The restore releases it, also
+    /// when the run loop released it in between: a second release changes nothing.
+    mouse: bool,
 }
 
 impl TerminalSession {
-    pub(crate) fn enter() -> io::Result<Self> {
+    /// Enter raw mode and the alternate screen. With `mouse`, the terminal reports clicks, drags
+    /// and the wheel as events. Without it, the terminal keeps its own selection and scrolling.
+    pub(crate) fn enter(mouse: bool) -> io::Result<Self> {
         enable_raw_mode()?;
         let mut output = stdout();
         if let Err(error) = execute!(output, EnterAlternateScreen, cursor::Hide) {
-            leave_terminal(&mut output);
+            leave_terminal(&mut output, false);
+            return Err(error);
+        }
+        if mouse && let Err(error) = enable_mouse(&mut output) {
+            leave_terminal(&mut output, true);
             return Err(error);
         }
 
@@ -27,9 +36,10 @@ impl TerminalSession {
             Ok(terminal) => Ok(Self {
                 terminal,
                 restored: false,
+                mouse,
             }),
             Err(error) => {
-                leave_terminal(&mut stdout());
+                leave_terminal(&mut stdout(), mouse);
                 Err(error)
             }
         }
@@ -50,6 +60,12 @@ impl TerminalSession {
             .delete_all_to(backend)
             .and_then(|()| Write::flush(backend))
             .err();
+        if self.mouse
+            && let Err(error) = disable_mouse(self.terminal.backend_mut())
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
         if let Err(error) = disable_raw_mode()
             && first_error.is_none()
         {
@@ -68,12 +84,35 @@ impl TerminalSession {
     }
 }
 
+/// The mouse modes that viewr needs: 1000 (press and release), 1002 (motion only while a button
+/// is held, for the drag) and 1006 (SGR coordinates, which crossterm parses). viewr leaves out
+/// 1003 (any motion), so a plain pointer move does not wake the run loop.
+const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+
+/// The same modes off, in the reverse order.
+const MOUSE_OFF: &[u8] = b"\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
+/// Let the terminal report clicks, drags and the wheel, but not a plain pointer move.
+pub(crate) fn enable_mouse(out: &mut impl Write) -> io::Result<()> {
+    out.write_all(MOUSE_ON)?;
+    out.flush()
+}
+
+/// Give the mouse back to the terminal: its own selection and scrolling.
+pub(crate) fn disable_mouse(out: &mut impl Write) -> io::Result<()> {
+    out.write_all(MOUSE_OFF)?;
+    out.flush()
+}
+
 /// Undo raw mode and the alternate screen after a failed start.
 #[expect(
     clippy::let_underscore_must_use,
     reason = "the start error matters more than a failed cleanup"
 )]
-fn leave_terminal(output: &mut io::Stdout) {
+fn leave_terminal(output: &mut io::Stdout, mouse: bool) {
+    if mouse {
+        let _ = disable_mouse(output);
+    }
     let _ = disable_raw_mode();
     let _ = execute!(output, cursor::Show, LeaveAlternateScreen);
 }
@@ -205,8 +244,24 @@ fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CELL_SIZE_QUERY, cell_pixel_size, cell_size_report_end, parse_cell_size_report};
+    use super::{
+        CELL_SIZE_QUERY, cell_pixel_size, cell_size_report_end, disable_mouse, enable_mouse,
+        parse_cell_size_report,
+    };
     use crossterm::terminal::WindowSize;
+
+    #[test]
+    fn the_mouse_modes_are_press_drag_and_sgr_without_any_motion() {
+        let mut on = Vec::new();
+        enable_mouse(&mut on).unwrap();
+        assert_eq!(on, b"\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+        let mut off = Vec::new();
+        disable_mouse(&mut off).unwrap();
+        assert_eq!(off, b"\x1b[?1006l\x1b[?1002l\x1b[?1000l");
+        for out in [&on, &off] {
+            assert!(!String::from_utf8_lossy(out).contains("1003"), "{out:?}");
+        }
+    }
 
     #[test]
     fn the_cell_size_query_and_its_answer_follow_xterm() {

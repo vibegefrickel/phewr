@@ -8,6 +8,7 @@ mod folders;
 mod fullscreen;
 mod grid_zoom;
 mod info_panel;
+pub(crate) mod mouse;
 mod scan;
 mod slideshow;
 pub(crate) mod thumbnails;
@@ -15,6 +16,7 @@ mod video;
 mod zoom;
 
 pub(crate) use delete::{DeleteMode, PendingDelete};
+pub(crate) use mouse::{Drag, MouseState, ScreenLayout};
 pub(crate) use slideshow::Slideshow;
 #[cfg(feature = "video")]
 pub(crate) use video::VideoReturn;
@@ -112,6 +114,9 @@ pub(crate) struct App {
     /// it, also in the gallery, so that the pre-decode of the hovered cell has the exact size.
     pub fullscreen_box: Rect,
     pub help_visible: bool,
+    /// The areas of the last draw that a click lands on.
+    pub layout: ScreenLayout,
+    pub mouse: MouseState,
     loaded_for_rect: Rect,
 
     // Async fullscreen decode
@@ -242,6 +247,8 @@ impl App {
             image_rect: Rect::default(),
             fullscreen_box: Rect::default(),
             help_visible: false,
+            layout: ScreenLayout::default(),
+            mouse: MouseState::default(),
             loaded_for_rect: Rect::default(),
             fullscreen_rx: None,
             fullscreen_target: None,
