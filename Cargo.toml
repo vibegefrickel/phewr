@@ -135,6 +135,9 @@ jxl-oxide = { version = "0.12.6", features = ["moxcms"] }
 kamadak-exif = "0.6"
 libheif-rs = { version = "3", optional = true }
 lru = "0.18"
+# The ICC profile of a JPEG XL file to sRGB (`decode/jxl.rs`). `image` and `jxl-oxide` use the
+# same version.
+moxcms = "0.8.1"
 nucleo-matcher = "0.3"
 ratatui = "0.30"
 rayon = "1.12"

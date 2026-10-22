@@ -181,7 +181,7 @@ pub(crate) fn test_dir() -> TempDir {
 
 /// A checked-in file below `tests/fixtures`. The animated images there (`anim.gif`,
 /// `anim.webp`, `anim.png`, `anim.avif`) hold 3 frames of 16x12 pixels, the stills one.
-#[cfg(feature = "video")]
+/// `jxl/` holds the color charts of `jxl/make.sh`.
 pub(crate) fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")

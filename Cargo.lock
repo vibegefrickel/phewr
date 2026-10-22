@@ -2706,6 +2706,7 @@ dependencies = [
  "kamadak-exif",
  "libheif-rs",
  "lru",
+ "moxcms",
  "nucleo-matcher",
  "ratatui",
  "rayon",
