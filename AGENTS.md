@@ -64,7 +64,7 @@ Files at run time:
 - Config: `~/.config/viewr/config.toml`, or `$XDG_CONFIG_HOME/viewr/config.toml`. The sections
   are `[gallery]`, `[slideshow]`, `[info]` and `[video]`.
 - State (the remembered zoom levels): `~/.local/state/viewr/state.toml`.
-- Thumbnail cache: `~/Library/Caches/viewr/`, pruned at 512 MB.
+- Thumbnail cache: `~/Library/Caches/viewr/`, QOI files, pruned at 512 MB.
 
 ### Release (maintainer only)
 
@@ -165,7 +165,8 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   session and the start of the run loop.
 - `cli.rs`: the clap arguments (`Cli`) and the start directory.
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
-  `query_terminal` and the cell pixel size.
+  `query_terminal`, `query_cell_size_and_probe` (`CSI 16 t` and the Kitty probe in one write)
+  and the cell pixel size.
 - `run_loop.rs`: `LoopState` (the status note and, with the `video` feature, the `VideoState`), `run`, the background polls,
   `render_images` and `next_timeout`. The status note lives here, not in `App`.
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
@@ -247,7 +248,8 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   file writers that the tests of more than one module share. `test_support::video` holds
   `FakeRunner`, `FakeDecoder` and the app builders of the video tests.
 - `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
-  terminal and read `VIEWR_TEST_DIR`.
+  terminal and read `VIEWR_TEST_DIR`. `start_to_the_first_grid_picture` measures the process
+  start and the steps of `main`, `disk_cache_formats` the cache formats.
 
 ## Gotchas
 
@@ -339,7 +341,9 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
 
 - **The run loop polls every 10 ms while a background job runs** (`App::has_pending_work`:
   a decode, a prefetch, a thumbnail, a filter, the scan or thumbnails that wait for their emit),
-  because no event wakes it. Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
+  because no event wakes it, and every 1 ms during the first 20 ms of the header read for the
+  cell shape (`SHAPE_POLL`, `SHAPE_POLL_WINDOW`). Otherwise it waits 250 ms (`next_timeout` in
+  `run_loop.rs`).
 - **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
   and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
@@ -389,7 +393,9 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
 - **Cell size:** `query_cell_pixel_size` asks with `CSI 16 t`, because TIOCGWINSZ includes the
   window padding of Ghostty (2258 px / 52 rows = 43.42 px). If the terminal answered at
   start, the run loop asks again after each resize. The read takes every byte of the tty, so
-  a key typed in that millisecond is lost.
+  a key typed in that millisecond is lost. At the start, the query goes out together with the
+  Kitty probe, in one round trip. A terminal that does not answer one of them costs
+  `PROBE_TIMEOUT` (300 ms) one time.
 - **Mouse:** viewr enables only the mouse modes 1000, 1002 and 1006 (`terminal::enable_mouse`),
   never 1003, so a pointer move without a button does not wake the run loop. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. `[gallery] mouse = false` turns
@@ -425,7 +431,14 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   switch, so the columns never move while the user browses.
 - **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `decode/resize.rs`). It is one
   third faster than Lanczos3, and the difference is not visible.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v10` (`THUMBNAIL_CACHE_VERSION`), the
+- **Process start:** about 30 ms pass before `main`, most of it the dylib load of libheif and its
+  codec libraries (a C program that links libheif needs 24.9 ms, with no library 4.6 ms).
+  Foundation (the `trash` crate) costs about 3.5 ms. The `dist` profile and `target-cpu` give no
+  measurable gain, so `just install` builds `--release`.
+- **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
+  0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
+  the space. The prune removes the `.png` files of older versions at once.
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v11` (`THUMBNAIL_CACHE_VERSION`), the
   path, the size, the mtime, the target size and the color target. Change the version string when the thumbnail
   output changes. The folder prefetch writes the same key (`warm_disk_cache` calls
   `sharp_thumbnail`). The prune removes temp files of the cache that are older than 1 hour.
