@@ -27,7 +27,7 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
         let (column, row) = centered_cell(app.image_rect, app.cell_px, img);
         queue!(out, cursor::MoveTo(column, row))?;
         app.graphics
-            .transmit(out, img, &encoder::DisplayOptions::default())?;
+            .transmit(out, img.into(), &encoder::DisplayOptions::default())?;
     }
 
     queue!(out, EndSynchronizedUpdate)?;
@@ -67,9 +67,10 @@ pub(crate) fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Resu
 
     if !app.help_visible
         && let Some(v) = &app.video
-        && let Some(img) = &v.current_frame
+        && let Some(frame) = &v.current_frame
     {
-        let cells = crate::player::cell_box(img.dimensions(), app.image_rect, app.cell_px);
+        let pixels = frame.pixels();
+        let cells = crate::player::cell_box(pixels.dimensions(), app.image_rect, app.cell_px);
         if cells.width == 0 || cells.height == 0 {
             return Ok(());
         }
@@ -77,7 +78,7 @@ pub(crate) fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Resu
         queue!(out, cursor::MoveTo(cells.x, cells.y))?;
         app.graphics.transmit(
             out,
-            img,
+            pixels,
             &encoder::DisplayOptions {
                 id: Some(VIDEO_IMAGE_ID),
                 cell_box: Some((cells.width, cells.height)),
@@ -220,7 +221,7 @@ fn transmit_cell(
     queue!(out, cursor::MoveTo(origin.0, origin.1))?;
     app.graphics.transmit(
         out,
-        &picture.image,
+        (&picture.image).into(),
         &encoder::DisplayOptions {
             id: Some(id),
             cell_box,
@@ -421,6 +422,23 @@ mod tests {
     /// The write half of `render_gallery_images`, for the visible cells of the grid.
     fn place_visible(app: &mut App, out: &mut Vec<u8>) {
         place_gallery_images_to(app, out).unwrap();
+    }
+
+    #[test]
+    fn an_opaque_fullscreen_image_goes_out_as_rgb_and_a_transparent_one_as_rgba() {
+        let mut app = App::new((8, 16), SharedImageList::new());
+        app.image_rect = Rect::new(0, 0, 10, 10);
+        let mut image = RgbaImage::from_pixel(16, 32, image::Rgba([9, 9, 9, 255]));
+        app.loaded = Some(image.clone());
+        let mut out = Vec::new();
+        render_fullscreen_image_to(&mut app, &mut out).unwrap();
+        assert!(text(&out).contains(",f=24,s=16,v=32,"), "{}", text(&out));
+
+        image.put_pixel(3, 3, image::Rgba([9, 9, 9, 0]));
+        app.loaded = Some(image);
+        let mut out = Vec::new();
+        render_fullscreen_image_to(&mut app, &mut out).unwrap();
+        assert!(text(&out).contains(",f=32,s=16,v=32,"), "{}", text(&out));
     }
 
     #[test]
@@ -987,7 +1005,7 @@ mod tests {
             true,
         )
         .unwrap();
-        decoder.feed(vec![7; 64 * 48 * 4]);
+        decoder.feed(vec![7; 64 * 48 * 3]);
         assert!(player.poll());
         app.video = Some(player);
         app
@@ -1002,7 +1020,7 @@ mod tests {
         super::render_video_frame_to(&app, &mut out).unwrap();
 
         for path in crate::encoder::kitty::temp_file_paths(&out) {
-            assert_eq!(std::fs::metadata(&path).unwrap().len(), 64 * 48 * 4);
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), 64 * 48 * 3);
             std::fs::remove_file(path).unwrap();
         }
         let text = text(&out);
@@ -1011,7 +1029,7 @@ mod tests {
         // 64x48 in 100x40 cells of 8x16: the 100 columns take 38 rows, from row 1.
         assert!(text.contains("\x1b[2;1H"), "{text}");
         assert!(
-            text.contains("\x1b_Ga=T,q=2,C=1,f=32,s=64,v=48,i=4294967294,c=100,r=38,t=t;"),
+            text.contains("\x1b_Ga=T,q=2,C=1,f=24,s=64,v=48,i=4294967294,c=100,r=38,t=t;"),
             "{text}"
         );
         assert!(!text.contains("X=") && !text.contains("Y="), "{text}");

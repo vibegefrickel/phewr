@@ -47,6 +47,29 @@ fn millis(duration: Duration) -> String {
     format!("{:.0} ms", duration.as_secs_f64() * 1000.0)
 }
 
+/// A short time with one decimal, for the cost of one frame.
+fn fine_millis(duration: Duration) -> String {
+    format!("{:.1} ms", duration.as_secs_f64() * 1000.0)
+}
+
+fn median(times: &mut [Duration]) -> Duration {
+    times.sort_unstable();
+    times.get(times.len() / 2).copied().unwrap_or_default()
+}
+
+/// Delete the temp files that the sequences in `out` name, as the terminal would, and return
+/// their bytes.
+fn remove_temp_files(out: &[u8]) -> u64 {
+    crate::encoder::kitty::temp_file_paths(out)
+        .iter()
+        .map(|path| {
+            let bytes = std::fs::metadata(path).map_or(0, |metadata| metadata.len());
+            std::fs::remove_file(path).unwrap();
+            bytes
+        })
+        .sum()
+}
+
 /// The grid area of the gallery: the whole terminal above the status row.
 fn grid_rect() -> Rect {
     Rect::new(0, 0, COLS, ROWS - 1)
@@ -648,44 +671,103 @@ fn prefetch_hits_for_next_and_previous() {
 #[test]
 #[ignore = "reads the folder VIEWR_TEST_DIR"]
 fn kitty_payload_of_a_fullscreen_frame() {
+    const RUNS: usize = 10;
+
+    let Some(dir) = test_dir() else {
+        report("skipped: VIEWR_TEST_DIR is not set");
+        return;
+    };
+    for extensions in [&["heic"][..], &["png"][..]] {
+        let mut bench = scanned_app(&dir);
+        let Some(index) = first_with_extension(&bench.app, extensions) else {
+            report(&format!("payload {}: no file in the folder", extensions[0]));
+            continue;
+        };
+        bench.app.enter_fullscreen_at(index);
+        run_until(&mut bench.app, |app| app.loaded.is_some());
+        let loaded = bench.app.loaded.as_ref().unwrap();
+        report(&format!(
+            "payload {}: image {}x{} in a box of {}x{} pixels",
+            bench.app.filenames[index],
+            loaded.width(),
+            loaded.height(),
+            u32::from(fullscreen_rect().width) * CELL_PX.0,
+            u32::from(fullscreen_rect().height) * CELL_PX.1
+        ));
+        for transfer in [Transfer::Direct, Transfer::Png, Transfer::TempFile] {
+            bench.app.graphics = KittyBackend::new(transfer);
+            let mut times = Vec::new();
+            let mut sizes = (0, 0);
+            for _ in 0..RUNS {
+                let mut out = Vec::new();
+                let start = Instant::now();
+                render_fullscreen_image_to(&mut bench.app, &mut out).unwrap();
+                times.push(start.elapsed());
+                sizes = (out.len(), remove_temp_files(&out));
+            }
+            report(&format!(
+                "payload {transfer:?}: {} bytes to the terminal, {} bytes in temp files, median {} per frame",
+                sizes.0,
+                sizes.1,
+                fine_millis(median(&mut times))
+            ));
+        }
+    }
+}
+
+/// One pan step of the zoomed fullscreen view: the new crop (`load_if_needed`) and its write
+/// through the temp file medium. Each pan step builds a new crop, so the write converts each
+/// crop one time.
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn zoom_pan_step() {
+    const STEPS: usize = 10;
+
     let Some(dir) = test_dir() else {
         report("skipped: VIEWR_TEST_DIR is not set");
         return;
     };
     let mut bench = scanned_app(&dir);
     let index = first_with_extension(&bench.app, &["heic"]).unwrap_or(0);
+    bench.app.graphics = KittyBackend::new(Transfer::TempFile);
     bench.app.enter_fullscreen_at(index);
+    bench.app.image_rect = fullscreen_rect();
     run_until(&mut bench.app, |app| app.loaded.is_some());
-    let loaded = bench.app.loaded.as_ref().unwrap();
-    report(&format!(
-        "payload: image {}x{} in a box of {}x{} pixels",
-        loaded.width(),
-        loaded.height(),
-        u32::from(fullscreen_rect().width) * CELL_PX.0,
-        u32::from(fullscreen_rect().height) * CELL_PX.1
-    ));
-    for transfer in [Transfer::Direct, Transfer::Png, Transfer::TempFile] {
-        bench.app.graphics = KittyBackend::new(transfer);
+    bench.app.zoom_in();
+    run_until(&mut bench.app, |app| !app.has_pending_work());
+    let (mut crops, mut writes, mut rgba_writes) = (Vec::new(), Vec::new(), Vec::new());
+    for step in 0..STEPS {
+        bench
+            .app
+            .pan_fraction(if step % 2 == 0 { 0.05 } else { -0.05 }, 0.0);
+        let start = Instant::now();
+        bench.app.load_if_needed();
+        crops.push(start.elapsed());
         let mut out = Vec::new();
         let start = Instant::now();
         render_fullscreen_image_to(&mut bench.app, &mut out).unwrap();
-        let elapsed = start.elapsed();
-        let files = crate::encoder::kitty::temp_file_paths(&out);
-        let file_bytes: u64 = files
-            .iter()
-            .filter_map(|path| std::fs::metadata(path).ok())
-            .map(|metadata| metadata.len())
-            .sum();
-        for path in &files {
-            std::fs::remove_file(path).unwrap();
+        writes.push(start.elapsed());
+        remove_temp_files(&out);
+        // The same crop with one transparent pixel goes out as RGBA: the write without the
+        // RGB step, as before the change to RGB.
+        if let Some(loaded) = bench.app.loaded.as_mut() {
+            loaded.put_pixel(0, 0, image::Rgba([0, 0, 0, 0]));
         }
-        report(&format!(
-            "payload {transfer:?}: {} bytes to the terminal in {}, {file_bytes} bytes in {} temp file(s)",
-            out.len(),
-            millis(elapsed),
-            files.len()
-        ));
+        let mut out = Vec::new();
+        let start = Instant::now();
+        render_fullscreen_image_to(&mut bench.app, &mut out).unwrap();
+        rgba_writes.push(start.elapsed());
+        remove_temp_files(&out);
     }
+    let loaded = bench.app.loaded.as_ref().unwrap();
+    report(&format!(
+        "zoom pan step {}x{}: median {} for the crop, {} for the temp file write as RGB, {} as RGBA",
+        loaded.width(),
+        loaded.height(),
+        fine_millis(median(&mut crops)),
+        fine_millis(median(&mut writes)),
+        fine_millis(median(&mut rgba_writes))
+    ));
 }
 
 /// The phases of one HEIC decode, alone and with the parallel decodes of a grid.
@@ -934,7 +1016,7 @@ fn terminal_player_decode_rate() {
     for limit in [(1280, 720), (1920, 1080)] {
         let frame = frame_box((info.width, info.height), limit);
         let args = crate::player::args(video, &info, frame, cube.as_deref(), 0.0, Pipeline::Gpu);
-        let bytes = frame.0 as usize * frame.1 as usize * 4;
+        let bytes = frame.0 as usize * frame.1 as usize * crate::player::pixel_format(&info).1;
         let start = Instant::now();
         let mut stream = SystemDecoder.start(&ffmpeg, &args, bytes).unwrap();
         let mut first = None;
@@ -1024,12 +1106,11 @@ fn terminal_player_realtime_into_the_buffer() {
     let mut frames = 0;
     let mut bytes = 0;
     let mut first = None;
+    let mut file_bytes = 0;
     while start.elapsed() < PLAY {
         run_pass(&mut app, &mut pending);
         let out = app.graphics_out.take_bytes();
-        for path in crate::encoder::kitty::temp_file_paths(&out) {
-            std::fs::remove_file(path).unwrap();
-        }
+        file_bytes += remove_temp_files(&out);
         if !out.is_empty() {
             frames += count_transmissions(&out);
             bytes += out.len();
@@ -1054,6 +1135,27 @@ fn terminal_player_realtime_into_the_buffer() {
             (frames.saturating_sub(1)) as f64 / shown.as_secs_f64()
         },
         player.position(),
+    ));
+    report_video_frame_write(&app, frames, file_bytes);
+}
+
+/// The bytes per frame of the realtime run, and the time of one frame write into a buffer.
+#[cfg(feature = "video")]
+fn report_video_frame_write(app: &App, frames: usize, file_bytes: u64) {
+    const RUNS: usize = 20;
+
+    let mut times = Vec::new();
+    for _ in 0..RUNS {
+        let mut out = Vec::new();
+        let start = Instant::now();
+        crate::kitty_output::render_video_frame_to(app, &mut out).unwrap();
+        times.push(start.elapsed());
+        remove_temp_files(&out);
+    }
+    report(&format!(
+        "terminal player frame: {} bytes in temp files per frame, median {} per frame write",
+        file_bytes / u64::try_from(frames.max(1)).unwrap_or(1),
+        fine_millis(median(&mut times))
     ));
 }
 

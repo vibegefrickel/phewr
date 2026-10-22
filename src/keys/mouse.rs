@@ -252,7 +252,7 @@ fn video_picture(app: &App) -> Rect {
         .video
         .as_ref()
         .and_then(|video| video.current_frame.as_ref())
-        .map(image::RgbaImage::dimensions);
+        .map(crate::player::Frame::dimensions);
     let Some(frame) = frame else {
         return app.image_rect;
     };
@@ -619,7 +619,7 @@ mod tests {
         )
         .unwrap();
         // A portrait frame leaves wide bars at both sides.
-        player.current_frame = Some(image::RgbaImage::new(9, 16));
+        player.current_frame = crate::player::Frame::new((9, 16), false, vec![0; 9 * 16 * 3]);
         app.video = Some(player);
         let rect = app.image_rect;
         let middle = (rect.x + rect.width / 2, rect.y + rect.height / 2);

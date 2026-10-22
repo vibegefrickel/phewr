@@ -1,6 +1,6 @@
 pub(crate) mod kitty;
 
-use image::RgbaImage;
+use image::{RgbImage, RgbaImage};
 use std::io::{self, Write};
 #[cfg(test)]
 use std::sync::{Arc, Mutex, PoisonError};
@@ -71,28 +71,100 @@ pub(crate) struct DisplayOptions {
     pub cell_box: Option<(u16, u16)>,
 }
 
+/// The pixels per step of [`Pixels::opaque_rgb`]: 16 KB of RGBA, which stays in the L1 cache
+/// between the check and the copy.
+const OPACITY_CHUNK: usize = 4096;
+
+/// Raw pixels for one transmission: 3 bytes per pixel (RGB, `f=24`) or 4 (RGBA, `f=32`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Pixels<'a> {
+    pub width: u32,
+    pub height: u32,
+    /// True for 4 bytes per pixel.
+    pub alpha: bool,
+    pub data: &'a [u8],
+}
+
+impl Pixels<'_> {
+    pub(crate) fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The same pixels with 3 bytes each, when every pixel is opaque. The terminal then reads
+    /// a quarter fewer bytes. `None` for RGB pixels and for an image with a transparent pixel.
+    ///
+    /// The check and the copy go in chunks of [`OPACITY_CHUNK`] pixels, so the first chunk with
+    /// a transparent pixel stops the work: a padded grid picture stops in its first rows.
+    pub(crate) fn opaque_rgb(&self) -> Option<Vec<u8>> {
+        if !self.alpha {
+            return None;
+        }
+        let (pixels, _) = self.data.as_chunks::<4>();
+        let mut rgb = vec![0; pixels.len() * 3];
+        for (source, target) in pixels
+            .chunks(OPACITY_CHUNK)
+            .zip(rgb.chunks_mut(OPACITY_CHUNK * 3))
+        {
+            if source.iter().fold(u8::MAX, |all, pixel| all & pixel[3]) != u8::MAX {
+                return None;
+            }
+            // The array stores let the compiler turn the loop into vector code: 1 ms for a
+            // 2736x2052 frame, four times faster than a `copy_from_slice` of 3 bytes per pixel.
+            for (&[red, green, blue, _], pixel) in source.iter().zip(target.as_chunks_mut::<3>().0)
+            {
+                *pixel = [red, green, blue];
+            }
+        }
+        Some(rgb)
+    }
+}
+
+impl<'a> From<&'a RgbaImage> for Pixels<'a> {
+    fn from(image: &'a RgbaImage) -> Self {
+        Self {
+            width: image.width(),
+            height: image.height(),
+            alpha: true,
+            data: image.as_raw(),
+        }
+    }
+}
+
+impl<'a> From<&'a RgbImage> for Pixels<'a> {
+    fn from(image: &'a RgbImage) -> Self {
+        Self {
+            width: image.width(),
+            height: image.height(),
+            alpha: false,
+            data: image.as_raw(),
+        }
+    }
+}
+
 /// How the pixels reach the terminal.
 ///
-/// A Retina fullscreen frame is about 22 MB of RGBA. As base64 through the pty, that is 29 MB
+/// A Retina fullscreen frame is about 17 MB of RGB. As base64 through the pty, that is 22 MB
 /// of text that the terminal parses and decodes. A temp file on the same machine carries the
 /// pixels with a sequence of about 100 bytes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Transfer {
-    /// Raw RGBA as base64 through the pty (`t=d`, `f=32`). Every Kitty terminal reads it.
+    /// Raw RGB or RGBA as base64 through the pty (`t=d`, `f=24` or `f=32`). Every Kitty
+    /// terminal reads it.
     #[default]
     Direct,
     /// A PNG as base64 through the pty (`f=100`): the smallest payload for a connection over SSH.
     Png,
-    /// Raw RGBA in a temp file that the terminal reads and deletes (`t=t`). The terminal must
-    /// run on this machine, and `kitty::detect_transfer` must have found its support.
+    /// Raw RGB or RGBA in a temp file that the terminal reads and deletes (`t=t`). The terminal
+    /// must run on this machine, and `kitty::detect_transfer` must have found its support.
     TempFile,
 }
 
 pub(crate) trait GraphicsBackend {
+    /// Send `pixels` and show them. An RGBA image without a transparent pixel goes out as RGB.
     fn transmit(
         &self,
         out: &mut dyn Write,
-        image: &RgbaImage,
+        pixels: Pixels<'_>,
         options: &DisplayOptions,
     ) -> io::Result<()>;
     fn delete_all_to(&self, out: &mut dyn Write) -> io::Result<()>;
@@ -127,10 +199,10 @@ impl GraphicsBackend for KittyBackend {
     fn transmit(
         &self,
         out: &mut dyn Write,
-        image: &RgbaImage,
+        pixels: Pixels<'_>,
         options: &DisplayOptions,
     ) -> io::Result<()> {
-        kitty::transmit_to(out, image, options, self.transfer)
+        kitty::transmit_to(out, pixels, options, self.transfer)
     }
 
     fn delete_all_to(&self, out: &mut dyn Write) -> io::Result<()> {
@@ -157,8 +229,11 @@ impl GraphicsBackend for KittyBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{DisplayOptions, GraphicsBackend, GraphicsOutput, KittyBackend, Transfer};
-    use image::RgbaImage;
+    use super::{
+        DisplayOptions, GraphicsBackend, GraphicsOutput, KittyBackend, OPACITY_CHUNK, Pixels,
+        Transfer,
+    };
+    use image::{Rgba, RgbaImage};
     use std::io::Write;
 
     #[test]
@@ -175,6 +250,25 @@ mod tests {
     }
 
     #[test]
+    fn the_opaque_check_looks_at_every_chunk() {
+        let mut image = RgbaImage::from_pixel(OPACITY_CHUNK as u32 + 1, 2, Rgba([1, 2, 3, 255]));
+        let rgb = Pixels::from(&image).opaque_rgb().unwrap();
+        assert_eq!(rgb.len(), image.as_raw().len() / 4 * 3);
+        assert_eq!(rgb[rgb.len() - 3..], [1, 2, 3]);
+
+        image.put_pixel(0, 1, Rgba([1, 2, 3, 0]));
+        assert!(
+            Pixels::from(&image).opaque_rgb().is_none(),
+            "a transparent pixel in the last chunk"
+        );
+        let rgb = image::RgbImage::new(2, 2);
+        assert!(
+            Pixels::from(&rgb).opaque_rgb().is_none(),
+            "RGB stays as it is"
+        );
+    }
+
+    #[test]
     fn kitty_backend_delegates_through_trait() {
         let backend = KittyBackend::default();
         assert_eq!(backend.transfer(), Transfer::Direct);
@@ -184,7 +278,7 @@ mod tests {
         backend
             .transmit(
                 &mut out,
-                &image,
+                (&image).into(),
                 &DisplayOptions {
                     id: Some(7),
                     cell_box: Some((5, 3)),

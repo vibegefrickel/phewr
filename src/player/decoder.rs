@@ -1,8 +1,8 @@
-//! The ffmpeg process that decodes a video into raw RGBA frames, and its command line.
+//! The ffmpeg process that decodes a video into raw RGB or RGBA frames, and its command line.
 //!
 //! ffmpeg decodes on the media engine of the Mac (`-hwaccel videotoolbox`), scales and turns
 //! the frame on the GPU (`scale_vt`, `transpose_vt`), maps an HDR signal to SDR with the tone
-//! mapping cube (`lut3d`) and writes raw RGBA frames into a pipe. A thread reads the pipe one
+//! mapping cube (`lut3d`) and writes raw RGB frames into a pipe. A thread reads the pipe one
 //! frame at a time, so the run loop never waits for ffmpeg.
 //!
 //! An animated image decodes in software without the hardware flags, because the AV1 decoder
@@ -36,7 +36,21 @@ pub(crate) enum Pipeline {
     Software,
 }
 
-/// The ffmpeg command line that writes raw RGBA frames of `frame` pixels to stdout.
+/// The raw pixel format of the frames for ffmpeg, and its bytes per pixel.
+///
+/// An animation keeps the alpha channel, because a GIF, WebP or APNG frame can hold
+/// transparent pixels. A video has none, so RGB saves a quarter of the bytes in the pipe and in
+/// the temp file of each frame.
+pub(crate) fn pixel_format(info: &VideoInfo) -> (&'static str, usize) {
+    if info.animation {
+        ("rgba", 4)
+    } else {
+        ("rgb24", 3)
+    }
+}
+
+/// The ffmpeg command line that writes raw frames of `frame` pixels to stdout, in the format of
+/// [`pixel_format`].
 ///
 /// `seek` is the start position in seconds. ffmpeg seeks in the input, before the decode.
 /// `cube` is the tone mapping cube of an HDR video, see [`super::tone_map::tone_map_file`].
@@ -86,7 +100,8 @@ pub(crate) fn args(
         ]
         .map(OsString::from),
     );
-    args.extend(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"].map(OsString::from));
+    let (pixels, _) = pixel_format(info);
+    args.extend(["-f", "rawvideo", "-pix_fmt", pixels, "pipe:1"].map(OsString::from));
     args
 }
 
@@ -447,7 +462,7 @@ mod tests {
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
-                "rgba",
+                "rgb24",
                 "pipe:1",
             ]
         );

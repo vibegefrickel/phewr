@@ -95,3 +95,58 @@ pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
     img.apply_orientation(orientation);
     Ok(decode::tonemap::to_display(img))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::decode_raster;
+    use crate::test_support::fixture;
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+    const BLACK: [u8; 4] = [0, 0, 0, 255];
+    const GRAY: [u8; 4] = [200, 200, 200, 255];
+
+    /// The RGBA pixels in the middle of the left half and of the right half of a 32x16 fixture
+    /// of `tests/fixtures/png`.
+    fn halves(name: &str) -> ([u8; 4], [u8; 4]) {
+        let decoded = decode_raster(&fixture(&format!("png/{name}")), None)
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(decoded.dimensions(), (32, 16), "{name}");
+        (decoded.get_pixel(8, 8).0, decoded.get_pixel(24, 8).0)
+    }
+
+    #[test]
+    fn every_opaque_png_layout_decodes_to_its_colors() {
+        for name in ["rgb16.png", "palette.png", "interlaced.png"] {
+            assert_eq!(halves(name), (RED, BLUE), "{name}");
+        }
+        for name in ["gray8.png", "gray16.png"] {
+            assert_eq!(halves(name), (BLACK, GRAY), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_transparent_half_of_a_png_stays_transparent() {
+        for (name, left) in [
+            ("rgba8.png", RED),
+            ("rgba16.png", RED),
+            ("palette-trns.png", RED),
+            ("gray-alpha.png", BLACK),
+        ] {
+            let (opaque, transparent) = halves(name);
+            assert_eq!(opaque, left, "{name}");
+            assert_eq!(transparent[3], 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_png_with_exif_orientation_6_decodes_upright() {
+        let decoded = decode_raster(&fixture("png/orientation-6.png"), None)
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(decoded.dimensions(), (16, 32));
+        assert_eq!(decoded.get_pixel(8, 4).0, RED);
+        assert_eq!(decoded.get_pixel(8, 27).0, BLUE);
+    }
+}

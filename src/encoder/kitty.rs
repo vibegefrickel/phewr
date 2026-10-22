@@ -1,8 +1,8 @@
-use super::{DisplayOptions, Transfer};
+use super::{DisplayOptions, Pixels, Transfer};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ImageEncoder, RgbaImage};
+use image::{ExtendedColorType, ImageEncoder};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,39 +15,75 @@ const PROBE_ID: u32 = 31;
 /// The environment variable that skips the probe: `direct`, `png` or `file`.
 pub(crate) const TRANSFER_OVERRIDE: &str = "VIEWR_KITTY_TRANSFER";
 
-/// Write `img` to `out` with the Kitty transmit-and-display action, through `transfer`.
+/// Write `pixels` to `out` with the Kitty transmit-and-display action, through `transfer`.
+///
+/// An RGBA image without a transparent pixel goes out as RGB (`f=24`): a quarter fewer bytes
+/// in the temp file or the pty, and a smaller PNG.
 pub(crate) fn transmit_to<W: Write + ?Sized>(
     out: &mut W,
-    img: &RgbaImage,
+    pixels: Pixels<'_>,
+    opts: &DisplayOptions,
+    transfer: Transfer,
+) -> io::Result<()> {
+    let rgb;
+    let pixels = match pixels.opaque_rgb() {
+        Some(converted) => {
+            rgb = converted;
+            Pixels {
+                alpha: false,
+                data: &rgb,
+                ..pixels
+            }
+        }
+        None => pixels,
+    };
+    write_pixels(out, pixels, opts, transfer)
+}
+
+/// Write `pixels` as they are, through `transfer`.
+fn write_pixels<W: Write + ?Sized>(
+    out: &mut W,
+    pixels: Pixels<'_>,
     opts: &DisplayOptions,
     transfer: Transfer,
 ) -> io::Result<()> {
     match transfer {
-        Transfer::Direct => write_direct(out, img, opts, 32, &STANDARD.encode(img.as_raw())),
+        Transfer::Direct => write_direct(
+            out,
+            pixels,
+            opts,
+            raw_format(pixels),
+            &STANDARD.encode(pixels.data),
+        ),
         Transfer::Png => {
+            let color = if pixels.alpha {
+                ExtendedColorType::Rgba8
+            } else {
+                ExtendedColorType::Rgb8
+            };
             let mut png_buf = Vec::new();
             PngEncoder::new_with_quality(&mut png_buf, CompressionType::Fast, FilterType::Sub)
-                .write_image(
-                    img.as_raw(),
-                    img.width(),
-                    img.height(),
-                    image::ExtendedColorType::Rgba8,
-                )
+                .write_image(pixels.data, pixels.width, pixels.height, color)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            write_direct(out, img, opts, 100, &STANDARD.encode(&png_buf))
+            write_direct(out, pixels, opts, 100, &STANDARD.encode(&png_buf))
         }
         // A temp dir that takes no file (full, read-only) must not stop the program, so the
         // pixels go through the pty instead.
-        Transfer::TempFile => match write_temp_file(img.as_raw()) {
-            Ok(path) => write_temp_file_reference(out, img, opts, &path),
-            Err(_) => transmit_to(out, img, opts, Transfer::Direct),
+        Transfer::TempFile => match write_temp_file(pixels.data) {
+            Ok(path) => write_temp_file_reference(out, pixels, opts, &path),
+            Err(_) => write_pixels(out, pixels, opts, Transfer::Direct),
         },
     }
 }
 
+/// The format key of raw pixels: `f=24` for RGB, `f=32` for RGBA.
+fn raw_format(pixels: Pixels<'_>) -> u32 {
+    if pixels.alpha { 32 } else { 24 }
+}
+
 /// The keys that every transmission shares: the format, the size, the id and the cell box.
-fn header_keys(img: &RgbaImage, opts: &DisplayOptions, format: u32) -> String {
-    let (w, h) = img.dimensions();
+fn header_keys(pixels: Pixels<'_>, opts: &DisplayOptions, format: u32) -> String {
+    let (w, h) = pixels.dimensions();
     let id_part = opts.id.map(|id| format!(",i={id}")).unwrap_or_default();
     let box_part = cell_box_keys(opts.cell_box);
     format!("a=T,q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}")
@@ -63,14 +99,14 @@ fn cell_box_keys(cell_box: Option<(u16, u16)>) -> String {
 /// The base64 payload in chunks of 4096 bytes through the pty.
 fn write_direct<W: Write + ?Sized>(
     out: &mut W,
-    img: &RgbaImage,
+    pixels: Pixels<'_>,
     opts: &DisplayOptions,
     format: u32,
     b64: &str,
 ) -> io::Result<()> {
     let chunks: Vec<&[u8]> = b64.as_bytes().chunks(CHUNK_SIZE).collect();
     let total = chunks.len();
-    let keys = header_keys(img, opts, format);
+    let keys = header_keys(pixels, opts, format);
 
     for (i, chunk) in chunks.iter().enumerate() {
         let more = i32::from(i + 1 < total);
@@ -86,15 +122,15 @@ fn write_direct<W: Write + ?Sized>(
     Ok(())
 }
 
-/// The sequence that names a temp file with the raw RGBA pixels (`t=t`). The terminal reads
-/// the file and deletes it.
+/// The sequence that names a temp file with the raw pixels (`t=t`). The terminal reads the
+/// file and deletes it.
 fn write_temp_file_reference<W: Write + ?Sized>(
     out: &mut W,
-    img: &RgbaImage,
+    pixels: Pixels<'_>,
     opts: &DisplayOptions,
     path: &Path,
 ) -> io::Result<()> {
-    let keys = header_keys(img, opts, 32);
+    let keys = header_keys(pixels, opts, raw_format(pixels));
     write!(out, "\x1b_G{keys},t=t;{}\x1b\\", encode_path(path))
 }
 
@@ -104,7 +140,7 @@ fn write_temp_file(pixels: &[u8]) -> io::Result<PathBuf> {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "{TEMP_FILE_MARKER}-viewr-{}-{sequence}.rgba",
+        "{TEMP_FILE_MARKER}-viewr-{}-{sequence}.raw",
         std::process::id()
     ));
     if let Err(error) = std::fs::write(&path, pixels) {
@@ -248,7 +284,7 @@ mod tests {
         PROBE_ID, TEMP_FILE_MARKER, Transfer, clear_placements_to, delete_all_to, detect_transfer,
         place_by_id_to, probe_accepted, temp_file_paths, transmit_to,
     };
-    use crate::encoder::DisplayOptions;
+    use crate::encoder::{DisplayOptions, Pixels};
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
     use image::RgbaImage;
@@ -260,9 +296,21 @@ mod tests {
     }
 
     fn transmit(image: &RgbaImage, opts: &DisplayOptions, transfer: Transfer) -> String {
+        transmit_pixels(image.into(), opts, transfer)
+    }
+
+    fn transmit_pixels(pixels: Pixels<'_>, opts: &DisplayOptions, transfer: Transfer) -> String {
         let mut output = Vec::new();
-        transmit_to(&mut output, image, opts, transfer).unwrap();
+        transmit_to(&mut output, pixels, opts, transfer).unwrap();
         String::from_utf8(output).unwrap()
+    }
+
+    /// The image inside the base64 PNG payload of a one-chunk sequence.
+    fn png_payload(encoded: &str) -> image::DynamicImage {
+        let (_, rest) = encoded.split_once(';').unwrap();
+        let png = STANDARD.decode(rest.trim_end_matches("\x1b\\")).unwrap();
+        assert!(png.starts_with(b"\x89PNG"));
+        image::load_from_memory(&png).unwrap()
     }
 
     #[test]
@@ -331,6 +379,78 @@ mod tests {
     }
 
     #[test]
+    fn an_opaque_image_goes_out_as_rgb_through_every_medium() {
+        let image = RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8, y as u8, 7, 255]));
+        let rgb: Vec<u8> = image
+            .pixels()
+            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
+            .collect();
+
+        let direct = transmit(&image, &options(None), Transfer::Direct);
+        assert_eq!(
+            direct,
+            format!(
+                "\x1b_Ga=T,q=2,C=1,f=24,s=3,v=2,m=0;{}\x1b\\",
+                STANDARD.encode(&rgb)
+            )
+        );
+
+        let png = png_payload(&transmit(&image, &options(None), Transfer::Png));
+        assert_eq!(png.color(), image::ColorType::Rgb8);
+        assert_eq!(png.as_bytes(), rgb);
+
+        let file = transmit(&image, &options(None), Transfer::TempFile);
+        assert!(
+            file.starts_with("\x1b_Ga=T,q=2,C=1,f=24,s=3,v=2,t=t;"),
+            "{file}"
+        );
+        let paths = temp_file_paths(file.as_bytes());
+        assert_eq!(fs::read(&paths[0]).unwrap(), rgb);
+        fs::remove_file(&paths[0]).unwrap();
+    }
+
+    #[test]
+    fn one_transparent_pixel_keeps_the_alpha_channel_through_every_medium() {
+        let mut image = RgbaImage::from_pixel(3, 2, image::Rgba([9, 8, 7, 255]));
+        image.put_pixel(2, 1, image::Rgba([9, 8, 7, 254]));
+
+        let direct = transmit(&image, &options(None), Transfer::Direct);
+        assert_eq!(
+            direct,
+            format!(
+                "\x1b_Ga=T,q=2,C=1,f=32,s=3,v=2,m=0;{}\x1b\\",
+                STANDARD.encode(image.as_raw())
+            )
+        );
+
+        let png = png_payload(&transmit(&image, &options(None), Transfer::Png));
+        assert_eq!(png.color(), image::ColorType::Rgba8);
+        assert_eq!(png.as_bytes(), image.as_raw().as_slice());
+
+        let file = transmit(&image, &options(None), Transfer::TempFile);
+        assert!(
+            file.starts_with("\x1b_Ga=T,q=2,C=1,f=32,s=3,v=2,t=t;"),
+            "{file}"
+        );
+        let paths = temp_file_paths(file.as_bytes());
+        assert_eq!(fs::read(&paths[0]).unwrap(), *image.as_raw());
+        fs::remove_file(&paths[0]).unwrap();
+    }
+
+    #[test]
+    fn rgb_pixels_go_out_as_they_are() {
+        let image = image::RgbImage::from_fn(2, 2, |x, y| image::Rgb([x as u8, y as u8, 3]));
+        let encoded = transmit_pixels((&image).into(), &options(Some(4)), Transfer::Direct);
+        assert_eq!(
+            encoded,
+            format!(
+                "\x1b_Ga=T,q=2,C=1,f=24,s=2,v=2,i=4,m=0;{}\x1b\\",
+                STANDARD.encode(image.as_raw())
+            )
+        );
+    }
+
+    #[test]
     fn large_payload_is_split_into_chunks() {
         // Non-uniform 2000x1 RGBA data: the raw base64 path and the PNG path both produce
         // more than 4096 bytes of payload, so the encoder must chunk.
@@ -359,7 +479,8 @@ mod tests {
 
     #[test]
     fn the_temp_file_transfer_writes_the_pixels_to_a_marked_file() {
-        let image = RgbaImage::from_fn(300, 200, |x, y| image::Rgba([x as u8, y as u8, 7, 255]));
+        let image =
+            RgbaImage::from_fn(300, 200, |x, y| image::Rgba([x as u8, y as u8, 7, x as u8]));
         let encoded = transmit(&image, &options(Some(5)), Transfer::TempFile);
 
         assert!(

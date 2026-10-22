@@ -12,11 +12,13 @@ mod probe;
 pub(crate) mod tone_map;
 
 pub(crate) use animation::is_animated;
-pub(crate) use decoder::{Decoder, FrameStream, Pipeline, SystemDecoder, args, cube_for};
+pub(crate) use decoder::{
+    Decoder, FrameStream, Pipeline, SystemDecoder, args, cube_for, pixel_format,
+};
 pub(crate) use layout::{cell_box, frame_box, frame_limit};
 pub(crate) use probe::VideoInfo;
 
-use image::RgbaImage;
+use crate::encoder::Pixels;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
@@ -40,6 +42,38 @@ enum State {
     Finished,
 }
 
+/// A decoded frame: RGB for a video, RGBA for an animation, see [`pixel_format`].
+pub(crate) struct Frame {
+    size: (u32, u32),
+    alpha: bool,
+    data: Vec<u8>,
+}
+
+impl Frame {
+    /// The frame of `size` pixels in `data`. `None` when `data` is shorter than such a frame.
+    pub(crate) fn new(size: (u32, u32), alpha: bool, mut data: Vec<u8>) -> Option<Self> {
+        let bytes = size.0 as usize * size.1 as usize * if alpha { 4 } else { 3 };
+        if data.len() < bytes {
+            return None;
+        }
+        data.truncate(bytes);
+        Some(Self { size, alpha, data })
+    }
+
+    pub(crate) fn dimensions(&self) -> (u32, u32) {
+        self.size
+    }
+
+    pub(crate) fn pixels(&self) -> Pixels<'_> {
+        Pixels {
+            width: self.size.0,
+            height: self.size.1,
+            alpha: self.alpha,
+            data: &self.data,
+        }
+    }
+}
+
 /// A video that plays in the terminal: the ffmpeg run, the pacing and the current frame.
 pub(crate) struct Player {
     path: PathBuf,
@@ -54,7 +88,7 @@ pub(crate) struct Player {
     /// The decoded frame that waits for its due time.
     pending: Option<Vec<u8>>,
     /// The frame on the screen.
-    pub(crate) current_frame: Option<RgbaImage>,
+    pub(crate) current_frame: Option<Frame>,
     state: State,
     /// The note of a failed decode.
     pub(crate) error: Option<String>,
@@ -141,7 +175,7 @@ impl Player {
             position,
             self.pipeline,
         );
-        let bytes = self.frame.0 as usize * self.frame.1 as usize * 4;
+        let bytes = self.frame.0 as usize * self.frame.1 as usize * pixel_format(&self.info).1;
         self.stream = Some(self.decoder.start(&self.program, &args, bytes)?);
         Ok(())
     }
@@ -191,7 +225,8 @@ impl Player {
             let Some(frame) = self.pending.take() else {
                 return false;
             };
-            self.current_frame = RgbaImage::from_raw(self.frame.0, self.frame.1, frame);
+            let (_, bytes_per_pixel) = pixel_format(&self.info);
+            self.current_frame = Frame::new(self.frame, bytes_per_pixel == 4, frame);
             return true;
         }
     }
@@ -339,7 +374,7 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
-    use super::{DECODE_POLL, PAUSED_POLL, Player, SEEK_STEP, VideoInfo};
+    use super::{DECODE_POLL, Frame, PAUSED_POLL, Player, SEEK_STEP, VideoInfo};
     use crate::test_support::video::{FakeDecoder, fake_decoder, info_of, shared};
     use std::path::Path;
     use std::rc::Rc;
@@ -362,7 +397,7 @@ mod tests {
 
     /// A frame of the clip with every byte at `value`.
     fn frame(value: u8) -> Vec<u8> {
-        vec![value; 64 * 48 * 4]
+        vec![value; 64 * 48 * 3]
     }
 
     #[test]
@@ -373,6 +408,7 @@ mod tests {
         let args = decoder.last_args();
         assert!(args.contains("scale_vt=w=64:h=48,"), "{args}");
         assert!(args.contains(" -i /videos/clip.mp4 "), "{args}");
+        assert!(args.ends_with(" -pix_fmt rgb24 pipe:1"), "{args}");
         assert!(player.playing());
         assert_eq!(player.position(), 0.0);
         assert_eq!(player.duration(), 2.0);
@@ -384,6 +420,16 @@ mod tests {
     }
 
     #[test]
+    fn a_video_frame_has_3_bytes_per_pixel_and_a_short_one_is_no_frame() {
+        let frame = Frame::new((4, 2), false, vec![5; 4 * 2 * 3 + 1]).unwrap();
+        let pixels = frame.pixels();
+        assert_eq!(frame.dimensions(), (4, 2));
+        assert!(!pixels.alpha);
+        assert_eq!(pixels.data, [5; 4 * 2 * 3], "the tail is cut");
+        assert!(Frame::new((4, 2), true, vec![5; 4 * 2 * 3]).is_none());
+    }
+
+    #[test]
     fn frames_show_at_their_due_time_and_a_late_frame_drops() {
         let decoder = fake_decoder(info_of(640, 480, 10.0));
         let mut player = player(&decoder, true);
@@ -392,7 +438,7 @@ mod tests {
         decoder.feed(frame(1));
         decoder.feed(frame(2));
         assert!(player.poll_at(clock), "the first frame starts the clock");
-        assert_eq!(player.current_frame.as_ref().unwrap().as_raw()[0], 1);
+        assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 1);
         assert!(
             !player.poll_at(clock + FRAME / 2),
             "the second frame is not due"
@@ -402,7 +448,7 @@ mod tests {
             FRAME / 2
         );
         assert!(player.poll_at(clock + FRAME));
-        assert_eq!(player.current_frame.as_ref().unwrap().as_raw()[0], 2);
+        assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 2);
         assert!((player.position() - 0.2).abs() < 1e-9);
 
         // Frame 3 is due at 200 ms. At 350 ms it is more than one interval late and drops.
@@ -412,7 +458,7 @@ mod tests {
             player.poll_at(clock + FRAME * 7 / 2),
             "frame 4 shows instead"
         );
-        assert_eq!(player.current_frame.as_ref().unwrap().as_raw()[0], 4);
+        assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 4);
         assert_eq!(player.dropped, 1);
         assert!((player.position() - 0.4).abs() < 1e-9);
     }
@@ -432,7 +478,7 @@ mod tests {
             player.poll_at(clock + FRAME * 7 / 2),
             "the late frame shows"
         );
-        assert_eq!(player.current_frame.as_ref().unwrap().as_raw()[0], 3);
+        assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 3);
         assert_eq!(player.dropped, 0);
         // The clock moved: frame 4 is due one interval after frame 3, at 450 ms.
         decoder.feed(frame(4));
@@ -442,7 +488,7 @@ mod tests {
             FRAME / 2
         );
         assert!(player.poll_at(clock + FRAME * 9 / 2));
-        assert_eq!(player.current_frame.as_ref().unwrap().as_raw()[0], 4);
+        assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 4);
         assert!((player.position() - 0.4).abs() < 1e-9);
         // Every later frame is on time again at the new clock.
         for value in 5..15 {
@@ -497,7 +543,7 @@ mod tests {
             player.poll_at(clock + FRAME * 20),
             "the first frame after the pause is on time"
         );
-        assert_eq!(player.current_frame.as_ref().unwrap().as_raw()[0], 2);
+        assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 2);
         assert_eq!(player.dropped, 0);
         assert!((player.position() - 0.2).abs() < 1e-9);
     }
@@ -552,11 +598,15 @@ mod tests {
         );
         assert!(args.contains("scale=w=64:h=48:flags=bilinear"), "{args}");
         assert!(!args.contains("-hwaccel"), "{args}");
+        assert!(args.ends_with(" -pix_fmt rgba pipe:1"), "{args}");
 
         player.play_at_least(Duration::from_millis(300));
         let clock = Instant::now();
-        decoder.feed(frame(1));
+        decoder.feed(vec![1; 64 * 48 * 4]);
         assert!(player.poll_at(clock));
+        let pixels = player.current_frame.as_ref().unwrap().pixels();
+        assert!(pixels.alpha, "an animation keeps its transparent pixels");
+        assert_eq!(pixels.data.len(), 64 * 48 * 4);
         decoder.end();
         assert!(!player.poll_at(clock + FRAME));
         assert!(
@@ -569,7 +619,7 @@ mod tests {
             "no GPU retry for an animation"
         );
 
-        decoder.feed(frame(2));
+        decoder.feed(vec![2; 64 * 48 * 4]);
         assert!(player.poll_at(clock + 2 * FRAME));
         decoder.end();
         assert!(!player.poll_at(clock + Duration::from_millis(400)));
