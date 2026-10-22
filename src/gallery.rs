@@ -5,6 +5,8 @@ use ratatui::layout::Rect;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub(crate) const LABEL_ROWS: u16 = 1;
 /// The gap in terminal cells between two cells and at the edges of the grid. The border of the
@@ -358,6 +360,58 @@ fn thumb_cache_capacity(visible_cells: usize) -> NonZeroUsize {
 /// thumbnails that no visible cell shows go, like a count eviction.
 pub(crate) const THUMB_CACHE_BYTE_LIMIT: usize = 512 * 1024 * 1024;
 
+/// A picture of the grid: the padded pixels and the whole cells that it covers. The terminal
+/// scales it to these cells (`c=`, `r=`), centered in its grid cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GridPicture {
+    pub(crate) image: RgbaImage,
+    pub(crate) cells: (u16, u16),
+}
+
+impl GridPicture {
+    fn bytes(&self) -> usize {
+        self.image.as_raw().len()
+    }
+}
+
+/// A picture of one cell, for the tests. The app pads each picture with `pad_for_grid`.
+#[cfg(test)]
+impl From<RgbaImage> for GridPicture {
+    fn from(image: RgbaImage) -> Self {
+        Self {
+            image,
+            cells: (1, 1),
+        }
+    }
+}
+
+/// The size that the parked thumbnails of the last folder were decoded for. Another grid zoom
+/// or cell size cannot use them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ParkKey {
+    pub(crate) target: (u32, u32),
+    pub(crate) cell_px: (u32, u32),
+}
+
+/// The modification time and the length of a file, so that a parked picture of a file that
+/// changed since the park is not used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl FileStamp {
+    /// The stamp of `path` now, or `None` for a file that is gone.
+    fn of(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        })
+    }
+}
+
 pub(crate) struct ThumbnailCache {
     cache: LruCache<usize, CachedThumb>,
     /// The next Kitty id of a thumbnail. The ids count up from 1 and never reset. The video
@@ -366,16 +420,19 @@ pub(crate) struct ThumbnailCache {
     /// The Kitty ids of the thumbnails that the cache dropped. The next write of the grid
     /// deletes them in the terminal, so its storage does not grow without end.
     evicted_ids: Vec<u32>,
-    /// The padded pixel bytes of every entry.
+    /// The padded pixel bytes of every entry, the parked ones included.
     bytes: usize,
     /// The bytes that the entries may take. A test sets a small one.
     pub(crate) byte_limit: usize,
     /// The cells on the screen. The byte limit never evicts them.
     visible: HashSet<usize>,
+    /// The sharp thumbnails of the folders that the grid left, by path and decode size, for a
+    /// quick way back. The byte limit drops the oldest of them before the entries of the grid.
+    parked: LruCache<(PathBuf, ParkKey), (FileStamp, GridPicture)>,
 }
 
 struct CachedThumb {
-    image: RgbaImage,
+    picture: GridPicture,
     image_id: u32,
     /// False for a preview from an embedded thumbnail, which the sharp decode replaces.
     sharp: bool,
@@ -390,6 +447,7 @@ impl ThumbnailCache {
             bytes: 0,
             byte_limit: THUMB_CACHE_BYTE_LIMIT,
             visible: HashSet::new(),
+            parked: LruCache::unbounded(),
         }
     }
 
@@ -435,9 +493,9 @@ impl ThumbnailCache {
         self.cache.peek(&index).is_some_and(|t| t.sharp)
     }
 
-    /// The image and the Kitty id of a cell, without a change of the eviction order.
-    pub(crate) fn peek(&self, index: usize) -> Option<(&RgbaImage, u32)> {
-        self.cache.peek(&index).map(|t| (&t.image, t.image_id))
+    /// The picture and the Kitty id of a cell, without a change of the eviction order.
+    pub(crate) fn peek(&self, index: usize) -> Option<(&GridPicture, u32)> {
+        self.cache.peek(&index).map(|t| (&t.picture, t.image_id))
     }
 
     /// Make the cell the newest entry. The grid touches each visible cell before its inserts,
@@ -448,27 +506,27 @@ impl ThumbnailCache {
 
     /// Store the sharp thumbnail. Returns the Kitty id of the preview that it replaces, so
     /// that the terminal can delete it.
-    pub(crate) fn insert(&mut self, index: usize, image: RgbaImage) -> Option<u32> {
-        self.push(index, image, true)
+    pub(crate) fn insert(&mut self, index: usize, picture: impl Into<GridPicture>) -> Option<u32> {
+        self.push(index, picture.into(), true)
     }
 
     /// Store a preview. A later `insert` replaces it.
-    pub(crate) fn insert_preview(&mut self, index: usize, image: RgbaImage) {
+    pub(crate) fn insert_preview(&mut self, index: usize, picture: impl Into<GridPicture>) {
         // A cell never has two previews, so there is no id to delete.
-        self.push(index, image, false);
+        self.push(index, picture.into(), false);
     }
 
-    fn push(&mut self, index: usize, image: RgbaImage, sharp: bool) -> Option<u32> {
+    fn push(&mut self, index: usize, picture: GridPicture, sharp: bool) -> Option<u32> {
         let id = self.next_id;
         self.next_id += 1;
-        self.bytes += image.as_raw().len();
+        self.bytes += picture.bytes();
         let thumb = CachedThumb {
-            image,
+            picture,
             image_id: id,
             sharp,
         };
         let replaced = self.cache.push(index, thumb).and_then(|(old_index, old)| {
-            self.bytes -= old.image.as_raw().len();
+            self.bytes -= old.picture.bytes();
             if old_index == index {
                 return Some(old.image_id);
             }
@@ -479,9 +537,14 @@ impl ThumbnailCache {
         replaced
     }
 
-    /// Drop the oldest entries that no visible cell shows, until the bytes fit the limit.
+    /// Drop the parked thumbnails first, then the oldest entries that no visible cell shows,
+    /// until the bytes fit the limit.
     fn trim_to_byte_limit(&mut self) {
         while self.bytes > self.byte_limit {
+            if let Some((_, (_, parked))) = self.parked.pop_lru() {
+                self.bytes -= parked.bytes();
+                continue;
+            }
             let Some(&index) = self
                 .cache
                 .iter()
@@ -499,8 +562,59 @@ impl ThumbnailCache {
 
     /// Take the bytes and the id of an entry that left the cache. The terminal deletes the id.
     fn forget(&mut self, old: &CachedThumb) {
-        self.bytes -= old.image.as_raw().len();
+        self.bytes -= old.picture.bytes();
         self.evicted_ids.push(old.image_id);
+    }
+
+    /// Keep the sharp thumbnails of the grid by their path, for the way back to this folder.
+    /// `paths` is the image list of the grid, `key` the size that the grid decoded them for.
+    /// The parked pictures of other folders stay. The grid clears the cache after this, and its
+    /// delete-all covers the ids. Each picture keeps the stamp of its file, one stat per file.
+    pub(crate) fn park(&mut self, paths: &[PathBuf], key: ParkKey) {
+        let indices: Vec<usize> = self.cache.iter().map(|(index, _)| *index).collect();
+        for index in indices {
+            let Some(path) = paths.get(index) else {
+                continue;
+            };
+            if !self.cache.peek(&index).is_some_and(|thumb| thumb.sharp) {
+                continue;
+            }
+            let Some(thumb) = self.cache.pop(&index) else {
+                continue;
+            };
+            self.evicted_ids.push(thumb.image_id);
+            let Some(stamp) = FileStamp::of(path) else {
+                self.bytes -= thumb.picture.bytes();
+                continue;
+            };
+            if let Some((_, (_, old))) = self
+                .parked
+                .push((path.clone(), key), (stamp, thumb.picture))
+            {
+                self.bytes -= old.bytes();
+            }
+        }
+        self.trim_to_byte_limit();
+    }
+
+    /// The parked thumbnail of `path`, decoded for `key`, when the cache has one and the file
+    /// has the same modification time and length as at the park.
+    pub(crate) fn take_parked(&mut self, path: &Path, key: ParkKey) -> Option<GridPicture> {
+        let (stamp, picture) = self.parked.pop(&(path.to_path_buf(), key))?;
+        self.bytes -= picture.bytes();
+        (FileStamp::of(path) == Some(stamp)).then_some(picture)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parked_count(&self) -> usize {
+        self.parked.len()
+    }
+
+    fn parked_bytes(&self) -> usize {
+        self.parked
+            .iter()
+            .map(|(_, (_, picture))| picture.bytes())
+            .sum()
     }
 
     /// The ids that left the cache since the last take. The caller deletes them in the terminal.
@@ -508,12 +622,12 @@ impl ThumbnailCache {
         std::mem::take(&mut self.evicted_ids)
     }
 
-    /// Drop every thumbnail. The caller deletes all images in the terminal, so the evicted ids
-    /// need no single delete.
+    /// Drop every thumbnail of the grid, but keep the parked ones. The caller deletes all
+    /// images in the terminal, so the evicted ids need no single delete.
     pub(crate) fn clear(&mut self) {
         self.cache.clear();
         self.evicted_ids.clear();
-        self.bytes = 0;
+        self.bytes = self.parked_bytes();
     }
 }
 
@@ -967,7 +1081,7 @@ mod tests {
         assert!(!cache.contains(1));
 
         let (peeked, id) = cache.peek(0).expect("peek should return the cached image");
-        assert_eq!(peeked.dimensions(), (2, 2));
+        assert_eq!(peeked.image.dimensions(), (2, 2));
         assert_eq!(id, 1);
 
         cache.insert(1, img);
@@ -1002,5 +1116,118 @@ mod tests {
             "a first sharp image replaces nothing"
         );
         assert!(cache.is_sharp(1));
+    }
+    #[test]
+    fn the_parked_pictures_come_back_by_path_and_go_first_at_the_byte_limit() {
+        use super::{GridPicture, ParkKey};
+        use std::path::PathBuf;
+
+        let key = ParkKey {
+            target: (160, 96),
+            cell_px: (8, 16),
+        };
+        let other_key = ParkKey {
+            target: (80, 48),
+            cell_px: (8, 16),
+        };
+        // The park reads the stamp of each file, so the files exist.
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = (0..4)
+            .map(|i| dir.path().join(format!("{i}.jpg")))
+            .collect();
+        for path in &paths {
+            std::fs::write(path, b"jpeg").unwrap();
+        }
+        let picture = |cells: (u16, u16)| GridPicture {
+            image: image::RgbaImage::new(2, 2),
+            cells,
+        };
+        let mut cache = ThumbnailCache::new();
+        cache.byte_limit = 64;
+        cache.insert(0, picture((20, 4)));
+        cache.insert(1, picture((20, 6)));
+        cache.insert_preview(2, picture((20, 6)));
+        // An index without a path (a cell that left the list) is not parked.
+        cache.insert(7, picture((20, 6)));
+
+        cache.park(&paths, key);
+        assert_eq!(cache.parked_count(), 2, "the sharp pictures with a path");
+        assert!(!cache.contains(0) && !cache.contains(1));
+        assert!(
+            cache.contains(2) && cache.contains(7),
+            "the grid still has the rest"
+        );
+        assert_eq!(cache.bytes(), 64, "the parked bytes count");
+        assert_eq!(cache.take_evicted_ids().len(), 2);
+        cache.clear();
+        assert_eq!(cache.bytes(), 32, "a clear keeps the parked pictures");
+
+        // Another key gives nothing: a picture for another size is of no use. The park stays.
+        assert!(cache.take_parked(&paths[0], other_key).is_none());
+        assert_eq!(cache.parked_count(), 2);
+
+        // The same key gives the picture back, with its cells, one time.
+        let parked = cache.take_parked(&paths[0], key).unwrap();
+        assert_eq!(parked.cells, (20, 4));
+        assert!(cache.take_parked(&paths[0], key).is_none(), "taken once");
+        assert_eq!(cache.bytes(), 16);
+
+        // A second park adds to the set. Over the limit, the oldest parked pictures go before
+        // the entries of the grid.
+        cache.insert(2, picture((20, 6)));
+        cache.park(&paths, other_key);
+        assert_eq!(cache.parked_count(), 2);
+        for index in 0..3 {
+            cache.insert(index, picture((20, 6)));
+        }
+        assert_eq!(cache.bytes(), 64, "3 entries and 1 parked picture");
+        assert_eq!(cache.parked_count(), 1);
+        cache.insert(3, picture((20, 6)));
+        assert_eq!(
+            cache.parked_count(),
+            0,
+            "the last parked picture went first"
+        );
+        assert!(cache.contains(0) && cache.contains(3));
+    }
+
+    #[test]
+    fn a_parked_picture_of_a_changed_or_missing_file_is_not_used() {
+        use super::ParkKey;
+        use std::path::PathBuf;
+
+        let key = ParkKey {
+            target: (160, 96),
+            cell_px: (8, 16),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = ["kept.jpg", "changed.jpg", "gone.jpg"]
+            .iter()
+            .map(|name| dir.path().join(name))
+            .collect();
+        for path in &paths {
+            std::fs::write(path, b"jpeg").unwrap();
+        }
+        let mut cache = ThumbnailCache::new();
+        for index in 0..3 {
+            cache.insert(index, image::RgbaImage::new(2, 2));
+        }
+        cache.park(&paths, key);
+        cache.clear();
+        assert_eq!(cache.parked_count(), 3);
+
+        std::fs::write(&paths[1], b"another jpeg").unwrap();
+        std::fs::remove_file(&paths[2]).unwrap();
+        assert!(cache.take_parked(&paths[0], key).is_some());
+        assert!(cache.take_parked(&paths[1], key).is_none(), "changed");
+        assert!(cache.take_parked(&paths[2], key).is_none(), "gone");
+        assert_eq!(cache.parked_count(), 0, "the stale pictures went too");
+        assert_eq!(cache.bytes(), 0);
+
+        // A file that is gone at the park is not parked.
+        cache.insert(2, image::RgbaImage::new(2, 2));
+        cache.park(&paths, key);
+        assert_eq!(cache.parked_count(), 0);
+        assert_eq!(cache.bytes(), 0);
     }
 }

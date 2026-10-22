@@ -8,6 +8,38 @@ use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::io;
 use std::path::Path;
 
+/// Decode a JPEG that sits inside another file (a RAW preview, a PSD thumbnail). libjpeg-turbo
+/// scales it down to `target` during the decode. `container_orientation` is the EXIF
+/// orientation of the outer file. It wins over the orientation of the JPEG itself, the same
+/// rule as on the turbo path.
+#[cfg(all(feature = "sips", target_os = "macos"))]
+pub(crate) fn decode_jpeg_bytes(
+    data: &[u8],
+    target: Option<(u32, u32)>,
+    container_orientation: Option<u8>,
+) -> io::Result<DynamicImage> {
+    #[cfg(feature = "turbo")]
+    if let Ok(image) = super::turbo::decode_jpeg_turbo_bytes(data, target, container_orientation) {
+        return Ok(image);
+    }
+    #[cfg(not(feature = "turbo"))]
+    let _ = target;
+    let reader = ImageReader::new(io::Cursor::new(data))
+        .with_guessed_format()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let orientation = match container_orientation.and_then(Orientation::from_exif) {
+        Some(orientation) => orientation,
+        None => decoder.orientation().unwrap_or(Orientation::NoTransforms),
+    };
+    let mut image = DynamicImage::from_decoder(decoder)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    image.apply_orientation(orientation);
+    Ok(image)
+}
+
 pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicImage> {
     // libjpeg-turbo is the fast path, but it rejects some JPEG variants the
     // pure-Rust decoder accepts (and vice versa), so a turbo failure falls

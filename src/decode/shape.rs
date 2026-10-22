@@ -3,8 +3,8 @@
 //!
 //! A header read costs a fraction of a millisecond: the `image` crate reads the size of a JPEG
 //! or PNG from its first bytes, the HEIF reader takes the `ispe` box from `meta`, and the EXIF
-//! reader stops at the first image data. A file without a cheap header (camera RAW, PDF, video)
-//! counts as 3:2.
+//! reader stops at the first image data. A RAW or PSD file gives the size of its embedded JPEG,
+//! after the orientation. A file without a cheap header (PDF, video) counts as 3:2.
 
 use crate::decode::Route;
 use crate::gallery::DEFAULT_IMAGE_ASPECT;
@@ -82,8 +82,10 @@ fn shown_size(path: &Path) -> Option<(u32, u32)> {
             }
         }
         Route::Jxl => crate::decode::jxl::dimensions(path),
+        // The embedded JPEG of a RAW or PSD file has the shape of the photo. PDF and SVG
+        // have none and count as 3:2.
         #[cfg(all(feature = "sips", target_os = "macos"))]
-        Route::Sips => None,
+        Route::Sips => crate::decode::embedded_jpeg::find(path).map(|jpeg| jpeg.shown_size()),
     }
 }
 
@@ -191,5 +193,18 @@ mod tests {
 
         assert_eq!(aspect_of(&turned), Some(0.75));
         assert_eq!(aspect_of(&upright), Some(4.0 / 3.0));
+    }
+
+    #[test]
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    fn a_raw_file_takes_the_shape_of_its_embedded_jpeg_after_the_orientation() {
+        let dir = TempDir::new().unwrap();
+        let turned = dir.path().join("turned.dng");
+        crate::test_support::write_tiff_raw(&turned, 6);
+        let upright = dir.path().join("upright.nef");
+        crate::test_support::write_tiff_raw(&upright, 1);
+        assert_eq!(aspect_of(&turned), Some(0.5));
+        assert_eq!(aspect_of(&upright), Some(2.0));
+        assert_eq!(aspect_of(&dir.path().join("page.pdf")), None);
     }
 }

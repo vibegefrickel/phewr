@@ -26,6 +26,9 @@ impl App {
     /// Spawns a fresh scanner thread; the previous scanner (if any) is orphaned
     /// against an unused `SharedImageList` clone and will be dropped as it completes.
     pub(crate) fn switch_to_dir(&mut self, dir: &Path) {
+        // The thumbnails of this folder stay parked for the way back, keyed by the size that
+        // this folder decoded them for, so the park comes before the zoom of the new folder.
+        self.park_thumbnails();
         let canonical = picker::canonicalize_or_self(dir);
         self.current_dir = Some(canonical.clone());
         self.apply_folder_zoom(&canonical);

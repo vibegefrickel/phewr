@@ -33,7 +33,10 @@ struct Bench {
 }
 
 fn test_dir() -> Option<PathBuf> {
-    std::env::var_os("VIEWR_TEST_DIR").map(PathBuf::from)
+    // Canonical, as `main` passes the start folder: `/tmp` is a link to `/private/tmp`.
+    std::env::var_os("VIEWR_TEST_DIR")
+        .map(PathBuf::from)
+        .map(|dir| std::fs::canonicalize(&dir).unwrap_or(dir))
 }
 
 fn report(line: &str) {
@@ -78,7 +81,13 @@ fn scanned_app(dir: &Path) -> Bench {
         app.refresh_from_scanner();
         thread::sleep(Duration::from_millis(5));
     }
-    // The bench measures the files only: no folder entry and no video.
+    keep_files_only(&mut app, deadline);
+    Bench { app, _cache: cache }
+}
+
+/// Drop the folder entries and the videos from the scanned list, wait for the cell shape and
+/// lay out the grid. The bench measures the files only.
+fn keep_files_only(app: &mut App, deadline: Instant) {
     let keep: Vec<usize> = (app.first_file()..app.images.len())
         .filter(|&index| !is_video(&app.images[index]))
         .collect();
@@ -100,7 +109,18 @@ fn scanned_app(dir: &Path) -> Bench {
     }
     app.gallery.update_grid(grid_rect());
     app.needs_render = true;
-    Bench { app, _cache: cache }
+}
+
+/// Switch `app` to `dir` and wait for its scan, as the run loop does after Enter or Backspace.
+fn switch_and_scan(app: &mut App, dir: &Path) {
+    let deadline = Instant::now() + LIMIT;
+    app.switch_to_dir(dir);
+    while !app.scan_complete {
+        assert!(Instant::now() < deadline, "the scan did not finish");
+        app.refresh_from_scanner();
+        thread::sleep(Duration::from_millis(5));
+    }
+    keep_files_only(app, deadline);
 }
 
 /// One pass of the run loop without a terminal. `ui::draw` would set the fullscreen box.
@@ -243,6 +263,100 @@ fn grid_first_thumbnail_and_full_grid() {
 
     bench.app.mark_dirty();
     measure_grid(&mut bench.app).report("warm (disk cache)");
+
+    // Backspace to an empty folder and Enter back: the parked thumbnails need no decode and no
+    // disk read.
+    let empty = tempfile::tempdir().unwrap();
+    switch_and_scan(&mut bench.app, empty.path());
+    let start = Instant::now();
+    switch_and_scan(&mut bench.app, &dir);
+    let switch = start.elapsed();
+    measure_grid(&mut bench.app).report("way back (parked)");
+    report(&format!(
+        "grid way back: scan and shape {}, parked pictures left {} (0 = every cell took one)",
+        millis(switch),
+        bench.app.thumb_cache.parked_count()
+    ));
+}
+
+/// The embedded JPEG previews of RAW and PSD files: the find, the decode for a grid cell and
+/// for the fullscreen box, against the sips decode. Synthetic files stand in for a camera: a
+/// 6000x4000 full-size preview in a TIFF, and a 1620x1080 preview in a CR3. The folder adds the
+/// first file of each RAW or PSD extension, when it has one.
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[cfg(all(feature = "sips", target_os = "macos"))]
+fn embedded_previews_of_raw_and_psd() {
+    use crate::decode::embedded_jpeg;
+    use crate::decode::sips;
+    use crate::test_support::{write_cr3_with_preview, write_tiff_raw_with_preview};
+
+    let Some(dir) = test_dir() else {
+        report("skipped: VIEWR_TEST_DIR is not set");
+        return;
+    };
+    let synthetic = tempfile::tempdir().unwrap();
+    let full = synthetic.path().join("full-size-preview.dng");
+    write_tiff_raw_with_preview(&full, (6000, 4000));
+    let cr3 = synthetic.path().join("camera.cr3");
+    write_cr3_with_preview(&cr3, 1, (1620, 1080));
+    let mut files = vec![full, cr3];
+    let bench = scanned_app(&dir);
+    let mut seen: Vec<String> = Vec::new();
+    for path in &bench.app.images {
+        let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        let extension = extension.to_ascii_lowercase();
+        if embedded_jpeg::may_have_embedded_jpeg(path) && !seen.contains(&extension) {
+            seen.push(extension);
+            files.push(path.clone());
+        }
+    }
+    if files.len() == 2 {
+        report("embedded: no RAW or PSD file in the folder, synthetic files only");
+    }
+    let grid_box = crate::app::thumbnails::thumb_target_px(bench.app.gallery.thumb_box(), CELL_PX);
+    let fullscreen_box = (u32::from(COLS) * CELL_PX.0, u32::from(ROWS - 1) * CELL_PX.1);
+    for path in &files {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let start = Instant::now();
+        let Some(jpeg) = embedded_jpeg::find(path) else {
+            report(&format!(
+                "embedded {name}: no JPEG found in {}",
+                millis(start.elapsed())
+            ));
+            continue;
+        };
+        let find = start.elapsed();
+        let start = Instant::now();
+        let grid = embedded_jpeg::decode(path, &jpeg, Some(grid_box)).ok();
+        let grid_time = start.elapsed();
+        let start = Instant::now();
+        let fullscreen = embedded_jpeg::decode(path, &jpeg, Some(fullscreen_box)).ok();
+        let fullscreen_time = start.elapsed();
+        report(&format!(
+            "embedded {name}: JPEG {}x{} ({} bytes) found in {:.2} ms, grid decode {} to {:?} \
+             (covers the cell: {}), fullscreen decode {} to {:?} (covers: {})",
+            jpeg.width,
+            jpeg.height,
+            jpeg.length,
+            find.as_secs_f64() * 1000.0,
+            millis(grid_time),
+            grid.map(|image| (image.width(), image.height())),
+            jpeg.covers(grid_box),
+            millis(fullscreen_time),
+            fullscreen.map(|image| (image.width(), image.height())),
+            jpeg.covers(fullscreen_box),
+        ));
+        let start = Instant::now();
+        let result = sips::decode(path, Some(grid_box));
+        report(&format!(
+            "embedded {name}: sips decode for the grid cell {} ({})",
+            millis(start.elapsed()),
+            result.map_or_else(|e| format!("failed: {e}"), |_| "ok".to_owned())
+        ));
+    }
 }
 
 /// The cost of the header read that picks the cell shape: the first 64 files of the folder,

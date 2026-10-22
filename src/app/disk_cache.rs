@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The version in the disk cache key. Change it when the thumbnail output changes. v6: the
-/// thumbnail box is the whole cell, without padding.
-const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v6";
+/// The version in the disk cache key. Change it when the thumbnail output changes. v7: a
+/// rotated JPEG gets the DCT scale of its turned box, and RAW and PSD files take their
+/// embedded JPEG.
+const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v7";
 
 /// The thumbnail disk cache below the user's cache directory, or a temp directory without one.
 pub(super) fn default_disk_cache_dir() -> PathBuf {
@@ -187,8 +188,8 @@ mod tests {
         assert_ne!(first, changed);
         assert_eq!(
             super::THUMBNAIL_CACHE_VERSION,
-            "viewr-thumbnail-v6",
-            "the thumbnail box without padding needs a new cache generation"
+            "viewr-thumbnail-v7",
+            "the DCT scale of rotated JPEGs and the RAW previews need a new cache generation"
         );
     }
 

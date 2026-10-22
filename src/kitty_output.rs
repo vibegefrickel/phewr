@@ -212,15 +212,15 @@ fn transmit_cell(
     vis_idx: usize,
     img_idx: usize,
 ) -> io::Result<()> {
-    let Some((img, id)) = app.thumb_cache.peek(img_idx) else {
+    let Some((picture, id)) = app.thumb_cache.peek(img_idx) else {
         return Ok(());
     };
-    let bytes = img.as_raw().len();
-    let (origin, cell_box) = grid_placement(app, vis_idx);
+    let bytes = picture.image.as_raw().len();
+    let (origin, cell_box) = grid_placement(app, vis_idx, picture.cells);
     queue!(out, cursor::MoveTo(origin.0, origin.1))?;
     app.graphics.transmit(
         out,
-        img,
+        &picture.image,
         &encoder::DisplayOptions {
             id: Some(id),
             cell_box,
@@ -276,16 +276,22 @@ fn delete_image_to(app: &mut App, out: &mut impl Write, id: u32) -> io::Result<(
     Ok(())
 }
 
-/// Where the thumbnail of the visible cell `vis_idx` goes: the whole cell in the middle of its
-/// grid cell, and the base cell box that the terminal scales it to.
+/// Where the thumbnail of the visible cell `vis_idx` goes: its `cells` in the middle of the
+/// grid cell, and the cell box that the terminal scales it to.
 ///
-/// Every grid picture has the shape of the box: a sharp thumbnail is padded to its pixel size,
-/// a preview has its own size. `c=` and `r=` fit both to the same cells. A sharp picture of
-/// the exact size scales 1:1, and one off by a pixel, after a rounded cell size, stays in its
-/// cells. No picture needs a pixel offset, which a relaying multiplexer gets wrong.
-fn grid_placement(app: &App, vis_idx: usize) -> ((u16, u16), Option<(u16, u16)>) {
+/// Every grid picture is padded to whole cells, at most the base cell box: a sharp thumbnail
+/// to its pixel size, a preview to the shape of those cells at its own size. `c=` and `r=` fit
+/// both to the same cells, centered in the grid cell. A sharp picture of the exact size scales
+/// 1:1, and one off by a pixel, after a rounded cell size, stays in its cells. No picture needs
+/// a pixel offset, which a relaying multiplexer gets wrong.
+fn grid_placement(
+    app: &App,
+    vis_idx: usize,
+    cells: (u16, u16),
+) -> ((u16, u16), Option<(u16, u16)>) {
     let cell = app.gallery.cell_rect(vis_idx);
-    let (cols, rows) = (app.gallery.thumb_cols, app.gallery.thumb_rows);
+    let cols = cells.0.clamp(1, app.gallery.thumb_cols.max(1));
+    let rows = cells.1.clamp(1, app.gallery.thumb_rows.max(1));
     let origin = (
         cell.x + cell.width.saturating_sub(cols) / 2,
         cell.y + cell.height.saturating_sub(rows) / 2,
@@ -337,12 +343,12 @@ fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()
     let mut shown = HashSet::new();
     for (vis_idx, position) in app.gallery.visible_range().enumerate() {
         let img_idx = app.gallery.filtered_indices[position];
-        let Some((_, id)) = app.thumb_cache.peek(img_idx) else {
+        let Some((picture, id)) = app.thumb_cache.peek(img_idx) else {
             continue;
         };
         shown.insert(id);
         if app.terminal_images.contains(id) {
-            let (origin, cell_box) = grid_placement(app, vis_idx);
+            let (origin, cell_box) = grid_placement(app, vis_idx, picture.cells);
             queue!(out, cursor::MoveTo(origin.0, origin.1))?;
             app.graphics.place_by_id_to(out, id, cell_box)?;
             app.terminal_images.touch(id);
@@ -363,6 +369,7 @@ mod tests {
     };
     use crate::app::App;
     use crate::app::thumbnails::{pad_for_grid, thumb_target_px};
+    use crate::gallery::GridPicture;
     use crate::image_list::SharedImageList;
     use crate::test_support::kitty::FakeTerminal;
     use crate::test_support::{char_key, text};
@@ -396,19 +403,19 @@ mod tests {
         app
     }
 
-    /// `grid_app` with a padded sharp thumbnail for each cell, so no decode starts.
+    /// `grid_app` with a sharp thumbnail of the whole box for each cell, so no decode starts.
     fn thumbnail_app(count: usize) -> App {
         let mut app = grid_app(count);
         for index in 0..count {
-            app.thumb_cache.insert(index, sharp_thumbnail(4, 4));
+            app.thumb_cache.insert(index, sharp_thumbnail(160, 96));
         }
         app
     }
 
-    /// A sharp thumbnail of `width` x `height` opaque pixels, padded to the box.
-    fn sharp_thumbnail(width: u32, height: u32) -> RgbaImage {
+    /// A sharp thumbnail of `width` x `height` opaque pixels, padded to whole cells of 8x16 px.
+    fn sharp_thumbnail(width: u32, height: u32) -> GridPicture {
         let image = RgbaImage::from_pixel(width, height, image::Rgba([9, 9, 9, 255]));
-        pad_for_grid(image, BOX_PX, true)
+        pad_for_grid(image, BOX_PX, (8, 16), true)
     }
 
     /// The write half of `render_gallery_images`, for the visible cells of the grid.
@@ -533,6 +540,24 @@ mod tests {
         assert!(text.contains("\x1b[10;2H"), "the second tall row: {text}");
         assert!(!text.contains(",X=") && !text.contains(",Y="));
         assert_eq!(text.matches(",s=160,v=96,").count(), 6, "the base size");
+
+        // A smaller picture of 16x4 cells (128x64 px) in the wide and tall first cell of 21x7:
+        // 2 columns and 1 row in, with its own cell count. The base cell of 20x6 gives 2
+        // columns and 1 row too, so a scroll that moves the picture to a base cell keeps it
+        // in whole cells.
+        assert_eq!(app.thumb_cache.insert(0, sharp_thumbnail(128, 64)), Some(1));
+        out.clear();
+        emit_new_thumbnails_to(&mut app, &[0], &mut out).unwrap();
+        let text = text_of(&out);
+        assert!(
+            text.contains("\x1b[3;4H"),
+            "centered in whole cells: {text}"
+        );
+        assert!(text.contains(",s=128,v=64,i=7,c=16,r=4,"), "{text}");
+        assert!(!text.contains(",X=") && !text.contains(",Y="));
+        out.clear();
+        place_visible(&mut app, &mut out);
+        assert!(text_of(&out).contains("\x1b[3;4H\x1b_Ga=p,q=2,C=1,i=7,c=16,r=4\x1b\\"));
     }
 
     fn text_of(out: &[u8]) -> String {
@@ -542,31 +567,33 @@ mod tests {
     #[test]
     fn a_preview_is_scaled_to_the_cell_box_by_the_terminal() {
         let mut app = grid_app(1);
-        // A 40x30 preview in a 160x96 box: padded to 40x24? No: to the box shape, 40x24 is too
-        // small for 30 rows, so 50x30.
-        let preview = pad_for_grid(RgbaImage::new(40, 30), BOX_PX, false);
-        assert_eq!(preview.dimensions(), (50, 30));
+        // A 40x30 preview in a 160x96 box of 8x16 px cells: the sharp image would be 128x96,
+        // 16x6 cells. The canvas gets that shape, 40x30, and the picture its cells.
+        let preview = pad_for_grid(RgbaImage::new(40, 30), BOX_PX, (8, 16), false);
+        assert_eq!(preview.image.dimensions(), (40, 30));
+        assert_eq!(preview.cells, (16, 6));
         assert!(app.store_thumbnail(0, preview, false));
         let mut out = Vec::new();
 
         emit_new_thumbnails_to(&mut app, &[0], &mut out).unwrap();
 
         let text = text(&out);
-        assert!(text.contains(",s=50,v=30,i=1,c=20,r=6,"), "{text}");
+        assert!(text.contains(",s=40,v=30,i=1,c=16,r=6,"), "{text}");
         assert!(!text.contains(",X=") && !text.contains(",Y="));
+        assert!(text.contains("\x1b[2;4H"), "centered: 2 columns in: {text}");
 
         out.clear();
         place_visible(&mut app, &mut out);
-        assert!(text_of(&out).contains("\x1b_Ga=p,q=2,C=1,i=1,c=20,r=6\x1b\\"));
+        assert!(text_of(&out).contains("\x1b_Ga=p,q=2,C=1,i=1,c=16,r=6\x1b\\"));
 
-        // The sharp image takes the same origin without a scale.
-        assert!(app.store_thumbnail(0, sharp_thumbnail(160, 80), true));
+        // The sharp image of 128x96 takes the same cells without a scale.
+        assert!(app.store_thumbnail(0, sharp_thumbnail(128, 96), true));
         out.clear();
         emit_new_thumbnails_to(&mut app, &[0], &mut out).unwrap();
         let text = text_of(&out);
         assert!(text.contains("\x1b_Ga=d,d=I,i=1,q=2\x1b\\"));
-        assert!(text.contains("\x1b[2;2H"), "the same origin: {text}");
-        assert!(text.contains(",s=160,v=96,i=2,c=20,r=6,m="), "{text}");
+        assert!(text.contains("\x1b[2;4H"), "the same origin: {text}");
+        assert!(text.contains(",s=128,v=96,i=2,c=16,r=6,m="), "{text}");
     }
 
     #[test]
@@ -750,7 +777,7 @@ mod tests {
                 .filter(|&index| !app.thumb_cache.contains(index))
                 .collect();
             for &index in &fresh {
-                assert!(app.store_thumbnail(index, sharp_thumbnail(8, 8), true));
+                assert!(app.store_thumbnail(index, sharp_thumbnail(160, 96), true));
             }
             let mut out = Vec::new();
             emit_new_thumbnails_to(app, &fresh, &mut out).unwrap();
@@ -825,7 +852,7 @@ mod tests {
 
     /// A sharp thumbnail for the base cell of `app`: a portrait photo in the odd cells and a
     /// landscape one in the even cells, padded to the pixel box of the cell.
-    fn thumbnail_for_grid(app: &App, index: usize) -> RgbaImage {
+    fn thumbnail_for_grid(app: &App, index: usize) -> GridPicture {
         let target = thumb_target_px(app.gallery.thumb_box(), app.cell_px);
         let (width, height) = if index.is_multiple_of(2) {
             (target.0, target.1 * 2 / 3)
@@ -833,7 +860,7 @@ mod tests {
             (target.0 * 2 / 3, target.1)
         };
         let image = RgbaImage::from_pixel(width, height, image::Rgba([9, 9, 9, 255]));
-        pad_for_grid(image, target, true)
+        pad_for_grid(image, target, app.cell_px, true)
     }
 
     /// One pass of the run loop after a key: the grid write when a render is due, then the

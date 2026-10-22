@@ -41,13 +41,30 @@ pub(super) fn decode_jpeg_turbo(
     target: Option<(u32, u32)>,
 ) -> io::Result<DynamicImage> {
     let data = std::fs::read(path)?;
+    decode_jpeg_turbo_bytes(&data, target, None)
+}
+
+/// Decode the JPEG `data` with libjpeg-turbo. The DCT scaling picks the smallest size that
+/// still covers `target`. `container_orientation` is the EXIF orientation of the file that
+/// holds the JPEG (a RAW file). It wins over the EXIF orientation of the JPEG itself.
+pub(super) fn decode_jpeg_turbo_bytes(
+    data: &[u8],
+    target: Option<(u32, u32)>,
+    container_orientation: Option<u8>,
+) -> io::Result<DynamicImage> {
     let mut decompressor = turbojpeg::Decompressor::new()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     let header = decompressor
-        .read_header(&data)
+        .read_header(data)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
+    // libjpeg-turbo ignores the EXIF orientation, so phone photos need it here. The
+    // container orientation of a RAW file wins over the EXIF of its preview.
+    let orientation = container_orientation
+        .or_else(|| info::orientation_from_bytes(data))
+        .and_then(Orientation::from_exif);
+    let target = target.map(|box_px| turned_target(box_px, orientation));
     let scaling = match target {
         Some((tw, th)) if tw > 0 && th > 0 && !header.is_lossless => {
             pick_scaling_factor(header.width, header.height, tw, th)
@@ -72,7 +89,7 @@ pub(super) fn decode_jpeg_turbo(
     };
 
     decompressor
-        .decompress(&data, image.as_deref_mut())
+        .decompress(data, image.as_deref_mut())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     let w = image.width as u32;
@@ -80,10 +97,22 @@ pub(super) fn decode_jpeg_turbo(
     let mut img = RgbaImage::from_raw(w, h, image.pixels)
         .map(DynamicImage::ImageRgba8)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid image dimensions"))?;
-    // libjpeg-turbo ignores the EXIF orientation, so phone photos need it here.
-    if let Some(orientation) = info::orientation_from_bytes(&data).and_then(Orientation::from_exif)
-    {
+    if let Some(orientation) = orientation {
         img.apply_orientation(orientation);
     }
     Ok(img)
+}
+
+/// The box in the stored orientation: a quarter turn swaps its sides, so the DCT scaling keeps
+/// enough pixels for the turned picture.
+fn turned_target(target: (u32, u32), orientation: Option<Orientation>) -> (u32, u32) {
+    match orientation {
+        Some(
+            Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH,
+        ) => (target.1, target.0),
+        _ => target,
+    }
 }

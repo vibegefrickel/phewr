@@ -2,6 +2,8 @@
 //! macOS `sips`, the tone map of float images, the HEIF box reader, the resize and the folder
 //! shape from the file headers.
 
+#[cfg(all(feature = "sips", target_os = "macos"))]
+pub(crate) mod embedded_jpeg;
 #[cfg(feature = "heic")]
 pub(crate) mod heif_boxes;
 pub(crate) mod jxl;
@@ -97,10 +99,15 @@ pub(crate) fn decode_image_with_hint(
     match Route::for_path(path) {
         Route::Raster => decode_raster(path, target),
         Route::Jxl => jxl::decode(path),
-        // The grid and the fullscreen view ask sips for a copy at the size of their box. The
-        // zoom decodes without a target, so it gets the full image with all detail.
+        // The grid and the fullscreen view take the embedded JPEG of a RAW or PSD file when
+        // it covers their box, else sips writes a copy at the size of the box. The zoom
+        // decodes without a target, so it gets the full image with all detail.
         #[cfg(all(feature = "sips", target_os = "macos"))]
-        Route::Sips => sips::decode(path, target),
+        Route::Sips => match target.and_then(|box_px| embedded_jpeg::decode_covering(path, box_px))
+        {
+            Some(image) => Ok(image),
+            None => sips::decode(path, target),
+        },
     }
 }
 
