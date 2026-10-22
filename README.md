@@ -90,7 +90,9 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `h` `j` `k` `l`, arrows | Move |
 | `g` `G`, `Home` `End` | First / last |
 | `Ctrl-b` `Ctrl-f`, `PgUp` `PgDn` | Page up / down |
-| `Enter` | Open fullscreen |
+| `Enter` | Open fullscreen, play a video, or open a folder |
+| `Backspace` | Go to the parent folder |
+| `p` | Play the video under the cursor in the mpv window, with sound |
 | `s` | Start a slideshow from the cursor |
 | `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows, remembered per folder, `Enter` opens the larger view) |
 | `n` | Show or hide filename labels |
@@ -98,16 +100,18 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `/` | Search. `Enter` applies, `Esc` clears, `Backspace` deletes |
 | `Space` | Toggle selection |
 | `a` `A` | Select all / clear selection |
+| `d` `D` | Trash / permanently delete, with confirm |
+| `o` | Directory picker |
+| `q` `Esc` | Quit |
+| `?` | Full help |
+
+The grid lists the subfolders of the folder first, with `..` for the parent. A folder cell shows `▸` and its name. Hidden folders and symlinks to folders stay out. Folders take no mark and no delete, and the fullscreen view and the slideshow skip them. The search matches folder names. A folder with exactly one image opens it in fullscreen.
 
 The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. The grid separates the thumbnails with 1-cell gaps. A thick blue border marks the thumbnail under the cursor. A thin yellow border marks each selected image (`Space`). A cell shows a dim ◌ (image) or ▶ (video) while its thumbnail loads.
 
 The grid also works under a multiplexer that relays Kitty graphics, such as herdr. The filename toggle and a font size change decode the thumbnails again.
 
-There is no search bar and no frame. A status row at the bottom shows the name and the position of the selected image, the search query and the match count while you search with `/`, the number of selected images, `scanning…` while the scan runs, and the key hints. In the fullscreen view, the image uses the whole terminal above the status row, and the filename shows in the status row.
-| `d` `D` | Trash / permanently delete, with confirm |
-| `o` | Directory picker |
-| `q` `Esc` | Quit |
-| `?` | Full help |
+There is no search bar and no frame. A status row at the bottom shows the name and the position of the selected entry, the folder and image count when the grid has folders, the search query and the match count while you search with `/`, the number of selected images, `scanning…` while the scan runs, and the key hints. In the fullscreen view, the image uses the whole terminal above the status row, and the filename shows in the status row.
 
 ### Fullscreen
 
@@ -121,26 +125,37 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 | `[` `]` | Shorter / longer interval (0.5 s steps) |
 | `i` | Toggle the info panel |
 | `d` `D` | Trash / permanently delete, with confirm |
-| `Enter` | Play the video again (on a video placeholder) |
+| `Enter` | Play the video (on a video placeholder) |
+| `p` | Play the video in the mpv window, with sound (on a video placeholder) |
 | `q` | Back to the gallery. In a running slideshow, `q` stops it and goes back in one press |
 | `Esc` | Stop the slideshow, or back to the gallery |
 
 ### Video
 
-viewr gives a video to mpv. By default, mpv plays it in a fullscreen window, with the same picture and HDR as the mpv app. All mpv keys work: `Space` pauses, `←` / `→` seek, `f` leaves or enters fullscreen. `q` or `Ctrl-c` stops mpv. viewr then goes back to the view that opened the video:
+viewr plays a video in the terminal with its own player. ffmpeg from Homebrew decodes on the media engine of the Mac, scales the frame on the GPU and maps HLG and PQ (iPhone HDR, Dolby Vision 8.4, HDR10) to SDR with a tone mapping cube. viewr sends each frame through the Kitty temp file medium, and the terminal scales it to the window. A 1080p video plays at 30 fps without dropped frames in Ghostty. The terminal player has no sound.
+
+| Key | Action |
+|-----|--------|
+| `Space` | Pause / resume |
+| `←` `→`, `h` `l` | Seek 5 s back / forward |
+| `n` `N` | Next / previous file |
+| `Home` `End` | First / last file |
+| `p` | Continue in the mpv window, with sound |
+| `q` `Esc` | Back to the view that opened the video |
+| `?` | Help |
+
+After a video, viewr goes back to the view that opened it:
 
 - From the gallery (`Enter`), viewr shows the gallery with the cursor on the video.
 - From fullscreen (`←` / `→`, `Home` / `End`), viewr stays on the video and shows "video: press Enter to play". `Enter` plays the video again, and `←` / `→` step on.
 
-In mpv, `n` plays the next file of the list and `N` (Shift-n) the previous file. viewr starts mpv at once for a video and shows an image in fullscreen. These keys need mpv 0.38 or later.
+`p` opens the video in a fullscreen mpv window with sound, from the grid, the fullscreen view and the player. The window gets `--fs --native-fs=no`, so macOS does not move it to its own Space, and `--hwdec=auto-safe`. mpv does its own HDR tone mapping on the GPU. All mpv keys work. In mpv, `n` plays the next file of the list and `N` (Shift-n) the previous file (mpv 0.38 or later). After the window closes, viewr returns to the view that opened it.
 
-The window gets `--fs --native-fs=no`, so macOS does not move it to its own Space. With the terminal player (`[video] player = "terminal"`), viewr starts mpv with `--vo=kitty --profile=sw-fast --hwdec=auto-copy-safe` and a scale filter that fits each frame to the terminal before the rotation. A 4K iPhone video plays about three times faster with this filter. The Kitty output of mpv cannot tone map HDR video. For HLG and PQ videos (iPhone HDR, Dolby Vision 8.4, HDR10), viewr writes a tone mapping LUT into the cache directory, and mpv applies it. The colors are close to the SDR export of macOS. The mpv window gets `--hwdec=auto-safe` and does its own HDR tone mapping on the GPU. The filters of your `mpv.conf` stay active.
+Over SSH, or when the Kitty probe found no temp file medium, a video opens in the mpv window, with a note. Without mpv, a note shows and the view stays. The terminal player needs `ffmpeg` on PATH.
 
-In a slideshow, a video plays one time and the slideshow continues. With the window player (the default), the slideshow waits until the window closes. Use `q` or the close button to stop it, because `Cmd-q` counts as the end of the clip. With the terminal player, quit mpv with `q` or `Ctrl-c` to stop the slideshow. In the built-in player, press `Esc`. A paused slideshow plays the video in a loop.
+In a slideshow, a video plays one time and the slideshow continues. Outside a slideshow, the video loops. In the mpv window, the slideshow waits until the window closes. Use `q` or the close button to stop it, because `Cmd-q` counts as the end of the clip. A paused slideshow plays the video in a loop.
 
 In fullscreen, a status note (for example "clip.mp4 plays in an mpv window") replaces the key hints until the next key press.
-
-The built-in player (`[video] player = "builtin"`) keeps its keys: `Space`, `←` / `→`, `h` / `l`, `Home` / `End`, `d` / `D`. `q` and `Esc` go back to the view that opened the video.
 
 `q` goes back one step in every view. Only `q` in the grid quits viewr. In the directory picker, `q` closes the picker. If the folder has no photos yet, `q` in the picker quits viewr, because there is no view to go back to.
 
@@ -160,13 +175,13 @@ loop = true          # start over after the last image
 show_on_start = false
 
 [video]
-# "window" (default): mpv plays in a fullscreen window of its own, and viewr keeps running.
-# "terminal": mpv plays in this terminal with --vo=kitty. Slow in Ghostty, use it over SSH. Press q in mpv to go back.
-# "builtin": the built-in FFmpeg player (10 fps, no sound).
-player = "window"
+# "terminal" (default): the terminal player of viewr, no sound. p opens the mpv window.
+# "window": mpv plays every video in a fullscreen window of its own, with sound.
+# "builtin" from older versions means "terminal".
+player = "terminal"
 ```
 
-If mpv is not on PATH, viewr uses the built-in player and shows a note.
+The terminal player needs `ffmpeg` on PATH. Without the temp file medium or ffmpeg, a video opens in the mpv window. Without mpv, a note shows.
 
 When you zoom the grid with `+` / `-`, viewr remembers the size for the current folder and as the last size in `~/.local/state/viewr/state.toml`. A folder opens with its own size. A folder without one opens with the last size, or with `[gallery] visible_rows`. `0` returns the current folder to the configured size and erases its entry. viewr keeps the sizes of the last 200 folders.
 

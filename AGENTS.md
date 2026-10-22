@@ -160,17 +160,20 @@ missing.
   grid and the new thumbnails. Each `render_*` has a `*_to` twin that writes to any `Write`,
   so that the tests read the escape sequences. `App::with_graphics_out` runs a write against the
   graphics output.
-- `video_handoff/` (feature `video`): the hand-off to mpv and the steps with `n` and `N`.
-  `mod.rs` holds `VideoState` (the mpv player and the fallback note), the hand-off and the way
-  back. `terminal.rs` holds `TerminalHandoff` and `play_in_terminal`. `window.rs` holds
+- `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
+  and the way back. `mod.rs` holds `VideoState` and `play_videos`. `window.rs` holds
   `poll_mpv_window`.
+- `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` and the pacing,
+  `decoder.rs` the ffmpeg command line and the `Decoder` trait, `probe.rs` `VideoInfo`,
+  `layout.rs` the frame box and the cell box, `tone_map.rs` the HDR curve and the cube.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
   construction. One file per topic: `info_panel.rs`, `grid_zoom.rs` (the cell size and the
   state file), `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter),
   `cell_shape.rs`, `fullscreen.rs` (enter, leave, the steps and the decode), `zoom.rs` (zoom,
   pan and the full-resolution source), `delete.rs` (the marks and the delete question),
-  `directory.rs` (the picker and the directory switch), `video.rs` (the built-in player, the
+  `directory.rs` (the picker and the directory switch), `folders.rs` (the folder entries of
+  the grid, `Enter` into a folder, `go_to_parent`), `video.rs` (the terminal player state, the
   return after a video, the mpv window watch), `thumbnails.rs` (the jobs, the queue, the HEIC
   previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
 - `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the
@@ -190,8 +193,10 @@ missing.
   so the grid reaches the edges. `set_cell_shape` picks the column count from the photo aspect
   and the pixel size of a terminal cell.
 - `scanner.rs`: the background directory scan and the lists of supported extensions.
-  `LIBHEIF_EXTENSIONS` is the one list for the libheif route.
+  `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `subfolders` lists the subfolders
+  of one folder argument, `..` first.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
+  `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
 - `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. Results carry a
   generation. `invalidate()` drops the jobs in flight and forgets the failed indices. Each result
   (`Prefetched`) keeps its decode box. `take_resized` fits the image into the requested box. If
@@ -200,64 +205,71 @@ missing.
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config.rs`: `config.toml` and the state file.
-- `video.rs` (feature `video`): the built-in FFmpeg player in a thread, and first-frame
-  thumbnails.
-- `mpv.rs` (feature `video`): the argument lists for mpv, the exit notes, the step exit codes,
-  the HDR probe and tone mapping LUT, and the `Runner` trait for the process start.
+- `video.rs` (feature `video`): the first-frame thumbnails and the video extensions.
+- `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
+  and the `Runner` trait for the process start.
 - `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `detect_transfer` probes the terminal at start with `a=q`.
   `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe.
 - `test_support.rs` (test only): the app builders, the key press helpers and the synthetic
   file writers that the tests of more than one module share. `test_support::video` holds
-  `FakeTerminal`, `FakeRunner` and the app builders of the mpv tests.
+  `FakeRunner`, `FakeDecoder` and the app builders of the video tests.
 - `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
   terminal and read `VIEWR_TEST_DIR`.
 
 ## Gotchas
 
-- **The mpv hand-off keeps raw mode and the alternate screen.** viewr deletes the Kitty images,
-  runs mpv with `--vo-kitty-alt-screen=no` and waits. Raw mode keeps ISIG off, so Ctrl+C, Ctrl+\
-  and Ctrl+Z reach mpv as keys and do not stop viewr. After mpv, viewr drops the queued input,
-  deletes the images and clears the screen. Tests use a fake `mpv::Runner` and a fake
-  `TerminalHandoff`. Never start a real mpv in a test.
-- **Video placeholder:** after mpv, and after Esc in the built-in player, `App::video_return`
-  selects the view. A video in `ViewMode::Fullscreen` is a placeholder
-  (`shows_video_placeholder`). `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because
-  the image decode cannot read a video.
-- **Built-in player pause:** a pause blocks the decoder thread before the next packet
-  (`follow_commands` in `video.rs`). The decoder tests drive `decode_loop` through a frame
-  channel without a buffer (`sync_channel(0)`), so no assertion depends on the clock.
-- **Slideshow and videos:** a running slideshow that is not paused plays a video one time. mpv
-  gets `--loop-file=no`, `--keep-open=no`, `--idle=no`, `--loop-playlist=no` and
-  `--input-commands` that bind `q`, `Q` (and `CLOSE_WIN` in a window) to `quit 4`. Exit code 0
-  is the end of the file. Each other exit stops the slideshow on the placeholder. Esc in the
-  built-in player also stops it. `--input-commands` needs mpv 0.38 or later. On macOS, the app
-  quit (Cmd+Q) of a window mpv exits with 0, so a window slideshow continues.
+- **Terminal player:** ffmpeg runs as a subprocess (`player/decoder.rs`, behind the `Decoder`
+  trait), with `-hwaccel videotoolbox`, `-noautorotate`, `scale_vt` and `transpose_vt` on the
+  GPU, `hflip,vflip` for 180 degrees, `hwdownload` as `p010le` (10 bit) or `nv12`, and
+  `format=rgb48le,lut3d=...:interp=tetrahedral` for HLG and PQ. A GPU run without a frame runs
+  again in software (`Pipeline::Software`). One frame per temp file, image id `u32::MAX - 1`
+  (the grid ids count up from 1), `c=` / `r=` to the cell box, no `X=` / `Y=`. The frame box is
+  the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the cell box. The
+  frame size stays until the next ffmpeg start. The reader thread holds 2 frames
+  (`FRAME_QUEUE`), so a pause blocks ffmpeg on the pipe. A frame more than one interval late
+  drops only when a newer frame waits. Otherwise the clock moves to the frame, and a slow
+  decode plays slower instead of frozen. The help popup holds the player and gets no frame. A
+  run after a seek without a frame is the end of the clip, not an error. The run loop waits
+  until the next frame is due, 10 ms while ffmpeg has no frame ready, 250 ms in a pause. Tests
+  use `FakeDecoder` and never start a real ffmpeg or mpv.
+- **Video player default:** `[video] player` defaults to `terminal`, and `builtin` maps to
+  `terminal`. Without the temp file medium (SSH, a probe that picked `direct` or `png`) or
+  without ffmpeg, a video opens in the mpv window with a note. mpv's own Kitty output is gone:
+  it played a 4K HLG clip at 2.4 fps in Ghostty and cannot scale a small frame.
+- **Video placeholder:** after the player or the mpv window, `App::video_return` selects the
+  view. A video in `ViewMode::Fullscreen` is a placeholder (`shows_video_placeholder`).
+  `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because the image decode cannot read
+  a video. `p` on the placeholder opens the mpv window.
+- **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
+  terminal player reports `finished`, and the slideshow moves on. Outside a slideshow, the clip
+  loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
+  `--loop-playlist=no` and `--input-commands` that bind `q`, `Q` and `CLOSE_WIN` to `quit 4`.
+  Exit code 0 is the end of the file. Each other exit stops the slideshow on the placeholder.
+  `--input-commands` needs mpv 0.38 or later. On macOS, the app quit (Cmd+Q) of a window mpv
+  exits with 0, so a window slideshow continues.
 - **mpv steps:** each mpv start gets `--input-commands` with `keybind n "quit 10"` and
-  `keybind N "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). `hand_off_videos` in
-  `video_handoff/mod.rs` starts the next video at once, without a draw. `App::step_from_video` keeps
+  `keybind N "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
   file that mpv played, not from the gallery cursor.
-- **Video player default:** `[video] player` defaults to `window` (`VideoPlayer::default`).
-  mpv's Kitty output is too slow in Ghostty: a 4K HLG clip plays at 2.4 fps, Ghostty ignores
-  `--vo-kitty-use-shm`, and a smaller `--vo-kitty-width` fills only a corner, because mpv's
-  Kitty output does not scale. The window gets `--fs --native-fs=no`, which overrides `fs=no` of
-  a user `mpv.conf`.
 - **mpv window:** viewr follows each mpv window until it exits (`App::poll_video_window`). The
   run loop polls every 100 ms (`WINDOW_POLL`) while a window plays. A step in viewr away from
-  the file of the window forgets the window.
-- **mpv speed:** the terminal start gets `--hwdec=auto-copy-safe` and a scale filter that fits
-  each frame to the terminal before the rotation. The size comes from the terminal size at the
-  start of mpv, so a larger terminal during playback gives a soft picture. The window start gets
-  `--hwdec=auto-safe`. The filters go through `--vf-pre`, so the filters of a user `mpv.conf`
-  stay.
-- **HDR in the terminal:** `--tone-mapping` and `--target-colorspace-hint` have no effect on
-  `--vo=kitty`, because only the GPU outputs read them. `mpv::hdr_of` reads the transfer curve
-  with FFmpeg before each terminal start. For HLG and PQ, viewr writes a 3D LUT
-  (`tonemap-hlg-v2.cube`, `tonemap-pq-v2.cube`) into the thumbnail cache directory, or into
-  `$TMPDIR/viewr` if the cache path holds filter graph syntax. If the LUT output changes, change
-  the version in the file names. `SDR_WHITE_NITS = 500` matches the macOS SDR export on three
-  iPhone clips. The PQ LUT has no test on a real PQ file.
+  the file of the window forgets the window. The window gets `--fs --native-fs=no` and
+  `--hwdec=auto-safe`. `--fs` overrides `fs=no` of a user `mpv.conf`.
+- **HDR in the terminal:** `player::probe` reads the transfer curve. For HLG and PQ,
+  `player::tone_map::tone_map_file` writes a 3D cube (`tonemap-hlg-v2.cube`,
+  `tonemap-pq-v2.cube`) into the thumbnail cache directory, or into `$TMPDIR/viewr` if the cache
+  path holds filter graph syntax. If the cube output changes, change the version in the file
+  names. `SDR_WHITE_NITS = 500` matches the macOS SDR export on three iPhone clips. The PQ cube
+  has no test on a real PQ file.
+- **Entry kinds:** the first `App::folder_count` entries of `images` are folders, `..` first.
+  The scanner pushes them before the first file batch, and the sort at the end of the scan sorts
+  the files only. Every step of the fullscreen view starts at `App::first_file()`, the prefetch
+  gets the first file index, and the thumbnail jobs, the marks, the delete, the cell shape and
+  the info panel skip folders. A folder cell has no thumbnail and no Kitty image. The run loop
+  opens the picker only when the list has no entry at all. A start with several paths lists no
+  folders. A symlink to a folder stays out. One image next to folders opens the fullscreen view
+  at once, as in a flat folder.
 - **FFmpeg log:** `main` sets the FFmpeg log level to `Quiet` directly after `ffmpeg::init()`, so
   no libav warning reaches the screen of the TUI.
 - **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
