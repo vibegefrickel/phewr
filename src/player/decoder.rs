@@ -1,8 +1,8 @@
 //! The ffmpeg process that decodes a video into raw RGB or RGBA frames, and its command line.
 //!
 //! ffmpeg decodes on the media engine of the Mac (`-hwaccel videotoolbox`), scales and turns
-//! the frame on the GPU (`scale_vt`, `transpose_vt`), maps an HDR signal to SDR with the tone
-//! mapping cube (`lut3d`) and writes raw RGB frames into a pipe. A thread reads the pipe one
+//! the frame on the GPU (`scale_vt`, `transpose_vt`), maps the colors into the color space of
+//! the terminal with a cube (`lut3d`) and writes raw RGB frames into a pipe. A thread reads the pipe one
 //! frame at a time, so the run loop never waits for ffmpeg.
 //!
 //! An animated image decodes in software without the hardware flags, because the AV1 decoder
@@ -15,7 +15,8 @@
 //! its frames as they are.
 
 use super::probe::VideoInfo;
-use super::tone_map::Hdr;
+use super::tone_map::{Cube, cube_file};
+use crate::decode::color::ColorTarget;
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::{self, Read};
@@ -54,7 +55,7 @@ pub(crate) fn pixel_format(info: &VideoInfo) -> (&'static str, usize) {
 /// [`pixel_format`].
 ///
 /// `seek` is the start position in seconds. ffmpeg seeks in the input, before the decode.
-/// `cube` is the tone mapping cube of an HDR video, see [`super::tone_map::tone_map_file`].
+/// `cube` is the color cube of the video, see [`cube_for`].
 pub(crate) fn args(
     video: &Path,
     info: &VideoInfo,
@@ -125,7 +126,7 @@ pub(crate) fn first_frame_args(
     args
 }
 
-/// The filter graph: the scale, the rotation, the download from the GPU and the tone mapping.
+/// The filter graph: the scale, the rotation, the download from the GPU and the color cube.
 ///
 /// `frame` is the size on the screen. The scale runs before the rotation, so a portrait clip
 /// scales to the swapped size. `-noautorotate` is on, because ffmpeg turns no GPU frame itself.
@@ -166,16 +167,31 @@ fn filter_graph(
             graph
         }
     };
-    if let (Some(_), Some(cube)) = (info.hdr, cube) {
+    if let Some(cube) = cube {
         push(
             &mut graph,
             format_args!(
-                ",format=rgb48le,lut3d=file={}:interp=tetrahedral",
+                ",format={},lut3d=file={}:interp=tetrahedral",
+                cube_format(info),
                 cube.display()
             ),
         );
     }
     graph
+}
+
+/// The pixel format in which the cube runs. An SDR cube runs in 8 bit, also for a 10 bit
+/// stream: it is the cheapest step, about 1 ms more per 1920x1080 frame, and its values hold
+/// the rounding of `lut3d` in 8 bit ([`Cube::runs_in_8_bit`]). An HDR cube runs in 16 bit,
+/// because the tone curve spreads the dark values over more levels. An animation keeps its
+/// alpha.
+fn cube_format(info: &VideoInfo) -> &'static str {
+    match (info.animation, info.hdr.is_some()) {
+        (false, false) => "rgb24",
+        (false, true) => "rgb48le",
+        (true, false) => "rgba",
+        (true, true) => "rgba64le",
+    }
 }
 
 /// Append formatted text to the graph.
@@ -187,10 +203,11 @@ fn push(graph: &mut String, text: std::fmt::Arguments<'_>) {
     let _ = graph.write_fmt(text);
 }
 
-/// The tone mapping cube for `info`, in the first of `dirs` that works. `None` for SDR.
-pub(crate) fn cube_for(info: &VideoInfo, dirs: &[&Path]) -> Option<PathBuf> {
-    let hdr: Hdr = info.hdr?;
-    super::tone_map::tone_map_file(dirs, hdr)
+/// The color cube that maps `info` into `target`, in the first of `dirs` that works. `None`
+/// for an SDR video in the target space.
+pub(crate) fn cube_for(info: &VideoInfo, target: ColorTarget, dirs: &[&Path]) -> Option<PathBuf> {
+    let cube = Cube::for_video(info.hdr, info.primaries, target)?;
+    cube_file(dirs, cube)
 }
 
 /// The frames of one ffmpeg run. The channel ends when ffmpeg ends or the stream stops.
@@ -309,7 +326,8 @@ mod tests {
     use super::{
         Decoder, Pipeline, SystemDecoder, VideoInfo, args, cube_for, first_frame_args, read_frames,
     };
-    use crate::player::tone_map::Hdr;
+    use crate::decode::color::{self, ColorTarget, SourceColor};
+    use crate::player::tone_map::{Hdr, Primaries};
     use std::ffi::OsString;
     use std::path::Path;
     use std::sync::mpsc;
@@ -334,6 +352,11 @@ mod tests {
             fps: 30.0,
             duration: 10.0,
             hdr,
+            primaries: if hdr.is_some() {
+                Primaries::Bt2020
+            } else {
+                Primaries::Bt709
+            },
             ten_bit,
             animation: false,
             variable_rate: false,
@@ -435,8 +458,45 @@ mod tests {
             })
     }
 
-    /// Decode the animated fixtures with the real ffmpeg. Without ffmpeg on PATH, the test
-    /// skips with a note.
+    /// Every frame of one real ffmpeg run, within 10 seconds.
+    fn all_frames(
+        decoder: &SystemDecoder,
+        program: &Path,
+        args: &[OsString],
+        frame_bytes: usize,
+    ) -> Vec<Vec<u8>> {
+        let mut stream = decoder.start(program, args, frame_bytes).unwrap();
+        let mut frames = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match stream.try_next() {
+                Ok(frame) => frames.push(frame),
+                Err(mpsc::TryRecvError::Empty) => {
+                    assert!(std::time::Instant::now() < deadline, "ffmpeg hangs");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return frames,
+            }
+        }
+    }
+
+    /// The largest difference of one channel between `cubed` and the still conversion of
+    /// `plain` from sRGB into Display P3. Both hold RGBA pixels of the same size.
+    fn largest_difference_to_the_still_conversion(plain: &[u8], cubed: &[u8]) -> u8 {
+        let pixels = u32::try_from(plain.len() / 4).unwrap();
+        let image = image::RgbaImage::from_raw(pixels, 1, plain.to_vec()).unwrap();
+        let converted = color::convert(image, &SourceColor::Srgb, ColorTarget::DisplayP3);
+        converted
+            .as_raw()
+            .iter()
+            .zip(cubed)
+            .map(|(still, video)| still.abs_diff(*video))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Decode the animated fixtures with the real ffmpeg, without a cube and with the cube into
+    /// Display P3. Without ffmpeg on PATH, the test skips with a note.
     #[test]
     fn the_real_ffmpeg_decodes_every_frame_of_the_animated_fixtures() {
         use crate::test_support::fixture;
@@ -445,6 +505,7 @@ mod tests {
             return;
         };
         let decoder = SystemDecoder::new(Some(ffprobe));
+        let dir = tempfile::tempdir().unwrap();
         // The GIF holds 3 frames with delays of 100, 500 and 200 ms: 8 frames at 10 per second.
         for (name, expected) in [
             ("anim.gif", 8),
@@ -459,26 +520,102 @@ mod tests {
             let path = fixture(name);
             let info = decoder.probe(&path).unwrap();
             assert!(info.animation, "{name}: {info:?}");
-            let args = args(&path, &info, (16, 12), None, 0.0, Pipeline::Software);
-            let mut stream = decoder.start(&program, &args, 16 * 12 * 4).unwrap();
-            let mut frames = Vec::new();
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                match stream.try_next() {
-                    Ok(frame) => frames.push(frame),
-                    Err(mpsc::TryRecvError::Empty) => {
-                        assert!(std::time::Instant::now() < deadline, "{name}: ffmpeg hangs");
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => break,
-                }
-            }
+            assert_eq!(info.primaries, Primaries::Bt709, "{name}: sRGB or untagged");
+            let plain = args(&path, &info, (16, 12), None, 0.0, Pipeline::Software);
+            let frames = all_frames(&decoder, &program, &plain, 16 * 12 * 4);
             assert_eq!(frames.len(), expected, "{name}");
             assert!(
                 frames
                     .first()
                     .is_some_and(|frame| frame.iter().any(|&byte| byte != 0)),
                 "{name}: the first frame is black"
+            );
+            let cube = cube_for(&info, ColorTarget::DisplayP3, &[dir.path()]);
+            let cubed = args(
+                &path,
+                &info,
+                (16, 12),
+                cube.as_deref(),
+                0.0,
+                Pipeline::Software,
+            );
+            let converted = all_frames(&decoder, &program, &cubed, 16 * 12 * 4);
+            assert_eq!(converted.len(), expected, "{name}");
+            for (plain, cubed) in frames.iter().zip(&converted) {
+                let difference = largest_difference_to_the_still_conversion(plain, cubed);
+                assert!(difference <= 2, "{name}: {difference} levels off the still");
+            }
+        }
+    }
+
+    /// Decode the first frame of a synthetic SDR clip with a red patch, without a cube and with
+    /// the cube into Display P3, on the GPU and in software. The clip has 128x96 pixels, because
+    /// the hardware decoder rejects a smaller H.264 stream. The cube output matches the still
+    /// conversion of the plain frame within 2 levels. Without ffmpeg or libx264, the test skips
+    /// with a note.
+    #[test]
+    fn the_real_ffmpeg_converts_an_sdr_clip_like_a_still_image() {
+        use crate::test_support::video::{real_ffmpeg, real_ffprobe};
+        let (Some(program), Some(ffprobe)) = (real_ffmpeg(), real_ffprobe()) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("red.mp4");
+        let made = std::process::Command::new(&program)
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+            .arg("color=c=0x808080:s=128x96:r=10:d=1,drawbox=x=0:y=0:w=64:h=96:color=red:t=fill")
+            .args([
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-color_primaries",
+                "bt709",
+            ])
+            .arg(&clip)
+            .status()
+            .is_ok_and(|status| status.success());
+        if !made {
+            println!("note: skipped, because ffmpeg cannot encode with libx264");
+            return;
+        }
+        let decoder = SystemDecoder::new(Some(ffprobe));
+        let info = decoder.probe(&clip).unwrap();
+        assert_eq!((info.primaries, info.hdr), (Primaries::Bt709, None));
+        let cube = cube_for(&info, ColorTarget::DisplayP3, &[dir.path()]);
+        assert!(cube.is_some());
+        let first = |cube: Option<&Path>, pipeline| {
+            let args = first_frame_args(&clip, &info, (64, 48), cube, pipeline);
+            decoder
+                .start(&program, &args, 64 * 48 * 4)
+                .unwrap()
+                .wait_next(Duration::from_secs(10))
+                .ok()
+        };
+        for pipeline in [Pipeline::Gpu, Pipeline::Software] {
+            let (Some(plain), Some(cubed)) =
+                (first(None, pipeline), first(cube.as_deref(), pipeline))
+            else {
+                assert_eq!(pipeline, Pipeline::Gpu, "the software chain gives a frame");
+                println!("note: skipped the GPU chain, because it gave no frame");
+                continue;
+            };
+            // The center of the red patch is red before the cube and P3 red after it.
+            let red = (24 * 64 + 16) * 4;
+            assert!(
+                plain[red] > 240 && plain[red + 1] < 15,
+                "{:?}",
+                &plain[red..red + 3]
+            );
+            assert!(
+                cubed[red] < 240 && cubed[red + 1] > 35,
+                "{:?}",
+                &cubed[red..red + 3]
+            );
+            let difference = largest_difference_to_the_still_conversion(&plain, &cubed);
+            assert!(
+                difference <= 2,
+                "{pipeline:?}: {difference} levels off the still"
             );
         }
     }
@@ -638,11 +775,94 @@ mod tests {
     }
 
     #[test]
-    fn only_an_hdr_video_gets_a_cube() {
+    fn a_video_outside_the_target_space_gets_a_cube() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(cube_for(&info(0, None, false), &[dir.path()]), None);
-        let cube = cube_for(&info(0, Some(Hdr::Hlg), true), &[dir.path()]).unwrap();
-        assert_eq!(cube, dir.path().join("tonemap-hlg-v2.cube"));
+        let cube = |info: &VideoInfo, target| cube_for(info, target, &[dir.path()]);
+        let sdr = info(0, None, false);
+        assert_eq!(cube(&sdr, ColorTarget::Srgb), None, "sRGB needs no step");
+        assert_eq!(
+            cube(&sdr, ColorTarget::DisplayP3),
+            Some(dir.path().join("color-bt709-p3-v3.cube"))
+        );
+        let p3 = VideoInfo {
+            primaries: Primaries::DisplayP3,
+            ..sdr
+        };
+        assert_eq!(cube(&p3, ColorTarget::DisplayP3), None);
+        assert_eq!(
+            cube(&p3, ColorTarget::Srgb),
+            Some(dir.path().join("color-p3-srgb-v3.cube"))
+        );
+        for (target, name) in [
+            (ColorTarget::Srgb, "tonemap-hlg-srgb-v3.cube"),
+            (ColorTarget::DisplayP3, "tonemap-hlg-p3-v3.cube"),
+        ] {
+            assert_eq!(
+                cube(&info(0, Some(Hdr::Hlg), true), target),
+                Some(dir.path().join(name))
+            );
+        }
+    }
+
+    #[test]
+    fn an_sdr_cube_runs_in_8_bit_and_keeps_the_alpha_of_an_animation() {
+        let cube = Some(Path::new("/cache/color.cube"));
+        let lut = "lut3d=file=/cache/color.cube:interp=tetrahedral";
+        let sdr = info(0, None, false);
+        let video = args(
+            Path::new("a.mp4"),
+            &sdr,
+            (1280, 720),
+            cube,
+            0.0,
+            Pipeline::Gpu,
+        );
+        assert_eq!(
+            graph(&video),
+            format!("scale_vt=w=1280:h=720,hwdownload,format=nv12,format=rgb24,{lut}")
+        );
+        let ten_bit = info(0, None, true);
+        let video = args(
+            Path::new("a.mov"),
+            &ten_bit,
+            (1280, 720),
+            cube,
+            0.0,
+            Pipeline::Gpu,
+        );
+        assert_eq!(
+            graph(&video),
+            format!("scale_vt=w=1280:h=720,hwdownload,format=p010le,format=rgb24,{lut}")
+        );
+        let animation = VideoInfo {
+            animation: true,
+            ..sdr
+        };
+        let frames = args(
+            Path::new("a.gif"),
+            &animation,
+            (64, 48),
+            cube,
+            0.0,
+            Pipeline::Software,
+        );
+        assert_eq!(
+            graph(&frames),
+            format!("scale=w=64:h=48:flags=bilinear,format=rgba,{lut}")
+        );
+        let hdr_animation = VideoInfo {
+            hdr: Some(Hdr::Pq),
+            ..animation
+        };
+        let frames = args(
+            Path::new("a.avif"),
+            &hdr_animation,
+            (64, 48),
+            cube,
+            0.0,
+            Pipeline::Software,
+        );
+        assert!(graph(&frames).ends_with(&format!(",format=rgba64le,{lut}")));
     }
 
     #[test]

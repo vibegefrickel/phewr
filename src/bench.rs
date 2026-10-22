@@ -1373,7 +1373,7 @@ fn terminal_player_decode_rate() {
     };
     let info: VideoInfo = decoder.probe(video).unwrap();
     let cache = tempfile::tempdir().unwrap();
-    let cube = crate::player::cube_for(&info, &[cache.path()]);
+    let cube = crate::player::cube_for(&info, color::target(), &[cache.path()]);
     report(&format!(
         "terminal player: {} {}x{} {:.2} fps, hdr {:?}, rotation {}",
         video.file_name().unwrap().to_string_lossy(),

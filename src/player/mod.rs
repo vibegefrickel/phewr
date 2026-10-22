@@ -115,7 +115,7 @@ pub(crate) struct Player {
 
 impl Player {
     /// Start ffmpeg for `path`. `limit` is the pixel box of the frame, `cube_dirs` the places
-    /// for the tone mapping cube. Without `repeat`, the clip plays one time and then
+    /// for the color cube. Without `repeat`, the clip plays one time and then
     /// `finished` turns true.
     pub(crate) fn open(
         decoder: Rc<dyn Decoder>,
@@ -127,7 +127,7 @@ impl Player {
     ) -> std::io::Result<Self> {
         let info = decoder.probe(path)?;
         let frame = frame_box((info.width, info.height), limit);
-        let cube = cube_for(&info, cube_dirs);
+        let cube = cube_for(&info, crate::decode::color::target(), cube_dirs);
         let interval = info.frame_interval();
         let pipeline = if info.animation {
             Pipeline::Software

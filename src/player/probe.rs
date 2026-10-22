@@ -5,7 +5,7 @@
 //! WebP, APNG, AVIS) gets its rate and its length from the packet durations, because the
 //! containers tell no frame rate that fits the frame delays.
 
-use super::tone_map::Hdr;
+use super::tone_map::{Hdr, Primaries};
 use lru::LruCache;
 use serde::Deserialize;
 use std::ffi::OsString;
@@ -28,6 +28,8 @@ pub(crate) struct VideoInfo {
     /// The length in seconds, or 0 when the container does not tell it.
     pub duration: f64,
     pub hdr: Option<Hdr>,
+    /// The primaries of an SDR stream. An untagged stream is BT.709, as sRGB.
+    pub primaries: Primaries,
     /// A 10 bit stream. The frames that the Mac hardware decoder gives back are `p010le` then.
     pub ten_bit: bool,
     /// An animated image. ffmpeg decodes it in software at the exact rate `fps`.
@@ -83,8 +85,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const PROBE_CACHE_ENTRIES: usize = 1024;
 
 /// The fields of each video stream that the probe reads.
-const STREAM_ENTRIES: &str = "stream=index,width,height,pix_fmt,color_transfer,r_frame_rate,\
-    avg_frame_rate,time_base,nb_frames:stream_disposition=default,attached_pic:\
+const STREAM_ENTRIES: &str = "stream=index,width,height,pix_fmt,color_transfer,color_primaries,\
+    r_frame_rate,avg_frame_rate,time_base,nb_frames:stream_disposition=default,attached_pic:\
     stream_side_data=side_data_type,rotation:format=duration";
 
 /// The JSON output of `ffprobe`. A field that `ffprobe` leaves out gets its default.
@@ -105,6 +107,7 @@ struct Stream {
     height: u32,
     pix_fmt: String,
     color_transfer: String,
+    color_primaries: String,
     r_frame_rate: String,
     avg_frame_rate: String,
     time_base: String,
@@ -348,6 +351,7 @@ fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<VideoInfo> {
         (stream.height, stream.width)
     };
     let hdr = Hdr::of_transfer(&stream.color_transfer);
+    let primaries = Primaries::of_name(&stream.color_primaries);
     let ten_bit = stream.pix_fmt.contains("10") || stream.pix_fmt.contains("12");
     if let Some(limit) = packet_limit
         && let Some(timing) = animation_timing(&output.packets, stream, limit)
@@ -364,6 +368,7 @@ fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<VideoInfo> {
         fps,
         duration,
         hdr,
+        primaries,
         ten_bit,
         animation,
         variable_rate,
@@ -521,7 +526,7 @@ mod tests {
         ProbeCache, VideoInfo, clockwise_rotation, fraction, gcd, output_within, pacing_rate,
         packet_limit, parse, probe, probe_args, sanitize_fps, timing_of, variable_rate_fps,
     };
-    use crate::player::tone_map::Hdr;
+    use crate::player::tone_map::{Hdr, Primaries};
     use crate::test_support::fixture;
     use crate::test_support::video::real_ffprobe;
     use std::cell::Cell;
@@ -530,7 +535,7 @@ mod tests {
     use std::time::Duration;
 
     /// The probe of an iPhone 15 clip: 4K HLG at 29.97 fps, average 29.99, without a rotation.
-    const IPHONE_HLG: &str = r#"{"programs":[],"stream_groups":[],"streams":[{"index":0,"width":3840,"height":2160,"pix_fmt":"yuv420p10le","color_transfer":"arib-std-b67","r_frame_rate":"30000/1001","avg_frame_rate":"249600/8323","time_base":"1/600","nb_frames":"416","disposition":{"default":1,"attached_pic":0},"side_data_list":[{"side_data_type":"DOVI configuration record"},{"side_data_type":"Ambient viewing environment"}]}],"format":{"duration":"13.870000"}}"#;
+    const IPHONE_HLG: &str = r#"{"programs":[],"stream_groups":[],"streams":[{"index":0,"width":3840,"height":2160,"pix_fmt":"yuv420p10le","color_transfer":"arib-std-b67","color_primaries":"bt2020","r_frame_rate":"30000/1001","avg_frame_rate":"249600/8323","time_base":"1/600","nb_frames":"416","disposition":{"default":1,"attached_pic":0},"side_data_list":[{"side_data_type":"DOVI configuration record"},{"side_data_type":"Ambient viewing environment"}]}],"format":{"duration":"13.870000"}}"#;
 
     /// The probe of a 64x48 clip with a display rotation of -90 degrees, as an iPhone portrait
     /// clip carries it.
@@ -558,6 +563,7 @@ mod tests {
         let info = parse(IPHONE_HLG.as_bytes(), None).unwrap();
         assert_eq!((info.width, info.height, info.rotation), (3840, 2160, 0));
         assert_eq!(info.hdr, Some(Hdr::Hlg));
+        assert_eq!(info.primaries, Primaries::Bt2020);
         assert!(
             info.ten_bit && !info.variable_rate && !info.animation,
             "{info:?}"
@@ -575,6 +581,7 @@ mod tests {
         let info = parse(PORTRAIT.as_bytes(), None).unwrap();
         assert_eq!((info.width, info.height, info.rotation), (48, 64, 90));
         assert_eq!(info.hdr, None);
+        assert_eq!(info.primaries, Primaries::Bt709, "untagged is BT.709");
         assert!(!info.ten_bit);
         assert_eq!(info.fps, 10.0);
     }
@@ -712,6 +719,7 @@ mod tests {
             fps: 25.0,
             duration: 1.0,
             hdr: None,
+            primaries: Primaries::Bt709,
             ten_bit: false,
             animation: false,
             variable_rate: false,

@@ -694,6 +694,7 @@ pub(crate) mod video {
             fps,
             duration: 2.0,
             hdr: None,
+            primaries: crate::player::tone_map::Primaries::Bt709,
             ten_bit: false,
             animation: false,
             variable_rate: false,

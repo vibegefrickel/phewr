@@ -482,7 +482,7 @@ fn pad_centered(image: RgbaImage, canvas: (u32, u32)) -> RgbaImage {
 }
 
 /// The sharp thumbnail of a grid cell: the first frame of a video, or the fitted image. The
-/// tone mapping cube of an HDR video goes into `cache_dir`.
+/// color cube of a video goes into `cache_dir`.
 fn decode_thumbnail(cache_dir: &Path, path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
     #[cfg(feature = "video")]
     if crate::video::is_video(path) {

@@ -6,7 +6,10 @@
 //!
 //! The terminal player is in `player`, the mpv window in `mpv`.
 
-use crate::player::{Decoder, Pipeline, SystemDecoder, cube_for, first_frame_args, frame_box};
+use crate::decode::color::{self, ColorTarget};
+use crate::player::{
+    Decoder, Pipeline, SystemDecoder, VideoInfo, cube_for, first_frame_args, frame_box,
+};
 use crate::yazi::find_on_path;
 use image::RgbaImage;
 use std::ffi::OsStr;
@@ -65,8 +68,8 @@ pub(crate) fn session_tools() -> &'static Tools {
     SESSION_TOOLS.get().unwrap_or(&NO_TOOLS)
 }
 
-/// The first frame of `path` for a grid thumbnail, with the programs of the session. The tone
-/// mapping cube goes into `cache_dir`, else into `$TMPDIR/viewr`. Without `ffmpeg` or
+/// The first frame of `path` for a grid thumbnail, with the programs of the session. The color
+/// cube goes into `cache_dir`, else into `$TMPDIR/viewr`. Without `ffmpeg` or
 /// `ffprobe`, the error is `NotFound` and no process starts.
 pub(crate) fn session_first_frame(
     path: &Path,
@@ -93,10 +96,28 @@ pub(crate) fn session_first_frame(
     )
 }
 
+/// The cube of the first frame: only the tone mapping of an HLG or PQ video. ffmpeg parses a
+/// cube at each start (about 16 ms for an SDR cube), and the conversion of one small SDR frame
+/// after the decode costs well below 1 ms.
+fn first_frame_cube(info: &VideoInfo, target: ColorTarget, dirs: &[&Path]) -> Option<PathBuf> {
+    info.hdr.and_then(|_| cube_for(info, target, dirs))
+}
+
+/// The first frame in the color target: an SDR frame converts as a still image with the
+/// primaries of the probe. An HDR frame left ffmpeg in the target already.
+fn convert_first_frame(image: RgbaImage, info: &VideoInfo, target: ColorTarget) -> RgbaImage {
+    if info.hdr.is_some() {
+        image
+    } else {
+        color::convert(image, &info.primaries.source_color(), target)
+    }
+}
+
 /// The first frame of `path`, fitted into `target` pixels, for a grid thumbnail.
 ///
 /// ffmpeg runs the filter chain of the terminal player: the rotation of the display matrix,
 /// the scale and, for HLG and PQ, the tone mapping cube in the first of `cube_dirs` that works.
+/// An SDR frame converts into the color target after the decode, see [`first_frame_cube`].
 /// A GPU run without a frame runs again in software, as in the player. A run without a frame
 /// after `timeout` is killed, and the error is `TimedOut`.
 pub(crate) fn decode_first_frame(
@@ -112,7 +133,8 @@ pub(crate) fn decode_first_frame(
         (info.width, info.height),
         (target.0.max(1), target.1.max(1)),
     );
-    let cube = cube_for(&info, cube_dirs);
+    let color_target = color::target();
+    let cube = first_frame_cube(&info, color_target, cube_dirs);
     let frame_bytes = frame.0 as usize * frame.1 as usize * 4;
     for pipeline in [Pipeline::Gpu, Pipeline::Software] {
         let args = first_frame_args(path, &info, frame, cube.as_deref(), pipeline);
@@ -123,6 +145,7 @@ pub(crate) fn decode_first_frame(
         {
             Ok(pixels) => {
                 return RgbaImage::from_raw(frame.0, frame.1, pixels)
+                    .map(|image| convert_first_frame(image, &info, color_target))
                     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid frame"));
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -142,9 +165,14 @@ pub(crate) fn decode_first_frame(
 
 #[cfg(test)]
 mod tests {
-    use super::{Tools, decode_first_frame, is_video, session_first_frame};
+    use super::{
+        Tools, convert_first_frame, decode_first_frame, first_frame_cube, is_video,
+        session_first_frame,
+    };
+    use crate::decode::color::ColorTarget;
     use crate::player::SystemDecoder;
     use crate::player::tone_map::Hdr;
+    use crate::player::tone_map::Primaries;
     use crate::test_support::video::{fake_decoder, info_of, real_ffmpeg, real_ffprobe};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -236,6 +264,32 @@ mod tests {
     }
 
     #[test]
+    fn only_an_hdr_first_frame_gets_a_cube_and_an_sdr_frame_converts_after_the_decode() {
+        let dir = test_dir();
+        let target = ColorTarget::DisplayP3;
+        let sdr = info_of(1920, 1080, 30.0);
+        assert_eq!(first_frame_cube(&sdr, target, &[dir.path()]), None);
+        let hlg = crate::player::VideoInfo {
+            hdr: Some(Hdr::Hlg),
+            ..sdr
+        };
+        assert_eq!(
+            first_frame_cube(&hlg, target, &[dir.path()]),
+            Some(dir.path().join("tonemap-hlg-p3-v3.cube"))
+        );
+        let red = || image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]));
+        // sRGB red is (234, 51, 35) in Display P3, as for a still image.
+        let [r, g, b, a] = convert_first_frame(red(), &sdr, target).get_pixel(0, 0).0;
+        assert!(r.abs_diff(234) <= 1 && g.abs_diff(51) <= 1 && b.abs_diff(35) <= 1 && a == 255);
+        let p3 = crate::player::VideoInfo {
+            primaries: Primaries::DisplayP3,
+            ..sdr
+        };
+        assert_eq!(convert_first_frame(red(), &p3, target), red());
+        assert_eq!(convert_first_frame(red(), &hlg, target), red());
+    }
+
+    #[test]
     fn the_first_frame_turns_scales_and_tone_maps_as_the_player_does() {
         let dir = test_dir();
         let decoder = fake_decoder(crate::player::VideoInfo {
@@ -261,7 +315,7 @@ mod tests {
             args.contains("scale_vt=w=32:h=18,transpose_vt=dir=clock"),
             "{args}"
         );
-        assert!(args.contains("tonemap-hlg-v2.cube"), "{args}");
+        assert!(args.contains("tonemap-hlg-srgb-v3.cube"), "{args}");
         assert!(
             args.ends_with("-f rawvideo -pix_fmt rgba -frames:v 1 pipe:1"),
             "{args}"

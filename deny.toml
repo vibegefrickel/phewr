@@ -11,10 +11,10 @@ unmaintained = "workspace"
 ignore = []
 
 [licenses]
-# viewr is MIT, so dependencies must be permissive. The native libraries (libheif, FFmpeg,
-# libjpeg-turbo) are system libraries outside this graph. MPL-2.0 (nucleo-matcher, option-ext)
-# is file-level copyleft: viewr ships them unchanged, and their source stays on crates.io.
-# WTFPL is the license of the FFmpeg bindings (ffmpeg-next, ffmpeg-sys-next).
+# viewr is MIT, so dependencies must be permissive. The native libraries (libheif,
+# libjpeg-turbo) are system libraries outside this graph, and viewr starts the FFmpeg programs
+# without a link. MPL-2.0 (nucleo-matcher, option-ext) is file-level copyleft: viewr ships them
+# unchanged, and their source stays on crates.io.
 # Add a license here only when a new dependency needs it: unused entries are warnings.
 allow = [
     "MIT",
@@ -23,13 +23,11 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "0BSD",
-    "ISC",
     "Zlib",
     "BSL-1.0",
     "Unlicense",
     "Unicode-3.0",
     "MPL-2.0",
-    "WTFPL",
 ]
 confidence-threshold = 0.8
 # This crate is not published (publish = false).
