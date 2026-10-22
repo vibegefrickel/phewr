@@ -11,9 +11,10 @@
 //! sips draws them again at the requested size, so they fill the box and the zoom gets a large
 //! copy. A PDF page has a transparent background, so the route puts it on white paper.
 
-use crate::decode::raster::decode_upright;
+use crate::decode::Decoded;
+use crate::decode::raster::{add_file_color, decode_upright};
 use crate::decode::resize::scaled_down_size;
-use image::{DynamicImage, ImageReader, Rgba};
+use image::{DynamicImage, ImageFormat, ImageReader, Rgba};
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -30,7 +31,7 @@ const VECTOR_ZOOM_SIDE: u32 = 4096;
 
 /// Decode `path` with sips. `target` is the box of the grid cell or the fullscreen view: sips
 /// then writes a copy that covers it. Without a target (the zoom) sips converts the full image.
-pub(crate) fn decode(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicImage> {
+pub(crate) fn decode(path: &Path, target: Option<(u32, u32)>) -> io::Result<Decoded> {
     let path = &argument_path(path);
     let max_side = requested_side(path, target)?.map(|side| side.to_string());
     let tiff = tempfile::Builder::new()
@@ -48,13 +49,13 @@ pub(crate) fn decode(path: &Path, target: Option<(u32, u32)>) -> io::Result<Dyna
     ]);
     run(&args)?;
     let reader = ImageReader::open(tiff.path())?.with_guessed_format()?;
-    let image =
+    let mut decoded =
         decode_upright(reader).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    Ok(if has_extension(path, &["pdf"]) {
-        on_white(&image)
-    } else {
-        image
-    })
+    add_file_color(&mut decoded, tiff.path(), Some(ImageFormat::Tiff));
+    if has_extension(path, &["pdf"]) {
+        decoded.image = on_white(&decoded.image);
+    }
+    Ok(decoded)
 }
 
 /// sips reads an argument that starts with `-` as a function name. A relative path from the
@@ -298,7 +299,7 @@ mod tests {
         let fullscreen = load_and_resize_px(&path, (32, 32), EmbeddedThumbnail::Deny).unwrap();
         assert_eq!(fullscreen.dimensions(), (32, 16));
         // A box larger than the image does not enlarge it.
-        let large = decode(&path, Some((200, 200))).unwrap();
+        let large = decode(&path, Some((200, 200))).unwrap().image;
         assert_eq!(large.dimensions(), (64, 32));
     }
 
@@ -314,14 +315,14 @@ mod tests {
         .unwrap();
         let path = convert(&png, "psd");
         // sips writes a 16-bit TIFF at full size and an 8-bit TIFF for `-Z`.
-        let full = decode(&path, None).unwrap();
+        let full = decode(&path, None).unwrap().image;
         assert!(
             matches!(full, DynamicImage::ImageRgb16(_)),
             "{:?}",
             full.color()
         );
         assert_red_left_blue_right(&full);
-        let small = decode(&path, Some((16, 16))).unwrap();
+        let small = decode(&path, Some((16, 16))).unwrap().image;
         assert_eq!(small.dimensions(), (16, 8));
         assert_red_left_blue_right(&small);
     }
@@ -350,7 +351,7 @@ mod tests {
         // sips keeps the stored layout: the orientation comes through the TIFF Orientation tag.
         assert_eq!(dimensions(&path), Some((64, 32)));
         for target in [None, Some((16, 16))] {
-            let rgba = decode(&path, target).unwrap().to_rgba8();
+            let rgba = decode(&path, target).unwrap().image.to_rgba8();
             let (w, h) = rgba.dimensions();
             assert!(h > w, "{target:?}: {w}x{h} is not upright");
             // Rotated 90 degrees clockwise: red on top, blue below.

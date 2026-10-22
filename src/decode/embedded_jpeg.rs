@@ -13,10 +13,10 @@
 //! sips takes 0.1 s to 1 s per RAW file. The embedded JPEG decodes in a few milliseconds, so the
 //! grid shows it at once. When it covers the box, it is the sharp thumbnail and sips never runs.
 
+use crate::decode::Decoded;
 use crate::decode::raster::decode_jpeg_bytes;
 use crate::info;
 use crate::scanner;
-use image::DynamicImage;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -111,7 +111,7 @@ pub(crate) fn decode(
     path: &Path,
     jpeg: &EmbeddedJpeg,
     target: Option<(u32, u32)>,
-) -> io::Result<DynamicImage> {
+) -> io::Result<Decoded> {
     let mut source = Source::open(path)?;
     let data = source.read_at(jpeg.offset, jpeg.length)?;
     decode_jpeg_bytes(&data, target, jpeg.orientation)
@@ -119,7 +119,7 @@ pub(crate) fn decode(
 
 /// The embedded JPEG of `path` when it covers `box_px`, decoded for that box. `None` when the
 /// file has none or the JPEG is too small, so that the caller decodes the primary image.
-pub(crate) fn decode_covering(path: &Path, box_px: (u32, u32)) -> Option<DynamicImage> {
+pub(crate) fn decode_covering(path: &Path, box_px: (u32, u32)) -> Option<Decoded> {
     let jpeg = find(path).filter(|jpeg| jpeg.covers(box_px))?;
     decode(path, &jpeg, Some(box_px)).ok()
 }
@@ -650,14 +650,14 @@ mod tests {
         assert!(jpeg.covers((32, 64)) && !jpeg.covers((33, 10)) && !jpeg.covers((10, 65)));
 
         // The decode turns the picture: red was left, so it is now at the top.
-        let image = decode(&path, &jpeg, None).unwrap();
+        let image = decode(&path, &jpeg, None).unwrap().image;
         assert_eq!((image.width(), image.height()), (32, 64));
         let rgba = image.to_rgba8();
         assert_close(rgba.get_pixel(16, 2).0, RED);
         assert_close(rgba.get_pixel(16, 61).0, BLUE);
 
         // A target scales the picture down, but never below the target.
-        let small = decode(&path, &jpeg, Some((8, 16))).unwrap();
+        let small = decode(&path, &jpeg, Some((8, 16))).unwrap().image;
         assert!(small.width() >= 8 && small.height() >= 16 && small.width() < 32);
     }
 
@@ -668,7 +668,7 @@ mod tests {
         write_tiff_raw(&path, 1);
         let jpeg = find(&path).unwrap();
         assert_eq!(jpeg.orientation, Some(1));
-        let image = decode(&path, &jpeg, None).unwrap();
+        let image = decode(&path, &jpeg, None).unwrap().image;
         let (left, right) = left_right(&image);
         assert_close(left, RED);
         assert_close(right, BLUE);
@@ -687,7 +687,7 @@ mod tests {
         let jpeg = find(&path).unwrap();
         assert_eq!((jpeg.width, jpeg.height), (64, 32), "the PRVW box");
         assert_eq!(jpeg.orientation, Some(8));
-        let image = decode(&path, &jpeg, None).unwrap();
+        let image = decode(&path, &jpeg, None).unwrap().image;
         assert_eq!((image.width(), image.height()), (32, 64));
 
         // A bad box after the preview boxes ends the walk, but keeps the JPEG and the
@@ -712,7 +712,7 @@ mod tests {
         let jpeg = find(&path).unwrap();
         assert_eq!((jpeg.width, jpeg.height), (64, 32));
         assert_eq!(jpeg.orientation, None, "no EXIF in the JPEG");
-        assert_close(center(&decode(&path, &jpeg, None).unwrap()), RED);
+        assert_close(center(&decode(&path, &jpeg, None).unwrap().image), RED);
 
         // A portrait RAF: the EXIF of the JPEG turns it, for the cell shape and the decode.
         let portrait = dir.path().join("portrait.raf");
@@ -721,16 +721,16 @@ mod tests {
         assert_eq!(jpeg.orientation, Some(6));
         assert_eq!(jpeg.shown_size(), (32, 64));
         assert!(jpeg.covers((32, 64)) && !jpeg.covers((64, 32)));
-        let image = decode(&portrait, &jpeg, None).unwrap();
+        let image = decode(&portrait, &jpeg, None).unwrap().image;
         assert_eq!((image.width(), image.height()), (32, 64));
     }
 
     #[test]
     fn the_container_orientation_wins_over_the_exif_of_the_jpeg() {
         let jpeg = with_exif_orientation(&red_left_blue_right_jpeg(64, 32), 6);
-        let turned = decode_jpeg_bytes(&jpeg, None, None).unwrap();
+        let turned = decode_jpeg_bytes(&jpeg, None, None).unwrap().image;
         assert_eq!((turned.width(), turned.height()), (32, 64), "its own EXIF");
-        let upright = decode_jpeg_bytes(&jpeg, None, Some(1)).unwrap();
+        let upright = decode_jpeg_bytes(&jpeg, None, Some(1)).unwrap().image;
         assert_eq!((upright.width(), upright.height()), (64, 32), "IFD0 says 1");
         let (left, right) = left_right(&upright);
         assert_close(left, RED);
@@ -744,7 +744,7 @@ mod tests {
         write_psd(&path, true);
         let jpeg = find(&path).unwrap();
         assert_eq!((jpeg.width, jpeg.height), (64, 32));
-        let (left, right) = left_right(&decode(&path, &jpeg, None).unwrap());
+        let (left, right) = left_right(&decode(&path, &jpeg, None).unwrap().image);
         assert_close(left, RED);
         assert_close(right, BLUE);
 

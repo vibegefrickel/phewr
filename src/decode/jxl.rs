@@ -3,10 +3,12 @@
 //! `jxl-oxide` has no scaled decode, so the grid decodes the full image and resizes it. The
 //! thumbnail disk cache keeps the result. An animated JPEG XL shows its first frame.
 //!
-//! viewr shows sRGB, so the decoder renders into sRGB. `jxl-oxide` converts the enum color
-//! encodings and the XYB samples itself and tone-maps PQ and HLG to SDR. Samples in the space
-//! of an ICC profile go through one `moxcms` transform (`IccToSrgb`), 16-bit for a deeper file.
+//! The decoder renders into the color space of the terminal (`ColorTarget`): sRGB or Display
+//! P3. `jxl-oxide` converts the enum color encodings and the XYB samples itself and tone-maps PQ
+//! and HLG to SDR. Samples in the space of an ICC profile go through one `moxcms` transform
+//! (`IccToTarget`), 16-bit for a deeper file.
 
+use crate::decode::color::ColorTarget;
 use image::{DynamicImage, GrayAlphaImage, GrayImage, RgbImage, RgbaImage};
 use jxl_oxide::color::ColourEncoding;
 use jxl_oxide::{
@@ -28,17 +30,17 @@ const DECODER_MEMORY_LIMIT: usize = 2 * 1024 * 1024 * 1024;
 /// The rows of one task of the parallel ICC transform.
 const ROWS_PER_TASK: usize = 64;
 
-/// Decode the first frame of `path` as sRGB, upright: the stream applies the codestream
-/// orientation. The EXIF orientation does not apply, because the codestream wins.
-pub(crate) fn decode(path: &Path) -> io::Result<DynamicImage> {
+/// Decode the first frame of `path` in the color space `target`, upright: the stream applies
+/// the codestream orientation. The EXIF orientation does not apply, because the codestream wins.
+pub(crate) fn decode(path: &Path, target: ColorTarget) -> io::Result<DynamicImage> {
     let image = open_for_render(path)?;
     let format = image.pixel_format();
-    if let Some(icc) = IccToSrgb::for_image(&image, format) {
+    if let Some(icc) = IccToTarget::for_image(&image, format, target) {
         reserve(&image, icc.bytes_per_pixel())?;
-        return decode_icc_or_srgb(path, &image, &icc);
+        return decode_icc_or_enum(path, &image, &icc, target);
     }
     reserve(&image, format.channels())?;
-    decode_srgb(image)
+    decode_enum(image, target)
 }
 
 /// Open `path` with the memory limit, and refuse CMYK.
@@ -63,15 +65,16 @@ fn reserve(image: &JxlImage, bytes_per_pixel: usize) -> io::Result<()> {
     image::Limits::default().reserve(bytes).map_err(invalid)
 }
 
-/// Let `jxl-oxide` render into sRGB: XYB, the enum encodings and the ICC fallback.
-fn decode_srgb(mut image: JxlImage) -> io::Result<DynamicImage> {
+/// Let `jxl-oxide` render into `target`: XYB, the enum encodings and the ICC fallback. Gray
+/// has the white point and the curve of sRGB in both targets.
+fn decode_enum(mut image: JxlImage, target: ColorTarget) -> io::Result<DynamicImage> {
     let format = image.pixel_format();
     let intent = RenderingIntent::Relative;
     image.set_cms(Moxcms);
-    image.request_color_encoding(if format.is_grayscale() {
-        EnumColourEncoding::gray_srgb(intent)
-    } else {
-        EnumColourEncoding::srgb(intent)
+    image.request_color_encoding(match target {
+        _ if format.is_grayscale() => EnumColourEncoding::gray_srgb(intent),
+        ColorTarget::Srgb => EnumColourEncoding::srgb(intent),
+        ColorTarget::DisplayP3 => EnumColourEncoding::display_p3(intent),
     });
     let render = image.render_frame(0).map_err(invalid)?;
     let mut stream = render.stream();
@@ -84,9 +87,14 @@ fn decode_srgb(mut image: JxlImage) -> io::Result<DynamicImage> {
 
 /// Convert through `icc`. A transform error leaves the conversion to `jxl-oxide`, with a new
 /// decoder, because the first one keeps the render without a color request.
-fn decode_icc_or_srgb(path: &Path, image: &JxlImage, icc: &IccToSrgb) -> io::Result<DynamicImage> {
+fn decode_icc_or_enum(
+    path: &Path,
+    image: &JxlImage,
+    icc: &IccToTarget,
+    target: ColorTarget,
+) -> io::Result<DynamicImage> {
     icc.decode(image)
-        .or_else(|_| decode_srgb(open_for_render(path)?))
+        .or_else(|_| decode_enum(open_for_render(path)?, target))
 }
 
 /// The `image` type for the channel count.
@@ -106,12 +114,12 @@ fn into_image(
     decoded.ok_or_else(|| invalid(format!("JPEG XL image with {channels} channels")))
 }
 
-/// The conversion of samples in the space of an ICC profile to sRGB.
+/// The conversion of samples in the space of an ICC profile into the target.
 ///
 /// `jxl-oxide` 0.12 converts the samples of an ICC v2 profile wrong: Adobe RGB 1998 blue
 /// comes out as (39, 19, 255), not (0, 0, 255). One `moxcms` transform from the profile to
 /// sRGB gives the values of `djxl` and `magick`.
-struct IccToSrgb {
+struct IccToTarget {
     transform: IccTransform,
     /// The channels of the rendered samples: gray or RGB, with or without alpha.
     input_channels: usize,
@@ -127,11 +135,11 @@ enum IccTransform {
     Sixteen(Arc<Transform16BitExecutor>),
 }
 
-impl IccToSrgb {
+impl IccToTarget {
     /// The transform for a file whose samples are in the space of its ICC profile. An XYB
     /// file has no such samples: `jxl-oxide` renders XYB into sRGB without the profile. A
     /// profile that `moxcms` cannot read, and a PQ or HLG profile, stay with `jxl-oxide`.
-    fn for_image(image: &JxlImage, format: PixelFormat) -> Option<Self> {
+    fn for_image(image: &JxlImage, format: PixelFormat, target: ColorTarget) -> Option<Self> {
         let metadata = &image.image_header().metadata;
         if metadata.xyb_encoded
             || !matches!(metadata.colour_encoding, ColourEncoding::IccProfile(_))
@@ -161,17 +169,17 @@ impl IccToSrgb {
             rendering_intent: moxcms::RenderingIntent::RelativeColorimetric,
             ..TransformOptions::default()
         };
-        let srgb = ColorProfile::new_srgb();
+        let destination = target.profile();
         let transform = if metadata.bit_depth.bits_per_sample() > 8 {
             IccTransform::Sixteen(
                 profile
-                    .create_transform_16bit(layout, &srgb, output, options)
+                    .create_transform_16bit(layout, &destination, output, options)
                     .ok()?,
             )
         } else {
             IccTransform::Eight(
                 profile
-                    .create_transform_8bit(layout, &srgb, output, options)
+                    .create_transform_8bit(layout, &destination, output, options)
                     .ok()?,
             )
         };
@@ -193,7 +201,7 @@ impl IccToSrgb {
     }
 
     /// Render the first frame without a color request, in the space of the profile, and
-    /// convert it to 8-bit sRGB. The rows convert in parallel.
+    /// convert it to 8 bits in the target. The rows convert in parallel.
     fn decode(&self, image: &JxlImage) -> io::Result<DynamicImage> {
         let render = image.render_frame(0).map_err(invalid)?;
         let mut stream = render.stream();
@@ -268,7 +276,10 @@ fn invalid(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Er
 
 #[cfg(test)]
 mod tests {
-    use super::{IccToSrgb, decode, decode_icc_or_srgb, decode_srgb, dimensions, open_for_render};
+    use super::{
+        IccToTarget, decode, decode_enum, decode_icc_or_enum, dimensions, open_for_render,
+    };
+    use crate::decode::color::ColorTarget;
     use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use crate::test_support::{assert_close, fixture};
     use image::{DynamicImage, RgbaImage};
@@ -363,23 +374,24 @@ mod tests {
         for name in ["pq-icc", "hlg-icc"] {
             let image = open(name);
             assert!(
-                IccToSrgb::for_image(&image, image.pixel_format()).is_none(),
+                IccToTarget::for_image(&image, image.pixel_format(), ColorTarget::Srgb).is_none(),
                 "{name}"
             );
         }
         let image = open("adobe-rgb-icc");
-        assert!(IccToSrgb::for_image(&image, image.pixel_format()).is_some());
+        assert!(IccToTarget::for_image(&image, image.pixel_format(), ColorTarget::Srgb).is_some());
     }
 
     #[test]
     fn a_failed_icc_transform_falls_back_to_jxl_oxide() {
         let path = fixture("jxl/adobe-rgb-icc.jxl");
         let image = open_for_render(&path).unwrap();
-        let mut icc = IccToSrgb::for_image(&image, image.pixel_format()).unwrap();
+        let mut icc =
+            IccToTarget::for_image(&image, image.pixel_format(), ColorTarget::Srgb).unwrap();
         icc.input_channels = 4;
         assert!(icc.decode(&image).is_err());
-        let decoded = decode_icc_or_srgb(&path, &image, &icc).unwrap();
-        let fallback = decode_srgb(open_for_render(&path).unwrap()).unwrap();
+        let decoded = decode_icc_or_enum(&path, &image, &icc, ColorTarget::Srgb).unwrap();
+        let fallback = decode_enum(open_for_render(&path).unwrap(), ColorTarget::Srgb).unwrap();
         assert_eq!(decoded, fallback);
     }
 
@@ -389,7 +401,7 @@ mod tests {
         // becomes the right column, and the stored bottom row becomes the left column.
         for name in ["orientation-6", "jpeg-orientation-6"] {
             let path = fixture(&format!("jxl/{name}.jxl"));
-            let decoded = decode(&path).unwrap().to_rgba8();
+            let decoded = decode(&path, ColorTarget::Srgb).unwrap().to_rgba8();
             assert_eq!(decoded.dimensions(), (32, 64), "{name}");
             assert_eq!(dimensions(&path), Some((32, 64)), "{name}");
             assert_eq!(crate::decode::shape::aspect_of(&path), Some(0.5), "{name}");
@@ -431,7 +443,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("broken.jxl");
         std::fs::write(&path, b"this is not a JPEG XL file").unwrap();
-        assert!(decode(&path).is_err());
+        assert!(decode(&path, ColorTarget::Srgb).is_err());
         assert!(dimensions(&path).is_none());
         assert!(decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).is_err());
     }

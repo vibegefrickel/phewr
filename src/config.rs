@@ -4,6 +4,7 @@
 //! The file has the sections `[gallery]`, `[slideshow]`, `[info]` and `[video]`. viewr ignores
 //! unknown keys, so an old file with the removed keys `theme` and `theme_catalog` still loads.
 
+use crate::decode::color::ColorTarget;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -34,6 +35,8 @@ pub(crate) struct Config {
     /// Capture the mouse: clicks, drags and the wheel reach viewr. Off, the terminal keeps its
     /// own selection and scrolling.
     pub mouse: bool,
+    /// The color space in which the terminal shows the pixels of an image.
+    pub colorspace: ColorTarget,
 }
 
 /// The value of `[video] player`: how viewr plays a video file.
@@ -69,6 +72,7 @@ impl Default for Config {
             info_panel: false,
             video_player: VideoPlayer::default(),
             mouse: true,
+            colorspace: ColorTarget::default(),
         }
     }
 }
@@ -83,6 +87,8 @@ struct ConfigFile {
     info: InfoSection,
     #[serde(default)]
     video: VideoSection,
+    #[serde(default)]
+    terminal: TerminalSection,
 }
 
 #[derive(Default, Deserialize)]
@@ -106,6 +112,11 @@ struct InfoSection {
 #[derive(Default, Deserialize)]
 struct VideoSection {
     player: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct TerminalSection {
+    colorspace: Option<String>,
 }
 
 /// The largest number of folders that viewr remembers a zoom level for.
@@ -190,6 +201,14 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     }
     if let Some(player) = file.video.player.as_deref().and_then(VideoPlayer::parse) {
         config.video_player = player;
+    }
+    if let Some(colorspace) = file
+        .terminal
+        .colorspace
+        .as_deref()
+        .and_then(ColorTarget::parse)
+    {
+        config.colorspace = colorspace;
     }
 
     // The remembered global zoom wins over the configured default until the user
@@ -418,6 +437,26 @@ mod tests {
             let config = load_at(&config_path, &state_path);
             assert_eq!(config.video_player, expected, "player = {value:?}");
             assert!(config.info_panel, "player = {value:?} keeps the other keys");
+        }
+    }
+
+    #[test]
+    fn the_terminal_colorspace_is_read_and_unknown_values_keep_display_p3() {
+        let root = test_root();
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("state.toml");
+        for (value, expected) in [
+            ("srgb", ColorTarget::Srgb),
+            ("display-p3", ColorTarget::DisplayP3),
+            ("rec2020", ColorTarget::DisplayP3),
+        ] {
+            std::fs::write(
+                &config_path,
+                format!("[terminal]\ncolorspace = \"{value}\"\n"),
+            )
+            .unwrap();
+            let config = load_at(&config_path, &state_path);
+            assert_eq!(config.colorspace, expected, "colorspace = {value:?}");
         }
     }
 

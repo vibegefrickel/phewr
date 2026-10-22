@@ -1,5 +1,5 @@
-use crate::decode::resize::{fit_rgba_within, resize_decoded_to_dims};
-use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
+use crate::decode::resize::fit_rgba_within;
+use crate::decode::{EmbeddedThumbnail, decode_image};
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
@@ -205,12 +205,12 @@ impl Prefetcher {
         let hint = self.target_hint;
         let generation = self.generation;
         rayon::spawn(move || {
-            let image = decode_image_with_hint(&path, hint, EmbeddedThumbnail::Deny)
+            let image = decode_image(&path, hint, EmbeddedThumbnail::Deny)
                 .ok()
-                .map(|img| Prefetched {
+                .map(|decoded| Prefetched {
                     image: match hint {
-                        Some((max_w, max_h)) => resize_decoded_to_dims(&img, max_w, max_h),
-                        None => img.to_rgba8(),
+                        Some((max_w, max_h)) => decoded.fit_within(max_w, max_h),
+                        None => decoded.into_display().into_rgba8(),
                     },
                     target: hint,
                 });

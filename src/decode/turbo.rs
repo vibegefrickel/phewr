@@ -1,5 +1,7 @@
 //! The libjpeg-turbo decode with its DCT scaling.
 
+use crate::decode::Decoded;
+use crate::decode::color::{SourceColor, jpeg_icc_profile};
 use crate::info;
 use image::metadata::Orientation;
 use image::{DynamicImage, RgbaImage};
@@ -36,22 +38,20 @@ fn pick_scaling_factor(
     turbojpeg::ScalingFactor::ONE
 }
 
-pub(super) fn decode_jpeg_turbo(
-    path: &Path,
-    target: Option<(u32, u32)>,
-) -> io::Result<DynamicImage> {
+pub(super) fn decode_jpeg_turbo(path: &Path, target: Option<(u32, u32)>) -> io::Result<Decoded> {
     let data = std::fs::read(path)?;
     decode_jpeg_turbo_bytes(&data, target, None)
 }
 
 /// Decode the JPEG `data` with libjpeg-turbo. The DCT scaling picks the smallest size that
 /// still covers `target`. `container_orientation` is the EXIF orientation of the file that
-/// holds the JPEG (a RAW file). It wins over the EXIF orientation of the JPEG itself.
+/// holds the JPEG (a RAW file). It wins over the EXIF orientation of the JPEG itself. The color
+/// is the ICC profile of the APP2 segments.
 pub(super) fn decode_jpeg_turbo_bytes(
     data: &[u8],
     target: Option<(u32, u32)>,
     container_orientation: Option<u8>,
-) -> io::Result<DynamicImage> {
+) -> io::Result<Decoded> {
     let mut decompressor = turbojpeg::Decompressor::new()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
@@ -100,7 +100,10 @@ pub(super) fn decode_jpeg_turbo_bytes(
     if let Some(orientation) = orientation {
         img.apply_orientation(orientation);
     }
-    Ok(img)
+    Ok(Decoded {
+        image: img,
+        color: jpeg_icc_profile(data).map_or(SourceColor::Srgb, SourceColor::icc),
+    })
 }
 
 /// The box in the stored orientation: a quarter turn swaps its sides, so the DCT scaling keeps

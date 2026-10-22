@@ -7,6 +7,7 @@
 //! tests also measure the size of the payload.
 
 use crate::app::{App, ViewMode};
+use crate::decode::color::{self, ColorTarget};
 use crate::encoder::{KittyBackend, Transfer};
 use crate::image_list::SharedImageList;
 use crate::kitty_output::render_fullscreen_image_to;
@@ -33,6 +34,13 @@ struct Bench {
 }
 
 fn test_dir() -> Option<PathBuf> {
+    // The color target of `main`: Display P3, or `VIEWR_BENCH_COLORSPACE=srgb`. The bench runs
+    // with one test thread, so the global target cannot change under another test.
+    let target = std::env::var("VIEWR_BENCH_COLORSPACE")
+        .ok()
+        .and_then(|value| ColorTarget::parse(&value))
+        .unwrap_or_default();
+    color::set_target(target);
     // Canonical, as `main` passes the start folder: `/tmp` is a link to `/private/tmp`.
     std::env::var_os("VIEWR_TEST_DIR")
         .map(PathBuf::from)
@@ -377,10 +385,10 @@ fn embedded_previews_of_raw_and_psd() {
             jpeg.length,
             find.as_secs_f64() * 1000.0,
             millis(grid_time),
-            grid.map(|image| (image.width(), image.height())),
+            grid.map(|decoded| (decoded.image.width(), decoded.image.height())),
             jpeg.covers(grid_box),
             millis(fullscreen_time),
-            fullscreen.map(|image| (image.width(), image.height())),
+            fullscreen.map(|decoded| (decoded.image.width(), decoded.image.height())),
             jpeg.covers(fullscreen_box),
         ));
         let start = Instant::now();
@@ -968,6 +976,77 @@ fn resize_filters_on_a_24_mp_frame() {
             millis(start.elapsed())
         ));
     }
+}
+
+/// The color conversion into the terminal space, alone: the first HEIC, JPEG and PNG of the
+/// folder at the fullscreen box and at a grid cell, and a full 24 MP frame for the zoom. Each
+/// time is the median of 5 runs.
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn color_conversion_cost() {
+    use crate::decode::resize::fit_rgba_within;
+    use crate::decode::{EmbeddedThumbnail, decode_image};
+    let Some(dir) = test_dir() else { return };
+    let median = |work: &dyn Fn() -> Duration| {
+        let mut times: Vec<Duration> = (0..5).map(|_| work()).collect();
+        times.sort();
+        times[2]
+    };
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    files.sort();
+    for extension in ["heic", "jpg", "png"] {
+        let Some(path) = files.iter().find(|path| {
+            path.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case(extension))
+        }) else {
+            continue;
+        };
+        for (label, box_px) in [("fullscreen", (2688, 2016)), ("grid", (528, 396))] {
+            let decoded = decode_image(path, Some(box_px), EmbeddedThumbnail::Deny).unwrap();
+            let source = decoded.color.clone();
+            let fitted = fit_rgba_within(decoded.image.into_rgba8(), box_px.0, box_px.1);
+            let time = |target: ColorTarget| {
+                median(&|| {
+                    let copy = fitted.clone();
+                    let start = Instant::now();
+                    let converted = color::convert(copy, &source, target);
+                    let elapsed = start.elapsed();
+                    assert_eq!(converted.dimensions(), fitted.dimensions());
+                    elapsed
+                })
+            };
+            let kind = match &source {
+                color::SourceColor::Icc(data) => format!("ICC of {} bytes", data.len()),
+                other => format!("{other:?}"),
+            };
+            report(&format!(
+                "color {extension} {label} {}x{} ({kind}): into Display P3 {:.2} ms, into sRGB {:.2} ms",
+                fitted.width(),
+                fitted.height(),
+                time(ColorTarget::DisplayP3).as_secs_f64() * 1000.0,
+                time(ColorTarget::Srgb).as_secs_f64() * 1000.0,
+            ));
+        }
+    }
+    let (w, h) = (5712u32, 4284u32);
+    let frame = image::RgbaImage::from_fn(w, h, |x, y| {
+        image::Rgba([(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8, 255])
+    });
+    let full = median(&|| {
+        let copy = frame.clone();
+        let start = Instant::now();
+        let converted = color::convert(copy, &color::SourceColor::Srgb, ColorTarget::DisplayP3);
+        let elapsed = start.elapsed();
+        assert_eq!(converted.width(), w);
+        elapsed
+    });
+    report(&format!(
+        "color 24 MP sRGB frame into Display P3 (zoom source): {:.1} ms",
+        full.as_secs_f64() * 1000.0
+    ));
 }
 
 /// The decode side of the terminal player: ffmpeg frames into a sink, for the first video of

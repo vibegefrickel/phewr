@@ -1,12 +1,13 @@
 //! The resize of a decoded image into its box, with Catmull-Rom.
 
-use super::{EmbeddedThumbnail, decode_image_with_hint};
+use super::{EmbeddedThumbnail, decode_image};
 use fast_image_resize as fir;
 use image::{DynamicImage, RgbaImage};
 use std::io;
 use std::path::Path;
 
-/// Decode `path` with the size hint `target` in pixels and fit the image into it.
+/// Decode `path` with the size hint `target` in pixels and fit the image into it, in the color
+/// space of the terminal.
 pub(crate) fn load_and_resize_px(
     path: &Path,
     (target_w, target_h): (u32, u32),
@@ -17,10 +18,12 @@ pub(crate) fn load_and_resize_px(
     } else {
         None
     };
-    let img = decode_image_with_hint(path, hint, embedded)?;
-    Ok(resize_decoded_to_dims(&img, target_w, target_h))
+    Ok(decode_image(path, hint, embedded)?.fit_within(target_w, target_h))
 }
 
+/// Fit `img` into the box. The decodes fit through `Decoded::fit_within`, which also converts
+/// the colors.
+#[cfg(test)]
 pub(crate) fn resize_decoded_to_dims(img: &DynamicImage, max_w: u32, max_h: u32) -> RgbaImage {
     fit_rgba_within(img.to_rgba8(), max_w, max_h)
 }

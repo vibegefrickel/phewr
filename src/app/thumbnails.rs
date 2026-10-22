@@ -8,8 +8,6 @@ use crate::decode::EmbeddedThumbnail;
 use crate::decode::embedded_jpeg;
 #[cfg(feature = "heic")]
 use crate::decode::libheif::{decode_heif_preview, decodes_with_libheif};
-#[cfg(all(feature = "sips", target_os = "macos"))]
-use crate::decode::resize::fit_rgba_within;
 use crate::decode::resize::load_and_resize_px;
 use crate::gallery::{GridPicture, ParkKey};
 use image::RgbaImage;
@@ -520,8 +518,8 @@ fn decode_preview(path: &Path, target: (u32, u32)) -> io::Result<(RgbaImage, boo
     #[cfg(all(feature = "sips", target_os = "macos"))]
     if let Some(jpeg) = embedded_jpeg::find(path) {
         let sharp = jpeg.covers(target);
-        let image = embedded_jpeg::decode(path, &jpeg, Some(target))?.into_rgba8();
-        return Ok((fit_rgba_within(image, target.0, target.1), sharp));
+        let image = embedded_jpeg::decode(path, &jpeg, Some(target))?;
+        return Ok((image.fit_within(target.0, target.1), sharp));
     }
     #[cfg(not(any(feature = "heic", all(feature = "sips", target_os = "macos"))))]
     let _ = (path, target);

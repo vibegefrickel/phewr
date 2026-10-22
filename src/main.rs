@@ -86,6 +86,7 @@ fn main() -> io::Result<()> {
     }
 
     let mut config = config::load();
+    decode::color::set_target(config.colorspace);
     let mut state = LoopState::new(&config);
     if let Some(interval) = cli.interval {
         if !interval.is_finite() || interval <= 0.0 {

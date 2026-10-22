@@ -3,8 +3,10 @@
 #[cfg(feature = "turbo")]
 use super::turbo::{decode_jpeg_turbo, is_jpeg};
 use crate::decode;
+use crate::decode::Decoded;
+use crate::decode::color::{self, SourceColor};
 use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use std::io;
 use std::path::Path;
 
@@ -17,7 +19,7 @@ pub(crate) fn decode_jpeg_bytes(
     data: &[u8],
     target: Option<(u32, u32)>,
     container_orientation: Option<u8>,
-) -> io::Result<DynamicImage> {
+) -> io::Result<Decoded> {
     #[cfg(feature = "turbo")]
     if let Ok(image) = super::turbo::decode_jpeg_turbo_bytes(data, target, container_orientation) {
         return Ok(image);
@@ -34,13 +36,14 @@ pub(crate) fn decode_jpeg_bytes(
         Some(orientation) => orientation,
         None => decoder.orientation().unwrap_or(Orientation::NoTransforms),
     };
+    let color = icc_color(&mut decoder);
     let mut image = DynamicImage::from_decoder(decoder)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     image.apply_orientation(orientation);
-    Ok(image)
+    Ok(Decoded { image, color })
 }
 
-pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<DynamicImage> {
+pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<Decoded> {
     // libjpeg-turbo is the fast path, but it rejects some JPEG variants the
     // pure-Rust decoder accepts (and vice versa), so a turbo failure falls
     // through to `image` rather than aborting. Remember turbo's error so that if
@@ -62,9 +65,13 @@ pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Resu
         .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?
         .with_guessed_format()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let format = reader.format();
 
     match decode_upright(reader) {
-        Ok(img) => Ok(img),
+        Ok(mut decoded) => {
+            add_file_color(&mut decoded, path, format);
+            Ok(decoded)
+        }
         Err(fallback_error) => {
             #[cfg(feature = "turbo")]
             if let Some(turbo_error) = turbo_error {
@@ -82,18 +89,50 @@ pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Resu
 
 /// Decode with `image` and apply the EXIF orientation that its decoder reads (JPEG, PNG,
 /// TIFF, WebP), so that phone photos show upright. A float image (EXR, HDR) is tone-mapped to
-/// 8 bit.
+/// 8 bit. The color is the ICC profile of the file.
 pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
     reader: ImageReader<R>,
-) -> image::ImageResult<DynamicImage> {
+) -> image::ImageResult<Decoded> {
     let mut decoder = reader.into_decoder()?;
     // A broken EXIF block must not stop the decode of the pixels.
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let color = icc_color(&mut decoder);
     // The same allocation limit as `ImageReader::decode`.
     image::Limits::default().reserve(decoder.total_bytes())?;
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
-    Ok(decode::tonemap::to_display(img))
+    Ok(Decoded {
+        image: decode::tonemap::to_display(img),
+        color,
+    })
+}
+
+/// Add the color information of the file at `path` that `image` does not read: the `cICP`,
+/// `sRGB`, `gAMA` and `cHRM` chunks of a PNG, and the ICC profile of a TIFF.
+pub(crate) fn add_file_color(decoded: &mut Decoded, path: &Path, format: Option<ImageFormat>) {
+    match format {
+        Some(ImageFormat::Png) => {
+            if let Some(color) = color::png_color(path) {
+                decoded.color = color;
+            }
+        }
+        Some(ImageFormat::Tiff) if decoded.color == SourceColor::Srgb => {
+            if let Some(icc) = color::tiff_icc_profile(path) {
+                decoded.color = SourceColor::icc(icc);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The ICC profile that the decoder reads (JPEG, PNG, TIFF, WebP, GIF). A broken profile
+/// block must not stop the decode either: the image is then sRGB.
+fn icc_color(decoder: &mut impl ImageDecoder) -> SourceColor {
+    decoder
+        .icc_profile()
+        .ok()
+        .flatten()
+        .map_or(SourceColor::Srgb, SourceColor::icc)
 }
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 //! The decoders and the decode routes: `image` with libjpeg-turbo, libheif, JPEG XL,
-//! macOS `sips`, the tone map of float images, the HEIF box reader, the resize and the folder
-//! shape from the file headers.
+//! macOS `sips`, the tone map of float images, the HEIF box reader, the resize, the color
+//! conversion and the folder shape from the file headers.
 
+pub(crate) mod color;
 #[cfg(all(feature = "sips", target_os = "macos"))]
 pub(crate) mod embedded_jpeg;
 #[cfg(feature = "heic")]
@@ -19,7 +20,8 @@ pub(crate) mod tonemap;
 pub(crate) mod turbo;
 
 use crate::scanner;
-use image::DynamicImage;
+use color::SourceColor;
+use image::{DynamicImage, RgbaImage};
 #[cfg(feature = "heic")]
 use libheif::{decode_with_libheif, decodes_with_libheif};
 use raster::decode_raster;
@@ -82,11 +84,47 @@ pub(crate) enum EmbeddedThumbnail {
     Deny,
 }
 
+/// A decoded image and the color space of its pixels. The conversion into the color space of
+/// the terminal waits for the resize, so that it runs on the small image.
+#[derive(Debug)]
+pub(crate) struct Decoded {
+    pub(crate) image: DynamicImage,
+    pub(crate) color: SourceColor,
+}
+
+impl Decoded {
+    /// The image at its decoded size in the color space of the terminal. An image that needs no
+    /// conversion keeps its pixel type.
+    pub(crate) fn into_display(self) -> DynamicImage {
+        let target = color::target();
+        if !color::converts(&self.color, target) {
+            return self.image;
+        }
+        DynamicImage::ImageRgba8(color::convert(self.image.into_rgba8(), &self.color, target))
+    }
+
+    /// The image fitted into `max_w` x `max_h`, in the color space of the terminal.
+    pub(crate) fn fit_within(self, max_w: u32, max_h: u32) -> RgbaImage {
+        let fitted = resize::fit_rgba_within(self.image.into_rgba8(), max_w, max_h);
+        color::convert(fitted, &self.color, color::target())
+    }
+}
+
+/// Decode `path` in the color space of the terminal, at the decoded size.
 pub(crate) fn decode_image_with_hint(
     path: &Path,
     target: Option<(u32, u32)>,
     embedded: EmbeddedThumbnail,
 ) -> io::Result<DynamicImage> {
+    decode_image(path, target, embedded).map(Decoded::into_display)
+}
+
+/// Decode `path` with the size hint `target`. The pixels stay in the color space of the file.
+pub(crate) fn decode_image(
+    path: &Path,
+    target: Option<(u32, u32)>,
+    embedded: EmbeddedThumbnail,
+) -> io::Result<Decoded> {
     #[cfg(feature = "heic")]
     if decodes_with_libheif(path) {
         // libheif applies the irot, imir and clap properties itself, so the EXIF
@@ -98,7 +136,13 @@ pub(crate) fn decode_image_with_hint(
 
     match Route::for_path(path) {
         Route::Raster => decode_raster(path, target),
-        Route::Jxl => jxl::decode(path),
+        Route::Jxl => {
+            let color = color::target();
+            jxl::decode(path, color).map(|image| Decoded {
+                image,
+                color: SourceColor::of_target(color),
+            })
+        }
         // The grid and the fullscreen view take the embedded JPEG of a RAW or PSD file when
         // it covers their box, else sips writes a copy at the size of the box. The zoom
         // decodes without a target, so it gets the full image with all detail.

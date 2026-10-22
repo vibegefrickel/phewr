@@ -1,8 +1,9 @@
 //! The libheif route: HEIC, HEIF and AVIF, the embedded thumbnails and the core share.
 
 use super::resize::{resize_rgba, scaled_down_size};
-use super::{EmbeddedThumbnail, FOREGROUND};
+use super::{Decoded, EmbeddedThumbnail, FOREGROUND};
 use crate::decode;
+use crate::decode::color::{self, SourceColor};
 use crate::scanner;
 use image::{DynamicImage, RgbaImage};
 use std::io;
@@ -43,22 +44,49 @@ pub(super) fn decode_with_libheif(
     path: &Path,
     target: Option<(u32, u32)>,
     embedded: EmbeddedThumbnail,
-) -> io::Result<DynamicImage> {
+) -> io::Result<Decoded> {
     use libheif_rs::{ColorSpace, LibHeif, RgbChroma};
 
     let invalid = |e: libheif_rs::HeifError| io::Error::new(io::ErrorKind::InvalidData, e);
     let mut ctx = open_heif_context(path)?;
     let _slot = LibheifSlot::take(&mut ctx);
     let primary = ctx.primary_image_handle().map_err(invalid)?;
+    let primary_color = source_color(&primary);
     // An embedded thumbnail (iPhone: 320x240) saves the decode of the full frame.
     let handle = target
         .filter(|_| embedded == EmbeddedThumbnail::Allow)
         .and_then(|target| usable_thumbnail(path, &primary, target))
         .unwrap_or(primary);
+    let color = thumbnail_color(&handle, primary_color);
     let image = LibHeif::new()
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
         .map_err(invalid)?;
-    heif_image_to_rgba(&image, target).map(DynamicImage::ImageRgba8)
+    let image = heif_image_to_rgba(&image, target).map(DynamicImage::ImageRgba8)?;
+    Ok(Decoded { image, color })
+}
+
+/// The color space of a thumbnail. A thumbnail without a color profile of its own shows the
+/// colors of the primary image.
+fn thumbnail_color(thumbnail: &libheif_rs::ImageHandle, primary: SourceColor) -> SourceColor {
+    match source_color(thumbnail) {
+        SourceColor::Srgb => primary,
+        color => color,
+    }
+}
+
+/// The color space of the RGB values that libheif decodes from `handle`: the ICC profile
+/// (`prof` or `rICC`) first, then the CICP code points of the `nclx` box. libheif converts
+/// YCbCr into RGB with the matrix of the `nclx` box, but it does not convert colors.
+fn source_color(handle: &libheif_rs::ImageHandle) -> SourceColor {
+    if let Some(icc) = handle.color_profile_raw() {
+        return SourceColor::icc(icc.data);
+    }
+    handle
+        .color_profile_nclx()
+        .map_or(SourceColor::Srgb, |nclx| SourceColor::Cicp {
+            primaries: nclx.color_primaries() as u8,
+            transfer: nclx.transfer_characteristics() as u8,
+        })
 }
 
 static LIBHEIF_DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -141,7 +169,8 @@ fn preview_thumbnail(
 
 /// Decode the embedded thumbnail of `path` at its own resolution, at most the size that the
 /// primary image gets in `target`. The grid pads it to the shape of the cell and lets the
-/// terminal scale it, so a cold cell sends a few kilobytes instead of a full-size image.
+/// terminal scale it, so a cold cell sends a few kilobytes instead of a full-size image. The
+/// preview is in the color space of the terminal.
 pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
     use libheif_rs::{ColorSpace, LibHeif, RgbChroma};
 
@@ -157,10 +186,12 @@ pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result
     })?;
     let sharp_size = fit_within((primary.width(), primary.height()), target)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty cell"))?;
+    let color = thumbnail_color(&thumbnail, source_color(&primary));
     let image = LibHeif::new()
         .decode(&thumbnail, ColorSpace::Rgb(RgbChroma::Rgba), None)
         .map_err(invalid)?;
-    heif_image_to_rgba(&image, Some(sharp_size))
+    let preview = heif_image_to_rgba(&image, Some(sharp_size))?;
+    Ok(color::convert(preview, &color, color::target()))
 }
 
 /// Accept a thumbnail only if it is at least as large as the primary image fitted into
