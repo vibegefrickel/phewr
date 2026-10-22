@@ -16,8 +16,8 @@ const IMAGE_LOADING_ICON: &str = "\u{25cc}";
 const VIDEO_LOADING_ICON: &str = "\u{25b6}";
 /// The symbol in the center of a folder cell: a small right-pointing triangle, one cell wide.
 const FOLDER_ICON: &str = "\u{25b8}";
-/// The marker of an animated image in the grid: a play symbol before the label, or in the gap
-/// below the cell when the labels are off.
+/// The marker of a playable file in the grid, a video or an animated image: a play symbol
+/// before the label, or in the gap below the cell when the labels are off.
 const ANIMATION_MARKER: &str = "\u{25b6}";
 
 /// Draw the whole frame. `status` is a one-line note of the run loop, in place of the key hints.
@@ -548,14 +548,20 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     }
     if !app.gallery.show_filenames {
         for (vis_idx, img_idx) in app.gallery.visible_items() {
-            if app.is_animated_at(img_idx) {
+            if shows_play_marker(app, img_idx) {
                 draw_animation_marker(frame, app, vis_idx, grid_rect);
             }
         }
     }
 }
 
-/// The play symbol of an animated image, in the middle of the gap below its cell. It comes
+/// True when the entry `img_idx` is playable and its thumbnail is shown. A video counts by its
+/// extension and an animated image by the flag of its thumbnail job, so the draw reads no file.
+fn shows_play_marker(app: &App, img_idx: usize) -> bool {
+    app.is_animated_at(img_idx) || (app.is_video_at(img_idx) && app.thumb_cache.contains(img_idx))
+}
+
+/// The play symbol of a playable file, in the middle of the gap below its cell. It comes
 /// after the borders, so the border of the selected cell does not cover it. Kitty draws the
 /// picture only inside the cell, so the gap stays visible.
 fn draw_animation_marker(frame: &mut Frame<'_>, app: &App, vis_idx: usize, grid_rect: Rect) {
@@ -690,12 +696,12 @@ fn draw_label(
 }
 
 /// The label of the entry `img_idx`, cut to `width` with a margin, with a dot for a mark and a
-/// play symbol for an animated image.
+/// play symbol for a playable file.
 fn label_text(app: &App, img_idx: usize, width: u16) -> String {
     let is_marked = app.is_marked(img_idx);
-    let is_animated = app.is_animated_at(img_idx);
+    let is_playable = shows_play_marker(app, img_idx);
     let raw_filename = app.filenames[img_idx].clone();
-    let prefix_len = 2 * (usize::from(is_marked) + usize::from(is_animated));
+    let prefix_len = 2 * (usize::from(is_marked) + usize::from(is_playable));
     let max_label = usize::from(width).saturating_sub(2 + prefix_len);
     let trimmed = if raw_filename.chars().count() > max_label {
         let head: String = raw_filename
@@ -710,7 +716,7 @@ fn label_text(app: &App, img_idx: usize, width: u16) -> String {
     if is_marked {
         label.push_str("\u{25cf} ");
     }
-    if is_animated {
+    if is_playable {
         label.push_str(ANIMATION_MARKER);
         label.push(' ');
     }
@@ -718,51 +724,73 @@ fn label_text(app: &App, img_idx: usize, width: u16) -> String {
     label
 }
 
-fn draw_help_popup(frame: &mut Frame<'_>) {
-    let area = frame.area();
+/// One row of the help popup: a key and its description. An empty key makes a heading, and both
+/// empty make a blank line.
+type HelpRow = (&'static str, &'static str);
 
-    let help_lines = [
+/// The smallest terminal width that shows the help popup in two columns.
+const HELP_TWO_COLUMN_WIDTH: u16 = 100;
+/// The width of the key part of a help row, the longest key being `Enter, double-click`.
+const HELP_KEY_WIDTH: usize = 19;
+/// The width of the popup in one column, for a narrow terminal.
+const HELP_SINGLE_WIDTH: u16 = 56;
+
+/// The left column of the help popup: the gallery and its search line.
+fn help_gallery_rows() -> Vec<HelpRow> {
+    vec![
         ("", "Gallery"),
-        ("h/j/k/l", "Navigate grid"),
-        ("g / G", "Jump to first / last"),
-        ("Home / End", "Jump to first / last"),
-        ("Enter", "Open fullscreen or folder"),
+        ("h/j/k/l, click", "Move in the grid"),
+        ("g / G, Home / End", "First / last"),
+        ("Enter, double-click", "Open image or folder"),
         ("Backspace", "Parent folder"),
-        ("+ / -", "Larger / smaller thumbnails"),
+        ("+ / -, Shift+wheel", "Larger / smaller grid"),
         ("0", "Reset thumbnail size"),
+        ("Wheel", "Scroll the grid"),
         ("n", "Toggle filename labels"),
-        ("i", "Toggle info panel"),
-        ("s", "Start slideshow from cursor"),
+        ("i / right click", "Toggle info panel"),
+        ("s", "Slideshow from cursor"),
         #[cfg(feature = "video")]
-        ("p", "Play video in the mpv window"),
+        ("p", "Open in the mpv window"),
         ("Space", "Toggle selection"),
         ("a / A", "Select all / clear all"),
-        ("d / D", "Trash / permanently delete selection"),
+        ("d / D", "Trash / delete for good"),
         ("o", "Open directory picker"),
         ("/", "Search"),
         ("?", "Toggle help"),
         ("q / Esc", "Quit"),
         ("", ""),
         ("", "Search"),
-        ("<type>", "Filter by filename"),
-        ("Esc", "Cancel search"),
-        ("Enter", "Confirm filter"),
-        ("Backspace", "Delete character"),
+        ("<type>, Backspace", "Filter by filename"),
+        ("Enter / Esc", "Confirm / cancel"),
         ("", ""),
+        ("", "Directory picker"),
+        ("j / k, click", "Move cursor"),
+        ("Enter, double-click", "Choose and open gallery"),
+        ("l / Right", "Descend into directory"),
+        ("h", "Parent directory"),
+        ("g / G", "First / last"),
+        ("/", "Filter names"),
+        ("q / Esc", "Back to gallery"),
+    ]
+}
+
+/// The right column of the help popup: the fullscreen view, the video player and the mouse.
+fn help_viewer_rows() -> Vec<HelpRow> {
+    vec![
         ("", "Fullscreen"),
-        ("\u{2190} / \u{2192}", "Previous / next image"),
-        ("h / l", "Previous / next image"),
-        ("Home / End", "Jump to first / last"),
-        ("+ / -", "Zoom in / out"),
+        ("\u{2190} / \u{2192}, h / l", "Previous / next image"),
+        ("Edge click", "Previous / next image"),
+        ("Home / End", "First / last"),
+        ("+ / -, wheel", "Zoom in / out"),
         ("0", "Reset zoom to fit"),
-        ("h/j/k/l", "Pan when zoomed"),
-        ("i", "Toggle info panel"),
+        ("h/j/k/l, drag", "Pan when zoomed"),
+        ("i / right click", "Toggle info panel"),
         ("s", "Start / stop slideshow"),
         #[cfg(feature = "video")]
-        ("p", "Play video in the mpv window"),
+        ("p", "Open in the mpv window"),
         ("Space", "Pause / resume slideshow"),
-        ("[ / ]", "Shorter / longer slide interval"),
-        ("d / D", "Trash / permanently delete image"),
+        ("[ / ]", "Shorter / longer interval"),
+        ("d / D", "Trash / delete for good"),
         ("q / Esc", "Back to gallery"),
         ("?", "Toggle help"),
         #[cfg(feature = "video")]
@@ -770,40 +798,65 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         #[cfg(feature = "video")]
         ("", "Video player (no sound)"),
         #[cfg(feature = "video")]
-        ("Space", "Pause / resume"),
+        ("Space / click", "Pause / resume"),
         #[cfg(feature = "video")]
-        ("\u{2190} / \u{2192}, h / l", "Seek 5 s back / forward"),
+        ("\u{2190}/\u{2192}, h/l, wheel", "Seek 5 s back / forward"),
         #[cfg(feature = "video")]
         ("n / N", "Next / previous file"),
         #[cfg(feature = "video")]
         ("Home / End", "First / last file"),
         #[cfg(feature = "video")]
-        ("p", "Play in the mpv window, with sound"),
+        ("p", "Open in mpv, with sound"),
         #[cfg(feature = "video")]
         ("q / Esc", "Back"),
-        ("", ""),
-        ("", "Directory picker"),
-        ("j / k", "Move cursor"),
-        ("Enter", "Choose directory and open gallery"),
-        ("l / Right", "Descend into directory"),
-        ("h", "Parent directory"),
-        ("g / G", "First / last"),
-        ("/", "Filter names"),
-        ("q / Esc", "Back to gallery"),
+        #[cfg(feature = "video")]
+        ("Right click", "Back"),
         ("", ""),
         ("", "Mouse"),
-        ("Click", "Select cell, pick entry, pause video"),
-        ("Double-click", "Open cell or folder, choose directory"),
-        ("Right click", "Info panel, or back from the video"),
-        ("Wheel", "Scroll grid, zoom image, seek video"),
-        ("Shift+wheel", "Larger / smaller thumbnails"),
-        ("Drag", "Pan the zoomed image"),
-        ("Edge click", "Previous / next image"),
-        ("Shift+drag", "Select text in the terminal"),
-    ];
+        ("Shift+drag", "Select terminal text"),
+    ]
+}
 
-    let height = (help_lines.len() as u16 + 4).min(area.height.saturating_sub(2));
-    let width = 52.min(area.width.saturating_sub(4));
+/// The help rows as styled lines: headings in the title style, keys in the key style.
+fn help_lines(rows: &[HelpRow]) -> Vec<Line<'static>> {
+    rows.iter()
+        .map(|&(key, description)| {
+            if key.is_empty() {
+                Line::from(Span::styled(format!(" {description}"), STYLES.title))
+            } else {
+                Line::from(vec![
+                    Span::styled(format!(" {key:>HELP_KEY_WIDTH$}  "), STYLES.key),
+                    Span::styled(description, STYLES.text),
+                ])
+            }
+        })
+        .collect()
+}
+
+/// The help popup. A terminal of 100 columns or more gets two columns, so that it fits into 40
+/// rows. A narrower one gets one column that the popup clips.
+fn draw_help_popup(frame: &mut Frame<'_>) {
+    let area = frame.area();
+    let two_columns = area.width >= HELP_TWO_COLUMN_WIDTH;
+    let left = help_gallery_rows();
+    let right = help_viewer_rows();
+    let rows = left.len().max(right.len());
+    let single: Vec<HelpRow> = left
+        .iter()
+        .chain(&[("", "")])
+        .chain(&right)
+        .copied()
+        .collect();
+    let content_rows = if two_columns { rows } else { single.len() };
+
+    let height = u16::try_from(content_rows + 4)
+        .unwrap_or(u16::MAX)
+        .min(area.height.saturating_sub(2));
+    let width = if two_columns {
+        area.width.saturating_sub(4).min(110)
+    } else {
+        HELP_SINGLE_WIDTH.min(area.width.saturating_sub(4))
+    };
     let x = area.width.saturating_sub(width) / 2;
     let y = area.height.saturating_sub(height) / 2;
     let popup_area = Rect::new(x, y, width, height);
@@ -819,23 +872,14 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
     frame.render_widget(block, popup_area);
 
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
-
-    let key_width = 12;
-    let lines: Vec<Line<'_>> = help_lines
-        .iter()
-        .map(|(key, desc)| {
-            if key.is_empty() {
-                Line::from(Span::styled(format!(" {desc}"), STYLES.title))
-            } else {
-                Line::from(vec![
-                    Span::styled(format!(" {key:>key_width$}  "), STYLES.key),
-                    Span::styled(*desc, STYLES.text),
-                ])
-            }
-        })
-        .collect();
-
-    frame.render_widget(Paragraph::new(lines), chunks[0]);
+    if two_columns {
+        let columns = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chunks[0]);
+        frame.render_widget(Paragraph::new(help_lines(&left)), columns[0]);
+        frame.render_widget(Paragraph::new(help_lines(&right)), columns[1]);
+    } else {
+        frame.render_widget(Paragraph::new(help_lines(&single)), chunks[0]);
+    }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             " press any key to close",
@@ -1746,26 +1790,121 @@ mod tests {
     }
 
     #[test]
-    fn help_popup_lists_the_keys() {
+    fn help_popup_lists_the_keys_of_each_view_in_two_columns() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
-        let screen = render(&mut app, None, 100, 120);
+        let screen = render(&mut app, None, 120, 52);
         assert_shows(&screen, " Help ");
-        assert_shows(&screen, "     h/j/k/l  Navigate grid");
-        assert_shows(&screen, "Open fullscreen or folder");
-        assert_shows(&screen, "   Backspace  Parent folder");
+        assert_shows(&screen, "h/j/k/l, click  Move in the grid");
+        assert_shows(&screen, "Open image or folder");
+        assert_shows(&screen, "Backspace  Parent folder");
+        assert_shows(&screen, "Trash / delete for good");
         assert_shows(&screen, " Directory picker");
+        assert_shows(&screen, " Fullscreen");
+        assert_shows(&screen, "Pan when zoomed");
+        assert_shows(&screen, "Shorter / longer interval");
         assert_shows(&screen, " Mouse");
-        assert_shows(&screen, "Shift+drag  Select text in the terminal");
+        assert_shows(&screen, "Shift+drag  Select terminal text");
         assert_shows(&screen, " press any key to close");
+        #[cfg(feature = "video")]
+        {
+            assert_shows(&screen, " Video player (no sound)");
+            assert_shows(&screen, "Seek 5 s back / forward");
+        }
 
-        let buffer = render_buffer(&mut app, None, 100, 120);
+        let rows = screen_rows(&render_buffer(&mut app, None, 120, 52));
+        let top = rows.iter().position(|row| row.contains(" Help ")).unwrap();
+        let bottom = rows
+            .iter()
+            .position(|row| row.contains("press any key to close"))
+            .unwrap();
+        let height = bottom - top + 2;
+        assert!(height <= 40, "the popup takes {height} rows");
+        let gallery_row = rows
+            .iter()
+            .position(|row| row.contains(" Gallery"))
+            .unwrap();
+        assert_eq!(
+            rows.iter().position(|row| row.contains(" Fullscreen")),
+            Some(gallery_row),
+            "the two columns start in the same row"
+        );
+
+        let buffer = render_buffer(&mut app, None, 120, 52);
         assert_terminal_background(&buffer);
         assert_default_fg(cell_of(&buffer, "Help "), Modifier::BOLD);
         assert_default_fg(cell_of(&buffer, "Gallery   "), Modifier::BOLD);
         assert_ansi(cell_of(&buffer, "h/j/k/l"), Color::Cyan);
-        assert_default_fg(cell_of(&buffer, "Navigate grid"), Modifier::empty());
+        assert_default_fg(cell_of(&buffer, "Move in the grid"), Modifier::empty());
         assert_ansi(cell_of(&buffer, "press any key"), Color::DarkGray);
+    }
+
+    #[test]
+    fn help_popup_falls_back_to_one_column_in_a_narrow_terminal() {
+        let mut app = app_with(&["a.jpg"]);
+        app.help_visible = true;
+        let rows = screen_rows(&render_buffer(&mut app, None, 80, 120));
+        let gallery_row = rows
+            .iter()
+            .position(|row| row.contains(" Gallery"))
+            .unwrap();
+        let fullscreen_row = rows
+            .iter()
+            .position(|row| row.contains(" Fullscreen"))
+            .unwrap();
+        assert!(
+            fullscreen_row > gallery_row + 20,
+            "one column, one below the other"
+        );
+        let screen = rows.join("\n");
+        assert_shows(&screen, "Move in the grid");
+        assert_shows(&screen, "Pan when zoomed");
+        assert_shows(&screen, " Mouse");
+    }
+
+    #[test]
+    fn help_popup_clips_inside_a_narrow_and_short_terminal() {
+        let mut app = app_with(&["a.jpg"]);
+        app.help_visible = true;
+        let rows = screen_rows(&render_buffer(&mut app, None, 80, 30));
+        let top = rows.iter().position(|row| row.contains(" Help ")).unwrap();
+        let bottom = rows
+            .iter()
+            .position(|row| row.contains("press any key to close"))
+            .unwrap();
+        assert!(top < bottom && bottom < 30);
+        assert_shows(&rows.join("\n"), "Move in the grid");
+        assert!(
+            !rows.iter().any(|row| row.contains(" Mouse")),
+            "the end of the one column is clipped"
+        );
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_video_cell_gets_the_play_marker_after_its_thumbnail() {
+        let mut app = app_with(&["a.jpg", "clip.mp4"]);
+        app.thumb_cache.insert(0, RgbaImage::new(4, 4));
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let cell = app.gallery.cell_rect(1);
+        let below = |buffer: &Buffer| {
+            buffer[(cell.x + cell.width / 2, cell.y + cell.height)]
+                .symbol()
+                .to_owned()
+        };
+        assert_ne!(below(&buffer), "\u{25b6}", "no marker before the thumbnail");
+
+        app.thumb_cache.insert(1, RgbaImage::new(4, 4));
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_eq!(below(&buffer), "\u{25b6}");
+        let still = app.gallery.cell_rect(0);
+        let below_still = buffer[(still.x + still.width / 2, still.y + still.height)].symbol();
+        assert_ne!(below_still, "\u{25b6}", "a still image gets no marker");
+
+        app.gallery.show_filenames = true;
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, "\u{25b6} clip.mp4");
+        assert!(!screen.contains("\u{25b6} a.jpg"), "{screen}");
     }
 
     #[test]
