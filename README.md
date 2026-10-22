@@ -105,7 +105,7 @@ When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `y
 | `q` `Esc` | Quit |
 | `?` | Full help |
 
-The grid lists the subfolders of the folder first, with `..` for the parent. A folder cell shows `▸` and its name. Hidden folders and symlinks to folders stay out. Folders take no mark and no delete, and the fullscreen view and the slideshow skip them. The search matches folder names. A folder with exactly one image opens it in fullscreen.
+The grid lists the subfolders of the folder first, with `..` for the parent. A folder cell shows `▸` and its name. Hidden folders and symlinks to folders stay out. Folders take no mark and no delete, and the fullscreen view and the slideshow skip them. The search matches folder names. A folder with exactly one image opens it in fullscreen. When the cursor rests on a folder, viewr prepares the thumbnails of that folder in the background, so `Enter` shows them at once.
 
 The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. The grid separates the thumbnails with 1-cell gaps. A thick blue border marks the thumbnail under the cursor. A thin yellow border marks each selected image (`Space`). A cell shows a dim ◌ (image) or ▶ (video) while its thumbnail loads.
 
@@ -132,7 +132,7 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 
 ### Video
 
-viewr plays a video in the terminal with its own player. ffmpeg from Homebrew decodes on the media engine of the Mac, scales the frame on the GPU and maps HLG and PQ (iPhone HDR, Dolby Vision 8.4, HDR10) to SDR with a tone mapping cube. viewr sends each frame through the Kitty temp file medium, and the terminal scales it to the window. A 1080p video plays at 30 fps without dropped frames in Ghostty. The terminal player has no sound.
+viewr plays a video in the terminal with its own player. ffmpeg from Homebrew decodes on the media engine of the Mac, scales the frame on the GPU and maps HLG and PQ (iPhone HDR, Dolby Vision 8.4, HDR10) to SDR with a tone mapping cube. viewr sends each frame through the Kitty temp file medium, and the terminal scales it to the window. A 1080p video plays at 30 fps without dropped frames in Ghostty. Videos with a variable frame rate, for example screen recordings and phone clips, play at their real speed. The terminal player has no sound.
 
 | Key | Action |
 |-----|--------|
@@ -222,7 +222,7 @@ At start, viewr asks the terminal whether it reads image data from a temp file. 
 
 **Animated images:** animated GIF, WebP, APNG (`.png`, `.apng`) and AVIF image sequences (AVIS) play in the terminal player, in a loop. The grid shows the first frame with a dim `▶` marker. Videos get the same marker. `Enter` plays the animation, and `p` opens it in the mpv window. In a slideshow, the terminal player plays an animation for at least the slideshow interval. Animated WebP needs FFmpeg 9 or later (the `webp_anim` decoder).
 
-**JPEG XL:** viewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors to sRGB and applies the orientation of the file. An animated JPEG XL shows its first frame.
+**JPEG XL:** viewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors to sRGB, also from ICC profiles and wide gamut, tone-maps PQ and HLG to SDR, and applies the orientation of the file. An animated JPEG XL shows its first frame.
 
 **EXR and HDR:** viewr maps the float values to 8 bit with an extended Reinhard tone map. The white point is the brightest value of the image.
 

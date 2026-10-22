@@ -126,7 +126,11 @@ missing.
   `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`.
 - `tests/fixtures/` holds 8 small animated and still files (GIF, WebP, APNG, AVIF), and
   `test_support::fixture(name)` finds them. `avifenc` makes a new AVIS fixture. The real ffmpeg
-  test skips WebP without FFmpeg 9 (`webp_anim` decoder).
+  test skips WebP without FFmpeg 9 (`webp_anim` decoder). `tests/fixtures/jxl/` holds 18 JPEG XL
+  color charts and gradients, `ref/` their djxl renderings, and `make.sh` rebuilds both with
+  cjxl, djxl, magick, exiftool and sips.
+- A real ffmpeg playback test uses a virtual clock that jumps to each due frame. The wall-time
+  twin is `#[ignore]` and runs in `just test-real`.
   `just test-real` runs them. A test without its variable skips with a note.
 - The `sips` tests run `/usr/bin/sips` to write synthetic PSD and PDF files.
 - The synthetic libheif tests encode with the aom (AVIF) and x265 (HEIC) encoder plugins of
@@ -177,7 +181,8 @@ missing.
   state file), `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter),
   `cell_shape.rs`, `fullscreen.rs` (enter, leave, the steps and the decode), `zoom.rs` (zoom,
   pan and the full-resolution source), `delete.rs` (the marks and the delete question),
-  `directory.rs` (the picker and the directory switch), `mouse.rs` (the mouse state and the
+  `directory.rs` (the picker and the directory switch), `folder_prefetch.rs` (the decode of the
+  first screen of the folder under the cursor into the disk cache), `mouse.rs` (the mouse state and the
   screen layout of the last draw), `folders.rs` (the folder entries of
   the grid, `Enter` into a folder, `go_to_parent`), `video.rs` (the terminal player state, the
   return after a video, the mpv window watch), `thumbnails.rs` (the jobs, the queue, the HEIC
@@ -187,7 +192,7 @@ missing.
   user waits for. `raster.rs` (the `image` crate and the EXIF orientation), `turbo.rs`
   (libjpeg-turbo with DCT scaling), `libheif.rs` (HEIC, HEIF, AVIF, the embedded thumbnails
   and the core share `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom), `jxl.rs`
-  (JPEG XL), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
+  (JPEG XL, ICC profiles through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
   (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and
   `ispe`), `shape.rs` (the image dimensions from the file headers, for the cell shape),
   `embedded_jpeg.rs` (the safe reader for the JPEG inside camera RAW and PSD files).
@@ -203,7 +208,8 @@ missing.
   and the pixel size of a terminal cell.
 - `scanner.rs`: the background directory scan and the lists of supported extensions.
   `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `subfolders` lists the subfolders
-  of one folder argument, `..` first.
+  of one folder argument, `..` first. `files_of` lists the files of one folder in the order of
+  the scan, without a thread.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
   `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
 - `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. Results carry a
@@ -232,7 +238,12 @@ missing.
   trait), with `-hwaccel videotoolbox`, `-noautorotate`, `scale_vt` and `transpose_vt` on the
   GPU, `hflip,vflip` for 180 degrees, `hwdownload` as `p010le` (10 bit) or `nv12`, and
   `format=rgb48le,lut3d=...:interp=tetrahedral` for HLG and PQ. A GPU run without a frame runs
-  again in software (`Pipeline::Software`). One frame per temp file, image id `u32::MAX - 1`
+  again in software (`Pipeline::Software`). A video with a variable frame rate gets
+  `-fps_mode cfr -r` too: the probe calls it VFR when `r_frame_rate` and `avg_frame_rate` differ
+  by more than 1 %, and the output rate is `r_frame_rate` up to 60 fps, else the average rate
+  capped at 60 fps (`pacing_rate`, `variable_rate_fps` in `player/probe.rs`). Without `-r`,
+  ffmpeg writes raw frames at `r_frame_rate`, so the pacing uses the same rate. iPhone clips
+  (30 and 29.99) stay constant-rate. One frame per temp file, image id `u32::MAX - 1`
   (the grid ids count up from 1), `c=` / `r=` to the cell box, no `X=` / `Y=`. The frame box is
   the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the cell box. The
   frame size stays until the next ffmpeg start. The reader thread holds 2 frames
@@ -390,7 +401,24 @@ missing.
   ffmpeg-next 8 does not build against FFmpeg 9. After a major update of Homebrew's FFmpeg, a
   release binary that links the old `libavcodec.<major>.dylib` does not start.
 - **Thumbnail cache key:** the key hashes `viewr-thumbnail-v7` (`THUMBNAIL_CACHE_VERSION`), the
-  path, the size, the mtime and the target size. Change the version string when the thumbnail output changes.
+  path, the size, the mtime and the target size. Change the version string when the thumbnail
+  output changes. The folder prefetch writes the same key (`warm_disk_cache` calls
+  `sharp_thumbnail`). The prune removes temp files of the cache that are older than 1 hour.
+- **Folder prefetch:** after the cursor rests on a folder cell for `FOLDER_PREFETCH_DELAY`
+  (300 ms) and `App::has_pending_work` is false, one thread decodes the first screen of that
+  folder into the disk cache (`app/folder_prefetch.rs`). It computes what Enter computes, with
+  the same functions (`scanner::files_of`, the shape sample, `sort_by_name`, `folder_zoom_rows`,
+  `GalleryState::for_folder`), and takes the union of both cursor orders. It pauses before each
+  file while the grid has work, so one running decode can overlap the grid. A cursor move, a
+  folder change, a zoom, a resize, a mode change or the quit cancels it, and the next start
+  waits for the old thread. `..` takes part only after a real cursor move. A folder that this
+  session prefetched, or one with fewer than 2 files, does not start. Only the folder switch
+  bench ticks the prefetch.
+- **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
+  profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
+  of 64 rows). A transform error, XYB, the enum encodings and a PQ or HLG ICC profile stay with
+  jxl-oxide. Nobody tone-maps a PQ or HLG ICC profile yet. The codestream orientation applies,
+  the EXIF orientation does not.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature
   too. The `image` feature `avif` is the encoder, not a decoder.
