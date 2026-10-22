@@ -141,7 +141,7 @@ fn main() -> io::Result<()> {
     if run_result.is_ok() && restore_result.is_ok() {
         // viewr quits anyway. A yazi that does not answer keeps its old cursor.
         reveal_in_yazi(
-            app.reveal_path(),
+            app.reveal_path().as_deref(),
             std::env::var_os("YAZI_ID").as_deref(),
             std::env::var_os("PATH").as_deref(),
             run_briefly,

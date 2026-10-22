@@ -14,8 +14,9 @@ impl App {
         }
     }
 
+    /// Open the file `idx`. A folder entry opens nothing.
     pub(crate) fn enter_fullscreen_at(&mut self, idx: usize) {
-        if idx >= self.images.len() {
+        if idx >= self.images.len() || self.is_folder(idx) {
             return;
         }
         #[cfg(feature = "video")]
@@ -88,21 +89,23 @@ impl App {
         }
     }
 
+    /// The step back stops at the first file, because the folders come before it.
     pub(crate) fn prev(&mut self) {
-        if self.current > 0 {
+        if self.current > self.first_file() {
             self.jump_to(self.current - 1);
         }
     }
 
     pub(crate) fn first(&mut self) {
-        if !self.images.is_empty() && self.current != 0 {
-            self.jump_to(0);
+        let first = self.first_file();
+        if self.has_files() && self.current != first {
+            self.jump_to(first);
         }
     }
 
     pub(crate) fn last(&mut self) {
         let last = self.images.len().saturating_sub(1);
-        if !self.images.is_empty() && self.current != last {
+        if self.has_files() && self.current != last {
             self.jump_to(last);
         }
     }
@@ -160,11 +163,21 @@ impl App {
     /// once. Without the hint, the decode came back at full size and `take_resized` scaled a
     /// 24 MP frame on the UI thread (50 ms to 70 ms).
     pub(crate) fn pre_decode_hovered(&mut self) {
-        if let Some(idx) = self.gallery.selected_index() {
+        if let Some(idx) = self.gallery.selected_index()
+            && !self.is_folder(idx)
+        {
             self.prefetcher
                 .set_target_hint(self.fullscreen_box, self.cell_px);
             self.prefetcher.kick_gallery(idx, &self.images);
         }
+    }
+
+    /// Decode the neighbors of the fullscreen file, the files only.
+    pub(crate) fn prefetch_neighbors(&mut self) {
+        self.prefetcher
+            .set_target_hint(self.image_rect, self.cell_px);
+        self.prefetcher
+            .kick(self.current, self.first_file(), &self.images);
     }
 
     pub(crate) fn load_if_needed(&mut self) {
@@ -304,7 +317,7 @@ mod tests {
         // A prefetched neighbor shows at once.
         app.prefetcher
             .set_target_hint(Rect::new(0, 0, 1, 1), (8, 16));
-        app.prefetcher.kick(0, &app.images);
+        app.prefetcher.kick(0, 0, &app.images);
         wait_until(|| {
             app.prefetcher.poll();
             app.prefetcher.pending_count() == 0

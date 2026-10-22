@@ -9,15 +9,7 @@ use std::path::Path;
 
 impl App {
     pub(crate) fn open_picker(&mut self) {
-        let start = self
-            .current_dir
-            .clone()
-            .or_else(|| {
-                self.initial_dir
-                    .clone()
-                    .map(|p| picker::canonicalize_or_self(&p))
-            })
-            .unwrap_or_else(|| picker::initial_picker_dir(&self.images));
+        let start = self.gallery_dir();
         self.current_dir = Some(start.clone());
         self.picker = Some(PickerState::new(start));
         self.mode = ViewMode::Picker;
@@ -44,6 +36,8 @@ impl App {
 
         self.images.clear();
         self.filenames.clear();
+        self.folder_count = 0;
+        self.return_to = None;
         self.known_len = 0;
         self.scan_complete = false;
         self.selection.clear();
@@ -133,7 +127,8 @@ mod tests {
             app.refresh_from_scanner();
             !app.is_scanning()
         });
-        assert_eq!(app.filenames, ["a.png", "b.png"]);
+        assert_eq!(app.filenames, ["..", "a.png", "b.png"]);
+        assert_eq!(app.folder_count, 1);
 
         // Without a known directory, the picker starts at the folder of the first image.
         let mut app = app_with(&[photos.join("a.png").to_str().unwrap()]);

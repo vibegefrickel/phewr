@@ -1,4 +1,5 @@
-use crate::image_list::SharedImageList;
+use crate::image_list::{FolderEntry, SharedImageList};
+use crate::picker::canonicalize_or_self;
 use std::path::{Path, PathBuf};
 use std::thread;
 
@@ -52,9 +53,16 @@ pub(crate) fn is_supported(path: &Path) -> bool {
     false
 }
 
+/// Scan `paths` in the background. One folder also lists its subfolders, so that the grid can
+/// walk the tree. A list of several paths has no one parent, so it lists no folders.
 pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
     thread::spawn(move || {
         let mut batch = Vec::with_capacity(BATCH_SIZE);
+        if let [dir] = paths.as_slice()
+            && dir.is_dir()
+        {
+            list.push_folders(subfolders(dir));
+        }
 
         for path in paths {
             if path.is_dir() {
@@ -75,6 +83,38 @@ pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
 
         list.mark_complete();
     });
+}
+
+/// The entries of the subfolders of `dir`, sorted by name, after `..` for the parent. A hidden
+/// folder, a symlink and a folder that viewr cannot read stay out. The paths are canonical, so
+/// that the cursor can find the folder that the user came from after a step to the parent.
+pub(crate) fn subfolders(dir: &Path) -> Vec<FolderEntry> {
+    let dir = canonicalize_or_self(dir);
+    let mut folders: Vec<FolderEntry> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = entry.path();
+            // A symlink stays out: its canonical parent is not the folder of the link, so
+            // `..` from inside would not lead back here.
+            let is_dir = entry.file_type().is_ok_and(|file_type| file_type.is_dir());
+            (is_dir && !name.starts_with('.') && std::fs::read_dir(&path).is_ok())
+                .then_some(FolderEntry { path, name })
+        })
+        .collect();
+    folders.sort_by_cached_key(|folder| (folder.name.to_lowercase(), folder.name.clone()));
+    folders.splice(0..0, parent_entry(&dir));
+    folders
+}
+
+/// The `..` entry of `dir`. The root has no parent and gets none.
+fn parent_entry(dir: &Path) -> Option<FolderEntry> {
+    dir.parent().map(|parent| FolderEntry {
+        path: parent.to_path_buf(),
+        name: "..".to_owned(),
+    })
 }
 
 fn scan_dir(dir: &Path, list: &SharedImageList, batch: &mut Vec<PathBuf>) {
@@ -136,9 +176,10 @@ fn flush_batch(list: &SharedImageList, batch: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BATCH_SIZE, is_supported, scan_dir, spawn};
+    use super::{BATCH_SIZE, is_supported, parent_entry, scan_dir, spawn, subfolders};
     use crate::image_list::SharedImageList;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -251,6 +292,70 @@ mod tests {
 
         assert_eq!(batch, vec![root.path().join("photo.jpg")]);
         assert!(list.drain_errors().is_empty());
+    }
+
+    #[test]
+    fn subfolders_come_sorted_after_the_parent_without_hidden_or_unreadable_ones() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = fs::canonicalize(root.path()).unwrap();
+        for name in ["zebra", "Apple", ".hidden", "locked", "mango"] {
+            fs::create_dir(dir.join(name)).unwrap();
+        }
+        fs::write(dir.join("photo.jpg"), b"synthetic").unwrap();
+        let locked = dir.join("locked");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let folders = subfolders(&dir);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let names: Vec<&str> = folders.iter().map(|folder| folder.name.as_str()).collect();
+        assert_eq!(names, ["..", "Apple", "mango", "zebra"]);
+        assert_eq!(folders[0].path, dir.parent().unwrap());
+        assert_eq!(folders[1].path, dir.join("Apple"));
+    }
+
+    #[test]
+    fn the_root_has_no_parent_entry() {
+        assert_eq!(parent_entry(Path::new("/")), None);
+        let entry = parent_entry(Path::new("/photos/2026")).unwrap();
+        assert_eq!(entry.name, "..");
+        assert_eq!(entry.path, Path::new("/photos"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_folder_stays_out() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = fs::canonicalize(root.path()).unwrap();
+        fs::create_dir(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+        let names: Vec<String> = subfolders(&dir)
+            .into_iter()
+            .map(|folder| folder.name)
+            .collect();
+        assert_eq!(names, ["..", "real"]);
+    }
+
+    #[test]
+    fn one_folder_lists_its_subfolders_first_and_several_paths_list_none() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = fs::canonicalize(root.path()).unwrap();
+        fs::create_dir(dir.join("sub")).unwrap();
+        fs::write(dir.join("photo.jpg"), b"synthetic").unwrap();
+
+        let list = SharedImageList::new();
+        spawn(vec![dir.clone()], list.clone());
+        wait_for_complete(&list);
+        assert_eq!(list.folder_count(), 2);
+        let (paths, filenames) = list.drain_since(0);
+        assert_eq!(filenames, ["..", "sub", "photo.jpg"]);
+        assert_eq!(paths[1], dir.join("sub"));
+
+        let list = SharedImageList::new();
+        spawn(vec![dir.clone(), dir.join("photo.jpg")], list.clone());
+        wait_for_complete(&list);
+        assert_eq!(list.folder_count(), 0);
+        assert_eq!(list.len(), 2);
     }
 
     #[test]

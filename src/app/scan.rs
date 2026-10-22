@@ -21,6 +21,7 @@ impl App {
             let old_len = self.images.len();
             self.images.extend(new_paths);
             self.filenames.extend(new_filenames);
+            self.folder_count = self.shared_list.folder_count();
 
             if self.gallery.search_query.is_empty() {
                 self.gallery
@@ -34,7 +35,7 @@ impl App {
             if old_len == 0 {
                 self.needs_render = true;
             }
-            if self.images.len() >= SHAPE_SAMPLE {
+            if self.file_count() >= SHAPE_SAMPLE {
                 self.request_cell_shape();
             }
         }
@@ -43,16 +44,18 @@ impl App {
             self.scan_complete = true;
             self.finalize_scan_order();
             self.request_cell_shape();
+            self.place_cursor_on_return();
 
-            if self.images.len() == 1 && self.mode == ViewMode::Gallery {
-                self.mode = ViewMode::Fullscreen;
-                self.needs_render = true;
+            // One image opens at once, also next to folder entries. `q` goes back to the grid.
+            if self.file_count() == 1 && self.mode == ViewMode::Gallery {
+                self.enter_fullscreen_at(self.first_file());
             }
         }
     }
 
+    /// Sort the files by name. The folders stay in front, in the order of the scanner.
     fn finalize_scan_order(&mut self) {
-        if self.images.len() < 2 {
+        if self.file_count() < 2 {
             return;
         }
 
@@ -62,13 +65,16 @@ impl App {
             .and_then(|index| self.images.get(index))
             .cloned();
         let current_path = self.images.get(self.current).cloned();
+        let first_file = self.first_file();
         let mut media: Vec<(PathBuf, String)> = self
             .images
-            .drain(..)
-            .zip(self.filenames.drain(..))
+            .drain(first_file..)
+            .zip(self.filenames.drain(first_file..))
             .collect();
         media.sort_by_cached_key(|(path, filename)| (filename.to_lowercase(), path.clone()));
-        (self.images, self.filenames) = media.into_iter().unzip();
+        let (files, names): (Vec<PathBuf>, Vec<String>) = media.into_iter().unzip();
+        self.images.extend(files);
+        self.filenames.extend(names);
 
         self.current = current_path
             .as_ref()
@@ -85,8 +91,11 @@ impl App {
             self.update_filter();
         }
 
-        self.shared_list
-            .replace_all(self.images.clone(), self.filenames.clone());
+        self.shared_list.replace_all(
+            self.images.clone(),
+            self.filenames.clone(),
+            self.folder_count,
+        );
         self.known_len = self.images.len();
         self.forget_thumbnails();
         self.prefetcher.invalidate();

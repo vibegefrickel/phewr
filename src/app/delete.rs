@@ -18,19 +18,26 @@ pub(crate) struct PendingDelete {
 }
 
 impl App {
+    /// Mark or unmark the file under the cursor. A folder takes no mark.
     pub(crate) fn toggle_selection_at_cursor(&mut self) {
         let Some(idx) = self.gallery.selected_index() else {
             return;
         };
+        if self.is_folder(idx) {
+            return;
+        }
         let path = &self.images[idx];
         if !self.selection.remove(path) {
             self.selection.insert(path.clone());
         }
     }
 
+    /// Mark every file of the view. The folders stay unmarked.
     pub(crate) fn select_all_filtered(&mut self) {
         for &idx in &self.gallery.filtered_indices {
-            self.selection.insert(self.images[idx].clone());
+            if idx >= self.folder_count {
+                self.selection.insert(self.images[idx].clone());
+            }
         }
     }
 
@@ -72,7 +79,9 @@ impl App {
                 v = self.selection.iter().cloned().collect();
             }
             v
-        } else if let Some(idx) = self.gallery.selected_index() {
+        } else if let Some(idx) = self.gallery.selected_index()
+            && !self.is_folder(idx)
+        {
             vec![self.images[idx].clone()]
         } else {
             return;
@@ -139,8 +148,11 @@ impl App {
         self.selection.retain(|p| !removed.contains(p));
         self.forget_info(&removed);
         self.known_len = self.images.len();
-        self.shared_list
-            .replace_all(self.images.clone(), self.filenames.clone());
+        self.shared_list.replace_all(
+            self.images.clone(),
+            self.filenames.clone(),
+            self.folder_count,
+        );
 
         if self.gallery.search_query.is_empty() {
             self.filter_rx = None;
@@ -165,18 +177,18 @@ impl App {
         };
 
         if pending.from_fullscreen {
-            if self.images.is_empty() {
-                self.mode = ViewMode::Gallery;
-                self.slideshow = None;
-            } else {
+            if self.has_files() {
                 let old_current = current_path
                     .as_ref()
                     .and_then(|p| self.images.iter().position(|q| q == p));
                 let target = old_current.unwrap_or_else(|| self.current.min(self.images.len() - 1));
                 self.jump_to(target);
+            } else {
+                self.mode = ViewMode::Gallery;
+                self.slideshow = None;
             }
-        } else if self.images.is_empty() {
-            self.current = 0;
+        } else if !self.has_files() {
+            self.current = self.first_file();
         } else if self.current >= self.images.len() {
             self.current = self.images.len() - 1;
         }

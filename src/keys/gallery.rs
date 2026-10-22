@@ -42,10 +42,18 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
         KeyCode::Char('/') => {
             app.gallery.search_active = true;
         }
+        // A folder cell opens the folder. The next grid write deletes the old pictures.
+        KeyCode::Enter if app.selected_is_folder() => {
+            app.enter_selected_folder();
+        }
+        KeyCode::Backspace => {
+            app.go_to_parent();
+        }
         KeyCode::Enter => {
             app.graphics_delete_all()?;
             app.enter_fullscreen_selected();
         }
+        KeyCode::Char('s') if app.selected_is_folder() => {}
         KeyCode::Char('s') => {
             app.graphics_delete_all()?;
             app.enter_fullscreen_selected();
@@ -130,9 +138,82 @@ mod tests {
     use crate::app::ViewMode;
 
     use crate::test_support::{
-        char_key, gallery_app, photo_paths, press, press_with, synthetic_tree,
+        char_key, folder_app, gallery_app, photo_paths, press, press_with, synthetic_tree,
+        wait_until,
     };
     use crossterm::event::{KeyCode, KeyModifiers};
+    use std::fs;
+
+    #[test]
+    fn enter_and_backspace_walk_the_folders_and_the_marks_skip_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        // Two photos, so that the one-image rule does not open the fullscreen view.
+        fs::write(root.join("sub").join("photo.png"), b"synthetic").unwrap();
+        fs::write(root.join("sub").join("other.png"), b"synthetic").unwrap();
+        let mut app = gallery_app(0);
+        app.switch_to_dir(&root);
+        wait_until(|| {
+            app.refresh_from_scanner();
+            !app.is_scanning()
+        });
+        assert_eq!(app.filenames, ["..", "sub"]);
+
+        // Space, a and s do nothing on a folder, and d asks no question.
+        press(&mut app, KeyCode::Right);
+        char_key(&mut app, ' ');
+        char_key(&mut app, 'a');
+        assert!(app.selection.is_empty());
+        char_key(&mut app, 's');
+        assert_eq!(app.mode, ViewMode::Gallery);
+        assert!(app.slideshow.is_none());
+        char_key(&mut app, 'd');
+        assert!(app.pending_delete.is_none());
+        assert!(
+            app.graphics_out.take_bytes().is_empty(),
+            "no delete of the pictures"
+        );
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.current_dir.as_deref(), Some(root.join("sub").as_path()));
+        wait_until(|| {
+            app.refresh_from_scanner();
+            !app.is_scanning()
+        });
+        assert_eq!(app.filenames, ["..", "other.png", "photo.png"]);
+
+        press(&mut app, KeyCode::Backspace);
+        wait_until(|| {
+            app.refresh_from_scanner();
+            !app.is_scanning()
+        });
+        assert_eq!(app.current_dir.as_deref(), Some(root.as_path()));
+        assert_eq!(app.gallery.cursor, 1, "the cursor is on sub");
+    }
+
+    #[test]
+    fn enter_on_a_file_of_a_folder_list_opens_the_fullscreen_view() {
+        let mut app = folder_app(&["..", "sub"], &["a.jpg", "b.jpg"]);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.mode,
+            ViewMode::Gallery,
+            "Enter on .. switches, nothing to see"
+        );
+        let mut app = folder_app(&["..", "sub"], &["a.jpg", "b.jpg"]);
+        app.gallery.cursor = 2;
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+        assert_eq!(app.current, 2);
+        // The steps stop at the first file.
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.current, 2);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.current, 3);
+        press(&mut app, KeyCode::Home);
+        assert_eq!(app.current, 2);
+    }
 
     #[test]
     fn gallery_arrows_move_the_cursor_in_the_grid() {

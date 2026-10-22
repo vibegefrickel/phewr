@@ -205,7 +205,10 @@ impl App {
     /// run. A sharp thumbnail in the cache, in a job or in the queue starts nothing. A HEIC cell
     /// without an image gets a preview job first.
     pub(crate) fn spawn_thumb_decode(&mut self, img_idx: usize, rect: Rect) {
-        if self.thumb_cache.is_sharp(img_idx) || self.thumb_jobs.holds(img_idx) {
+        if self.is_folder(img_idx)
+            || self.thumb_cache.is_sharp(img_idx)
+            || self.thumb_jobs.holds(img_idx)
+        {
             return;
         }
         let job = ThumbJob {

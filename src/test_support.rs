@@ -69,6 +69,25 @@ pub(crate) fn gallery_app(count: usize) -> App {
     gallery_app_with(count, &Config::default())
 }
 
+/// A scanned grid of the `folders` below `/photos` and then the `files`, with the cursor on
+/// the first entry. The paths do not exist.
+pub(crate) fn folder_app(folders: &[&str], files: &[&str]) -> App {
+    let mut app = gallery_app(0);
+    app.images = folders
+        .iter()
+        .chain(files)
+        .map(|name| PathBuf::from("/photos").join(name))
+        .collect();
+    app.filenames = folders
+        .iter()
+        .chain(files)
+        .map(|name| (*name).to_owned())
+        .collect();
+    app.folder_count = folders.len();
+    app.gallery.filtered_indices = (0..app.images.len()).collect();
+    app
+}
+
 pub(crate) fn fullscreen_app(count: usize, index: usize) -> App {
     let mut app = gallery_app(count);
     app.enter_fullscreen_at(index);

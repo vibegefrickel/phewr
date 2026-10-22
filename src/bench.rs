@@ -78,9 +78,11 @@ fn scanned_app(dir: &Path) -> Bench {
         app.refresh_from_scanner();
         thread::sleep(Duration::from_millis(5));
     }
-    let keep: Vec<usize> = (0..app.images.len())
+    // The bench measures the files only: no folder entry and no video.
+    let keep: Vec<usize> = (app.first_file()..app.images.len())
         .filter(|&index| !is_video(&app.images[index]))
         .collect();
+    app.folder_count = 0;
     app.images = keep
         .iter()
         .map(|&index| app.images[index].clone())

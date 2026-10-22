@@ -196,7 +196,10 @@ impl App {
             crate::mpv::Step::Next => {
                 Some(self.current + 1).filter(|&next| next < self.images.len())
             }
-            crate::mpv::Step::Previous => self.current.checked_sub(1),
+            crate::mpv::Step::Previous => self
+                .current
+                .checked_sub(1)
+                .filter(|&previous| previous >= self.first_file()),
         };
         let Some(target) = target else {
             return false;

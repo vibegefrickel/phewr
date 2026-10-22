@@ -5,6 +5,7 @@ use lru::LruCache;
 use ratatui::layout::Rect;
 use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -136,13 +137,15 @@ impl Prefetcher {
 
     /// Queue the neighbors of `current`. After a step, the neighbors in the direction of the
     /// step come first, nearest first. The queue of an older position goes.
-    pub(crate) fn kick(&mut self, current: usize, images: &[PathBuf]) {
+    /// Decode the neighbors of `current` within `first..images.len()`. The entries before
+    /// `first` are folders, and nothing decodes a folder.
+    pub(crate) fn kick(&mut self, current: usize, first: usize, images: &[PathBuf]) {
         self.queue.clear();
         if self.last_current != Some(current) {
             self.last_direction = self.last_current.map(|last| current > last);
             self.last_current = Some(current);
         }
-        for index in neighbor_order(current, images.len(), self.last_direction) {
+        for index in neighbor_order(current, first..images.len(), self.last_direction) {
             self.ensure_decoding(index, images);
         }
     }
@@ -252,20 +255,22 @@ impl Prefetcher {
     }
 }
 
-/// The neighbors of `current` within `PREFETCH_RADIUS` and `len`. `Some(true)` is a step
+/// The neighbors of `current` within `PREFETCH_RADIUS` and `files`. `Some(true)` is a step
 /// forward: the next images first, then the previous ones. `None` alternates.
-fn neighbor_order(current: usize, len: usize, direction: Option<bool>) -> Vec<usize> {
+fn neighbor_order(current: usize, files: Range<usize>, direction: Option<bool>) -> Vec<usize> {
     let next = (1..=PREFETCH_RADIUS)
         .map(|offset| current + offset)
-        .filter(|&index| index < len);
-    let previous = (1..=PREFETCH_RADIUS).filter_map(|offset| current.checked_sub(offset));
+        .filter(|index| files.contains(index));
+    let previous = (1..=PREFETCH_RADIUS)
+        .filter_map(|offset| current.checked_sub(offset))
+        .filter(|index| files.contains(index));
     match direction {
         Some(true) => next.chain(previous).collect(),
         Some(false) => previous.chain(next).collect(),
         None => (1..=PREFETCH_RADIUS)
             .flat_map(|offset| [Some(current + offset), current.checked_sub(offset)])
             .flatten()
-            .filter(|&index| index < len)
+            .filter(|index| files.contains(index))
             .collect(),
     }
 }
@@ -313,7 +318,7 @@ mod tests {
 
         let mut prefetcher = Prefetcher::new();
         prefetcher.set_target_hint(Rect::new(0, 0, 2, 2), (2, 2));
-        prefetcher.kick(2, &paths);
+        prefetcher.kick(2, 0, &paths);
         wait_until_idle(&mut prefetcher);
 
         for i in [0, 1, 3, 4] {
@@ -370,9 +375,9 @@ mod tests {
             .collect();
 
         let mut prefetcher = Prefetcher::new();
-        prefetcher.kick(1, &paths);
+        prefetcher.kick(1, 0, &paths);
         wait_until_idle(&mut prefetcher);
-        prefetcher.kick(1, &paths);
+        prefetcher.kick(1, 0, &paths);
         wait_until_idle(&mut prefetcher);
         prefetcher.invalidate();
 
@@ -496,12 +501,15 @@ mod tests {
     #[test]
     fn the_neighbor_order_follows_the_direction_of_the_step() {
         use super::neighbor_order;
-        assert_eq!(neighbor_order(4, 9, None), vec![5, 3, 6, 2, 7, 1]);
-        assert_eq!(neighbor_order(4, 9, Some(true)), vec![5, 6, 7, 3, 2, 1]);
-        assert_eq!(neighbor_order(4, 9, Some(false)), vec![3, 2, 1, 5, 6, 7]);
-        assert_eq!(neighbor_order(0, 2, None), vec![1]);
-        assert_eq!(neighbor_order(1, 2, Some(true)), vec![0]);
-        assert!(neighbor_order(0, 1, Some(false)).is_empty());
+        assert_eq!(neighbor_order(4, 0..9, None), vec![5, 3, 6, 2, 7, 1]);
+        assert_eq!(neighbor_order(4, 0..9, Some(true)), vec![5, 6, 7, 3, 2, 1]);
+        assert_eq!(neighbor_order(4, 0..9, Some(false)), vec![3, 2, 1, 5, 6, 7]);
+        assert_eq!(neighbor_order(0, 0..2, None), vec![1]);
+        assert_eq!(neighbor_order(1, 0..2, Some(true)), vec![0]);
+        assert!(neighbor_order(0, 0..1, Some(false)).is_empty());
+        // The folders before the first file are never a neighbor.
+        assert_eq!(neighbor_order(3, 2..6, None), vec![4, 2, 5]);
+        assert_eq!(neighbor_order(2, 2..4, Some(false)), vec![3]);
     }
 
     #[test]
@@ -512,11 +520,11 @@ mod tests {
             .collect();
 
         let mut prefetcher = Prefetcher::new();
-        prefetcher.kick(4, &paths);
+        prefetcher.kick(4, 0, &paths);
         assert_eq!(prefetcher.running_count(), 2, "5 and 3 run");
 
         // Only `poll` frees a job, so the next kicks queue everything that does not run.
-        prefetcher.kick(5, &paths);
+        prefetcher.kick(5, 0, &paths);
         let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
         assert_eq!(
             waiting,
@@ -524,12 +532,12 @@ mod tests {
             "forward: the next images first"
         );
 
-        prefetcher.kick(4, &paths);
+        prefetcher.kick(4, 0, &paths);
         let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
         assert_eq!(waiting, vec![2, 1, 6, 7], "back: the previous images first");
 
         // A redraw kicks the same position again and keeps the direction of the step.
-        prefetcher.kick(4, &paths);
+        prefetcher.kick(4, 0, &paths);
         let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
         assert_eq!(
             waiting,
@@ -566,7 +574,7 @@ mod tests {
             .collect();
 
         let mut prefetcher = Prefetcher::new();
-        prefetcher.kick(4, &paths);
+        prefetcher.kick(4, 0, &paths);
         assert_eq!(
             prefetcher.running_count(),
             2,
@@ -577,7 +585,7 @@ mod tests {
         assert_eq!(waiting, vec![6, 2, 7, 1], "the others wait, nearest first");
 
         // A second kick at the same position changes nothing.
-        prefetcher.kick(4, &paths);
+        prefetcher.kick(4, 0, &paths);
         assert_eq!(prefetcher.pending_count(), 6);
 
         wait_until_idle(&mut prefetcher);
@@ -592,7 +600,7 @@ mod tests {
 
         // A kick at another position drops the queue of the old one.
         let mut prefetcher = Prefetcher::new();
-        prefetcher.kick(4, &paths);
+        prefetcher.kick(4, 0, &paths);
         prefetcher.kick_gallery(8, &paths);
         let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
         assert_eq!(waiting, vec![8]);

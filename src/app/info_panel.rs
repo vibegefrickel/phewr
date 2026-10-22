@@ -23,17 +23,27 @@ impl App {
     }
 
     /// The file that yazi reveals when viewr quits: the fullscreen file, or the gallery cursor.
-    pub(crate) fn reveal_path(&self) -> Option<&Path> {
-        self.images.get(self.view_index()?).map(PathBuf::as_path)
+    /// A subfolder cell reveals that folder. The `..` cell reveals the folder of the grid, so
+    /// that yazi stays where viewr was.
+    pub(crate) fn reveal_path(&self) -> Option<PathBuf> {
+        let index = self.view_index()?;
+        if self.is_folder(index) && self.filenames[index] == ".." {
+            return Some(self.gallery_dir());
+        }
+        self.images.get(index).cloned()
     }
 
     /// Path the info panel describes: the fullscreen image, or the hovered thumbnail. The
-    /// picker covers the grid, so it shows no info.
+    /// picker covers the grid, so it shows no info. A folder has no info.
     pub(crate) fn info_path(&self) -> Option<PathBuf> {
         if self.mode == ViewMode::Picker {
             return None;
         }
-        self.images.get(self.view_index()?).cloned()
+        let index = self.view_index()?;
+        if self.is_folder(index) {
+            return None;
+        }
+        self.images.get(index).cloned()
     }
 
     /// Metadata for `path`, read on first use and cached for the session.

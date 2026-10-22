@@ -160,8 +160,7 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
             // The neighbors wait until the image is on the screen, so that their decodes
             // do not take the cores from the one that the user waits for.
             if app.loaded.is_some() {
-                app.prefetcher.set_target_hint(app.image_rect, app.cell_px);
-                app.prefetcher.kick(app.current, &app.images);
+                app.prefetch_neighbors();
             }
             finish_render(app, pending_emits);
             return Ok(true);

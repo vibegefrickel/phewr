@@ -32,7 +32,7 @@ impl App {
     }
 
     pub(crate) fn start_slideshow(&mut self) {
-        if self.images.is_empty() {
+        if !self.has_files() {
             return;
         }
         let interval = self.slideshow_interval;
@@ -144,8 +144,8 @@ impl App {
         let last = self.images.len().saturating_sub(1);
         if self.current < last {
             self.next();
-        } else if self.slideshow_loop && !self.images.is_empty() {
-            self.jump_to(0);
+        } else if self.slideshow_loop && self.has_files() {
+            self.jump_to(self.first_file());
         } else {
             self.stop_slideshow();
             return;
@@ -162,11 +162,11 @@ impl App {
             return;
         }
         self.slideshow_autostart = false;
-        if self.images.is_empty() {
+        if !self.has_files() {
             return;
         }
         if self.mode == ViewMode::Gallery {
-            self.enter_fullscreen_at(0);
+            self.enter_fullscreen_at(self.first_file());
         }
         if self.in_slideshow_view() {
             self.start_slideshow();

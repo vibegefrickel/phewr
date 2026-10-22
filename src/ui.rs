@@ -14,6 +14,8 @@ const STATUS_ROWS: u16 = 1;
 const IMAGE_LOADING_ICON: &str = "\u{25cc}";
 /// The icon of a grid cell whose video thumbnail is not decoded yet.
 const VIDEO_LOADING_ICON: &str = "\u{25b6}";
+/// The symbol in the center of a folder cell: a small right-pointing triangle, one cell wide.
+const FOLDER_ICON: &str = "\u{25b8}";
 
 /// Draw the whole frame. `status` is a one-line note of the run loop, in place of the key hints.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
@@ -404,6 +406,9 @@ fn gallery_status_line(app: &App, filtered_count: usize, status: Option<&str>) -
     } else {
         selected_position(app, filtered_count)
     };
+    if app.folder_count > 0 && !app.gallery.search_active {
+        spans.push(Span::styled(entry_counts(app), STYLES.dim));
+    }
     if !app.selection.is_empty() {
         spans.push(Span::styled(
             format!(" {} selected ", app.selection.len()),
@@ -426,19 +431,27 @@ fn gallery_status_line(app: &App, filtered_count: usize, status: Option<&str>) -
     Line::from(spans)
 }
 
-/// The name and the position of the selected image. Empty when the filter matches nothing.
+/// The name and the position of the selected entry. Empty when the filter matches nothing.
 fn selected_position(app: &App, filtered_count: usize) -> Vec<Span<'static>> {
     let Some(index) = app.gallery.selected_index() else {
         return Vec::new();
     };
-    let name = app.images[index]
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let name = &app.filenames[index];
     vec![Span::styled(
         format!(" {name} [{}/{filtered_count}] ", app.gallery.cursor + 1),
         STYLES.text,
     )]
+}
+
+/// The folder and the image count of a grid with folders. `..` does not count.
+fn entry_counts(app: &App) -> String {
+    let folders = app.folder_count.saturating_sub(usize::from(
+        app.filenames.first().is_some_and(|name| name == ".."),
+    ));
+    let folder_word = if folders == 1 { "folder" } else { "folders" };
+    let images = app.file_count();
+    let image_word = if images == 1 { "image" } else { "images" };
+    format!(" {folders} {folder_word}, {images} {image_word} ")
 }
 
 /// The rows above the status row. The grid and the image use all of them, without a frame.
@@ -475,17 +488,19 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
         } else if is_marked {
             draw_cell_border(frame, BorderType::Plain, STYLES.marked, border, grid_rect);
         }
-        if !app.thumb_cache.contains(img_idx) {
+        let label_style = if is_selected {
+            STYLES.cursor_cell
+        } else if is_marked {
+            STYLES.marked
+        } else {
+            STYLES.text
+        };
+        if app.is_folder(img_idx) {
+            draw_folder_cell(frame, app, vis_idx, img_idx, label_style, grid_rect);
+        } else if !app.thumb_cache.contains(img_idx) {
             draw_loading_icon(frame, app, vis_idx, img_idx, grid_rect);
         }
         if app.gallery.show_filenames {
-            let label_style = if is_selected {
-                STYLES.cursor_cell
-            } else if is_marked {
-                STYLES.marked
-            } else {
-                STYLES.text
-            };
             draw_label(frame, app, vis_idx, img_idx, label_style, grid_rect);
         }
     }
@@ -523,6 +538,42 @@ fn draw_loading_icon(
     frame
         .buffer_mut()
         .set_string(center.x, center.y, icon, STYLES.dim);
+}
+
+/// A folder cell: a dim symbol at the center and the name below it. The name goes inside the
+/// cell when the filename labels are off, because the label row then does not exist.
+fn draw_folder_cell(
+    frame: &mut Frame<'_>,
+    app: &App,
+    vis_idx: usize,
+    img_idx: usize,
+    style: Style,
+    grid_rect: Rect,
+) {
+    let cell = app.gallery.cell_rect(vis_idx);
+    let center = Position::new(cell.x + cell.width / 2, cell.y + cell.height / 2);
+    if !grid_rect.contains(center) {
+        return;
+    }
+    frame
+        .buffer_mut()
+        .set_string(center.x, center.y, FOLDER_ICON, STYLES.dim);
+    if app.gallery.show_filenames {
+        return;
+    }
+    let name_rect = Rect {
+        y: center.y + 1,
+        height: LABEL_ROWS,
+        ..cell
+    }
+    .intersection(grid_rect);
+    let name = label_text(app, img_idx, name_rect.width);
+    frame.render_widget(
+        Paragraph::new(name)
+            .style(style)
+            .alignment(Alignment::Center),
+        name_rect,
+    );
 }
 
 /// A line border without a fill, so the label and the cells inside keep their own styles. A
@@ -571,27 +622,7 @@ fn draw_label(
     if label_y >= grid_rect.bottom() {
         return;
     }
-    let is_marked = app.is_marked(img_idx);
-    let raw_filename = app.images[img_idx]
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let prefix_len = if is_marked { 2 } else { 0 };
-    let max_label = usize::from(cell.width).saturating_sub(2 + prefix_len);
-    let trimmed = if raw_filename.chars().count() > max_label {
-        let head: String = raw_filename
-            .chars()
-            .take(max_label.saturating_sub(1))
-            .collect();
-        format!("{head}\u{2026}")
-    } else {
-        raw_filename
-    };
-    let filename = if is_marked {
-        format!("\u{25cf} {trimmed}")
-    } else {
-        trimmed
-    };
+    let filename = label_text(app, img_idx, cell.width);
     let label_rect = Rect {
         y: label_y,
         height: LABEL_ROWS,
@@ -605,6 +636,28 @@ fn draw_label(
     );
 }
 
+/// The label of the entry `img_idx`, cut to `width` with a margin, with a dot for a mark.
+fn label_text(app: &App, img_idx: usize, width: u16) -> String {
+    let is_marked = app.is_marked(img_idx);
+    let raw_filename = app.filenames[img_idx].clone();
+    let prefix_len = if is_marked { 2 } else { 0 };
+    let max_label = usize::from(width).saturating_sub(2 + prefix_len);
+    let trimmed = if raw_filename.chars().count() > max_label {
+        let head: String = raw_filename
+            .chars()
+            .take(max_label.saturating_sub(1))
+            .collect();
+        format!("{head}\u{2026}")
+    } else {
+        raw_filename
+    };
+    if is_marked {
+        format!("\u{25cf} {trimmed}")
+    } else {
+        trimmed
+    }
+}
+
 fn draw_help_popup(frame: &mut Frame<'_>) {
     let area = frame.area();
 
@@ -613,7 +666,8 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
         ("h/j/k/l", "Navigate grid"),
         ("g / G", "Jump to first / last"),
         ("Home / End", "Jump to first / last"),
-        ("Enter", "Open fullscreen"),
+        ("Enter", "Open fullscreen or folder"),
+        ("Backspace", "Parent folder"),
         ("+ / -", "Larger / smaller thumbnails"),
         ("0", "Reset thumbnail size"),
         ("n", "Toggle filename labels"),
@@ -731,6 +785,7 @@ mod tests {
     use crate::app::{App, DeleteMode, PendingDelete, ViewMode};
     use crate::image_list::SharedImageList;
     use crate::picker::PickerState;
+    use crate::test_support::folder_app;
     use image::RgbaImage;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -1169,6 +1224,70 @@ mod tests {
         assert_symbol(&buffer, cached, " ", Color::Reset, Modifier::empty());
     }
 
+    #[test]
+    fn a_folder_cell_shows_a_dim_symbol_and_its_name() {
+        let mut app = folder_app(&["..", "summer"], &["a.jpg"]);
+        app.thumb_cache.insert(2, RgbaImage::new(4, 4));
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let screen = screen_rows(&buffer).join("\n");
+        for vis_index in 0..2 {
+            let center = cell_center(&app, vis_index);
+            assert_symbol(
+                &buffer,
+                center,
+                "\u{25b8}",
+                Color::DarkGray,
+                Modifier::empty(),
+            );
+        }
+        assert_eq!(
+            screen.matches('\u{25b8}').count(),
+            2,
+            "the file cell has no symbol"
+        );
+        assert_eq!(
+            screen.matches('\u{25cc}').count(),
+            0,
+            "a folder has no loading icon"
+        );
+        // The names sit inside the cells, one row below the symbol, also without labels.
+        let (x, y) = cell_center(&app, 1);
+        let row = &screen_rows(&buffer)[usize::from(y) + 1];
+        assert!(row.contains("summer"), "{screen}");
+        assert!(row.contains(".."), "{screen}");
+        let name_cell = &buffer[(x, y + 1)];
+        assert_eq!(name_cell.symbol(), "m", "the name is centered: sum|mer");
+        assert_hides(&screen, "a.jpg");
+        assert!(
+            status_row(&screen).starts_with(" .. [1/3]  1 folder, 1 image  Enter: open"),
+            "{screen}"
+        );
+
+        // With labels, the names move to the label row, and the selected border wins.
+        app.gallery.toggle_filenames();
+        app.gallery.cursor = 1;
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let screen = screen_rows(&buffer).join("\n");
+        let (_, y) = cell_center(&app, 1);
+        let row = &screen_rows(&buffer)[usize::from(y) + 1];
+        assert!(!row.contains("summer"), "{screen}");
+        assert_shows(&screen, "summer");
+        assert_shows(&screen, "a.jpg");
+        let label = cell_of(&buffer, "summer");
+        assert_eq!((label.fg, label.modifier), (Color::Blue, Modifier::BOLD));
+        assert_border(
+            &buffer,
+            app.gallery.border_rect(1),
+            THICK,
+            Color::Blue,
+            Modifier::BOLD,
+        );
+        assert!(
+            status_row(&screen).starts_with(" summer [2/3]  1 folder, 1 image "),
+            "{screen}"
+        );
+    }
+
     #[cfg(feature = "video")]
     #[test]
     fn an_empty_video_cell_shows_a_dim_play_icon_at_its_center() {
@@ -1473,6 +1592,8 @@ mod tests {
         let screen = render(&mut app, None, 100, 120);
         assert_shows(&screen, " Help ");
         assert_shows(&screen, "     h/j/k/l  Navigate grid");
+        assert_shows(&screen, "Open fullscreen or folder");
+        assert_shows(&screen, "   Backspace  Parent folder");
         assert_shows(&screen, " Directory picker");
         assert_shows(&screen, " press any key to close");
 

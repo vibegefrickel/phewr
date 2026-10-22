@@ -15,11 +15,17 @@ impl App {
     /// The grid keeps the shape until the next scan, so the columns do not jump while the user
     /// browses. A later call does nothing.
     pub(crate) fn request_cell_shape(&mut self) {
-        if self.shape_requested || self.images.is_empty() {
+        if self.shape_requested || !self.has_files() {
             return;
         }
         self.shape_requested = true;
-        let paths: Vec<PathBuf> = self.images.iter().take(SHAPE_SAMPLE).cloned().collect();
+        let paths: Vec<PathBuf> = self
+            .images
+            .iter()
+            .skip(self.first_file())
+            .take(SHAPE_SAMPLE)
+            .cloned()
+            .collect();
         let (tx, rx) = mpsc::channel();
         self.shape_rx = Some(rx);
         // A thread of its own: the rayon pool can be full of decodes of the old folder after a
@@ -123,7 +129,8 @@ mod tests {
             app.refresh_from_scanner();
             app.scan_complete
         });
-        assert_eq!(app.images.len(), 1);
+        assert_eq!(app.filenames, ["..", "a.png"]);
+        assert_eq!(app.file_count(), 1);
         assert!(
             app.cell_shape_pending(),
             "the complete scan starts the header read"

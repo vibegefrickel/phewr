@@ -4,6 +4,7 @@ mod cell_shape;
 mod delete;
 mod directory;
 mod disk_cache;
+mod folders;
 mod fullscreen;
 mod grid_zoom;
 mod info_panel;
@@ -21,6 +22,7 @@ pub(crate) use video::VideoReturn;
 use crate::config::{self, Config};
 use crate::encoder::{GraphicsBackend, GraphicsOutput, KittyBackend};
 use crate::gallery::{GalleryState, ThumbnailCache};
+pub(crate) use crate::image_list::EntryKind;
 use crate::image_list::SharedImageList;
 use crate::info::ImageInfo;
 use crate::kitty_output::TerminalImages;
@@ -56,8 +58,12 @@ pub(crate) enum ViewMode {
     reason = "App is the whole view state; each flag is an independent toggle"
 )]
 pub(crate) struct App {
+    /// The entries of the grid: the folders first, then the files. The fullscreen view, the
+    /// slideshow, the prefetch, the thumbnails and the delete never touch the folders.
     pub images: Vec<PathBuf>,
     pub filenames: Vec<String>,
+    /// The first `folder_count` entries of `images` are folders. `..` is the first one.
+    pub folder_count: usize,
     pub mode: ViewMode,
     pub cell_px: (u32, u32),
     pub graphics: KittyBackend,
@@ -91,6 +97,9 @@ pub(crate) struct App {
     pub picker: Option<PickerState>,
     pub current_dir: Option<PathBuf>,
     pub initial_dir: Option<PathBuf>,
+    /// The entry that the cursor lands on when the next scan ends: the folder that the user
+    /// came from after a step to the parent.
+    return_to: Option<PathBuf>,
 
     // Fullscreen state
     pub current: usize,
@@ -200,6 +209,7 @@ impl App {
         Self {
             images: Vec::new(),
             filenames: Vec::new(),
+            folder_count: 0,
             mode: ViewMode::Gallery,
             cell_px,
             graphics: KittyBackend::default(),
@@ -220,6 +230,7 @@ impl App {
             picker: None,
             current_dir: None,
             initial_dir: None,
+            return_to: None,
             current: 0,
             prefetcher: Prefetcher::new(),
             loaded: None,

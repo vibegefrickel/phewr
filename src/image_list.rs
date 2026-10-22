@@ -2,9 +2,25 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
+/// What an entry of the list is. The folders come first, so the decoders never see a folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryKind {
+    Folder,
+    File,
+}
+
+/// A subfolder of the scanned folder, or its parent as `..`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FolderEntry {
+    pub path: PathBuf,
+    pub name: String,
+}
+
 struct Inner {
     paths: Vec<PathBuf>,
     filenames: Vec<String>,
+    /// The first `folder_count` entries are folders.
+    folder_count: usize,
     errors: Vec<String>,
 }
 
@@ -21,6 +37,7 @@ impl SharedImageList {
             inner: Arc::new(Mutex::new(Inner {
                 paths: Vec::new(),
                 filenames: Vec::new(),
+                folder_count: 0,
                 errors: Vec::new(),
             })),
             len: Arc::new(AtomicUsize::new(0)),
@@ -39,6 +56,34 @@ impl SharedImageList {
             inner.filenames.push(name);
         }
         self.len.store(inner.paths.len(), Ordering::Release);
+    }
+
+    /// Put the folders at the front of the list. The scanner calls it before the first batch of
+    /// files, so that the folders stay a prefix of the list.
+    pub(crate) fn push_folders(&self, folders: Vec<FolderEntry>) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        debug_assert!(
+            inner.paths.len() == inner.folder_count,
+            "push_folders must come before the first batch of files"
+        );
+        let at = inner.folder_count;
+        let count = folders.len();
+        let (paths, names): (Vec<PathBuf>, Vec<String>) = folders
+            .into_iter()
+            .map(|folder| (folder.path, folder.name))
+            .unzip();
+        inner.paths.splice(at..at, paths);
+        inner.filenames.splice(at..at, names);
+        inner.folder_count += count;
+        self.len.store(inner.paths.len(), Ordering::Release);
+    }
+
+    /// The count of the folder entries at the front of the list.
+    pub(crate) fn folder_count(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .folder_count
     }
 
     pub(crate) fn mark_complete(&self) {
@@ -78,17 +123,24 @@ impl SharedImageList {
         (paths, filenames)
     }
 
-    pub(crate) fn replace_all(&self, paths: Vec<PathBuf>, filenames: Vec<String>) {
+    /// Replace the list. The first `folder_count` entries of `paths` are folders.
+    pub(crate) fn replace_all(
+        &self,
+        paths: Vec<PathBuf>,
+        filenames: Vec<String>,
+        folder_count: usize,
+    ) {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.paths = paths;
         inner.filenames = filenames;
+        inner.folder_count = folder_count;
         self.len.store(inner.paths.len(), Ordering::Release);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SharedImageList;
+    use super::{FolderEntry, SharedImageList};
     use std::path::PathBuf;
 
     #[test]
@@ -132,12 +184,43 @@ mod tests {
 
         assert!(list.is_complete());
 
-        list.replace_all(vec![PathBuf::from("x.png")], vec!["x.png".into()]);
+        list.replace_all(vec![PathBuf::from("x.png")], vec!["x.png".into()], 0);
         assert_eq!(list.len(), 1);
+        assert_eq!(list.folder_count(), 0);
 
         let (paths, filenames) = list.drain_since(0);
         assert_eq!(paths, vec![PathBuf::from("x.png")]);
         assert_eq!(filenames, vec!["x.png"]);
+    }
+
+    #[test]
+    fn folders_go_to_the_front_and_count_as_a_prefix() {
+        let list = SharedImageList::new();
+        list.push_folders(vec![FolderEntry {
+            path: PathBuf::from("/x"),
+            name: "..".into(),
+        }]);
+        list.push_folders(vec![FolderEntry {
+            path: PathBuf::from("/x/y/sub"),
+            name: "sub".into(),
+        }]);
+        list.push_batch(vec![PathBuf::from("/x/y/a.png")]);
+
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.folder_count(), 2);
+        let (paths, filenames) = list.drain_since(0);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/x"),
+                PathBuf::from("/x/y/sub"),
+                PathBuf::from("/x/y/a.png")
+            ]
+        );
+        assert_eq!(filenames, vec!["..", "sub", "a.png"]);
+
+        list.replace_all(paths, filenames, 1);
+        assert_eq!(list.folder_count(), 1);
     }
 
     #[test]
