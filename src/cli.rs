@@ -1,7 +1,8 @@
 //! The command line: the arguments of `viewr` and the start directory that they name.
 
+use crate::scanner::canonicalize_or_self;
 use clap::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -30,6 +31,26 @@ pub(crate) struct Cli {
     pub(crate) info: bool,
 }
 
+/// One file argument opens its folder with the cursor on that file, so a file manager can start
+/// viewr on the hovered file. The second value is the path that the cursor goes to.
+pub(crate) fn start_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Option<PathBuf>) {
+    let [file] = paths.as_slice() else {
+        return (paths, None);
+    };
+    let (true, Some(parent), Some(name)) = (file.is_file(), file.parent(), file.file_name()) else {
+        return (paths, None);
+    };
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    // The scanner lists the folder by its canonical path, so the cursor target uses it too.
+    let folder = canonicalize_or_self(parent);
+    let target = folder.join(name);
+    (vec![folder], Some(target))
+}
+
 pub(crate) fn initial_dir_from_paths(paths: &[PathBuf]) -> PathBuf {
     for p in paths {
         if p.is_dir() {
@@ -47,7 +68,7 @@ pub(crate) fn initial_dir_from_paths(paths: &[PathBuf]) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, initial_dir_from_paths};
+    use super::{Cli, initial_dir_from_paths, start_paths};
     use crate::test_support::synthetic_tree;
     use clap::Parser;
     use std::path::PathBuf;
@@ -122,5 +143,20 @@ mod tests {
             PathBuf::from(".")
         );
         assert_eq!(initial_dir_from_paths(&[]), PathBuf::from("."));
+    }
+
+    #[test]
+    fn one_file_argument_opens_its_folder_at_the_file() {
+        let (_temp, root, child) = synthetic_tree();
+        let file = child.join("a.png");
+        std::fs::write(&file, b"").unwrap();
+
+        assert_eq!(
+            start_paths(vec![file.clone()]),
+            (vec![child.clone()], Some(file.clone()))
+        );
+        let two = vec![file, root];
+        assert_eq!(start_paths(two.clone()), (two, None));
+        assert_eq!(start_paths(vec![child.clone()]), (vec![child], None));
     }
 }

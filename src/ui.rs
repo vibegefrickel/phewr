@@ -1,5 +1,6 @@
 use crate::app::{App, DeleteMode, ViewMode};
 use crate::gallery::LABEL_ROWS;
+use crate::icons::{self, Icon};
 use crate::styles::STYLES;
 use ratatui::{
     prelude::*,
@@ -10,17 +11,11 @@ use ratatui::{
 const INFO_PANEL_WIDTH: u16 = 42;
 /// The status row at the bottom of the gallery, the fullscreen view and the video view.
 const STATUS_ROWS: u16 = 1;
-/// The icon of a grid cell whose image thumbnail is not decoded yet.
-const IMAGE_LOADING_ICON: &str = "\u{25cc}";
-/// The icon of a grid cell whose video thumbnail is not decoded yet.
-const VIDEO_LOADING_ICON: &str = "\u{25b6}";
-/// The symbol in the center of a folder cell: a small right-pointing triangle, one cell wide.
-const FOLDER_ICON: &str = "\u{25b8}";
 /// The marker of a playable file in the grid, a video or an animated image: a play symbol
 /// before the label, or in the gap below the cell when the labels are off.
 const ANIMATION_MARKER: &str = "\u{25b6}";
 
-/// Draw the whole frame. `status` is a one-line note of the run loop, in place of the key hints.
+/// Draw the whole frame. `status` is a one-line note of the run loop, in place of the file facts.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     let area = frame.area();
     app.layout.screen = area;
@@ -129,11 +124,6 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
     } else if let Some(err) = &app.error {
         Line::from(Span::styled(format!(" Error: {err} "), STYLES.error))
     } else {
-        let dims = app
-            .loaded
-            .as_ref()
-            .map(|img| format!(" {}x{}", img.width(), img.height()))
-            .unwrap_or_default();
         let zoom = if app.zoom > 1.0 {
             format!(" {:.0}%", app.zoom * 100.0)
         } else {
@@ -150,34 +140,21 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note
                 )
             })
             .unwrap_or_default();
-        let hint = if app.slideshow.is_some() {
-            " space: pause  [/]: interval  s/Esc: stop  q: back  i: info "
-        } else if placeholder {
-            " Enter: play  \u{2190}/\u{2192}: navigate  i: info  ?: help  q/Esc: back "
-        } else if app.zoom > 1.0 {
-            " hjkl: pan  +/-: zoom  0: reset  ?: help  q/Esc: back "
-        } else {
-            " \u{2190}/\u{2192}: navigate  +/-: zoom  s: slideshow  i: info  ?: help  q/Esc: back "
-        };
-        Line::from(vec![
-            Span::styled(
-                format!(
-                    " {} [{}/{}]{dims}{zoom}{slideshow} ",
-                    filename,
-                    app.current + 1,
-                    app.images.len(),
-                ),
-                STYLES.text,
+        let mut spans = vec![Span::styled(
+            format!(
+                " {} [{}/{}]{zoom}{slideshow} ",
+                filename,
+                app.current + 1,
+                app.images.len(),
             ),
-            status_note.map_or_else(
-                || Span::styled(hint, STYLES.key),
-                |note| Span::styled(format!(" {note} "), STYLES.text),
-            ),
-        ])
+            STYLES.text,
+        )];
+        spans.extend(status_note.map(|note| Span::styled(format!(" {note} "), STYLES.text)));
+        Line::from(spans)
     };
 
     let inner = content_area(area);
-    frame.render_widget(Paragraph::new(bottom_line), status_area(area));
+    draw_status_row(frame, app, status_area(area), bottom_line, status_note);
     if placeholder {
         let middle = Rect {
             y: inner.y + inner.height / 2,
@@ -233,60 +210,66 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status_note: Opt
                     " {} {} {}/{} [{}/{}] {}",
                     status,
                     filename,
-                    format_time(position),
-                    format_time(duration),
+                    crate::file_meta::format_time(position),
+                    crate::file_meta::format_time(duration),
                     app.current + 1,
                     app.images.len(),
                     drops,
                 ),
                 STYLES.text,
             ),
-            status_note.map_or_else(
-                || {
-                    Span::styled(
-                        " Space: pause  \u{2190}/\u{2192}: seek  n/N: next/prev  p: mpv                           ?: help  q: back ",
-                        STYLES.key,
-                    )
-                },
-                |note| Span::styled(format!(" {note} "), STYLES.text),
-            ),
+            status_note.map_or_else(Span::default, |note| {
+                Span::styled(format!(" {note} "), STYLES.text)
+            }),
         ])
     };
 
-    frame.render_widget(Paragraph::new(bottom_line), status_area(area));
+    draw_status_row(frame, app, status_area(area), bottom_line, status_note);
     app.image_rect = content_area(area);
-}
-
-/// Seconds as `mm:ss`, or `h:mm:ss` from one hour on.
-#[cfg(feature = "video")]
-fn format_time(seconds: f64) -> String {
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a position is never negative, and a clip never runs for 2^64 seconds"
-    )]
-    let whole = seconds.max(0.0) as u64;
-    let (hours, minutes, seconds) = (whole / 3600, whole / 60 % 60, whole % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
-    }
 }
 
 fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
     let grid_rect = content_area(area);
     app.gallery.update_grid(grid_rect);
     let filtered_count = app.gallery.filtered_indices.len();
-    frame.render_widget(
-        Paragraph::new(gallery_status_line(app, filtered_count, status)),
-        status_area(area),
-    );
+    let line = gallery_status_line(app, filtered_count, status);
+    draw_status_row(frame, app, status_area(area), line, status);
     draw_thumbnail_cells(frame, app, grid_rect);
 }
 
+/// The status row: `line` at the left, the facts of the file at the right. The facts give way
+/// to a status note, a question, an error and a line too long for both.
+fn draw_status_row(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    line: Line<'static>,
+    status: Option<&str>,
+) {
+    let busy = status.is_some()
+        || app.error.is_some()
+        || app.pending_delete.is_some()
+        || app.delete_error.is_some()
+        || app.gallery.search_active;
+    let facts = (!busy).then(|| app.meta_line()).flatten();
+    let left_width = u16::try_from(line.width()).unwrap_or(u16::MAX);
+    frame.render_widget(Paragraph::new(line), area);
+    let Some(facts) = facts else {
+        return;
+    };
+    let facts = format!(" {facts} ");
+    let facts_width = u16::try_from(facts.chars().count()).unwrap_or(u16::MAX);
+    if left_width.saturating_add(facts_width) > area.width {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(Span::styled(facts, STYLES.dim)).alignment(Alignment::Right),
+        area,
+    );
+}
+
 /// The status row of the gallery: a delete question, an error, the search query while typing,
-/// or name, position, selection count, scan note and hints.
+/// or name, position, entry counts, selection count, scan note and the status note.
 fn gallery_status_line(app: &App, filtered_count: usize, status: Option<&str>) -> Line<'static> {
     if let Some(pending) = &app.pending_delete {
         let action = if pending.mode == DeleteMode::Permanent {
@@ -299,14 +282,11 @@ fn gallery_status_line(app: &App, filtered_count: usize, status: Option<&str>) -
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            format!(" {action} {name}? ")
+            format!(" {action} {name}? [y/N] ")
         } else {
-            format!(" {action} {} files? ", pending.paths.len())
+            format!(" {action} {} files? [y/N] ", pending.paths.len())
         };
-        return Line::from(vec![
-            Span::styled(prompt, STYLES.error),
-            Span::styled(" y: confirm  n/Esc: cancel ", STYLES.key),
-        ]);
+        return Line::from(Span::styled(prompt, STYLES.error));
     }
     if let Some(err) = &app.delete_error {
         return Line::from(Span::styled(format!(" Delete error: {err} "), STYLES.error));
@@ -341,21 +321,14 @@ fn gallery_status_line(app: &App, filtered_count: usize, status: Option<&str>) -
     if app.is_scanning() {
         spans.push(Span::styled(" scanning\u{2026} ", STYLES.dim));
     }
-    spans.push(if app.gallery.search_active {
-        Span::styled(" Esc: cancel  Enter: confirm ", STYLES.key)
-    } else if let Some(status) = status {
-        Span::styled(format!(" {status} "), STYLES.text)
+    if app.gallery.search_active {
+        return Line::from(spans);
+    }
+    if let Some(status) = status {
+        spans.push(Span::styled(format!(" {status} "), STYLES.text));
     } else if is_empty_folder(app) {
-        Span::styled(
-            " No images or folders here. Backspace: parent folder  q: quit ",
-            STYLES.text,
-        )
-    } else {
-        Span::styled(
-            " Enter: open  +/-: zoom  n: names  i: info  /: search  ?: help  q: quit ",
-            STYLES.key,
-        )
-    });
+        spans.push(Span::styled(" No images or folders here ", STYLES.text));
+    }
     Line::from(spans)
 }
 
@@ -436,7 +409,12 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
         if app.is_folder(img_idx) {
             draw_folder_cell(frame, app, vis_idx, img_idx, label_style, grid_rect);
         } else if !app.thumb_cache.contains(img_idx) {
-            draw_loading_icon(frame, app, vis_idx, img_idx, grid_rect);
+            let icon = if app.is_video_at(img_idx) {
+                Icon::Video
+            } else {
+                Icon::Loading
+            };
+            draw_cell_icon(frame, app, app.gallery.cell_rect(vis_idx), icon, grid_rect);
         }
         if app.gallery.show_filenames {
             draw_label(frame, app, vis_idx, img_idx, label_style, grid_rect);
@@ -481,31 +459,33 @@ fn draw_animation_marker(frame: &mut Frame<'_>, app: &App, vis_idx: usize, grid_
         .set_string(marker.x, marker.y, ANIMATION_MARKER, STYLES.dim);
 }
 
-/// A dim icon in the center of a cell without a thumbnail. Kitty draws the thumbnail above the
-/// text, so the icon needs no redraw when the thumbnail arrives.
-fn draw_loading_icon(
+/// A large dim icon in the center of `cell`, or the one-cell symbol when the cell is small or
+/// the grid edge cuts the icon. Kitty draws a thumbnail above the text, so the icon of a cell
+/// that loads needs no redraw when the thumbnail arrives. Returns the row below the icon.
+fn draw_cell_icon(
     frame: &mut Frame<'_>,
     app: &App,
-    vis_idx: usize,
-    img_idx: usize,
+    cell: Rect,
+    icon: Icon,
     grid_rect: Rect,
-) {
-    let cell = app.gallery.cell_rect(vis_idx);
+) -> Option<u16> {
+    let shape =
+        icons::icon_rect(cell, app.cell_px).filter(|area| grid_rect.intersection(*area) == *area);
+    if let Some(area) = shape {
+        icons::draw_icon(frame.buffer_mut(), area, icon, STYLES.dim);
+        return Some(area.bottom());
+    }
     let center = Position::new(cell.x + cell.width / 2, cell.y + cell.height / 2);
     if !grid_rect.contains(center) {
-        return;
+        return None;
     }
-    let icon = if app.is_video_at(img_idx) {
-        VIDEO_LOADING_ICON
-    } else {
-        IMAGE_LOADING_ICON
-    };
     frame
         .buffer_mut()
-        .set_string(center.x, center.y, icon, STYLES.dim);
+        .set_string(center.x, center.y, icon.symbol(), STYLES.dim);
+    Some(center.y + 1)
 }
 
-/// A folder cell: a dim symbol at the center and the name below it. The name goes inside the
+/// A folder cell: a folder icon, or an arrow for `..`, and the name below it. The name goes inside the
 /// cell when the filename labels are off, because the label row then does not exist.
 fn draw_folder_cell(
     frame: &mut Frame<'_>,
@@ -516,18 +496,19 @@ fn draw_folder_cell(
     grid_rect: Rect,
 ) {
     let cell = app.gallery.cell_rect(vis_idx);
-    let center = Position::new(cell.x + cell.width / 2, cell.y + cell.height / 2);
-    if !grid_rect.contains(center) {
+    let icon = if app.filenames[img_idx] == ".." {
+        Icon::Parent
+    } else {
+        Icon::Folder
+    };
+    let Some(below) = draw_cell_icon(frame, app, cell, icon, grid_rect) else {
         return;
-    }
-    frame
-        .buffer_mut()
-        .set_string(center.x, center.y, FOLDER_ICON, STYLES.dim);
+    };
     if app.gallery.show_filenames {
         return;
     }
     let name_rect = Rect {
-        y: center.y + 1,
+        y: below,
         height: LABEL_ROWS,
         ..cell
     }
@@ -789,7 +770,9 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
 mod tests {
     use super::draw;
     use crate::app::{App, DeleteMode, PendingDelete, ViewMode};
+    use crate::icons::{Icon, draw_icon, icon_rect};
     use crate::image_list::SharedImageList;
+    use crate::styles::STYLES;
     use crate::test_support::folder_app;
     use image::RgbaImage;
     use ratatui::Terminal;
@@ -965,14 +948,12 @@ mod tests {
     }
 
     #[test]
-    fn gallery_status_row_shows_the_position_and_the_hints() {
+    fn gallery_status_row_shows_the_position_and_no_hints() {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
         app.gallery.show_filenames = true;
         let screen = render(&mut app, None, 100, 30);
-        assert!(
-            status_row(&screen).starts_with(" a.jpg [1/2]  Enter: open  +/-: zoom"),
-            "{screen}"
-        );
+        assert_eq!(status_row(&screen).trim_end(), " a.jpg [1/2]", "{screen}");
+        assert_hides(&screen, "?: help");
         assert_shows(&screen, "b.jpg");
         assert_hides(&screen, "Gallery");
         assert_hides(&screen, "Search");
@@ -1010,10 +991,8 @@ mod tests {
         });
         assert_eq!(app.filenames, [".."], "the scan lists only the parent");
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(
-            &screen,
-            "No images or folders here. Backspace: parent folder",
-        );
+        assert_shows(&screen, "No images or folders here");
+        assert_hides(&screen, "Backspace");
 
         std::fs::create_dir(temp.path().join("sub")).unwrap();
         app.switch_to_dir(temp.path());
@@ -1033,8 +1012,7 @@ mod tests {
         app.gallery.filtered_indices = vec![1];
         let screen = render(&mut app, None, 100, 30);
         assert!(
-            status_row(&screen)
-                .starts_with(" /b\u{2588}  1/2 matches  Esc: cancel  Enter: confirm "),
+            status_row(&screen).trim_end() == " /b\u{2588}  1/2 matches",
             "{screen}"
         );
 
@@ -1051,7 +1029,7 @@ mod tests {
         app.selection.insert(app.images[1].clone());
         let screen = render(&mut app, None, 100, 30);
         assert!(
-            status_row(&screen).starts_with(" a.jpg [1/2]  1 selected  Enter: open"),
+            status_row(&screen).trim_end() == " a.jpg [1/2]  1 selected",
             "{screen}"
         );
         assert_shows(&screen, "\u{25cf} b.jpg");
@@ -1063,7 +1041,7 @@ mod tests {
         app.scan_complete = false;
         let screen = render(&mut app, None, 100, 30);
         assert!(
-            status_row(&screen).starts_with(" a.jpg [1/2]  scanning\u{2026}  Enter: open"),
+            status_row(&screen).trim_end() == " a.jpg [1/2]  scanning\u{2026}",
             "{screen}"
         );
 
@@ -1074,16 +1052,41 @@ mod tests {
         let buffer = render_buffer(&mut app, None, 100, 30);
         let screen = screen_rows(&buffer).join("\n");
         assert!(
-            status_row(&screen).starts_with(
-                " /a\u{2588}  1/2 matches  1 selected  scanning\u{2026}  Esc: cancel  Enter: confirm "
-            ),
+            status_row(&screen).trim_end()
+                == " /a\u{2588}  1/2 matches  1 selected  scanning\u{2026}",
             "{screen}"
         );
         assert_default_fg(cell_of(&buffer, "/a\u{2588}"), Modifier::empty());
         assert_ansi(cell_of(&buffer, "1/2 matches"), Color::DarkGray);
         assert_ansi(cell_of(&buffer, "1 selected"), Color::Yellow);
         assert_ansi(cell_of(&buffer, "scanning"), Color::DarkGray);
-        assert_ansi(cell_of(&buffer, "Esc: cancel"), Color::Cyan);
+    }
+
+    #[test]
+    fn the_status_row_shows_the_file_facts_at_the_right_until_a_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = crate::test_support::app_with_files(dir.path(), &["a.png"]);
+        app.request_meta();
+        crate::test_support::wait_until(|| {
+            app.poll_meta();
+            !app.meta_pending()
+        });
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let screen = screen_rows(&buffer).join("\n");
+        let row = status_row(&screen);
+        assert!(row.starts_with(" a.png [1/1] "), "{screen}");
+        assert!(row.contains("8\u{d7}8 \u{b7} 0.0 MP \u{b7} "), "{row}");
+        assert!(row.contains(" \u{b7} PNG \u{b7} "), "{row}");
+        assert_eq!(
+            row.trim_end().chars().count(),
+            99,
+            "the facts end at the right edge"
+        );
+        assert_ansi(cell_of(&buffer, "8\u{d7}8"), Color::DarkGray);
+
+        let screen = render(&mut app, Some("copied"), 100, 30);
+        assert_hides(&screen, "PNG");
+        assert_shows(&screen, "copied");
     }
 
     #[test]
@@ -1232,65 +1235,65 @@ mod tests {
         (cell.x + cell.width / 2, cell.y + cell.height / 2)
     }
 
-    #[test]
-    fn an_empty_image_cell_shows_a_dim_loading_icon_at_its_center() {
-        let mut app = app_with(&["a.jpg", "b.jpg"]);
-        app.thumb_cache.insert(1, RgbaImage::new(4, 4));
-        let buffer = render_buffer(&mut app, None, 100, 30);
-        let screen = screen_rows(&buffer).join("\n");
-        let center = cell_center(&app, 0);
-        assert_symbol(
-            &buffer,
-            center,
-            "\u{25cc}",
-            Color::DarkGray,
-            Modifier::empty(),
-        );
-        assert_eq!(
-            screen.matches('\u{25cc}').count(),
-            1,
-            "the cached cell has no icon"
-        );
-        let cached = cell_center(&app, 1);
-        assert_symbol(&buffer, cached, " ", Color::Reset, Modifier::empty());
+    /// The icon box of the grid cell `vis_index`. The test cells fit a large icon.
+    fn icon_area(app: &App, vis_index: usize) -> Rect {
+        icon_rect(app.gallery.cell_rect(vis_index), app.cell_px).unwrap()
+    }
+
+    /// True when the icon box of the cell shows `icon` in the dim color, or nothing for `None`.
+    fn shows_icon(app: &App, buffer: &Buffer, vis_index: usize, icon: Option<Icon>) -> bool {
+        let area = icon_area(app, vis_index);
+        let mut expected = Buffer::empty(area);
+        if let Some(icon) = icon {
+            draw_icon(&mut expected, area, icon, STYLES.dim);
+        }
+        area.positions().all(|position| {
+            let (shown, wanted) = (&buffer[position], &expected[position]);
+            shown.symbol() == wanted.symbol()
+                && (wanted.symbol() == " " || shown.fg == Color::DarkGray)
+        })
     }
 
     #[test]
-    fn a_folder_cell_shows_a_dim_symbol_and_its_name() {
+    fn an_empty_image_cell_shows_a_large_dim_loading_icon() {
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        app.thumb_cache.insert(1, RgbaImage::new(4, 4));
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert!(icon_area(&app, 0).height >= 2, "a large icon, not one cell");
+        assert!(shows_icon(&app, &buffer, 0, Some(Icon::Loading)));
+        assert!(
+            shows_icon(&app, &buffer, 1, None),
+            "the cached cell has no icon"
+        );
+    }
+
+    #[test]
+    fn a_folder_cell_shows_a_large_folder_icon_and_its_name() {
         let mut app = folder_app(&["..", "summer"], &["a.jpg"]);
         app.thumb_cache.insert(2, RgbaImage::new(4, 4));
         let buffer = render_buffer(&mut app, None, 100, 30);
         let screen = screen_rows(&buffer).join("\n");
-        for vis_index in 0..2 {
-            let center = cell_center(&app, vis_index);
-            assert_symbol(
-                &buffer,
-                center,
-                "\u{25b8}",
-                Color::DarkGray,
-                Modifier::empty(),
-            );
-        }
-        assert_eq!(
-            screen.matches('\u{25b8}').count(),
-            2,
-            "the file cell has no symbol"
+        assert!(shows_icon(&app, &buffer, 0, Some(Icon::Parent)));
+        assert!(shows_icon(&app, &buffer, 1, Some(Icon::Folder)));
+        assert!(
+            shows_icon(&app, &buffer, 2, None),
+            "the file cell has no icon"
         );
-        assert_eq!(
-            screen.matches('\u{25cc}').count(),
-            0,
-            "a folder has no loading icon"
-        );
-        // The names sit inside the cells, one row below the symbol, also without labels.
-        let (x, y) = cell_center(&app, 1);
-        let row = &screen_rows(&buffer)[usize::from(y) + 1];
+        // The names sit inside the cells, in the row below the icon, also without labels.
+        let (x, _) = cell_center(&app, 1);
+        let below = icon_area(&app, 1).bottom();
+        let row = &screen_rows(&buffer)[usize::from(below)];
         assert!(row.contains("summer"), "{screen}");
         assert!(row.contains(".."), "{screen}");
-        let name_cell = &buffer[(x, y + 1)];
-        assert_eq!(name_cell.symbol(), "m", "the name is centered: sum|mer");
+        assert_eq!(
+            buffer[(x, below)].symbol(),
+            "m",
+            "the name is centered: sum|mer"
+        );
         assert_hides(&screen, "a.jpg");
-        assert!(
-            status_row(&screen).starts_with(" .. [1/3]  1 folder, 1 image  Enter: open"),
+        assert_eq!(
+            status_row(&screen).trim_end(),
+            " .. [1/3]  1 folder, 1 image",
             "{screen}"
         );
 
@@ -1299,8 +1302,7 @@ mod tests {
         app.gallery.cursor = 1;
         let buffer = render_buffer(&mut app, None, 100, 30);
         let screen = screen_rows(&buffer).join("\n");
-        let (_, y) = cell_center(&app, 1);
-        let row = &screen_rows(&buffer)[usize::from(y) + 1];
+        let row = &screen_rows(&buffer)[usize::from(icon_area(&app, 1).bottom())];
         assert!(!row.contains("summer"), "{screen}");
         assert_shows(&screen, "summer");
         assert_shows(&screen, "a.jpg");
@@ -1321,21 +1323,22 @@ mod tests {
 
     #[cfg(feature = "video")]
     #[test]
-    fn an_empty_video_cell_shows_a_dim_play_icon_at_its_center() {
+    fn an_empty_video_cell_shows_a_large_dim_play_icon() {
         let mut app = app_with(&["a.jpg", "clip.mp4"]);
         let buffer = render_buffer(&mut app, None, 100, 30);
-        let center = cell_center(&app, 1);
-        assert_symbol(
-            &buffer,
-            center,
-            "\u{25b6}",
-            Color::DarkGray,
-            Modifier::empty(),
-        );
+        assert!(shows_icon(&app, &buffer, 1, Some(Icon::Video)));
+        assert!(shows_icon(&app, &buffer, 0, Some(Icon::Loading)));
+    }
+
+    #[test]
+    fn a_small_cell_gets_the_one_cell_symbol() {
+        let mut app = app_with(&["a.jpg", "clip.mp4"]);
+        let buffer = render_buffer(&mut app, None, 100, 5);
+        assert_eq!(icon_rect(app.gallery.cell_rect(0), app.cell_px), None);
         assert_symbol(
             &buffer,
             cell_center(&app, 0),
-            "\u{25cc}",
+            Icon::Loading.symbol(),
             Color::DarkGray,
             Modifier::empty(),
         );
@@ -1414,7 +1417,6 @@ mod tests {
         assert_default_fg(cell_of(&buffer, "c.jpg"), Modifier::empty());
         assert_default_fg(cell_of(&buffer, "a.jpg ["), Modifier::empty());
         assert_ansi(cell_of(&buffer, "1 selected"), Color::Yellow);
-        assert_ansi(cell_of(&buffer, "Enter: open"), Color::Cyan);
 
         // On a marked cell under the cursor, the cursor style wins for the label.
         app.selection.insert(app.images[0].clone());
@@ -1482,7 +1484,7 @@ mod tests {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
         app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Trash));
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, " Move to trash a.jpg?  y: confirm  n/Esc: cancel ");
+        assert_shows(&screen, " Move to trash a.jpg? [y/N] ");
 
         app.pending_delete = Some(pending(&["a.jpg", "b.jpg"], DeleteMode::Permanent));
         let screen = render(&mut app, None, 100, 30);
@@ -1511,15 +1513,15 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_shows_the_name_the_position_and_the_size() {
+    fn fullscreen_shows_the_name_and_the_position() {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
         app.mode = ViewMode::Fullscreen;
         app.current = 1;
         app.loaded = Some(RgbaImage::new(30, 20));
         let screen = render(&mut app, None, 100, 30);
         assert!(
-            status_row(&screen).starts_with(" b.jpg [2/2] 30x20  \u{2190}/\u{2192}: navigate"),
-            "{screen}"
+            status_row(&screen).trim_end() == " b.jpg [2/2]",
+            "the decoded size is not the file size, the facts come from the file: {screen}"
         );
         assert_eq!(
             app.image_rect,
@@ -1534,12 +1536,12 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_shows_the_zoom_and_the_pan_hints() {
+    fn fullscreen_shows_the_zoom() {
         let mut app = app_with(&["a.jpg"]);
         app.mode = ViewMode::Fullscreen;
         app.zoom = 2.0;
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, " a.jpg [1/1] 200%  hjkl: pan");
+        assert_eq!(status_row(&screen).trim_end(), " a.jpg [1/1] 200%");
     }
 
     #[test]
@@ -1550,7 +1552,7 @@ mod tests {
         let interval = format!("{:.1}s", app.slideshow_interval.as_secs_f64());
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, &format!("\u{25b6} {interval}"));
-        assert_shows(&screen, "space: pause  [/]: interval  s/Esc: stop  q: back");
+        assert_hides(&screen, "space: pause");
 
         app.slideshow_toggle_pause();
         let screen = render(&mut app, None, 100, 30);
@@ -1589,7 +1591,6 @@ mod tests {
         assert_symbol(&buffer, (0, 0), " ", Color::Reset, Modifier::empty());
         assert_symbol(&buffer, (0, 29), " ", Color::Reset, Modifier::empty());
         assert_symbol(&buffer, (1, 29), "a", Color::Reset, Modifier::empty());
-        assert_ansi(cell_of(&buffer, "\u{2190}/\u{2192}: navigate"), Color::Cyan);
 
         app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Trash));
         let buffer = render_buffer(&mut app, None, 100, 30);
@@ -1606,8 +1607,7 @@ mod tests {
             status_row(&screen).starts_with(" \u{25b6} clip.mp4 00:00/00:00 [1/2] "),
             "{screen}"
         );
-        assert_shows(&screen, "Space: pause");
-        assert_shows(&screen, "p: mpv");
+        assert_hides(&screen, "Space: pause");
         assert_eq!(
             app.image_rect,
             Rect::new(0, 0, 100, 29),
@@ -1616,7 +1616,6 @@ mod tests {
 
         let screen = render(&mut app, Some("mpv not found"), 100, 30);
         assert_shows(&screen, " mpv not found ");
-        assert_hides(&screen, "Space: pause");
 
         app.error = Some("no video stream".to_owned());
         let screen = render(&mut app, None, 100, 30);
@@ -1652,7 +1651,7 @@ mod tests {
             status_row(&screen).starts_with(" \u{23f8} clip.mp4 00:00/1:02:05 [1/2] "),
             "{screen}"
         );
-        assert_eq!(super::format_time(65.9), "01:05");
+        assert_eq!(crate::file_meta::format_time(65.9), "01:05");
 
         app.video.as_mut().unwrap().toggle_pause();
         decoder.end();

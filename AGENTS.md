@@ -195,9 +195,10 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   full-resolution source), `delete.rs` (the marks and the delete question), `directory.rs` (the
   directory switch), `folder_prefetch.rs` (the decode of the first screen of the folder under the
   cursor into the disk cache), `mouse.rs` (the mouse state and the screen layout of the last draw),
-  `folders.rs` (the folder entries of the grid, `Enter` into a folder, `go_to_parent`), `video.rs`
-  (the terminal player state, the return after a video, the mpv window watch), `thumbnails.rs` (the
-  jobs, the queue, the HEIC previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
+  `meta.rs` (the facts of the file under the cursor, read on a thread), `folders.rs` (the folder
+  entries of the grid, `Enter` into a folder, `go_to_parent`), `video.rs` (the terminal player
+  state, the return after a video, the mpv window watch), `thumbnails.rs` (the jobs, the queue, the
+  HEIC previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
 - `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the route by
   extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the user waits
   for. `raster.rs` (the `image` crate and the EXIF orientation), `turbo.rs` (libjpeg-turbo with DCT
@@ -233,6 +234,8 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   the decode box is smaller, it returns `None`.
 - `search.rs`: fuzzy filename search (nucleo-matcher).
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
+- `file_meta.rs`: the facts of one file for the status row (`FileMeta`, `describe`).
+- `icons.rs`: the large octant icons of the grid cells.
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config.rs`: `config.toml` and the state file.
 - `video.rs` (feature `video`): `Tools`, the session lookup of ffmpeg and ffprobe, the first-frame
@@ -341,11 +344,20 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   pays no cube parse. The player maps the probed stream with
   `-map 0:N` for every video. Without the programs, a video cell keeps its `▶` icon, and
   `Enter` opens the mpv window with a note.
+- **One file argument:** `cli::start_paths` turns one file argument into its canonical folder
+  and a cursor target (`App::place_cursor_after_scan`, the `return_to` of `Backspace`). Several
+  arguments stay a plain file list. yazi starts viewr with the hovered path (`viewr %h`).
 - **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
   that does not answer cannot hold viewr. Tests pass a closure and never start `ya`.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
   no status note. The note shows in the status row at the bottom. The next key press clears it.
+- **Status row:** the row shows no key hints. At the right, it shows the facts of the selected
+  file (`file_meta.rs`): the size, the file size, the format, the date and, for a video, the
+  length, the frame rate and the HDR curve. A thread reads them (`app/meta.rs`, one read at a
+  time, 256 entries), so a cursor move never waits. A status note, a question, an error, the
+  search line and a row too narrow for both hide the facts. A video takes its facts from the
+  probe cache of the thumbnail job.
 
 - **The run loop polls every 10 ms while a background job runs** (`App::has_pending_work`:
   a decode, a prefetch, a thumbnail, a filter, the scan or thumbnails that wait for their emit),
@@ -434,10 +446,14 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   plain form `"/path" = 3` also loads. `+` / `-` save the level for the folder and as the
   global fallback. `0` resets the folder and removes its entry. The table keeps the 200 most
   recent folders.
-- **Loading icon:** a grid cell without a thumbnail shows a dim `◌` (image) or `▶` (video) at its
-  center (`draw_loading_icon` in `ui.rs`, `App::is_video_at`). The icon is text in the ratatui
-  frame, so the thumbnail that Kitty draws above it covers it. It needs no redraw and has no
-  animation. A HEIC preview counts as a thumbnail.
+- **Cell icons:** a grid cell without a thumbnail shows a large dim ring (image) or play triangle
+  (video), a folder cell a folder, and `..` an arrow (`icons.rs`, `draw_cell_icon` in `ui.rs`).
+  The icons are octant blocks (2x4 dots per cell, drawn by Ghostty itself) on a ratatui canvas,
+  about 40 % of the cell height and square in pixels (`App::cell_px`). A cell that cannot hold
+  2 rows, or an icon that the grid edge cuts, gets the one-cell symbol (`Icon::symbol`). The
+  icon is text in the ratatui frame, so the thumbnail that Kitty draws above it covers it. The
+  next draw leaves it out once the thumbnail is in `thumb_cache`. A HEIC preview counts as a
+  thumbnail.
 - **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64) files
   on a thread, one time per scan (`decode/shape.rs`). JPEG and PNG swap for the EXIF orientation,
   HEIC and AVIF read `ispe` and swap for `irot`. A RAW or PSD file gives the size of its embedded

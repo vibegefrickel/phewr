@@ -56,7 +56,7 @@ pub(crate) fn load(path: &Path) -> ImageInfo {
     ImageInfo { rows }
 }
 
-fn megapixels(w: u32, h: u32) -> String {
+pub(crate) fn megapixels(w: u32, h: u32) -> String {
     let mp = (f64::from(w) * f64::from(h)) / 1_000_000.0;
     if mp >= 10.0 {
         format!("{mp:.0} MP")
@@ -80,7 +80,7 @@ pub(crate) fn human_size(bytes: u64) -> String {
     }
 }
 
-fn dimensions(path: &Path) -> Option<(u32, u32)> {
+pub(crate) fn dimensions(path: &Path) -> Option<(u32, u32)> {
     #[cfg(feature = "heic")]
     if decode::libheif::decodes_with_libheif(path) {
         return decode::libheif::libheif_dimensions(path);
@@ -174,6 +174,22 @@ fn exif_rows(path: &Path) -> Vec<(String, String)> {
 
 /// The EXIF block of JPEG, TIFF (also the TIFF-based camera RAW formats), HEIF, PNG, WebP and
 /// JPEG XL.
+/// The EXIF date of the shot as `YYYY-MM-DD HH:MM`: `DateTimeOriginal`, else `DateTime`.
+pub(crate) fn date_taken(path: &Path) -> Option<String> {
+    let exif = read_exif(path)?;
+    let field = exif
+        .get_field(Tag::DateTimeOriginal, In::PRIMARY)
+        .or_else(|| exif.get_field(Tag::DateTime, In::PRIMARY))?;
+    let exif::Value::Ascii(values) = &field.value else {
+        return None;
+    };
+    let date = exif::DateTime::from_ascii(values.first()?).ok()?;
+    Some(format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        date.year, date.month, date.day, date.hour, date.minute
+    ))
+}
+
 fn read_exif(path: &Path) -> Option<exif::Exif> {
     if Route::for_path(path) == Route::Jxl {
         return exif::Reader::new().read_raw(decode::jxl::exif(path)?).ok();

@@ -9,6 +9,7 @@ mod folders;
 mod fullscreen;
 mod grid_zoom;
 mod info_panel;
+mod meta;
 pub(crate) mod mouse;
 mod scan;
 mod slideshow;
@@ -101,6 +102,8 @@ pub(crate) struct App {
     return_to: Option<PathBuf>,
     /// The decode of the first screen of the folder under the cursor into the disk cache.
     folder_prefetch: folder_prefetch::FolderPrefetch,
+    /// The facts of the file under the cursor for the status row.
+    meta: meta::MetaState,
 
     // Fullscreen state
     pub current: usize,
@@ -248,6 +251,7 @@ impl App {
             current_dir: None,
             initial_dir: None,
             return_to: None,
+            meta: meta::MetaState::default(),
             current: 0,
             prefetcher: Prefetcher::new(),
             loaded: None,
@@ -339,6 +343,7 @@ impl App {
             || self.filter_rx.is_some()
             || self.shape_rx.is_some()
             || !self.scan_complete
+            || self.meta_pending()
     }
 
     pub(crate) fn mark_dirty(&mut self) {

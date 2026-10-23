@@ -19,20 +19,14 @@ State of the main goal:
 
 ## Now
 
-Maintainer tests in Ghostty. Run the tests marked "herdr" in herdr too.
+Maintainer tests in Ghostty: run the 13 steps in `~/Pictures/viewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders and placeholders).
 
-- Start note: read the first status note (`Kitty transfer: ...`). After you quit, make sure that `ls $TMPDIR/tty-graphics-protocol-viewr-*` lists nothing. If the dim text on cendre is too dark, change the `dim` role in `src/styles.rs` to ANSI `Gray`. Then remove the start note (`src/main.rs`, near line 139).
-- Player: play HDR and SDR videos. Seek, pause, `n` / `N`, `p`, and a slideshow with videos.
-- VFR: a 4K phone clip with a variable frame rate (r=60, avg=30) plays without stutter. If it stutters, take the average rate in `variable_rate_fps` when r_frame_rate is more than 1.5 times the average.
-- mpv window: `p`, or `[video] player = "window"`, with an HDR clip, and `n` / `N` between videos and images in the window.
-- yazi reveal: start viewr with `g v` in yazi, quit, and make sure that the yazi cursor is on the last file.
-- Animation: open an animated GIF, WebP and APNG. Look at the `▶` marker in the grid, the loop, `p`, and a slideshow with a short GIF.
-- Mouse: click, double-click and right click in the grid, wheel and Shift+wheel (does Shift+wheel-up zoom in, like `+`?), a sideways trackpad swipe, fullscreen wheel zoom, drag pan and edge clicks, player clicks and wheel, Shift+drag text selection. Watch the CPU while you move the mouse over a large grid.
-- Grid shape: a portrait folder gets narrow cells and more columns, a landscape folder gets wide cells.
-- Warm grid (also herdr): a warm grid of 36 or more cells fills at once, without a stall or a flicker.
-- RGB frames (also herdr): opaque fullscreen images and player frames go out as `f=24`. Make sure that they look right, also a transparent PNG in fullscreen.
-- Color: sRGB images (screenshots, web images, Android photos) look less saturated than before, and iPhone photos look unchanged. Compare with `[terminal] colorspace = "srgb"`.
-- Real RAW: put a portrait DNG, CR2, CR3, NEF, ARW and RAF into a folder. Run `VIEWR_TEST_RAW=<file> just test-real` and open the folder in the grid. The embedded previews have only synthetic tests.
+After the tests:
+
+- Start note: if the dim text on cendre is too dark, change the `dim` role in `src/styles.rs` to ANSI `Gray`. Then remove the start note (`Kitty transfer: ...` in `src/main.rs`).
+- VFR: if the 4K clips with r=120 stutter, take the average rate in `variable_rate_fps` when r_frame_rate is more than 1.5 times the average.
+- RAW: the portrait RAW files in `08-raw` (except `IMG_1361.DNG`) are copies with a changed Orientation tag, so they test the container orientation, not a real portrait shot.
+- Then start the delete removal (Next, item 3).
 
 ## Next
 
@@ -52,7 +46,7 @@ Order: speed first, then formats, then the delete removal, then the first releas
    - Camera previews in Adobe RGB without an ICC profile (EXIF ColorSpace 0xFFFF with InteropIndex R03) show as sRGB. HDR stills (PQ or HLG in AVIF, HEIC or ICC) have no tone map.
    - Add an sRGB folder (like `/tmp/viewr-bench-srgb`) to the standard bench set, so the conversion cost shows.
    - JPEG XL with a PQ or HLG ICC profile (rare) shows washed out: read the cicp tag and tone-map like the video cube.
-   - Real files for the new formats. This machine has no JPEG XL and no camera RAW file.
+   - Real files for the new formats. `~/Pictures/viewr-test/08-raw` holds camera RAW files. JPEG XL has only converted and synthetic files.
      - Make sure that JPEG XL decodes correctly: sRGB, Display P3, PQ and an ICC profile (`VIEWR_TEST_JXL`).
      - Make sure that camera RAW decodes correctly, with a portrait photo (`VIEWR_TEST_RAW`).
      - Measure whether `sips -Z` on a RAW uses the embedded preview, and measure the `sips` times with a real RAW.
@@ -85,6 +79,8 @@ Order: speed first, then formats, then the delete removal, then the first releas
 
 ## Done
 
+- Large octant icons in the grid (loading image, video, folder, `..`). The status row shows the facts of the selected file at the right (size, megapixels, file size, format, date of the shot, and length, frame rate and HDR curve of a video) and no key hints.
+- One file argument opens its folder with the cursor on the file. yazi `g v` runs `viewr %h`, so it opens the hovered folder or the folder at the hovered file.
 - Warm grid: disk cache reads beside the decode slots and batched Kitty emits. All 36 cells show after 17 ms instead of 127 ms, the cold grid is not slower.
 - Videos, video thumbnails and animations convert into the terminal color space: a 17-point SDR cube by primaries (BT.709, BT.601, P3, DCI-P3, BT.2020), the HDR cube writes P3, SDR thumbnails convert in Rust. Real time stays at 30 and 60 fps without drops.
 - Disk cache in QOI (a hit 2.2 times faster), the cell size query and the Kitty probe in one round trip, the first warm picture after about 20 ms instead of about 28 ms. The `dist` profile gives no gain, so `just install` stays on `--release`.

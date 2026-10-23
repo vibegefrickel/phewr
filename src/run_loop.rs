@@ -176,6 +176,8 @@ pub(crate) fn poll_background(app: &mut App, pending_emits: &mut Vec<usize>) {
     app.refresh_from_scanner();
     app.maybe_autostart_slideshow();
     app.poll_filter();
+    app.poll_meta();
+    app.request_meta();
     app.poll_cell_shape();
     app.poll_fullscreen();
     app.poll_source();

@@ -80,6 +80,11 @@ impl App {
         self.return_to = Some(from);
     }
 
+    /// The start with one file argument: the cursor goes to that file after the scan.
+    pub(crate) fn place_cursor_after_scan(&mut self, path: PathBuf) {
+        self.return_to = Some(path);
+    }
+
     /// Put the cursor on the entry that `return_to` names, one time, after the scan ends.
     pub(super) fn place_cursor_on_return(&mut self) {
         let Some(path) = self.return_to.take() else {
@@ -366,6 +371,31 @@ mod tests {
         assert_eq!(app.reveal_path(), Some(PathBuf::from("/photos/sub")));
         app.gallery.cursor = 2;
         assert_eq!(app.reveal_path(), Some(PathBuf::from("/photos/a.jpg")));
+    }
+
+    #[test]
+    fn the_cursor_lands_on_the_start_file_after_the_scan() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        for name in ["a.png", "b.png", "c.png"] {
+            fs::write(root.join(name), b"synthetic").unwrap();
+        }
+
+        let mut app = app_with(&[]);
+        app.switch_to_dir(&root);
+        app.place_cursor_after_scan(root.join("b.png"));
+        wait_until(|| {
+            app.refresh_from_scanner();
+            !app.is_scanning()
+        });
+        assert_eq!(app.filenames, ["..", "sub", "a.png", "b.png", "c.png"]);
+        assert_eq!(app.gallery.selected_index(), Some(3));
+        assert_eq!(
+            app.mode,
+            ViewMode::Gallery,
+            "the grid opens, not the fullscreen view"
+        );
     }
 
     #[test]

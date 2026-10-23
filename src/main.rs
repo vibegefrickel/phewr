@@ -5,7 +5,9 @@ mod cli;
 mod config;
 mod decode;
 mod encoder;
+mod file_meta;
 mod gallery;
+mod icons;
 mod image_list;
 mod info;
 mod keys;
@@ -31,7 +33,7 @@ mod yazi;
 
 use app::App;
 use clap::Parser;
-use cli::{Cli, initial_dir_from_paths};
+use cli::{Cli, initial_dir_from_paths, start_paths};
 use image_list::SharedImageList;
 use run_loop::{LoopState, run};
 use scanner::canonicalize_or_self;
@@ -99,6 +101,7 @@ fn main() -> io::Result<()> {
         config.info_panel = true;
     }
 
+    let (paths, cursor_target) = start_paths(paths);
     let initial_dir = initial_dir_from_paths(&paths);
 
     let shared_list = SharedImageList::new();
@@ -143,6 +146,9 @@ fn main() -> io::Result<()> {
     app.initial_dir = Some(initial_dir.clone());
     app.current_dir = Some(initial_dir.clone());
     app.apply_folder_zoom(&initial_dir);
+    if let Some(target) = cursor_target {
+        app.place_cursor_after_scan(target);
+    }
     app.slideshow_autostart = cli.slideshow;
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();

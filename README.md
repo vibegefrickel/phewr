@@ -62,7 +62,8 @@ cargo install --path . --no-default-features --features turbo   # without HEIC a
 ```bash
 viewr                                      # current directory
 viewr ~/Pictures
-viewr image.png                            # single file opens fullscreen
+viewr image.png                            # its folder, with the cursor on image.png
+viewr a.png b.png                          # only these files
 viewr -s ~/Pictures/holiday                # start a slideshow at once
 viewr -s -n 5 ~/Pictures/holiday           # ... with 5 seconds per slide
 viewr -i ~/Pictures                        # open with the info panel
@@ -75,11 +76,11 @@ viewr -j 4 ~/Pictures                      # decode threads (default: all cores)
 # ~/.config/yazi/keymap.toml
 [[mgr.prepend_keymap]]
 on   = [ "g", "v" ]
-run  = "shell --block -- viewr ."
-desc = "Image grid (viewr)"
+run  = "shell --block -- viewr %h"
+desc = "Image grid of the hovered folder, or at the hovered file (viewr)"
 ```
 
-When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `ya emit reveal <path>` for this. If `YAZI_ID` is not set or `ya` is not on PATH, nothing happens.
+On a folder, `g v` opens that folder. On a file, it opens the folder of the file with the cursor on the file. When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `ya emit reveal <path>` for this. If `YAZI_ID` is not set or `ya` is not on PATH, nothing happens.
 
 ## Controls
 
@@ -110,7 +111,7 @@ The grid fills the terminal. The cells have the shape of the photos in the folde
 
 The grid also works under a multiplexer that relays Kitty graphics, such as herdr. The filename toggle and a font size change decode the thumbnails again.
 
-There is no search bar and no frame. A status row at the bottom shows the name and the position of the selected entry, the folder and image count when the grid has folders, the search query and the match count while you search with `/`, the number of selected images, `scanning…` while the scan runs, and the key hints. In the fullscreen view, the image uses the whole terminal above the status row, and the filename shows in the status row.
+There is no search bar and no frame. A status row at the bottom shows the name and the position of the selected entry, the folder and image count when the grid has folders, the search query and the match count while you search with `/`, the number of selected images and `scanning…` while the scan runs. At the right, it shows the facts of the selected file: the size in pixels and megapixels, the file size, the format and the date of the shot (the EXIF date, else the modified time). A video shows its length, its size, its frame rate and `SDR`, `HLG` or `PQ`. The status row shows no key hints: `?` opens the help. In the fullscreen view, the image uses the whole terminal above the status row, and the status row shows the same facts for the open file.
 
 ### Fullscreen
 
@@ -154,9 +155,9 @@ Over SSH, or when the Kitty probe found no temp file medium, a video opens in th
 
 In a slideshow, a video plays one time and the slideshow continues. Outside a slideshow, the video loops. In the mpv window, the slideshow waits until the window closes. Use `q` or the close button to stop it, because `Cmd-q` counts as the end of the clip. A paused slideshow plays the video in a loop.
 
-In fullscreen, a status note (for example "clip.mp4 plays in an mpv window") replaces the key hints until the next key press.
+A status note (for example "clip.mp4 plays in an mpv window") replaces the file facts until the next key press.
 
-`q` goes back one step in every view. Only `q` in the grid quits viewr. An empty folder shows a note in the status row: `Backspace` goes up, `q` quits.
+`q` goes back one step in every view. Only `q` in the grid quits viewr. An empty folder shows a note in the status row. `Backspace` goes up, and `q` quits.
 
 ### Mouse
 

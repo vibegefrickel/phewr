@@ -16,9 +16,9 @@ pub(crate) use decoder::{
     Decoder, FrameStream, Pipeline, SystemDecoder, args, cube_for, first_frame_args, pixel_format,
 };
 pub(crate) use layout::{cell_box, frame_box, frame_limit};
-pub(crate) use probe::VideoInfo;
 #[cfg(test)]
 pub(crate) use probe::probe as probe_file;
+pub(crate) use probe::{VideoInfo, probe_cached};
 
 use crate::encoder::Pixels;
 use std::path::{Path, PathBuf};
