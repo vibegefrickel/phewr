@@ -55,7 +55,15 @@ Order: speed first, then formats, then the delete removal, then the first releas
 3. Delete removal, after the terminal tests in "Now"
    - viewr is a viewer only. Remove trash, permanent delete, the delete question, the `d` / `D` keys, their tests and docs, and the `trash` crate if nothing else needs it.
    - Keep the marks (`Space`, `a`, `A`) for a later use, for example a slideshow of the marked images.
-4. First release: make ffmpeg a recommendation in the formula and drop the `libavcodec` check from `install.sh`, because viewr runs without ffmpeg. Then create the Codeberg repository `viewr`, then `just render` and `just release`. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
+4. Grid loops (decided 2026-10-23, one heavy worker, spawn on request)
+   - Every visible video and animated cell plays a loop in the grid, always, not only under the cursor. The loop replaces the `▶` marker.
+   - Video: 12 keyframes spread over the whole clip, about 3 fps, a 4 s loop. Extract them with `-skip_frame nokey` (measured: 0.11 s to 0.15 s per 4K clip). For a long clip, seek to 12 points instead.
+   - Animated GIF, WebP, APNG and AVIS: their own frames and delays, with a cap on the frame count.
+   - Ghostty has no Kitty animation frames (Ghostty #5255). viewr drives the loop: each frame goes to the terminal once as its own image, then each tick deletes the old placement and places the next frame (about 100 bytes per cell), in one synchronized update.
+   - Count the frames against `TERMINAL_IMAGE_BUDGET` (128 MB, herdr stores each image twice). Only visible cells loop. Above the budget, a cell keeps its still thumbnail.
+   - Keep the frames in the disk cache. The run loop wakes at the next due frame, not on a fixed poll.
+   - Config key `[gallery] animate = false` turns the loops off. Measure the CPU of viewr and Ghostty with 30 looping cells, also in herdr.
+5. First release: make ffmpeg a recommendation in the formula and drop the `libavcodec` check from `install.sh`, because viewr runs without ffmpeg. Then create the Codeberg repository `viewr`, then `just render` and `just release`. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 
 ## Later
 
@@ -67,15 +75,6 @@ Order: speed first, then formats, then the delete removal, then the first releas
   - Open the socket in a thread, parse events, and send the final reason back through the existing `Runner::spawn` channel or a new one. Remove the socket file before start.
   - Low priority: the terminal player is the slideshow video path now.
 
-- Moving thumbnails: the selected grid cell plays a short loop for GIF, WebP, APNG, AVIF and video files when the cell is active
-  - Extract 12 frames with FFmpeg for each animated file. Space the frames evenly across the video duration. You can also sample the first 4 seconds.
-  - Loop the 12 frames over 4 seconds. Set the gap between frames to 333 ms.
-  - Use the Kitty animation protocol for terminal-driven looping. Upload frames with `a=f`. Start the loop with `a=a,s=3,v=1`.
-  - Query the terminal for animation support first. Ghostty does not support Kitty animation frames yet (Ghostty #5255), so the fallback to a static thumbnail is required on Ghostty.
-  - Decode the frames in a background thread. Cache the frame data so the UI can replay the loop without redecoding.
-  - Stop the animation and remove the image when the cursor leaves the cell.
-  - Add a config key to disable moving thumbnails.
-  - Lowest priority: it is visual polish, not decode/render speed or format coverage.
 
 ## Done
 
