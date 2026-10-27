@@ -126,6 +126,80 @@ pub(crate) fn first_frame_args(
     args
 }
 
+/// The frames that one ffmpeg run of a grid loop writes, see [`loop_args`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum LoopSampling {
+    /// Every keyframe of the clip, and no other frame (`-skip_frame nokey`). The decoder skips
+    /// the frames between, so a 4K clip takes about 0.15 s.
+    Keyframes,
+    /// `count` frames at most, at a constant `fps` from the start (the `fps` filter before the
+    /// scale). An animation keeps its own delays this way, and a short clip with few keyframes
+    /// gets frames between them.
+    Rate { fps: f64, count: usize },
+    /// The one keyframe at or before `seconds` (`-noaccurate_seek`), for a long clip.
+    KeyframeAt(f64),
+}
+
+/// The command line of [`args`] that writes the RGBA frames of a grid loop, picked by
+/// `sampling`. The scale, the rotation and the cube are the same as for the first frame.
+pub(crate) fn loop_args(
+    video: &Path,
+    info: &VideoInfo,
+    frame: (u32, u32),
+    cube: Option<&Path>,
+    pipeline: Pipeline,
+    sampling: LoopSampling,
+) -> Vec<OsString> {
+    let mut info = info.clone();
+    // The sampling sets the rate, so ffmpeg must not fill a variable rate with copies.
+    info.variable_rate = false;
+    let mut seek = 0.0;
+    // A loop runs in the background, so its decode and its filters take at most 2 cores. A
+    // software decode of a 4K clip took 10 s of CPU on 7 cores without the cap.
+    let mut input_options: Vec<&str> = vec!["-threads", "2", "-filter_threads", "1"];
+    match sampling {
+        LoopSampling::Keyframes => input_options.extend(["-skip_frame", "nokey"]),
+        LoopSampling::Rate { fps, .. } => info.fps = fps,
+        LoopSampling::KeyframeAt(seconds) => {
+            seek = seconds;
+            input_options.extend(["-skip_frame", "nokey", "-noaccurate_seek"]);
+        }
+    }
+    let mut args = args(video, &info, frame, cube, seek, pipeline);
+    let input = args.iter().position(|arg| arg == "-ss" || arg == "-i");
+    let input = input.unwrap_or(args.len());
+    args.splice(input..input, input_options.into_iter().map(OsString::from));
+    if let LoopSampling::Rate { fps, .. } = sampling
+        && let Some(graph) = args.iter().position(|arg| arg == "-vf").map(|vf| vf + 1)
+        && let Some(text) = args
+            .get(graph)
+            .map(|graph| graph.to_string_lossy().into_owned())
+    {
+        args[graph] = OsString::from(format!("fps=fps={fps:.6},{text}"));
+    }
+    let output = args.pop();
+    // [`args`] ends with `-pix_fmt <format> pipe:1`.
+    if let Some(format) = args.last_mut() {
+        *format = OsString::from("rgba");
+    }
+    if !info.animation {
+        args.extend(["-fps_mode", "passthrough"].map(OsString::from));
+    }
+    let count = match sampling {
+        LoopSampling::Keyframes => None,
+        LoopSampling::Rate { count, .. } => Some(count),
+        LoopSampling::KeyframeAt(_) => Some(1),
+    };
+    if let Some(count) = count {
+        args.extend([
+            OsString::from("-frames:v"),
+            OsString::from(count.to_string()),
+        ]);
+    }
+    args.extend(output);
+    args
+}
+
 /// The filter graph: the scale, the rotation, the download from the GPU and the color cube.
 ///
 /// `frame` is the size on the screen. The scale runs before the rotation, so a portrait clip

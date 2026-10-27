@@ -21,9 +21,10 @@ use std::time::Duration;
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
 
-/// The longest wait for the first frame of a thumbnail. A 4K HLG clip takes about 240 ms. A
-/// file that hangs ffmpeg must not hold one of the 4 thumbnail slots for longer.
-const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
+/// The longest wait for the first frame of a thumbnail, and for each frame of a grid loop. A
+/// 4K HLG clip takes about 240 ms. A file that hangs ffmpeg must not hold one of the 4
+/// thumbnail slots for longer.
+pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn is_video(path: &Path) -> bool {
     path.extension()
@@ -99,13 +100,21 @@ pub(crate) fn session_first_frame(
 /// The cube of the first frame: only the tone mapping of an HLG or PQ video. ffmpeg parses a
 /// cube at each start (about 16 ms for an SDR cube), and the conversion of one small SDR frame
 /// after the decode costs well below 1 ms.
-fn first_frame_cube(info: &VideoInfo, target: ColorTarget, dirs: &[&Path]) -> Option<PathBuf> {
+pub(crate) fn first_frame_cube(
+    info: &VideoInfo,
+    target: ColorTarget,
+    dirs: &[&Path],
+) -> Option<PathBuf> {
     info.hdr.and_then(|_| cube_for(info, target, dirs))
 }
 
 /// The first frame in the color target: an SDR frame converts as a still image with the
 /// primaries of the probe. An HDR frame left ffmpeg in the target already.
-fn convert_first_frame(image: RgbaImage, info: &VideoInfo, target: ColorTarget) -> RgbaImage {
+pub(crate) fn convert_first_frame(
+    image: RgbaImage,
+    info: &VideoInfo,
+    target: ColorTarget,
+) -> RgbaImage {
     if info.hdr.is_some() {
         image
     } else {

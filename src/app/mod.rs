@@ -7,6 +7,7 @@ mod disk_cache;
 mod folder_prefetch;
 mod folders;
 mod fullscreen;
+pub(crate) mod grid_loops;
 mod grid_zoom;
 mod info_panel;
 mod meta;
@@ -192,6 +193,8 @@ pub(crate) struct App {
     /// The images that the terminal stores, so a cell can place one by its id instead of a
     /// transmit. The grid keeps their bytes below a budget.
     pub terminal_images: TerminalImages,
+    /// The loops of the visible video and animated cells.
+    pub(crate) grid_loops: grid_loops::GridLoops,
     /// True when the LRU thumb cache was invalidated but backend storage has not been cleared yet.
     /// Consumed by `render_gallery_images` to issue a full `d=A` at the next redraw.
     pub graphics_storage_dirty: bool,
@@ -306,6 +309,7 @@ impl App {
             stale_image_ids: Vec::new(),
             animated: HashMap::new(),
             terminal_images: TerminalImages::new(),
+            grid_loops: grid_loops::GridLoops::new(config.animate),
             graphics_storage_dirty: false,
         }
     }
@@ -331,6 +335,7 @@ impl App {
     pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         self.graphics.delete_all_to(out)?;
         self.terminal_images.clear();
+        self.grid_loops.forget_placements();
         Ok(())
     }
 
@@ -339,7 +344,7 @@ impl App {
     }
 
     /// True while a background job runs or waits: a decode for the view, a prefetch, a
-    /// thumbnail, a filter, or the scan. The loop then looks for results every few milliseconds.
+    /// thumbnail, a grid loop, a filter, or the scan. The loop then looks for results every few milliseconds.
     /// The prefetch counts, because only `Prefetcher::poll` starts its waiting jobs.
     pub(crate) fn has_pending_work(&self) -> bool {
         self.fullscreen_rx.is_some()
@@ -350,6 +355,7 @@ impl App {
             || self.shape_rx.is_some()
             || !self.scan_complete
             || self.meta_pending()
+            || self.grid_loops_pending()
     }
 
     pub(crate) fn mark_dirty(&mut self) {

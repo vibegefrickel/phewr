@@ -1,10 +1,13 @@
-//! The thumbnail disk cache: the key, the read, the write and the prune.
+//! The thumbnail disk cache: the key, the read, the write and the prune. It also keeps the
+//! frames of the grid loops, one file per loop.
 
+use super::grid_loops::LoopFrames;
 use directories::ProjectDirs;
 use image::RgbaImage;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 /// The version in the disk cache key. Change it when the thumbnail output changes. v7: a
 /// rotated JPEG gets the DCT scale of its turned box, and RAW and PSD files take their
@@ -13,6 +16,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// of a video gets the rotation and the HDR tone mapping. v11: the cache files are QOI, not PNG.
 /// v12: the first frame of a video is in the color space of the terminal too.
 const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v13";
+
+/// The version in the key of a loop file. Change it when the loop output changes.
+const LOOP_CACHE_VERSION: &str = "viewr-loop-v1";
+
+/// The extension of a loop file: the frames of one grid loop as QOI images, with their times.
+const LOOP_EXTENSION: &str = "loop";
+
+/// The first bytes of a loop file.
+const LOOP_MAGIC: &[u8; 8] = b"VIEWRLP1";
 
 /// The file format of the cache. QOI decodes twice as fast as PNG at the same file size.
 const CACHE_FORMAT: image::ImageFormat = image::ImageFormat::Qoi;
@@ -39,6 +51,23 @@ pub(super) fn get_cache_file_path(
     path: &Path,
     target: (u32, u32),
 ) -> Option<PathBuf> {
+    cache_file_path(
+        cache_dir,
+        path,
+        target,
+        THUMBNAIL_CACHE_VERSION,
+        CACHE_EXTENSION,
+    )
+}
+
+/// The cache file of `path` at `target` for the output `version`, with `extension`.
+fn cache_file_path(
+    cache_dir: &Path,
+    path: &Path,
+    target: (u32, u32),
+    version: &str,
+    extension: &str,
+) -> Option<PathBuf> {
     use std::collections::hash_map::DefaultHasher;
     use std::fs;
     use std::hash::{Hash, Hasher};
@@ -52,7 +81,7 @@ pub(super) fn get_cache_file_path(
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     let mut hasher = DefaultHasher::new();
-    THUMBNAIL_CACHE_VERSION.hash(&mut hasher);
+    version.hash(&mut hasher);
     crate::decode::color::target().hash(&mut hasher);
     canonical_path.hash(&mut hasher);
     metadata.len().hash(&mut hasher);
@@ -60,7 +89,7 @@ pub(super) fn get_cache_file_path(
     mtime.subsec_nanos().hash(&mut hasher);
     target.0.hash(&mut hasher);
     target.1.hash(&mut hasher);
-    let filename = format!("{:016x}.{CACHE_EXTENSION}", hasher.finish());
+    let filename = format!("{:016x}.{extension}", hasher.finish());
 
     Some(cache_dir.join(filename))
 }
@@ -90,11 +119,107 @@ pub(super) fn try_save_to_disk_cache(
     target: (u32, u32),
     img: &RgbaImage,
 ) -> Option<()> {
+    let cache_path = get_cache_file_path(cache_dir, path, target)?;
+    write_cache_file(&cache_path, |temp_path| {
+        img.save_with_format(temp_path, CACHE_FORMAT).is_ok()
+    })
+}
+
+/// The frames of the grid loop of `path` for a grid picture of `target` pixels, from the disk
+/// cache. A file that does not read is removed.
+pub(super) fn try_load_loop(
+    cache_dir: &Path,
+    path: &Path,
+    target: (u32, u32),
+) -> Option<LoopFrames> {
+    let cache_path = cache_file_path(cache_dir, path, target, LOOP_CACHE_VERSION, LOOP_EXTENSION)?;
+    let bytes = std::fs::read(&cache_path).ok()?;
+    let frames = decode_loop_file(&bytes);
+    if frames.is_none() {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a cache file that stays is only disk space, the cache prunes it"
+        )]
+        let _ = std::fs::remove_file(cache_path);
+    }
+    frames
+}
+
+/// Keep the frames of the grid loop of `path` in the disk cache, so that a warm folder starts
+/// its loops without ffmpeg.
+pub(super) fn try_save_loop(
+    cache_dir: &Path,
+    path: &Path,
+    target: (u32, u32),
+    frames: &LoopFrames,
+) -> Option<()> {
+    let cache_path = cache_file_path(cache_dir, path, target, LOOP_CACHE_VERSION, LOOP_EXTENSION)?;
+    let bytes = encode_loop_file(frames)?;
+    write_cache_file(&cache_path, |temp_path| {
+        std::fs::write(temp_path, &bytes).is_ok()
+    })
+}
+
+/// A loop file: [`LOOP_MAGIC`], the frame count and the size of the still, then the time in
+/// microseconds, the length and the QOI bytes of each frame. All numbers are little-endian
+/// `u32` values.
+fn encode_loop_file(frames: &LoopFrames) -> Option<Vec<u8>> {
+    let mut bytes = LOOP_MAGIC.to_vec();
+    let count = u32::try_from(frames.frames.len()).ok()?;
+    for number in [count, frames.shown.0, frames.shown.1] {
+        bytes.extend_from_slice(&number.to_le_bytes());
+    }
+    for (frame, delay) in frames.frames.iter().zip(&frames.delays) {
+        let mut qoi = Vec::new();
+        frame
+            .write_to(&mut std::io::Cursor::new(&mut qoi), CACHE_FORMAT)
+            .ok()?;
+        let micros = u32::try_from(delay.as_micros()).ok()?;
+        let length = u32::try_from(qoi.len()).ok()?;
+        bytes.extend_from_slice(&micros.to_le_bytes());
+        bytes.extend_from_slice(&length.to_le_bytes());
+        bytes.extend_from_slice(&qoi);
+    }
+    Some(bytes)
+}
+
+/// The frames of a loop file, or `None` for a file that is cut or broken.
+fn decode_loop_file(bytes: &[u8]) -> Option<LoopFrames> {
+    let mut rest = bytes.strip_prefix(LOOP_MAGIC.as_slice())?;
+    let count = take_u32(&mut rest)?;
+    let shown = (take_u32(&mut rest)?, take_u32(&mut rest)?);
+    let mut frames = LoopFrames {
+        frames: Vec::new(),
+        delays: Vec::new(),
+        shown,
+    };
+    for _ in 0..count {
+        let micros = take_u32(&mut rest)?;
+        let length = usize::try_from(take_u32(&mut rest)?).ok()?;
+        let (qoi, tail) = rest.split_at_checked(length)?;
+        rest = tail;
+        let image = image::load_from_memory_with_format(qoi, CACHE_FORMAT).ok()?;
+        frames.frames.push(image.into_rgba8());
+        frames.delays.push(Duration::from_micros(u64::from(micros)));
+    }
+    Some(frames)
+}
+
+/// The little-endian `u32` at the start of `rest`, which then starts after it.
+fn take_u32(rest: &mut &[u8]) -> Option<u32> {
+    let (number, tail) = rest.split_first_chunk::<4>()?;
+    *rest = tail;
+    Some(u32::from_le_bytes(*number))
+}
+
+/// Write a cache file through a temp file and a rename, so that a reader never sees half a
+/// file. `write` fills the temp file. The first write of the session prunes the cache, and
+/// each 64th write too.
+fn write_cache_file(cache_path: &Path, write: impl FnOnce(&Path) -> bool) -> Option<()> {
     use std::fs;
     static CACHE_PRUNED: OnceLock<()> = OnceLock::new();
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    let cache_path = get_cache_file_path(cache_dir, path, target)?;
     let parent = cache_path.parent()?;
     fs::create_dir_all(parent).ok()?;
     CACHE_PRUNED.get_or_init(|| prune_disk_cache(parent, 512 * 1024 * 1024));
@@ -109,7 +234,7 @@ pub(super) fn try_save_to_disk_cache(
         std::process::id(),
         sequence
     ));
-    if img.save_with_format(&temp_path, CACHE_FORMAT).is_err() {
+    if !write(&temp_path) {
         #[expect(
             clippy::let_underscore_must_use,
             reason = "a cache file that stays is only disk space, the cache prunes it"
@@ -117,7 +242,7 @@ pub(super) fn try_save_to_disk_cache(
         let _ = fs::remove_file(temp_path);
         return None;
     }
-    if fs::rename(&temp_path, &cache_path).is_err() {
+    if fs::rename(&temp_path, cache_path).is_err() {
         #[expect(
             clippy::let_underscore_must_use,
             reason = "a cache file that stays is only disk space, the cache prunes it"
@@ -135,7 +260,7 @@ pub(super) fn try_save_to_disk_cache(
 
 /// The age after which a temp file of the cache counts as left behind. A write takes
 /// milliseconds, so an older temp file belongs to a viewr that ended during its write.
-const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+const STALE_TEMP_AGE: Duration = Duration::from_secs(3600);
 
 /// Remove a temp file of `try_save_to_disk_cache` that is older than `STALE_TEMP_AGE`. A quit
 /// during a cache write leaves one, and the size prune only counts the cache files.
@@ -158,6 +283,9 @@ fn remove_stale_temp_file(entry: &std::fs::DirEntry) {
     }
 }
 
+/// Remove cache files until the cache takes at most `max_bytes`: the loop files first, then
+/// the stills, each oldest first. A video loop takes about 3 times the bytes of its still and
+/// an animation up to 12 times, so the stills of a warm folder keep their priority.
 fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
     let Ok(entries) = std::fs::read_dir(cache_dir) else {
         return;
@@ -175,7 +303,7 @@ fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
                 let _ = std::fs::remove_file(&path);
                 return None;
             }
-            if extension != Some(CACHE_EXTENSION) {
+            if extension != Some(CACHE_EXTENSION) && extension != Some(LOOP_EXTENSION) {
                 remove_stale_temp_file(&entry);
                 return None;
             }
@@ -194,7 +322,10 @@ fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
         return;
     }
 
-    files.sort_by_key(|(_, _, modified)| *modified);
+    files.sort_by_key(|(path, _, modified)| {
+        let still = path.extension().and_then(|ext| ext.to_str()) == Some(CACHE_EXTENSION);
+        (still, *modified)
+    });
     for (path, bytes, _) in files {
         if total_bytes <= max_bytes {
             break;
@@ -208,13 +339,51 @@ fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_cache_file_path, prune_disk_cache, try_load_from_disk_cache, try_save_to_disk_cache,
+        LoopFrames, get_cache_file_path, prune_disk_cache, try_load_from_disk_cache, try_load_loop,
+        try_save_loop, try_save_to_disk_cache,
     };
     use crate::test_support::test_dir;
     use image::RgbaImage;
     use std::fs;
 
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn a_loop_file_keeps_its_frames_its_times_and_the_size_of_the_still() {
+        let dir = test_dir();
+        let cache = dir.path().join("cache");
+        let source = dir.path().join("clip.mp4");
+        fs::write(&source, b"synthetic").unwrap();
+        let frames = LoopFrames {
+            frames: vec![
+                RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255])),
+                RgbaImage::from_pixel(4, 2, image::Rgba([4, 5, 6, 128])),
+            ],
+            delays: vec![Duration::from_millis(333), Duration::from_micros(83_333)],
+            shown: (8, 4),
+        };
+        assert!(try_load_loop(&cache, &source, (8, 4)).is_none());
+        try_save_loop(&cache, &source, (8, 4), &frames).unwrap();
+        assert_eq!(try_load_loop(&cache, &source, (8, 4)), Some(frames));
+        assert!(
+            try_load_loop(&cache, &source, (16, 8)).is_none(),
+            "another size"
+        );
+        let thumbnail = get_cache_file_path(&cache, &source, (8, 4)).unwrap();
+        assert!(!thumbnail.exists(), "the loop has its own key");
+
+        // A cut file reads as a miss and goes.
+        let file = fs::read_dir(&cache)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let bytes = fs::read(&file).unwrap();
+        fs::write(&file, &bytes[..bytes.len() - 5]).unwrap();
+        assert!(try_load_loop(&cache, &source, (8, 4)).is_none());
+        assert!(!file.exists());
+    }
 
     #[test]
     fn cache_key_changes_with_dimensions_and_source_size() {
@@ -302,6 +471,32 @@ mod tests {
         assert!(cache.join("notes.txt").exists());
 
         prune_disk_cache(&cache.join("missing"), 0);
+    }
+
+    #[test]
+    fn prune_removes_the_loop_files_before_the_stills() {
+        let dir = test_dir();
+        let cache = dir.path();
+        let base = SystemTime::now() - Duration::from_secs(1000);
+        let names = ["old.qoi", "old.loop", "new.qoi", "new.loop"];
+        for (index, name) in names.iter().enumerate() {
+            let path = cache.join(name);
+            fs::write(&path, [0_u8; 100]).unwrap();
+            let file = fs::File::options().write(true).open(&path).unwrap();
+            file.set_modified(base + Duration::from_secs(index as u64 * 100))
+                .unwrap();
+        }
+
+        prune_disk_cache(cache, 300);
+        assert!(!cache.join("old.loop").exists());
+        assert!(cache.join("new.loop").exists(), "{names:?}");
+        prune_disk_cache(cache, 200);
+        assert!(
+            !cache.join("new.loop").exists(),
+            "a newer loop goes before an old still"
+        );
+        assert!(cache.join("old.qoi").exists());
+        assert!(cache.join("new.qoi").exists());
     }
 
     #[test]

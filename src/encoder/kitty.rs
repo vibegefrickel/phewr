@@ -86,7 +86,8 @@ fn header_keys(pixels: Pixels<'_>, opts: &DisplayOptions, format: u32) -> String
     let (w, h) = pixels.dimensions();
     let id_part = opts.id.map(|id| format!(",i={id}")).unwrap_or_default();
     let box_part = cell_box_keys(opts.cell_box);
-    format!("a=T,q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}")
+    let action = if opts.transmit_only { 't' } else { 'T' };
+    format!("a={action},q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}")
 }
 
 /// The `c=` and `r=` keys of the cell box that the terminal scales the picture to.
@@ -263,6 +264,12 @@ pub(crate) fn delete_image_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Re
     write!(out, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")
 }
 
+/// Delete the placements of the image `id` and keep its pixels (`d=i`), so that a later `a=p`
+/// shows it again without a transmit. A grid loop swaps its frames this way.
+pub(crate) fn delete_placements_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Result<()> {
+    write!(out, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\")
+}
+
 /// Place an already-transmitted image (by ID) at the cursor position, scaled to `cell_box` if
 /// there is one. Cheap — no PNG payload. `C=1` keeps the text cursor fixed so large placements
 /// never scroll the grid.
@@ -281,8 +288,9 @@ pub(crate) fn place_by_id_to<W: Write + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::{
-        PROBE_ID, TEMP_FILE_MARKER, Transfer, clear_placements_to, delete_all_to, detect_transfer,
-        place_by_id_to, probe_accepted, temp_file_paths, transmit_to,
+        PROBE_ID, TEMP_FILE_MARKER, Transfer, clear_placements_to, delete_all_to,
+        delete_placements_to, detect_transfer, place_by_id_to, probe_accepted, temp_file_paths,
+        transmit_to,
     };
     use crate::encoder::{DisplayOptions, Pixels};
     use base64::Engine;
@@ -292,7 +300,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn options(id: Option<u32>) -> DisplayOptions {
-        DisplayOptions { id, cell_box: None }
+        DisplayOptions {
+            id,
+            ..DisplayOptions::default()
+        }
     }
 
     fn transmit(image: &RgbaImage, opts: &DisplayOptions, transfer: Transfer) -> String {
@@ -319,9 +330,10 @@ mod tests {
         delete_all_to(&mut output).unwrap();
         clear_placements_to(&mut output).unwrap();
         place_by_id_to(&mut output, 42, None).unwrap();
+        delete_placements_to(&mut output, 42).unwrap();
         assert_eq!(
             output,
-            b"\x1b_Ga=d,d=A,q=2\x1b\\\x1b_Ga=d,d=a,q=2\x1b\\\x1b_Ga=p,q=2,C=1,i=42\x1b\\"
+            b"\x1b_Ga=d,d=A,q=2\x1b\\\x1b_Ga=d,d=a,q=2\x1b\\\x1b_Ga=p,q=2,C=1,i=42\x1b\\\x1b_Ga=d,d=i,i=42,q=2\x1b\\"
         );
     }
 
@@ -335,12 +347,28 @@ mod tests {
     }
 
     #[test]
+    fn a_transmit_without_a_placement_takes_the_action_t() {
+        let encoded = transmit(
+            &RgbaImage::new(2, 3),
+            &DisplayOptions {
+                id: Some(9),
+                transmit_only: true,
+                ..DisplayOptions::default()
+            },
+            Transfer::Direct,
+        );
+        assert!(encoded.starts_with("\u{1b}_Ga=t,q=2,"), "{encoded}");
+        assert!(encoded.contains(",i=9"));
+    }
+
+    #[test]
     fn transmission_includes_cell_size_options() {
         let encoded = transmit(
             &RgbaImage::new(2, 3),
             &DisplayOptions {
                 id: None,
                 cell_box: Some((4, 2)),
+                transmit_only: false,
             },
             Transfer::Direct,
         );

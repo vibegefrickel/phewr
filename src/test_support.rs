@@ -415,12 +415,21 @@ pub(crate) mod kitty {
                     self.store(id, bytes);
                     self.place(id, cell_box);
                 }
+                Some("t") => {
+                    let id = number("i").unwrap_or(0);
+                    let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
+                    self.store(id, bytes);
+                }
                 Some("p") => self.place(number("i").unwrap_or(0), cell_box),
                 Some("d") => match keys.get("d").copied() {
                     Some("a") => self.placements.clear(),
                     Some("A") => {
                         self.placements.clear();
                         self.stored.clear();
+                    }
+                    Some("i") => {
+                        let id = number("i").unwrap_or(0);
+                        self.placements.retain(|placement| placement.id != id);
                     }
                     Some("I") => {
                         let id = number("i").unwrap_or(0);
@@ -497,6 +506,14 @@ pub(crate) mod kitty {
 
         terminal.feed(b"\x1b_Ga=T,q=2,C=1,f=32,s=1,v=1,i=9,m=0;AAAA\x1b\\\x1b_Ga=d,d=A,q=2\x1b\\");
         assert!(terminal.stored_ids().is_empty());
+
+        // A transmit without a placement stores, and `d=i` deletes the placement only.
+        terminal.feed(b"\x1b_Ga=t,q=2,C=1,f=32,s=1,v=1,i=5,m=0;AAAA\x1b\\");
+        assert!(terminal.stores(5));
+        assert!(terminal.placements.is_empty());
+        terminal.feed(b"\x1b_Ga=p,q=2,C=1,i=5\x1b\\\x1b_Ga=d,d=i,i=5,q=2\x1b\\");
+        assert!(terminal.placements.is_empty());
+        assert!(terminal.stores(5));
     }
 
     #[test]

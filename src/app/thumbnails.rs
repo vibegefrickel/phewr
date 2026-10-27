@@ -131,6 +131,7 @@ impl App {
         self.cache_reads.clear();
         self.cache_misses.clear();
         self.thumb_generation += 1;
+        self.forget_grid_loops();
     }
 
     /// Drop the waiting thumbnail jobs. A render of the grid queues the visible cells again.
@@ -141,7 +142,7 @@ impl App {
     }
 
     /// True while a thumbnail job or a disk cache read runs or waits.
-    pub(super) fn thumbnails_pending(&self) -> bool {
+    pub(crate) fn thumbnails_pending(&self) -> bool {
         !self.thumb_jobs.is_idle() || self.previews_pending() || self.cache_reads_pending()
     }
 
@@ -547,6 +548,31 @@ pub(crate) fn pad_for_grid(
     } else {
         box_shaped_canvas(image.dimensions(), box_px)
     };
+    GridPicture {
+        image: pad_centered(image, canvas),
+        cells,
+    }
+}
+
+/// Pad a frame of a grid loop to the cells of its still, which has `shown` pixels. The frame
+/// keeps its own resolution, and the canvas grows by the same factor as the frame shrank, so
+/// the terminal scales the frame to the size of the still when it fits the canvas to the cells.
+pub(crate) fn pad_loop_frame(
+    image: RgbaImage,
+    shown: (u32, u32),
+    target: (u32, u32),
+    cell_px: (u32, u32),
+) -> GridPicture {
+    let cells = whole_cells(shown, target, cell_px);
+    let side = |cells: u16, cell: u32, frame: u32, shown: u32| {
+        let box_side = u64::from(cells) * u64::from(cell.max(1));
+        let side = (box_side * u64::from(frame)).div_ceil(u64::from(shown.max(1)));
+        u32::try_from(side).unwrap_or(u32::MAX).max(frame)
+    };
+    let canvas = (
+        side(cells.0, cell_px.0, image.width(), shown.0),
+        side(cells.1, cell_px.1, image.height(), shown.1),
+    );
     GridPicture {
         image: pad_centered(image, canvas),
         cells,

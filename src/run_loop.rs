@@ -5,7 +5,9 @@ use crate::config::Config;
 use crate::keys::{LateAnswerFilter, handle_event};
 #[cfg(feature = "video")]
 use crate::kitty_output::render_video_frame;
-use crate::kitty_output::{emit_new_thumbnails, render_fullscreen_image, render_gallery_images};
+use crate::kitty_output::{
+    emit_new_thumbnails, play_grid_loops, render_fullscreen_image, render_gallery_images,
+};
 #[cfg(feature = "video")]
 use crate::mpv;
 use crate::terminal::{disable_mouse, enable_mouse, query_cell_pixel_size};
@@ -186,6 +188,7 @@ pub(crate) fn poll_background(app: &mut App, pending_emits: &mut Vec<usize>) {
     app.poll_source();
     app.prefetcher.poll();
     pending_emits.extend(app.poll_thumbnails());
+    app.poll_grid_loops();
     app.slideshow_tick();
 
     // The help popup sits above the pictures, so no frame moves while it is open.
@@ -225,6 +228,8 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
             finish_render(app, pending_emits);
         }
         ViewMode::Gallery if !pending_emits.is_empty() => emit_new_thumbnails(app, pending_emits)?,
+        // The loops wait for the stills: they write in a pass without new thumbnails.
+        ViewMode::Gallery => return play_grid_loops(app, Instant::now()),
         _ => {}
     }
     Ok(false)
@@ -243,9 +248,10 @@ fn finish_render(app: &mut App, pending_emits: &mut Vec<usize>) {
 /// loop looks every 10 ms, every 2 ms while a disk cache read of the grid is on its way, and
 /// every 1 ms during the first 20 ms of the cell shape read. Otherwise it looks every 250 ms.
 /// The thumbnails that one pass of the grid left for the next pass go out without a wait,
-/// after the loop read the input.
+/// after the loop read the input, and so do the frames of new grid loops. A playing grid loop
+/// wakes the loop at its next frame, not on a short poll.
 pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
-    if app.mode == ViewMode::Gallery && !pending_emits.is_empty() {
+    if app.mode == ViewMode::Gallery && (!pending_emits.is_empty() || app.loops_to_send()) {
         return Duration::ZERO;
     }
     let busy = app.has_pending_work() || !pending_emits.is_empty();
@@ -274,6 +280,9 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
         timeout = timeout.min(remaining);
     }
     if let Some(remaining) = app.folder_prefetch_timeout(Instant::now()) {
+        timeout = timeout.min(remaining);
+    }
+    if let Some(remaining) = app.grid_loop_timeout(Instant::now()) {
         timeout = timeout.min(remaining);
     }
     #[cfg(feature = "video")]

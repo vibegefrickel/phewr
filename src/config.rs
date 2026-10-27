@@ -18,6 +18,10 @@ pub(crate) const MAX_VISIBLE_ROWS: u16 = 12;
 pub(crate) const DEFAULT_SLIDESHOW_INTERVAL: f64 = 3.0;
 
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one independent key of the config file"
+)]
 pub(crate) struct Config {
     /// The grid zoom level: how many thumbnail rows the terminal shows.
     /// This is the effective level, which the remembered global level can override.
@@ -35,6 +39,9 @@ pub(crate) struct Config {
     /// Capture the mouse: clicks, drags and the wheel reach viewr. Off, the terminal keeps its
     /// own selection and scrolling.
     pub mouse: bool,
+    /// Play a short loop in each visible video and animated cell of the grid. Off, the cells
+    /// keep their stills and their play markers.
+    pub animate: bool,
     /// The color space in which the terminal shows the pixels of an image.
     pub colorspace: ColorTarget,
 }
@@ -72,6 +79,7 @@ impl Default for Config {
             info_panel: false,
             video_player: VideoPlayer::default(),
             mouse: true,
+            animate: true,
             colorspace: ColorTarget::default(),
         }
     }
@@ -95,6 +103,7 @@ struct ConfigFile {
 struct GallerySection {
     visible_rows: Option<u16>,
     mouse: Option<bool>,
+    animate: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -195,6 +204,9 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     }
     if let Some(mouse) = file.gallery.mouse {
         config.mouse = mouse;
+    }
+    if let Some(animate) = file.gallery.animate {
+        config.animate = animate;
     }
     if let Some(show) = file.info.show_on_start {
         config.info_panel = show;
@@ -372,13 +384,15 @@ mod tests {
         let state_path = root.path().join("state.toml");
         std::fs::write(
             &config_path,
-            "[gallery]\nvisible_rows = 6\nmouse = false\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
+            "[gallery]\nvisible_rows = 6\nmouse = false\nanimate = false\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
         )
         .unwrap();
 
         let config = load_at(&config_path, &state_path);
         assert_eq!(config.visible_rows, 6);
         assert!(!config.mouse);
+        assert!(!config.animate);
+        assert!(Config::default().animate, "the loops are on by default");
         assert_eq!(config.slideshow_interval, 1.5);
         assert!(!config.slideshow_loop);
         assert!(config.info_panel);

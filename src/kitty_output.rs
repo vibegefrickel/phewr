@@ -8,6 +8,7 @@ use lru::LruCache;
 use ratatui::prelude::*;
 use std::collections::HashSet;
 use std::io::{self, Write};
+use std::time::Instant;
 
 pub(crate) fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
     app.with_graphics_out(render_fullscreen_image_to)
@@ -98,6 +99,7 @@ pub(crate) fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Resu
             &encoder::DisplayOptions {
                 id: Some(VIDEO_IMAGE_ID),
                 cell_box: Some((cells.width, cells.height)),
+                transmit_only: false,
             },
         )?;
         queue!(out, EndSynchronizedUpdate)?;
@@ -144,6 +146,11 @@ impl TerminalImages {
 
     pub(crate) fn contains(&self, id: u32) -> bool {
         self.stored.contains(&id)
+    }
+
+    /// The pixel bytes of the stored image `id`, 0 for an image that the terminal does not store.
+    pub(crate) fn bytes_of(&self, id: u32) -> usize {
+        self.stored.peek(&id).copied().unwrap_or(0)
     }
 
     /// Make `id` the newest image, because a cell shows it again.
@@ -231,6 +238,9 @@ fn emit_new_thumbnails_to(
         if let Some((_, id)) = app.thumb_cache.peek(img_idx) {
             shown.insert(id);
         }
+        if let Some(cell) = app.grid_loops.loops.get(&img_idx) {
+            shown.extend(cell.ids.iter().copied());
+        }
         if !new_indices.contains(&img_idx) {
             continue;
         }
@@ -267,6 +277,7 @@ fn transmit_cell(
         &encoder::DisplayOptions {
             id: Some(id),
             cell_box,
+            transmit_only: false,
         },
     )?;
     app.terminal_images.insert(id, bytes);
@@ -354,6 +365,7 @@ pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
         app.thumb_cache
             .touch(app.gallery.filtered_indices[position]);
     }
+    app.drop_hidden_loops();
     if !app.cell_shape_pending() {
         for position in app.gallery.visible_range() {
             let img_idx = app.gallery.filtered_indices[position];
@@ -379,17 +391,33 @@ fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()
         // Drop visible placements only; keep stored image data so already-transmitted thumbs
         // can be re-placed with a cheap `a=p` instead of a full PNG retransmit.
         app.graphics.clear_placements_to(out)?;
+        app.grid_loops.forget_placements();
         delete_stale_images_to(app, out, |_| true)?;
         delete_evicted_images_to(app, out)?;
     }
+    for id in std::mem::take(&mut app.grid_loops.stale_ids) {
+        delete_image_to(app, out, id)?;
+    }
 
     let mut shown = HashSet::new();
+    let tick = app.grid_loops.tick_at(Instant::now());
     for (vis_idx, position) in app.gallery.visible_range().enumerate() {
         let img_idx = app.gallery.filtered_indices[position];
-        let Some((picture, id)) = app.thumb_cache.peek(img_idx) else {
+        let Some((_, id)) = app.thumb_cache.peek(img_idx) else {
             continue;
         };
         shown.insert(id);
+        if let Some(cell) = app.grid_loops.loops.get(&img_idx) {
+            shown.extend(cell.ids.iter().copied());
+        }
+        if place_loop_frame_to(app, out, vis_idx, img_idx, tick)? {
+            // The still stays for the next overlay, and the trim keeps the newest images.
+            app.terminal_images.touch(id);
+            continue;
+        }
+        let Some((picture, id)) = app.thumb_cache.peek(img_idx) else {
+            continue;
+        };
         if app.terminal_images.contains(id) {
             let (origin, cell_box) = grid_placement(app, vis_idx, picture.cells);
             queue!(out, cursor::MoveTo(origin.0, origin.1))?;
@@ -402,6 +430,203 @@ fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()
     trim_to_budget(app, out, &shown)?;
     queue!(out, EndSynchronizedUpdate)?;
     out.flush()
+}
+
+/// Place the frame of the loop of `img_idx` that shows at `tick`, when the grid shows its
+/// loops and the terminal stores every frame. Returns `false` when the cell shows its still.
+fn place_loop_frame_to(
+    app: &mut App,
+    out: &mut impl Write,
+    vis_idx: usize,
+    img_idx: usize,
+    tick: u64,
+) -> io::Result<bool> {
+    let shown = app.grid_loops_shown();
+    let Some(cell) = app.grid_loops.loops.get_mut(&img_idx) else {
+        return Ok(false);
+    };
+    if !shown || !cell.ids.iter().all(|&id| app.terminal_images.contains(id)) {
+        return Ok(false);
+    }
+    cell.start_at(tick);
+    let id = cell.id_at(tick);
+    cell.placed = Some(id);
+    for &frame in &cell.ids {
+        app.terminal_images.touch(frame);
+    }
+    let cells = cell.cells();
+    let (origin, cell_box) = grid_placement(app, vis_idx, cells);
+    queue!(out, cursor::MoveTo(origin.0, origin.1))?;
+    app.graphics.place_by_id_to(out, id, cell_box)?;
+    Ok(true)
+}
+
+/// Write the loops of the grid at `now`: the frames of the new loops, then the frames that
+/// are due. Returns `true` when a cell started its loop, so that the draw drops its marker.
+pub(crate) fn play_grid_loops(app: &mut App, now: Instant) -> io::Result<bool> {
+    if !app.loops_to_send() && !app.loop_frames_due(now) {
+        return Ok(false);
+    }
+    let mut started = false;
+    app.with_graphics_out(|app, out| {
+        started = play_grid_loops_to(app, out, now)?;
+        Ok(())
+    })?;
+    Ok(started)
+}
+
+/// Write the loops of the grid to `out`, in one synchronized update, so that the tests can read
+/// the escape sequences. See [`play_grid_loops`].
+pub(crate) fn play_grid_loops_to(
+    app: &mut App,
+    out: &mut impl Write,
+    now: Instant,
+) -> io::Result<bool> {
+    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+
+    if !app.grid_loops_shown() {
+        return Ok(false);
+    }
+    let tick = app.grid_loops.tick_at(now);
+    queue!(out, BeginSynchronizedUpdate)?;
+    let started = start_grid_loops_to(app, out, tick)?;
+    swap_loop_frames_to(app, out, tick)?;
+    queue!(out, EndSynchronizedUpdate)?;
+    out.flush()?;
+    Ok(started)
+}
+
+/// The ids that the visible cells need in the terminal: the stills and the frames of their
+/// loops. The trim keeps them.
+fn visible_image_ids(app: &App) -> HashSet<u32> {
+    let mut ids = HashSet::new();
+    for (_, img_idx) in app.gallery.visible_items() {
+        if let Some((_, id)) = app.thumb_cache.peek(img_idx) {
+            ids.insert(id);
+        }
+        if let Some(cell) = app.grid_loops.loops.get(&img_idx) {
+            ids.extend(cell.ids.iter().copied());
+        }
+    }
+    ids
+}
+
+/// Send the frames of the visible loops that wait, in grid order, each frame one time without a
+/// placement (`a=t`), then put the current frame in the place of the still. A pass sends up to
+/// `EMIT_PASS_BYTES`, and the rest goes out in the next pass. A loop that does not fit the
+/// terminal budget beside the images of the screen goes, and its cell keeps the still.
+fn start_grid_loops_to(app: &mut App, out: &mut impl Write, tick: u64) -> io::Result<bool> {
+    let mut kept = visible_image_ids(app);
+    let mut kept_bytes: usize = kept
+        .iter()
+        .map(|&id| app.terminal_images.bytes_of(id))
+        .sum();
+    let mut written = 0;
+    let mut started = false;
+    let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
+    for (vis_idx, img_idx) in visible {
+        let Some(cell) = app.grid_loops.loops.get(&img_idx) else {
+            continue;
+        };
+        if cell.placed.is_some() {
+            continue;
+        }
+        if !cell.ids.iter().all(|&id| app.terminal_images.contains(id)) {
+            if written >= EMIT_PASS_BYTES {
+                continue;
+            }
+            let bytes = cell.bytes();
+            if kept_bytes + bytes > app.terminal_images.budget {
+                app.grid_loops.drop_over_budget(img_idx);
+                continue;
+            }
+            transmit_loop_to(app, out, img_idx)?;
+            written += bytes;
+            kept_bytes += bytes;
+        }
+        if let Some((_, still)) = app.thumb_cache.peek(img_idx) {
+            app.graphics.delete_placements_to(out, still)?;
+        }
+        kept.extend(start_loop_to(app, out, vis_idx, img_idx, tick)?);
+        started = true;
+    }
+    trim_to_budget(app, out, &kept)?;
+    Ok(started)
+}
+
+/// Send each frame of the loop of `img_idx` that the terminal does not store, without a
+/// placement, and record its bytes.
+fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::Result<()> {
+    let Some(cell) = app.grid_loops.loops.get(&img_idx) else {
+        return Ok(());
+    };
+    for (frame, &id) in cell.frames.iter().zip(&cell.ids) {
+        if app.terminal_images.contains(id) {
+            continue;
+        }
+        app.graphics.transmit(
+            out,
+            (&frame.image).into(),
+            &encoder::DisplayOptions {
+                id: Some(id),
+                cell_box: None,
+                transmit_only: true,
+            },
+        )?;
+        app.terminal_images.insert(id, frame.image.as_raw().len());
+    }
+    Ok(())
+}
+
+/// Place the frame of the loop of `img_idx` at `tick` in the visible cell `vis_idx`, and start
+/// the clock of the loop. Returns the ids of its frames.
+fn start_loop_to(
+    app: &mut App,
+    out: &mut impl Write,
+    vis_idx: usize,
+    img_idx: usize,
+    tick: u64,
+) -> io::Result<Vec<u32>> {
+    let Some(cell) = app.grid_loops.loops.get_mut(&img_idx) else {
+        return Ok(Vec::new());
+    };
+    cell.start_at(tick);
+    let id = cell.id_at(tick);
+    cell.placed = Some(id);
+    let (cells, ids) = (cell.cells(), cell.ids.clone());
+    let (origin, cell_box) = grid_placement(app, vis_idx, cells);
+    queue!(out, cursor::MoveTo(origin.0, origin.1))?;
+    app.graphics.place_by_id_to(out, id, cell_box)?;
+    Ok(ids)
+}
+
+/// Swap the frame of each placed loop whose next frame is due at `tick`: delete the placement
+/// of the old frame (`d=i`, the pixels stay) and place the new one by its id. A tick never
+/// sends pixels.
+fn swap_loop_frames_to(app: &mut App, out: &mut impl Write, tick: u64) -> io::Result<()> {
+    let mut swaps = Vec::new();
+    for (vis_idx, img_idx) in app.gallery.visible_items() {
+        let Some(cell) = app.grid_loops.loops.get(&img_idx) else {
+            continue;
+        };
+        let Some(old) = cell.placed else {
+            continue;
+        };
+        let new = cell.id_at(tick);
+        if new != old {
+            swaps.push((vis_idx, img_idx, old, new, cell.cells()));
+        }
+    }
+    for (vis_idx, img_idx, old, new, cells) in swaps {
+        app.graphics.delete_placements_to(out, old)?;
+        let (origin, cell_box) = grid_placement(app, vis_idx, cells);
+        queue!(out, cursor::MoveTo(origin.0, origin.1))?;
+        app.graphics.place_by_id_to(out, new, cell_box)?;
+        if let Some(cell) = app.grid_loops.loops.get_mut(&img_idx) {
+            cell.placed = Some(new);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1172,5 +1397,303 @@ mod tests {
         super::render_video_frame_to(&app, &mut out).unwrap();
 
         assert!(out.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod loop_tests {
+    use super::{place_gallery_images_to, play_grid_loops, play_grid_loops_to};
+    use crate::app::thumbnails::{pad_for_grid, pad_loop_frame};
+    use crate::app::{App, ViewMode};
+    use crate::image_list::SharedImageList;
+    use crate::test_support::kitty::FakeTerminal;
+    use crate::test_support::{char_key, text};
+    use image::{Rgba, RgbaImage};
+    use ratatui::layout::Rect;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    const BOX_PX: (u32, u32) = (160, 96);
+    const CELL_PX: (u32, u32) = (8, 16);
+    /// The time of a video frame on the loop clock: 4 ticks of 1/12 s.
+    const FRAME_TICKS: u64 = 4;
+    /// The RGBA bytes of a still and of a half-size loop frame of `clip_app`.
+    const STILL_BYTES: usize = 160 * 96 * 4;
+    const FRAME_BYTES: usize = 80 * 48 * 4;
+    const BEGIN_SYNC: &str = "\x1b[?2026h";
+    const END_SYNC: &str = "\x1b[?2026l";
+
+    /// A grid of `count` clips with sharp stills: 5 columns and 4 rows of cells of 160x96 px.
+    fn clip_app(count: usize) -> App {
+        let mut app = App::new(CELL_PX, SharedImageList::new());
+        app.images = (0..count)
+            .map(|index| PathBuf::from(format!("/clips/{index}.mp4")))
+            .collect();
+        app.filenames = (0..count).map(|index| format!("{index}.mp4")).collect();
+        app.gallery.filtered_indices = (0..count).collect();
+        app.gallery.zoom_rows = 4;
+        app.gallery.update_grid(Rect::new(0, 0, 106, 29));
+        app.scan_complete = true;
+        for index in 0..count {
+            let still = RgbaImage::from_pixel(160, 96, Rgba([9, 9, 9, 255]));
+            app.thumb_cache
+                .insert(index, pad_for_grid(still, BOX_PX, CELL_PX, true));
+        }
+        app
+    }
+
+    /// Give the cell `index` a loop of `count` half-size frames of 333 ms, each in its own
+    /// color. Returns the Kitty ids of the frames.
+    fn add_loop(app: &mut App, index: usize, count: usize) -> Vec<u32> {
+        let frames = (0..count)
+            .map(|frame| {
+                let red = u8::try_from(frame * 10).unwrap();
+                let image = RgbaImage::from_pixel(80, 48, Rgba([red, 0, 0, 255]));
+                pad_loop_frame(image, BOX_PX, BOX_PX, CELL_PX)
+            })
+            .collect();
+        let delays = vec![Duration::from_millis(333); count];
+        app.grid_loops.insert(index, frames, &delays);
+        app.grid_loops.loops[&index].ids.clone()
+    }
+
+    /// Place the stills of the grid, as the render of the grid does.
+    fn place_stills(app: &mut App, terminal: &mut FakeTerminal) {
+        let mut out = Vec::new();
+        place_gallery_images_to(app, &mut out).unwrap();
+        terminal.feed(&out);
+    }
+
+    /// Write the loops at `tick` of the loop clock. Returns the output and whether a loop
+    /// started.
+    fn play_at(app: &mut App, tick: u64) -> (String, bool) {
+        let mut out = Vec::new();
+        let now = app.grid_loops.instant_of(tick);
+        let started = play_grid_loops_to(app, &mut out, now).unwrap();
+        (text(&out), started)
+    }
+
+    /// The ids of `ids` that the terminal places.
+    fn placed(terminal: &FakeTerminal, ids: &[u32]) -> Vec<u32> {
+        terminal
+            .placements
+            .iter()
+            .map(|placement| placement.id)
+            .filter(|id| ids.contains(id))
+            .collect()
+    }
+
+    #[test]
+    fn a_loop_goes_out_once_and_each_tick_swaps_its_placement_without_pixels() {
+        let mut app = clip_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let (_, still) = app.thumb_cache.peek(1).unwrap();
+        let ids = add_loop(&mut app, 1, 3);
+        assert!(app.loops_to_send());
+        assert!(!app.loop_plays(1));
+
+        let (first, started) = play_at(&mut app, 0);
+        terminal.feed(first.as_bytes());
+        assert!(started, "the draw drops the marker");
+        assert_eq!(first.matches("\x1b_Ga=t,").count(), 3, "{first}");
+        assert!(!first.contains("\x1b_Ga=T,"), "no frame places itself");
+        assert!(first.contains(&format!("\x1b_Ga=d,d=i,i={still},")));
+        assert!(first.starts_with(BEGIN_SYNC) && first.ends_with(END_SYNC));
+        assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
+        assert!(placed(&terminal, &[still]).is_empty());
+        assert!(
+            terminal.stores(still),
+            "the still stays for the next overlay"
+        );
+        assert!(app.loop_plays(1));
+        assert!(!app.loops_to_send());
+
+        let (tick, started) = play_at(&mut app, FRAME_TICKS);
+        terminal.feed(tick.as_bytes());
+        assert!(!started);
+        assert!(!tick.contains("a=t,") && !tick.contains("a=T,"), "{tick}");
+        assert!(
+            tick.contains(&format!("\x1b_Ga=d,d=i,i={},", ids[0])),
+            "{tick:?} {ids:?}"
+        );
+        assert!(tick.contains(&format!("\x1b_Ga=p,q=2,C=1,i={},c=20,r=6", ids[1])));
+        assert!(
+            tick.len() < 150,
+            "{} bytes for one cell: {tick:?}",
+            tick.len()
+        );
+        assert_eq!(placed(&terminal, &ids), vec![ids[1]]);
+        assert!(terminal.black_cells.is_empty());
+
+        // In the middle of a frame, nothing is due, and the pass writes nothing.
+        let now = app.grid_loops.instant_of(FRAME_TICKS + 3);
+        assert!(!app.loop_frames_due(now));
+        assert!(!play_grid_loops(&mut app, now).unwrap());
+        assert!(app.graphics_out.take_bytes().is_empty());
+
+        // After the last frame, the loop starts again.
+        let (again, _) = play_at(&mut app, 3 * FRAME_TICKS);
+        assert!(again.contains(&format!("i={},c=20,r=6", ids[0])), "{again}");
+    }
+
+    #[test]
+    fn the_run_loop_sleeps_until_the_next_frame_of_a_loop() {
+        let mut app = clip_app(3);
+        assert_eq!(app.grid_loop_timeout(app.grid_loops.instant_of(0)), None);
+        add_loop(&mut app, 1, 3);
+        play_at(&mut app, 0);
+        let timeout = app.grid_loop_timeout(app.grid_loops.instant_of(2));
+        let frame = app.grid_loops.instant_of(FRAME_TICKS) - app.grid_loops.instant_of(2);
+        assert_eq!(timeout, Some(frame));
+        assert!(crate::run_loop::next_timeout(&app, &[]) <= Duration::from_millis(334));
+
+        app.grid_loops.loops.clear();
+        assert_eq!(
+            crate::run_loop::next_timeout(&app, &[]),
+            Duration::from_millis(250),
+            "without a loop, the idle wait stays"
+        );
+    }
+
+    #[test]
+    fn a_loop_above_the_terminal_budget_keeps_its_still() {
+        let mut app = clip_app(3);
+        let mut terminal = FakeTerminal::new();
+        app.terminal_images.budget = 3 * STILL_BYTES + 2 * FRAME_BYTES;
+        place_stills(&mut app, &mut terminal);
+        add_loop(&mut app, 0, 3);
+
+        let (out, started) = play_at(&mut app, 0);
+        assert!(!started);
+        assert!(!out.contains("a=t,"), "{out}");
+        assert!(!app.loop_plays(0));
+        assert!(
+            app.grid_loops.loops.is_empty(),
+            "the frames leave the memory too"
+        );
+        assert!(!app.loops_to_send(), "no pass waits for the cell");
+
+        let ids = add_loop(&mut app, 1, 2);
+        let (out, started) = play_at(&mut app, 0);
+        terminal.feed(out.as_bytes());
+        assert!(started, "a loop that fits plays");
+        assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
+        assert!(app.terminal_images.bytes() <= app.terminal_images.budget);
+    }
+
+    #[test]
+    fn a_loop_that_leaves_the_screen_deletes_its_frames_in_the_terminal() {
+        let mut app = clip_app(40);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let ids = add_loop(&mut app, 0, 3);
+        play_at(&mut app, 0);
+        assert!(ids.iter().all(|&id| app.terminal_images.contains(id)));
+
+        app.gallery.move_to_last();
+        super::render_gallery_images(&mut app).unwrap();
+        let out = text(&app.graphics_out.take_bytes());
+        for id in &ids {
+            assert!(out.contains(&format!("\x1b_Ga=d,d=I,i={id},")), "{id}");
+            assert!(!app.terminal_images.contains(*id));
+        }
+        assert!(app.grid_loops.loops.is_empty());
+    }
+
+    #[test]
+    fn a_redraw_of_the_grid_places_the_current_frame_instead_of_the_still() {
+        let mut app = clip_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let (_, still) = app.thumb_cache.peek(1).unwrap();
+        let ids = add_loop(&mut app, 1, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+
+        place_stills(&mut app, &mut terminal);
+        assert_eq!(placed(&terminal, &ids).len(), 1);
+        assert!(placed(&terminal, &[still]).is_empty());
+        assert!(app.loop_plays(1));
+        assert!(terminal.black_cells.is_empty());
+    }
+
+    #[test]
+    fn the_help_popup_the_info_panel_and_the_fullscreen_view_stop_the_loops() {
+        let mut app = clip_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        add_loop(&mut app, 1, 3);
+        play_at(&mut app, 0);
+
+        char_key(&mut app, '?');
+        assert!(text(&app.graphics_out.take_bytes()).contains("\x1b_Ga=d,d=A,"));
+        assert!(!app.loop_plays(1));
+        assert!(!app.loops_to_send());
+        assert_eq!(app.grid_loop_timeout(app.grid_loops.instant_of(1)), None);
+        assert!(
+            play_at(&mut app, FRAME_TICKS).0.is_empty(),
+            "no frame above the popup"
+        );
+
+        // The grid comes back with its stills, and the next pass sends the frames again.
+        char_key(&mut app, 'x');
+        assert!(!app.help_visible);
+        place_stills(&mut app, &mut terminal);
+        let (again, started) = play_at(&mut app, 2 * FRAME_TICKS);
+        assert!(started);
+        assert_eq!(again.matches("\x1b_Ga=t,").count(), 3);
+
+        char_key(&mut app, 'i');
+        assert!(app.info_visible);
+        place_stills(&mut app, &mut terminal);
+        assert!(!app.loop_plays(1));
+        assert!(play_at(&mut app, 3 * FRAME_TICKS).0.is_empty());
+        char_key(&mut app, 'i');
+
+        app.mode = ViewMode::Fullscreen;
+        assert!(!app.grid_loops_shown());
+        assert!(play_at(&mut app, 4 * FRAME_TICKS).0.is_empty());
+    }
+
+    #[test]
+    fn the_loops_play_on_while_the_delete_question_waits_in_the_status_row() {
+        let mut app = clip_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let ids = add_loop(&mut app, 1, 3);
+        play_at(&mut app, 0);
+
+        char_key(&mut app, 'd');
+        assert!(app.pending_delete.is_some());
+        assert!(app.loop_plays(1), "no marker beside a visible loop frame");
+        let (tick, _) = play_at(&mut app, FRAME_TICKS);
+        assert!(tick.contains(&format!("i={},c=20,r=6", ids[1])), "{tick}");
+        char_key(&mut app, 'n');
+        assert!(app.pending_delete.is_none());
+    }
+
+    #[test]
+    fn a_zoom_drops_the_loops_and_the_next_grid_write_deletes_all_images() {
+        let mut app = clip_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        add_loop(&mut app, 1, 3);
+        play_at(&mut app, 0);
+
+        char_key(&mut app, '+');
+        assert!(app.grid_loops.loops.is_empty());
+        let mut out = Vec::new();
+        place_gallery_images_to(&mut app, &mut out).unwrap();
+        assert!(text(&out).contains("\x1b_Ga=d,d=A,"));
+    }
+
+    #[test]
+    fn without_animate_the_grid_shows_no_loop() {
+        let mut app = clip_app(3);
+        app.grid_loops.enabled = false;
+        add_loop(&mut app, 1, 3);
+        assert!(!app.loops_to_send());
+        assert!(play_at(&mut app, 0).0.is_empty());
+        assert!(!app.loop_plays(1));
     }
 }

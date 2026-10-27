@@ -15,7 +15,8 @@ pub(crate) mod tone_map;
 
 pub(crate) use animation::is_animated;
 pub(crate) use decoder::{
-    Decoder, FrameStream, Pipeline, SystemDecoder, args, cube_for, first_frame_args, pixel_format,
+    Decoder, FrameStream, LoopSampling, Pipeline, SystemDecoder, args, cube_for, first_frame_args,
+    loop_args, pixel_format,
 };
 pub(crate) use layout::{cell_box, frame_box, frame_limit};
 #[cfg(test)]

@@ -59,7 +59,8 @@ impl Write for GraphicsOutput {
     }
 }
 
-/// The default places the picture at the cursor, without an id and at its pixel size.
+/// The default sends the picture and places it at the cursor, without an id and at its pixel
+/// size.
 ///
 /// There is no pixel offset (`X=`, `Y=`): a relaying multiplexer such as herdr turns an offset
 /// into a stretched picture, so every picture starts at a cell border.
@@ -69,6 +70,9 @@ pub(crate) struct DisplayOptions {
     /// The cell box (`c=`, `r=`) that the terminal scales the picture to. `None` keeps the
     /// pixel size.
     pub cell_box: Option<(u16, u16)>,
+    /// Send the picture without a placement (`a=t`). A later `a=p` places it by its id. The
+    /// frames of a grid loop go out this way, one time each.
+    pub transmit_only: bool,
 }
 
 /// The pixels per step of [`Pixels::opaque_rgb`]: 16 KB of RGBA, which stays in the L1 cache
@@ -176,6 +180,7 @@ pub(crate) trait GraphicsBackend {
         cell_box: Option<(u16, u16)>,
     ) -> io::Result<()>;
     fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
+    fn delete_placements_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -224,6 +229,10 @@ impl GraphicsBackend for KittyBackend {
 
     fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
         kitty::delete_image_to(out, id)
+    }
+
+    fn delete_placements_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
+        kitty::delete_placements_to(out, id)
     }
 }
 
@@ -282,6 +291,7 @@ mod tests {
                 &DisplayOptions {
                     id: Some(7),
                     cell_box: Some((5, 3)),
+                    transmit_only: false,
                 },
             )
             .unwrap();

@@ -443,8 +443,10 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
 
 /// True when the entry `img_idx` is playable and its thumbnail is shown. A video counts by its
 /// extension and an animated image by the flag of its thumbnail job, so the draw reads no file.
+/// A cell that plays its grid loop needs no marker.
 fn shows_play_marker(app: &App, img_idx: usize) -> bool {
-    app.is_animated_at(img_idx) || (app.is_video_at(img_idx) && app.thumb_cache.contains(img_idx))
+    (app.is_animated_at(img_idx) || (app.is_video_at(img_idx) && app.thumb_cache.contains(img_idx)))
+        && !app.loop_plays(img_idx)
 }
 
 /// The play symbol of a playable file, in the middle of the gap below its cell. It comes
@@ -1858,5 +1860,37 @@ mod tests {
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, "\u{25b6} clip.mp4");
         assert!(!screen.contains("\u{25b6} a.jpg"), "{screen}");
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_playing_grid_loop_replaces_the_play_marker() {
+        let mut app = app_with(&["clip.mp4"]);
+        app.thumb_cache.insert(0, RgbaImage::new(4, 4));
+        let frames = vec![RgbaImage::new(2, 2).into(), RgbaImage::new(2, 2).into()];
+        app.grid_loops
+            .insert(0, frames, &[std::time::Duration::from_millis(333); 2]);
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let cell = app.gallery.cell_rect(0);
+        let below = |buffer: &Buffer| {
+            buffer[(cell.x + cell.width / 2, cell.y + cell.height)]
+                .symbol()
+                .to_owned()
+        };
+        assert_eq!(below(&buffer), "\u{25b6}", "the frames are not out yet");
+
+        if let Some(cell) = app.grid_loops.loops.get_mut(&0) {
+            cell.placed = Some(cell.ids[0]);
+        }
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_ne!(below(&buffer), "\u{25b6}");
+
+        app.grid_loops.enabled = false;
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert_eq!(
+            below(&buffer),
+            "\u{25b6}",
+            "without loops, the marker stays"
+        );
     }
 }

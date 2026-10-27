@@ -7,6 +7,8 @@ mod decode;
 mod encoder;
 mod file_meta;
 mod gallery;
+#[cfg(feature = "video")]
+mod grid_loop;
 mod icons;
 mod image_list;
 mod info;
