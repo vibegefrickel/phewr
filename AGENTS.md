@@ -273,9 +273,11 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   (30 and 29.99) stay constant-rate. ffmpeg writes `-pix_fmt rgb24` for a video and `rgba` for an
   animation, and `pixel_format` in `player/decoder.rs` is the one source for the frame layout
   (`player::Frame`). One frame per temp file, image id `u32::MAX - 1`
-  (the grid ids count up from 1), `c=` / `r=` to the cell box, no `X=` / `Y=`. The frame box is
-  the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the cell box. The
-  frame size stays until the next ffmpeg start. The reader thread holds 2 frames
+  (the grid ids count up from 1), `c=` / `r=` to the cell box, no `X=` / `Y=`. The first frame
+  of a new video removes all other placements in the same synchronized update
+  (`App::clear_before_video`), so the photo of the view before does not show around the frame.
+  The frame box is the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the
+  cell box. The frame size stays until the next ffmpeg start. The reader thread holds 2 frames
   (`FRAME_QUEUE`), so a slow terminal blocks ffmpeg on the pipe.
 - **Player real time (rule):** the terminal player never plays in slow motion. A 6 s clip
   plays for 6 s, and a slow decode or a slow terminal drops frames. The clock of a run never
@@ -292,8 +294,10 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   `terminal`. Without the temp file medium (SSH, a probe that picked `direct` or `png`) or
   without ffmpeg, a video opens in the mpv window with a note. mpv's own Kitty output is gone:
   it played a 4K HLG clip at 2.4 fps in Ghostty and cannot scale a small frame.
-- **Video placeholder:** after the player or the mpv window, `App::video_return` selects the
-  view. A video in `ViewMode::Fullscreen` is a placeholder (`shows_video_placeholder`).
+- **Video placeholder:** `q`, `Esc` and the back click in the terminal player always go to the
+  grid (`leave_player` calls `App::exit_video`), because the player has no controls and the
+  placeholder would be one more step back. After the mpv window, `App::video_return` selects
+  the view. A video in `ViewMode::Fullscreen` is a placeholder (`shows_video_placeholder`).
   `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because the image decode cannot read
   a video. `p` on the placeholder opens the mpv window.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a

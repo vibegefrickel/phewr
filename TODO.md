@@ -86,6 +86,7 @@ Order: speed first, then formats, then the delete removal, then the first releas
 
 ## Done
 
+- One `q` leaves the player for the grid, also after a step from the fullscreen view onto a video (before, the first `q` showed the fullscreen placeholder). The first frame of a new video removes the pictures of the view before, so no photo shows around the video.
 - Player measured without a terminal (2026-10-27, `just bench` per clip of `07-video`): every clip decodes at 160 fps to 500 fps at 1080p and plays in real time with 0 drops. The first frame comes 170 ms to 305 ms after the open (ffmpeg start, VideoToolbox, the HDR cube). In plain Ghostty, the player has no bottleneck.
 - VFR bursts: a base rate above 1.5 times the average plays at the average, at least 24 fps. A phone clip at 60 with an average of 30 plays at 30 fps instead of 60 duplicated frames. A screen recording at 25 with an average of 7.7 plays at 24 fps.
 - An animated WebP or APNG with an ICC profile or a cICP chunk plays in its own colors: the probe reads the profile and maps sRGB, Display P3 and BT.2020 colorants to the cube primaries. Other profiles still play as sRGB.

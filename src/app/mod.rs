@@ -146,6 +146,10 @@ pub(crate) struct App {
     /// The mpv window that plays the current video, until it exits.
     #[cfg(feature = "video")]
     video_window: Option<VideoWindow>,
+    /// The first frame of a new video removes the other pictures first, so that the photo of
+    /// the view before does not show around the frame.
+    #[cfg(feature = "video")]
+    pub(crate) clear_before_video: bool,
 
     // Scanner state
     shared_list: SharedImageList,
@@ -281,6 +285,8 @@ impl App {
             video_window_request: false,
             #[cfg(feature = "video")]
             video_window: None,
+            #[cfg(feature = "video")]
+            clear_before_video: false,
             shared_list,
             known_len: 0,
             scan_complete: false,

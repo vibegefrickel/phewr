@@ -52,7 +52,23 @@ const VIDEO_IMAGE_ID: u32 = u32::MAX - 1;
 
 #[cfg(feature = "video")]
 pub(crate) fn render_video_frame(app: &mut App) -> io::Result<()> {
-    app.with_graphics_out(|app, out| render_video_frame_to(app, out))
+    use crossterm::terminal::BeginSynchronizedUpdate;
+
+    let clear = app.clear_before_video
+        && !app.help_visible
+        && app
+            .video
+            .as_ref()
+            .is_some_and(|v| v.current_frame.is_some());
+    app.with_graphics_out(|app, out| {
+        if clear {
+            // The same synchronized update holds the delete and the frame, so nothing flashes.
+            queue!(out, BeginSynchronizedUpdate)?;
+            app.graphics.clear_placements_to(out)?;
+            app.clear_before_video = false;
+        }
+        render_video_frame_to(app, out)
+    })
 }
 
 /// Write the current video frame to `out`, so that the tests can read the escape sequences.
@@ -1075,6 +1091,39 @@ mod tests {
         assert!(player.poll());
         app.video = Some(player);
         app
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn the_first_frame_of_a_new_video_removes_the_pictures_of_the_view_before() {
+        let mut app = playing_app();
+        assert!(app.clear_before_video, "enter_video asks for the clear");
+
+        super::render_video_frame(&mut app).unwrap();
+        let first = app.graphics_out.take_bytes();
+        super::render_video_frame(&mut app).unwrap();
+        let second = app.graphics_out.take_bytes();
+
+        for bytes in [&first, &second] {
+            for path in crate::encoder::kitty::temp_file_paths(bytes) {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        let (first, second) = (text(&first), text(&second));
+        let clear = first
+            .find("a=d")
+            .expect("the first frame clears the placements");
+        let frame = first.find("a=T").unwrap();
+        assert!(clear < frame, "{first}");
+        assert!(
+            first.starts_with("\x1b[?2026h"),
+            "in one synchronized update: {first}"
+        );
+        assert!(
+            !second.contains("a=d"),
+            "only the first frame clears: {second}"
+        );
+        assert!(!app.clear_before_video);
     }
 
     #[cfg(feature = "video")]

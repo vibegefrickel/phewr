@@ -37,11 +37,13 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
     Ok(false)
 }
 
-/// Back to the view that opened the player, with the gallery cursor on the file.
+/// Back to the grid, with the cursor on the file. A running slideshow stops.
 pub(super) fn leave_player(app: &mut App) -> io::Result<()> {
     app.graphics_delete_all()?;
     app.stop_slideshow();
-    app.return_from_video();
+    // The player has no controls, so the fullscreen placeholder of a video is no step back:
+    // the player always goes back to the grid.
+    app.exit_video();
     focus_gallery_on_current(app);
     Ok(())
 }
@@ -231,7 +233,23 @@ mod tests {
         assert!(!q_app.slideshow_running());
         assert!(!esc_app.slideshow_running());
         assert_eq!(q_app.mode, esc_app.mode);
-        assert_eq!(q_app.mode, ViewMode::Fullscreen);
-        assert!(q_app.shows_video_placeholder());
+        assert_eq!(
+            q_app.mode,
+            ViewMode::Gallery,
+            "one q leaves the player for the grid"
+        );
+    }
+
+    #[test]
+    fn one_q_leaves_a_video_that_a_step_in_the_fullscreen_view_opened() {
+        let mut app =
+            crate::test_support::video::fullscreen_app_on_video(&["a.jpg", "clip.mp4"], false);
+        assert!(!char_key(&mut app, 'q'));
+        assert_eq!(app.mode, ViewMode::Gallery);
+        assert_eq!(
+            app.gallery.selected_index(),
+            Some(1),
+            "the cursor is on the video"
+        );
     }
 }

@@ -45,6 +45,7 @@ impl App {
         self.needs_render = true;
         self.loaded = None;
         self.video = None;
+        self.clear_before_video = true;
     }
 
     /// Ask the run loop to open the current video in the mpv window, see

@@ -138,6 +138,7 @@ impl App {
             self.mode = ViewMode::Video;
             self.video_return = VideoReturn::Fullscreen;
             self.loaded = None;
+            self.clear_before_video = true;
             return;
         }
 

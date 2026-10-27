@@ -143,10 +143,7 @@ viewr plays a video in the terminal with its own player. ffmpeg from Homebrew de
 | `q` `Esc` | Back to the view that opened the video |
 | `?` | Help |
 
-After a video, viewr goes back to the view that opened it:
-
-- From the gallery (`Enter`), viewr shows the gallery with the cursor on the video.
-- From fullscreen (`←` / `→`, `Home` / `End`), viewr stays on the video and shows "video: press Enter to play". `Enter` plays the video again, and `←` / `→` step on.
+`q` or `Esc` in the player goes back to the gallery in one press, with the cursor on the video, also when a step in the fullscreen view opened the video. After the mpv window, viewr goes back to the view that opened the window. In the fullscreen view, the video then shows "video: Enter plays, p opens the mpv window".
 
 `p` opens the video in a fullscreen mpv window with sound, from the grid, the fullscreen view and the player. The window gets `--fs --native-fs=no`, so macOS does not move it to its own Space, and `--hwdec=auto-safe`. mpv does its own HDR tone mapping on the GPU. All mpv keys work. In mpv, `n` plays the next file of the list and `N` (Shift-n) the previous file (mpv 0.38 or later). After the window closes, viewr returns to the view that opened it.
 
