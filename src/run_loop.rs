@@ -28,6 +28,9 @@ const SHAPE_POLL_WINDOW: Duration = Duration::from_millis(20);
 /// The wait of the loop while a disk cache read of the grid runs or waits. A read takes about
 /// 1 ms, so a warm grid has its pictures after 2 ms to 4 ms, not after `BUSY_POLL`.
 const CACHE_READ_POLL: Duration = Duration::from_millis(2);
+/// The wait of the loop while the grid decodes its first picture. A cold grid shows its first
+/// thumbnail after 15 ms to 25 ms, so a wait of `BUSY_POLL` would add up to 10 ms to it.
+const FIRST_PICTURE_POLL: Duration = Duration::from_millis(2);
 /// The wait of the loop when nothing runs in the background.
 const IDLE_POLL: Duration = Duration::from_millis(250);
 /// The wait of the loop while an mpv window plays: the latency of `n` and `N` in the window.
@@ -264,6 +267,9 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     if app.cache_reads_pending() {
         timeout = timeout.min(CACHE_READ_POLL);
     }
+    if app.waits_for_the_first_picture() {
+        timeout = timeout.min(FIRST_PICTURE_POLL);
+    }
     if let Some(remaining) = app.slideshow_timeout() {
         timeout = timeout.min(remaining);
     }
@@ -285,8 +291,8 @@ fn waits_for_a_fast_shape(running: Option<Duration>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CACHE_READ_POLL, LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW, mouse_capture_wanted,
-        next_timeout, sync_mouse_capture, waits_for_a_fast_shape,
+        CACHE_READ_POLL, FIRST_PICTURE_POLL, LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW,
+        mouse_capture_wanted, next_timeout, sync_mouse_capture, waits_for_a_fast_shape,
     };
     use crate::app::ViewMode;
     use crate::config::Config;
@@ -317,6 +323,20 @@ mod tests {
         }
         assert!(app.cache_reads_pending(), "the fifth cell waits and reads");
         assert_eq!(next_timeout(&app, &[]), CACHE_READ_POLL);
+    }
+
+    #[test]
+    fn the_loop_looks_every_two_milliseconds_until_the_first_picture_of_the_grid() {
+        let dir = test_dir();
+        let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+        app.scan_complete = true;
+        app.gallery.update_grid(Rect::new(0, 0, 80, 24));
+        app.spawn_thumb_decode(0, Rect::new(0, 0, 1, 1));
+        assert!(app.waits_for_the_first_picture());
+        assert_eq!(next_timeout(&app, &[]), FIRST_PICTURE_POLL);
+
+        app.thumb_cache.insert(1, image::RgbaImage::new(1, 1));
+        assert!(!app.waits_for_the_first_picture(), "one picture shows");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Speed measurements on a real folder. Each test is ignored and reads `VIEWR_TEST_DIR`.
-//! `VIEWR_TEST_DIR=/tmp/viewr-bench just test-real bench` runs them and shows the numbers.
+//! `just bench` runs them on `~/Pictures/viewr-test/01-mixed-big` and shows the numbers.
 //!
 //! The tests drive the steps of the run loop (`poll_background`, `render_images`,
 //! `next_timeout`) without a terminal. A sleep stands in for `event::poll`, so the numbers
@@ -31,6 +31,25 @@ const STEPS: usize = 10;
 struct Bench {
     app: App,
     _cache: TempDir,
+}
+
+impl Drop for Bench {
+    /// The next bench starts only after the decodes of this one end, so the cold numbers of
+    /// the full `just bench` match a run of one bench.
+    fn drop(&mut self) {
+        settle(&mut self.app);
+    }
+}
+
+/// Run passes until the background work of `app` ends, without an assert, because a drop
+/// during a failed bench must not panic again.
+fn settle(app: &mut App) {
+    let deadline = Instant::now() + LIMIT;
+    let mut pending = Vec::new();
+    while (app.has_pending_work() || !pending.is_empty()) && Instant::now() < deadline {
+        run_pass(app, &mut pending);
+        thread::sleep(Duration::from_millis(2));
+    }
 }
 
 fn test_dir() -> Option<PathBuf> {
@@ -816,6 +835,7 @@ fn enter_subfolder(dir: &Path, rest: bool) -> (Option<Duration>, Duration, usize
         .visible_items()
         .filter(|&(_, index)| !app.is_folder(index))
         .count();
+    settle(&mut app);
     (prefetch, time, cells)
 }
 

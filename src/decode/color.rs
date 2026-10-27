@@ -90,6 +90,8 @@ pub(crate) enum SourceColor {
     Srgb,
     /// Display P3: the target of a decoder that converts itself.
     DisplayP3,
+    /// Adobe RGB (1998) without a profile: a camera JPEG that marks it in its EXIF block.
+    AdobeRgb,
     /// An ICC profile.
     Icc(Arc<[u8]>),
     /// The CICP code points (ITU-T H.273) of a HEIF `nclx` box or a PNG `cICP` chunk.
@@ -229,6 +231,7 @@ fn source_profile(source: &SourceColor) -> Option<ColorProfile> {
     let profile = match source {
         SourceColor::Srgb => ColorProfile::new_srgb(),
         SourceColor::DisplayP3 => ColorProfile::new_display_p3(),
+        SourceColor::AdobeRgb => ColorProfile::new_adobe_rgb(),
         // The decoders give RGB values. moxcms reads RGBA samples as CMYK for a CMYK
         // profile, so a profile of another color space counts as sRGB too.
         SourceColor::Icc(data) => ColorProfile::new_from_slice(data)
@@ -414,6 +417,89 @@ pub(crate) fn tiff_icc_profile(path: &Path) -> Option<Vec<u8>> {
     None
 }
 
+/// The known RGB space whose colorants the ICC profile `data` has: sRGB, Display P3 or
+/// BT.2020 (as CICP 9 with the sRGB curve). The terminal player has a color cube for each of
+/// them. `None` for another profile.
+#[cfg(feature = "video")]
+pub(crate) fn icc_known_space(data: &[u8]) -> Option<SourceColor> {
+    let profile = ColorProfile::new_from_slice(data).ok()?;
+    let close = |known: &ColorProfile| {
+        let near = |a: moxcms::Xyzd, b: moxcms::Xyzd| {
+            (a.x - b.x).abs() < 0.003 && (a.y - b.y).abs() < 0.003 && (a.z - b.z).abs() < 0.003
+        };
+        near(profile.red_colorant, known.red_colorant)
+            && near(profile.green_colorant, known.green_colorant)
+            && near(profile.blue_colorant, known.blue_colorant)
+    };
+    if close(&ColorProfile::new_srgb()) {
+        Some(SourceColor::Srgb)
+    } else if close(&ColorProfile::new_display_p3()) {
+        Some(SourceColor::DisplayP3)
+    } else if close(&ColorProfile::new_bt2020()) {
+        Some(SourceColor::Cicp {
+            primaries: 9,
+            transfer: 13,
+        })
+    } else {
+        None
+    }
+}
+
+/// The color of the JPEG `data`: its ICC profile, else Adobe RGB when the EXIF block marks it,
+/// else sRGB. Cameras in the Adobe RGB mode often write no profile, only the EXIF mark.
+#[cfg(any(feature = "turbo", test))]
+pub(crate) fn jpeg_color(data: &[u8]) -> SourceColor {
+    if let Some(icc) = jpeg_icc_profile(data) {
+        return SourceColor::icc(icc);
+    }
+    if exif_marks_adobe_rgb(data) {
+        SourceColor::AdobeRgb
+    } else {
+        SourceColor::Srgb
+    }
+}
+
+/// True when the EXIF block of the JPEG `data` marks Adobe RGB, as the DCF standard defines
+/// it: `ColorSpace` 0xFFFF (uncalibrated) and the interoperability index `R03`.
+pub(crate) fn exif_marks_adobe_rgb(data: &[u8]) -> bool {
+    let Some(payload) = jpeg_exif_payload(data) else {
+        return false;
+    };
+    let Ok(exif) = exif::Reader::new().read_raw(payload.to_vec()) else {
+        return false;
+    };
+    let uncalibrated = exif
+        .get_field(exif::Tag::ColorSpace, exif::In::PRIMARY)
+        .and_then(|field| field.value.get_uint(0))
+        == Some(0xFFFF);
+    let option_file = exif
+        .get_field(exif::Tag::InteroperabilityIndex, exif::In::PRIMARY)
+        .is_some_and(|field| {
+            matches!(&field.value, exif::Value::Ascii(values)
+                if values.first().is_some_and(|value| value.starts_with(b"R03")))
+        });
+    uncalibrated && option_file
+}
+
+/// The TIFF data of the first `Exif` APP1 segment of the JPEG `data`.
+fn jpeg_exif_payload(data: &[u8]) -> Option<&[u8]> {
+    let mut pos = 2;
+    while let Some(&[0xFF, marker, length_high, length_low, ..]) = data.get(pos..) {
+        if matches!(marker, 0xDA | 0xD9) {
+            return None;
+        }
+        let length = usize::from(u16::from_be_bytes([length_high, length_low]));
+        let segment = data.get(pos + 4..pos + 2 + length)?;
+        if marker == 0xE1
+            && let Some(payload) = segment.strip_prefix(b"Exif\0\0")
+        {
+            return Some(payload);
+        }
+        pos += 2 + length;
+    }
+    None
+}
+
 /// The ICC profile of the JPEG `data`: the `ICC_PROFILE` APP2 segments in the order of their
 /// sequence numbers. A profile larger than one segment (64 KB) spans several. `None` without
 /// a profile, or when a segment is missing.
@@ -455,7 +541,10 @@ pub(crate) fn jpeg_icc_profile(data: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColorTarget, SourceColor, convert, jpeg_icc_profile, png_color, transform};
+    use super::{
+        ColorTarget, SourceColor, convert, exif_marks_adobe_rgb, jpeg_color, jpeg_icc_profile,
+        png_color, transform,
+    };
     use crate::decode::{EmbeddedThumbnail, decode_image};
     use crate::test_support::fixture;
     use image::{Rgba, RgbaImage};
@@ -791,5 +880,69 @@ mod tests {
         let (first, second) = icc.split_at(icc.len() / 2);
         let split = jpeg_with_icc(&[(1, 2, first), (2, 2, second)]);
         assert_eq!(jpeg_icc_profile(&split).unwrap(), icc);
+    }
+
+    /// A small JPEG whose EXIF block holds `ColorSpace` and the interoperability index.
+    fn jpeg_with_color_space(color_space: u16, index: &str) -> Vec<u8> {
+        use exif::experimental::Writer;
+        use exif::{Field, In, Tag, Value};
+        use image::ImageEncoder;
+        let fields = [
+            Field {
+                tag: Tag::ColorSpace,
+                ifd_num: In::PRIMARY,
+                value: Value::Short(vec![color_space]),
+            },
+            Field {
+                tag: Tag::InteroperabilityIndex,
+                ifd_num: In::PRIMARY,
+                value: Value::Ascii(vec![index.as_bytes().to_vec()]),
+            },
+        ];
+        let mut writer = Writer::new();
+        for field in &fields {
+            writer.push_field(field);
+        }
+        let mut exif = std::io::Cursor::new(Vec::new());
+        writer.write(&mut exif, true).unwrap();
+        let mut jpeg = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90);
+        encoder.set_exif_metadata(exif.into_inner()).unwrap();
+        encoder
+            .write_image(&[200; 8 * 8 * 3], 8, 8, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        jpeg
+    }
+
+    #[test]
+    fn a_camera_jpeg_with_the_adobe_rgb_mark_converts_as_adobe_rgb() {
+        let adobe = jpeg_with_color_space(0xFFFF, "R03");
+        assert!(exif_marks_adobe_rgb(&adobe));
+        assert_eq!(jpeg_color(&adobe), SourceColor::AdobeRgb);
+        let srgb = jpeg_with_color_space(1, "R98");
+        assert!(!exif_marks_adobe_rgb(&srgb));
+        assert_eq!(jpeg_color(&srgb), SourceColor::Srgb);
+        let uncalibrated_only = jpeg_with_color_space(0xFFFF, "R98");
+        assert!(
+            !exif_marks_adobe_rgb(&uncalibrated_only),
+            "R03 is the mark of Adobe RGB"
+        );
+        assert!(!exif_marks_adobe_rgb(&[0xFF, 0xD8, 0xFF]), "a cut file");
+
+        // A mid green of Adobe RGB is more saturated than the same values in sRGB or P3, so
+        // the conversion lowers its red. Gray stays gray.
+        let tone = RgbaImage::from_pixel(1, 1, Rgba([60, 160, 60, 255]));
+        for target in [ColorTarget::Srgb, ColorTarget::DisplayP3] {
+            let converted = convert(tone.clone(), &SourceColor::AdobeRgb, target);
+            let [red, green, _, _] = converted.get_pixel(0, 0).0;
+            assert!(red < 40 && green > 150, "{target:?}: {red} {green}");
+        }
+        let gray = RgbaImage::from_pixel(1, 1, Rgba([128, 128, 128, 255]));
+        let converted = convert(gray, &SourceColor::AdobeRgb, ColorTarget::Srgb);
+        let [red, green, blue, _] = converted.get_pixel(0, 0).0;
+        assert!(
+            red.abs_diff(green) <= 1 && green.abs_diff(blue) <= 1,
+            "gray stays gray"
+        );
     }
 }

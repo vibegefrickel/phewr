@@ -6,6 +6,8 @@
 //! image descriptor. The thumbnail job runs the check off the UI thread, and the grid reads
 //! the stored answer (`App::animated`), so the draw reads no file.
 
+use super::tone_map::Primaries;
+use crate::decode::color::SourceColor;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek};
 use std::path::Path;
@@ -24,6 +26,31 @@ pub(crate) fn has_animation_extension(path: &Path) -> bool {
         .is_some_and(|extension| {
             ANIMATION_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
         })
+}
+
+/// The primaries of the ICC profile or the cICP chunk of a WebP or PNG file. ffprobe reports
+/// no profile for an animated WebP or APNG, so the player reads it here, as the grid thumbnail
+/// does. `None` without a profile, or for a profile without a cube (see
+/// [`Primaries::of_source_color`]).
+pub(crate) fn embedded_primaries(path: &Path) -> Option<Primaries> {
+    use image::{ImageDecoder, ImageFormat};
+    let reader = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?;
+    let format = reader.format()?;
+    if !matches!(format, ImageFormat::Png | ImageFormat::WebP) {
+        return None;
+    }
+    // A PNG chunk wins over the ICC profile, as in the decode of a still image.
+    let chunks = (format == ImageFormat::Png)
+        .then(|| crate::decode::color::png_color(path))
+        .flatten();
+    let source = match chunks {
+        Some(source) => source,
+        None => SourceColor::icc(reader.into_decoder().ok()?.icc_profile().ok()??),
+    };
+    Primaries::of_source_color(&source)
 }
 
 /// True when `path` is an animated GIF, WebP, APNG or AVIS. A file that does not open, or a
@@ -195,7 +222,8 @@ fn skip_sub_blocks<R: Read + Seek>(reader: &mut BufReader<R>) -> io::Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::{has_animation_extension, is_animated, read_is_animated};
+    use super::{embedded_primaries, has_animation_extension, is_animated, read_is_animated};
+    use crate::player::tone_map::Primaries;
     use crate::test_support::fixture;
     use std::io::{BufReader, Cursor};
     use std::path::Path;
@@ -293,5 +321,32 @@ mod tests {
         assert!(super::avif_has_avis_brand(BufReader::new(Cursor::new(&avis))).unwrap());
         let avif = b"\x00\x00\x00\x14ftypavif\x00\x00\x00\x00mif1".to_vec();
         assert!(!super::avif_has_avis_brand(BufReader::new(Cursor::new(&avif))).unwrap());
+    }
+
+    #[test]
+    fn the_player_reads_the_profile_that_ffprobe_does_not_report() {
+        assert_eq!(
+            embedded_primaries(&fixture("color/p3-icc.png")),
+            Some(Primaries::DisplayP3)
+        );
+        assert_eq!(
+            embedded_primaries(&fixture("color/p3-icc.webp")),
+            Some(Primaries::DisplayP3)
+        );
+        assert_eq!(
+            embedded_primaries(&fixture("color/p3-cicp.png")),
+            Some(Primaries::DisplayP3)
+        );
+        assert_eq!(
+            embedded_primaries(&fixture("color/srgb.png")),
+            None,
+            "no profile"
+        );
+        assert_eq!(
+            embedded_primaries(&fixture("color/adobe-rgb-icc.jpg")),
+            None,
+            "a JPEG never plays"
+        );
+        assert_eq!(embedded_primaries(Path::new("/nonexistent/a.webp")), None);
     }
 }

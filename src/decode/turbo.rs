@@ -1,7 +1,7 @@
 //! The libjpeg-turbo decode with its DCT scaling.
 
 use crate::decode::Decoded;
-use crate::decode::color::{SourceColor, jpeg_icc_profile};
+use crate::decode::color::jpeg_color;
 use crate::info;
 use image::metadata::Orientation;
 use image::{DynamicImage, RgbaImage};
@@ -102,7 +102,7 @@ pub(super) fn decode_jpeg_turbo_bytes(
     }
     Ok(Decoded {
         image: img,
-        color: jpeg_icc_profile(data).map_or(SourceColor::Srgb, SourceColor::icc),
+        color: jpeg_color(data),
     })
 }
 

@@ -188,8 +188,8 @@ impl KittyBackend {
         Self { transfer }
     }
 
-    /// The medium of the pixels. The terminal player needs [`Transfer::TempFile`].
-    #[cfg(any(test, feature = "video"))]
+    /// The medium of the pixels. The terminal player needs [`Transfer::TempFile`], and the
+    /// help popup names it.
     pub(crate) fn transfer(self) -> Transfer {
         self.transfer
     }

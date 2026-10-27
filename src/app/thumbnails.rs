@@ -145,6 +145,17 @@ impl App {
         !self.thumb_jobs.is_idle() || self.previews_pending() || self.cache_reads_pending()
     }
 
+    /// True while the grid decodes and no visible cell shows a picture yet. The run loop then
+    /// looks for the first result more often, because nothing wakes it when a decode ends.
+    pub(crate) fn waits_for_the_first_picture(&self) -> bool {
+        self.mode == super::ViewMode::Gallery
+            && self.thumbnails_pending()
+            && !self
+                .gallery
+                .visible_items()
+                .any(|(_, index)| self.thumb_cache.contains(index))
+    }
+
     /// Take the finished thumbnails and start the waiting jobs. Returns the cells with a new
     /// image, a preview or a sharp one. The sharp jobs wait until every preview is done, so
     /// that a cold HEIC grid shows all its previews first. A missed disk cache read leaves

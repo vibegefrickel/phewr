@@ -34,7 +34,7 @@ just test [FILTER]   # cargo nextest (falls back to cargo test)
 just test-real [FILTER]  # also the ignored tests that decode real files (VIEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
-just bench [DIR]     # the speed measurements of src/bench.rs on VIEWR_TEST_DIR (default /tmp/viewr-bench)
+just bench [DIR]     # the speed measurements of src/bench.rs on VIEWR_TEST_DIR (default ~/Pictures/viewr-test/01-mixed-big)
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | audit | outdated   # the single steps
@@ -254,8 +254,8 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
 - `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
   terminal and read `VIEWR_TEST_DIR`. `start_to_the_first_grid_picture` measures the process start
   and the steps of `main`, `disk_cache_formats` the cache formats. `measure_grid` stops the clock at
-  the end of the pass. In `just bench`, the grid bench runs after benches that leave decodes
-  running, so its cold numbers are about 3 times higher than in a run of the grid bench alone.
+  the end of the pass. Each bench lets its background work end before the next one starts (the
+  `Drop` of `Bench`, `settle`), so the numbers of the full `just bench` match a run of one bench.
 
 ## Gotchas
 
@@ -265,8 +265,10 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   `format=rgb48le,lut3d=...:interp=tetrahedral` for HLG and PQ. A GPU run without a frame runs
   again in software (`Pipeline::Software`). A video with a variable frame rate gets
   `-fps_mode cfr -r` too: the probe calls it VFR when `r_frame_rate` and `avg_frame_rate` differ
-  by more than 1 %, and the output rate is `r_frame_rate` up to 60 fps, else the average rate
-  capped at 60 fps (`pacing_rate`, `variable_rate_fps` in `player/probe.rs`). Without `-r`,
+  by more than 1 %. The output rate is `r_frame_rate`, but a base rate above 1.5 times the
+  average is a burst, and then the output rate is the average, at least 24 fps and never above
+  `r_frame_rate`. Every rate stays at or below 60 fps (`pacing_rate`, `variable_rate_fps` in
+  `player/probe.rs`). Without `-r`,
   ffmpeg writes raw frames at `r_frame_rate`, so the pacing uses the same rate. iPhone clips
   (30 and 29.99) stay constant-rate. ffmpeg writes `-pix_fmt rgb24` for a video and `rgba` for an
   animation, and `pixel_format` in `player/decoder.rs` is the one source for the frame layout
@@ -274,12 +276,18 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   (the grid ids count up from 1), `c=` / `r=` to the cell box, no `X=` / `Y=`. The frame box is
   the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the cell box. The
   frame size stays until the next ffmpeg start. The reader thread holds 2 frames
-  (`FRAME_QUEUE`), so a pause blocks ffmpeg on the pipe. A frame more than one interval late
-  drops only when a newer frame waits. Otherwise the clock moves to the frame, and a slow
-  decode plays slower instead of frozen. The help popup holds the player and gets no frame. A
-  run after a seek without a frame is the end of the clip, not an error. The run loop waits
-  until the next frame is due, 10 ms while ffmpeg has no frame ready, 250 ms in a pause. Tests
-  use `FakeDecoder` and never start a real ffmpeg or mpv.
+  (`FRAME_QUEUE`), so a slow terminal blocks ffmpeg on the pipe.
+- **Player real time (rule):** the terminal player never plays in slow motion. A 6 s clip
+  plays for 6 s, and a slow decode or a slow terminal drops frames. The clock of a run never
+  moves to a late frame. A frame more than one interval late drops when a newer frame waits,
+  else it shows late. If the frames lag the clock by more than `MAX_LAG` (300 ms),
+  `Player::catch_up` starts ffmpeg again `RESTART_LEAD` (0.3 s) ahead of the clock, and the new
+  run keeps the clock. A run whose clock passed the length of the clip while its frames lag
+  ends at once. A restart without a frame is the end of the clip, not an error. The player has
+  no pause and no seek: it plays like an animated image, and `p` opens the mpv window for all
+  controls. The help popup holds the player and gets no frame. The run loop waits until the
+  next frame is due, 10 ms while ffmpeg has no frame ready. Tests use `FakeDecoder` and never
+  start a real ffmpeg or mpv.
 - **Video player default:** `[video] player` defaults to `terminal`, and `builtin` maps to
   `terminal`. Without the temp file medium (SSH, a probe that picked `direct` or `png`) or
   without ffmpeg, a video opens in the mpv window with a note. mpv's own Kitty output is gone:
@@ -331,8 +339,8 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   the info panel skip folders. A folder cell has no thumbnail and no Kitty image. An empty
   folder (no file, and no folder besides `..`) shows a note in the status row (`is_empty_folder`
   in `ui.rs`). There is no directory picker. A start with several paths lists no
-  folders. A symlink to a folder stays out. One image next to folders opens the fullscreen view
-  at once, as in a flat folder.
+  folders. A symlink to a folder stays out. viewr always starts in the grid, also with one
+  image: it never opens the fullscreen view or a slideshow by itself (only `--slideshow` does).
 - **Video programs:** viewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
   time, and the tests never do, so `session_first_frame` gives `NotFound` in a test. The probe
   (`player/probe.rs`) is one `ffprobe -of json` process of about 32 ms with a 2 s timeout
@@ -362,8 +370,10 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
 - **The run loop polls every 10 ms while a background job runs** (`App::has_pending_work`:
   a decode, a prefetch, a thumbnail, a filter, the scan or thumbnails that wait for their emit),
   because no event wakes it, and every 1 ms during the first 20 ms of the header read for the
-  cell shape (`SHAPE_POLL`, `SHAPE_POLL_WINDOW`), and every 2 ms while a cache read runs or waits
-  (`CACHE_READ_POLL`). There is no wait while the grid has emits left from the last pass.
+  cell shape (`SHAPE_POLL`, `SHAPE_POLL_WINDOW`), every 2 ms while a cache read runs or waits
+  (`CACHE_READ_POLL`), and every 2 ms while the grid decodes and shows no picture yet
+  (`FIRST_PICTURE_POLL`, `App::waits_for_the_first_picture`). There is no wait while the grid
+  has emits left from the last pass.
   Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
 - **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
@@ -446,10 +456,12 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   plain form `"/path" = 3` also loads. `+` / `-` save the level for the folder and as the
   global fallback. `0` resets the folder and removes its entry. The table keeps the 200 most
   recent folders.
-- **Cell icons:** a grid cell without a thumbnail shows a large dim ring (image) or play triangle
-  (video), a folder cell a folder, and `..` an arrow (`icons.rs`, `draw_cell_icon` in `ui.rs`).
-  The icons are octant blocks (2x4 dots per cell, drawn by Ghostty itself) on a ratatui canvas,
-  about 40 % of the cell height and square in pixels (`App::cell_px`). A cell that cannot hold
+- **Cell icons:** a grid cell without a thumbnail shows a large dim picture (image) or play
+  triangle (video), a folder cell a folder, and `..` two dots without a name (`icons.rs`,
+  `draw_cell_icon` in `ui.rs`). The icons are octant blocks (2x4 dots per cell, drawn by Ghostty
+  itself) on a ratatui canvas, about 30 % of the cell height and square in pixels
+  (`App::cell_px`). The help popup hides the icons and the play markers, as it hides the
+  pictures. A cell that cannot hold
   2 rows, or an icon that the grid edge cuts, gets the one-cell symbol (`Icon::symbol`). The
   icon is text in the ratatui frame, so the thumbnail that Kitty draws above it covers it. The
   next draw leaves it out once the thumbnail is in `thumb_cache`. A HEIC preview counts as a
@@ -470,7 +482,7 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v12` (`THUMBNAIL_CACHE_VERSION`), the
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v13` (`THUMBNAIL_CACHE_VERSION`), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. The folder prefetch
@@ -491,7 +503,9 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   setting converts only the text colors). So viewr converts each image into Display P3
   (`[terminal] colorspace`, default `display-p3`, or `srgb`). Each decoder reports the color of
   its pixels: ICC from JPEG APP2 (also over several segments), PNG iCCP, WebP ICCP, TIFF tag
-  34675 and HEIF `prof`/`rICC`, CICP from HEIF `nclx` and PNG `cICP`, and PNG `gAMA`/`cHRM`.
+  34675 and HEIF `prof`/`rICC`, CICP from HEIF `nclx` and PNG `cICP`, PNG `gAMA`/`cHRM`, and
+  the Adobe RGB mark of a camera JPEG without a profile (EXIF `ColorSpace` 0xFFFF with the
+  interoperability index `R03`, `color::jpeg_color`).
   The conversion runs after the resize, as one cached `moxcms` transform with the rows in
   parallel. A source in the target space converts nothing, so iPhone photos (Display P3) cost
   nothing. A source that cannot convert (an unreadable or non-RGB ICC profile, unknown CICP
@@ -499,7 +513,10 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   tests keep sRGB. The terminal player converts with a `lut3d` cube (`player/tone_map.rs`): an
   SDR video or animation gets a 17-point cube from its `color_primaries` (`Primaries::of_name`:
   BT.709, SMPTE 170M, BT.470 BG, Display P3, DCI-P3 with a Bradford adaptation, BT.2020) into
-  the target. An untagged stream, GIF, WebP and APNG count as BT.709 with the sRGB curve. A
+  the target. An untagged stream and GIF count as BT.709 with the sRGB curve. ffprobe reports
+  no profile for WebP and APNG, so the probe reads their ICC profile or cICP chunk
+  (`animation::embedded_primaries`) and maps a profile with the colorants of sRGB, Display P3
+  or BT.2020 to its primaries (`color::icc_known_space`). Any other profile counts as BT.709. A
   source in the target space gets no cube. The SDR cube runs in 8 bit (`rgb24`, `rgba`), and
   its values hold half a level, because `lut3d` truncates to 8 bit. A real ffmpeg test fails if
   `lut3d` starts to round. At 1080p, the SDR cube costs 1.4 ms to 2 ms per frame.

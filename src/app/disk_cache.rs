@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// the color target, so a change of `[terminal] colorspace` decodes again. v10: the first frame
 /// of a video gets the rotation and the HDR tone mapping. v11: the cache files are QOI, not PNG.
 /// v12: the first frame of a video is in the color space of the terminal too.
-const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v12";
+const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v13";
 
 /// The file format of the cache. QOI decodes twice as fast as PNG at the same file size.
 const CACHE_FORMAT: image::ImageFormat = image::ImageFormat::Qoi;
@@ -232,8 +232,8 @@ mod tests {
         assert_ne!(first, changed);
         assert_eq!(
             super::THUMBNAIL_CACHE_VERSION,
-            "viewr-thumbnail-v12",
-            "the first frames of videos in the color space of the terminal need a new cache generation"
+            "viewr-thumbnail-v13",
+            "camera JPEGs with the Adobe RGB mark of EXIF need a new cache generation"
         );
         assert_eq!(first.extension().and_then(|ext| ext.to_str()), Some("qoi"));
     }

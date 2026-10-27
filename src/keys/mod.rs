@@ -122,8 +122,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
 /// restarts the slideshow countdown, so that the new file gets the full interval.
 fn step_key(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Left | KeyCode::Char('h') => app.prev(),
-        KeyCode::Right | KeyCode::Char('l') => app.next(),
+        // `h` and `j` step back, `k` and `l` forward, so either hand position works.
+        KeyCode::Left | KeyCode::Char('h' | 'j') => app.prev(),
+        KeyCode::Right | KeyCode::Char('k' | 'l') => app.next(),
         KeyCode::Home => app.first(),
         KeyCode::End => app.last(),
         _ => return,

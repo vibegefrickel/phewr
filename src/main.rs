@@ -137,11 +137,6 @@ fn main() -> io::Result<()> {
     state.late_answers = keys::LateAnswerFilter::new(probe_unanswered);
     let mut app = App::with_config(cell_px, shared_list, &config);
     app.graphics = encoder::KittyBackend::new(transfer);
-    // The first status note tells which medium the probe found. The first key clears it.
-    state.status = Some(format!(
-        "Kitty transfer: {}",
-        encoder::kitty::describe(transfer)
-    ));
     let initial_dir = canonicalize_or_self(&initial_dir);
     app.initial_dir = Some(initial_dir.clone());
     app.current_dir = Some(initial_dir.clone());

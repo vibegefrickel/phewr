@@ -48,7 +48,9 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
         KeyCode::Right | KeyCode::Char('l') if app.zoom > 1.0 => app.pan(1.0, 0.0),
         KeyCode::Up | KeyCode::Char('k') if app.zoom > 1.0 => app.pan(0.0, -1.0),
         KeyCode::Down | KeyCode::Char('j') if app.zoom > 1.0 => app.pan(0.0, 1.0),
-        KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') => step_key(app, key.code),
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'j' | 'k' | 'l') => {
+            step_key(app, key.code);
+        }
         KeyCode::Home | KeyCode::End => {
             app.graphics_delete_all()?;
             step_key(app, key.code);
@@ -64,6 +66,20 @@ mod tests {
     use crate::app::{App, ViewMode};
     use crate::test_support::{char_key, fullscreen_app, press, text};
     use crossterm::event::KeyCode;
+
+    #[test]
+    fn h_and_j_step_back_and_k_and_l_step_forward() {
+        let mut app = fullscreen_app(4, 1);
+        char_key(&mut app, 'k');
+        assert_eq!(app.current, 2);
+        char_key(&mut app, 'l');
+        assert_eq!(app.current, 3);
+        char_key(&mut app, 'j');
+        assert_eq!(app.current, 2);
+        char_key(&mut app, 'h');
+        assert_eq!(app.current, 1);
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+    }
 
     fn zoom_is_one(app: &App) -> bool {
         (app.zoom - 1.0).abs() < f64::EPSILON

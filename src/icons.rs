@@ -1,5 +1,5 @@
-//! The large icons of the grid cells: a ring for an image that loads, a play triangle for a
-//! video, a folder and an arrow for the parent folder. They are octant blocks (2x4 dots per
+//! The large icons of the grid cells: a picture for an image that loads, a play triangle for
+//! a video, a folder, and two dots for the parent folder. They are octant blocks (2x4 dots per
 //! cell), which Ghostty draws itself, in a terminal color. A cell too small for an icon of two
 //! rows gets the old one-cell symbol.
 
@@ -11,7 +11,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::canvas::{Canvas, Painter, Shape};
 
 /// The share of the cell height that an icon takes.
-const ICON_HEIGHT_SHARE: f64 = 0.4;
+const ICON_HEIGHT_SHARE: f64 = 0.3;
 /// The smallest icon in rows. A smaller cell gets the one-cell symbol.
 const MIN_ICON_ROWS: u16 = 2;
 /// The dots of one octant cell: 2 across, 4 down.
@@ -35,7 +35,7 @@ impl Icon {
             Self::Loading => "\u{25cc}",
             Self::Video => "\u{25b6}",
             Self::Folder => "\u{25b8}",
-            Self::Parent => "\u{2191}",
+            Self::Parent => "..",
         }
     }
 
@@ -43,7 +43,7 @@ impl Icon {
     /// downward, like the rows.
     fn covers(self, u: f64, v: f64) -> bool {
         match self {
-            Self::Loading => (0.62..=0.95).contains(&u.hypot(v)),
+            Self::Loading => picture_covers(u, v),
             // The tip at the right, the flat side at the left, centered on its area.
             Self::Video => u >= -0.6 && v.abs() <= 0.85 * (0.9 - u) / 1.5,
             Self::Folder => {
@@ -51,13 +51,25 @@ impl Icon {
                 let body = u.abs() <= 0.95 && (-0.55..=0.72).contains(&v);
                 tab || body
             }
-            Self::Parent => {
-                let head = (-0.9..=-0.05).contains(&v) && u.abs() <= 0.8 * (v + 0.9) / 0.85;
-                let shaft = u.abs() <= 0.2 && (-0.1..=0.9).contains(&v);
-                head || shaft
-            }
+            Self::Parent => (u - 0.5).hypot(v) <= 0.35 || (u + 0.5).hypot(v) <= 0.35,
         }
     }
+}
+
+/// A landscape photo: a frame, a sun at the top right and two mountains.
+fn picture_covers(u: f64, v: f64) -> bool {
+    let outer = u.abs() <= 0.95 && v.abs() <= 0.75;
+    let inner = u.abs() <= 0.78 && v.abs() <= 0.58;
+    if outer && !inner {
+        return true;
+    }
+    if !inner {
+        return false;
+    }
+    let sun = (u - 0.42).hypot(v + 0.25) <= 0.17;
+    let big_mountain = v >= -0.2 && (u + 0.25).abs() <= (v + 0.2) * 0.75;
+    let small_mountain = v >= 0.1 && (u - 0.4).abs() <= (v - 0.1) * 0.9;
+    sun || big_mountain || small_mountain
 }
 
 /// The box of the icon in `cell`: a square in pixels, about 40 % of the cell height, centered.
@@ -138,15 +150,15 @@ mod tests {
     fn the_icon_box_is_square_in_pixels_and_centered() {
         let cell = Rect::new(10, 5, 30, 10);
         let icon = icon_rect(cell, CELL_PX).unwrap();
-        assert_eq!(icon.height, 4);
-        // 4 rows of 43 px are 172 px, so 10 columns of 18 px.
-        assert_eq!(icon.width, 10);
-        assert_eq!((icon.x, icon.y), (20, 8));
+        assert_eq!(icon.height, 3);
+        // 3 rows of 43 px are 129 px, so 8 columns of 18 px.
+        assert_eq!(icon.width, 8);
+        assert_eq!((icon.x, icon.y), (21, 8));
     }
 
     #[test]
     fn a_small_cell_has_no_icon_box() {
-        assert_eq!(icon_rect(Rect::new(0, 0, 30, 3), CELL_PX), None);
+        assert_eq!(icon_rect(Rect::new(0, 0, 30, 4), CELL_PX), None);
         assert_eq!(icon_rect(Rect::new(0, 0, 4, 10), CELL_PX), None);
         assert_eq!(icon_rect(Rect::new(0, 0, 30, 10), (0, 0)), None);
     }
@@ -168,13 +180,15 @@ mod tests {
     }
 
     #[test]
-    fn the_ring_is_hollow_and_the_triangle_points_right() {
-        assert!(!Icon::Loading.covers(0.0, 0.0));
-        assert!(Icon::Loading.covers(0.8, 0.0));
+    fn the_shapes_have_their_parts() {
+        assert!(Icon::Loading.covers(0.9, 0.0), "the frame");
+        assert!(Icon::Loading.covers(0.42, -0.25), "the sun");
+        assert!(Icon::Loading.covers(-0.25, 0.3), "the mountain");
+        assert!(!Icon::Loading.covers(-0.6, -0.4), "the sky");
         assert!(Icon::Video.covers(-0.5, 0.0));
         assert!(Icon::Video.covers(0.8, 0.0));
         assert!(!Icon::Video.covers(0.8, 0.5));
-        assert!(Icon::Parent.covers(0.0, -0.8));
-        assert!(!Icon::Parent.covers(0.7, 0.5));
+        assert!(Icon::Parent.covers(-0.5, 0.0) && Icon::Parent.covers(0.5, 0.0));
+        assert!(!Icon::Parent.covers(0.0, 0.0), "two dots, not one bar");
     }
 }

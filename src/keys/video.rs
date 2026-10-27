@@ -2,26 +2,23 @@
 
 use super::step_key;
 use crate::app::App;
-use crate::player::SEEK_STEP;
+use crate::mpv::Step;
 use crate::video_handoff::focus_gallery_on_current;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::io;
 
-/// Keys of the player: pause, seek, the steps through the list, the mpv window.
+/// Keys of the player: the steps through the list, the slideshow, the mpv window.
 ///
-/// `q` and Esc stop a running slideshow and go back: the user wants out. A step to another file
+/// The player plays like an animated image: no pause and no seek. `p` opens the video in the
+/// mpv window, with sound and all controls. `h` / `j`, `k` / `l`, the arrows, `N` and `n` step
+/// to the previous and next file, as in the fullscreen view. Space pauses a running slideshow. `q`
+/// and Esc stop a running slideshow and go back: the user wants out. A step to another file
 /// keeps the slideshow and gives that file the full interval, like in the fullscreen view.
-/// `n` and `N` step like the same keys in mpv. `p` opens the video in the mpv window, with sound.
 pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     match key.code {
-        KeyCode::Char(' ') => {
-            if let Some(ref mut v) = app.video {
-                v.toggle_pause();
-                app.needs_render = true;
-            }
-        }
-        KeyCode::Left | KeyCode::Char('h') => seek(app, -SEEK_STEP),
-        KeyCode::Right | KeyCode::Char('l') => seek(app, SEEK_STEP),
+        KeyCode::Char(' ') => app.slideshow_toggle_pause(),
+        KeyCode::Left | KeyCode::Char('h' | 'j' | 'N') => step(app, Step::Previous)?,
+        KeyCode::Right | KeyCode::Char('k' | 'l' | 'n') => step(app, Step::Next)?,
         KeyCode::Char('q') | KeyCode::Esc => leave_player(app)?,
         KeyCode::Char('p') => {
             app.graphics_delete_all()?;
@@ -30,14 +27,6 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
         KeyCode::Char('?') => {
             app.graphics_delete_all()?;
             app.help_visible = true;
-        }
-        KeyCode::Char('n') => {
-            app.graphics_delete_all()?;
-            step_from_player(app, crate::mpv::Step::Next);
-        }
-        KeyCode::Char('N') => {
-            app.graphics_delete_all()?;
-            step_from_player(app, crate::mpv::Step::Previous);
         }
         KeyCode::Home | KeyCode::End => {
             app.graphics_delete_all()?;
@@ -57,20 +46,14 @@ pub(super) fn leave_player(app: &mut App) -> io::Result<()> {
     Ok(())
 }
 
-/// Move the position of the player by `seconds`.
-pub(super) fn seek(app: &mut App, seconds: f64) {
-    if let Some(ref mut v) = app.video {
-        v.seek_by(seconds);
-        app.needs_render = true;
-    }
-}
-
 /// Step to the neighbor in the list, as `n` and `N` do in mpv. The end of the list keeps the
 /// video, and the slideshow countdown starts again for the new file.
-fn step_from_player(app: &mut App, step: crate::mpv::Step) {
+pub(super) fn step(app: &mut App, step: Step) -> io::Result<()> {
+    app.graphics_delete_all()?;
     if !app.step_from_video(step) {
         app.needs_render = true;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -162,48 +145,31 @@ mod tests {
     }
 
     #[test]
-    fn space_pauses_and_the_arrows_seek() {
+    fn the_arrows_and_hl_step_between_the_files_and_space_does_not_pause() {
         let mut app = video_app();
-        char_key(&mut app, ' ');
-        press(&mut app, KeyCode::Right);
-        assert!(app.video.is_none(), "without a player, the keys do nothing");
-        assert_eq!(app.current, 1);
-
         let decoder = with_player(&mut app);
         char_key(&mut app, ' ');
-        assert!(!app.video.as_ref().unwrap().playing());
-        char_key(&mut app, ' ');
-        assert!(app.video.as_ref().unwrap().playing());
-
-        let mut info = clip_info();
-        info.duration = 60.0;
-        let decoder_long = fake_decoder(info);
-        drop(decoder);
-        app.video = Some(
-            Player::open(
-                shared(&decoder_long),
-                Path::new("/bin/ffmpeg"),
-                Path::new("/videos/clip.mp4"),
-                (64, 48),
-                &[],
-                true,
-            )
-            .unwrap(),
-        );
-        press(&mut app, KeyCode::Right);
         assert!(
-            decoder_long.last_args().contains(" -ss 5.000 "),
-            "{}",
-            decoder_long.last_args()
+            app.video.as_ref().unwrap().playing(),
+            "no pause in the player"
         );
-        char_key(&mut app, 'l');
-        assert!(decoder_long.last_args().contains(" -ss 10.000 "));
-        press(&mut app, KeyCode::Left);
-        assert!(decoder_long.last_args().contains(" -ss 5.000 "));
+        assert_eq!(decoder.starts().len(), 1, "no seek");
+
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.current, 2);
+        assert_eq!(app.mode, ViewMode::Video);
         char_key(&mut app, 'h');
-        assert!(!decoder_long.last_args().contains("-ss"));
-        assert_eq!(decoder_long.starts().len(), 5);
-        assert_eq!(app.mode, ViewMode::Video, "a seek never leaves the video");
+        assert_eq!(app.current, 1);
+        char_key(&mut app, 'l');
+        assert_eq!(app.current, 2);
+        char_key(&mut app, 'j');
+        assert_eq!(app.current, 1);
+        char_key(&mut app, 'k');
+        assert_eq!(app.current, 2);
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.current, 0);
+        assert_eq!(app.mode, ViewMode::Fullscreen, "a.jpg is a photo");
     }
 
     #[test]

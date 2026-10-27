@@ -61,6 +61,13 @@ const MAX_ANIMATION_FPS: f64 = 50.0;
 /// no more frames than this.
 const MAX_VARIABLE_FPS: f64 = 60.0;
 
+/// A base rate above this multiple of the average rate is a burst, not the rate of the clip.
+const BURST_RATIO: f64 = 1.5;
+
+/// The lowest output rate of a clip with bursts, so that its motion stays smooth. A screen
+/// recording at 25 with an average of 7.7 plays at 24, not at 7.7.
+const MIN_BURST_FPS: f64 = 24.0;
+
 /// The share by which the average rate can differ from the real base rate of a constant-rate
 /// video. iPhone clips have an average rate of 29.99 at a base rate of 30 (0.03 %).
 const VARIABLE_RATE_TOLERANCE: f64 = 0.01;
@@ -202,7 +209,16 @@ pub(crate) fn probe(program: &Path, path: &Path) -> io::Result<VideoInfo> {
         let reason = text.lines().map(str::trim).rfind(|line| !line.is_empty());
         return Err(invalid(reason.unwrap_or("ffprobe could not read the file")));
     }
-    parse(&output.stdout, packet_limit)
+    let mut info = parse(&output.stdout, packet_limit)?;
+    // ffprobe reports no profile for an animated WebP or APNG. The file can carry one.
+    if info.animation
+        && info.hdr.is_none()
+        && info.primaries == Primaries::Bt709
+        && let Some(primaries) = super::animation::embedded_primaries(path)
+    {
+        info.primaries = primaries;
+    }
+    Ok(info)
 }
 
 /// The probe of `path` from the cache of the session, or a new probe that goes into it. The
@@ -407,19 +423,20 @@ fn pacing_rate(real: Option<f64>, average: Option<f64>, animation: bool) -> (f64
 /// the first packets. `average` is the frame count over the length. A video is variable when
 /// the two differ by more than [`VARIABLE_RATE_TOLERANCE`]. Without `-r`, ffmpeg writes raw
 /// frames at `real`, but the player paced them at `average`: a screen recording at 25 and
-/// 7.7 played 3.2 times too slow. The output rate is `real` up to [`MAX_VARIABLE_FPS`], so no
-/// frame drops and the still parts repeat their frame. Above it, `real` is a fast burst (an
-/// iPhone slow motion clip at 120 and 29.6) or a time base guess, and the output rate is
-/// `average`, capped at [`MAX_VARIABLE_FPS`].
+/// 7.7 played 3.2 times too slow. Up to [`BURST_RATIO`] times the average, the output rate is
+/// `real`, so no frame drops. Above it, `real` is a burst (a phone clip at 60 with an average
+/// of 30, an iPhone slow motion clip at 120 and 29.6) or a time base guess. The output rate is
+/// then `average`, at least [`MIN_BURST_FPS`] (but not above `real`), so ffmpeg does not
+/// duplicate most frames. Every rate stays at or below [`MAX_VARIABLE_FPS`].
 fn variable_rate_fps(real: f64, average: f64) -> Option<f64> {
     let valid = |rate: f64| rate.is_finite() && rate > 0.0;
     if !valid(real) || !valid(average) || (real - average).abs() <= real * VARIABLE_RATE_TOLERANCE {
         return None;
     }
-    let rate = if real <= MAX_VARIABLE_FPS {
-        real
+    let rate = if real > average * BURST_RATIO {
+        average.max(MIN_BURST_FPS.min(real))
     } else {
-        average
+        real
     };
     Some(rate.min(MAX_VARIABLE_FPS))
 }
@@ -587,10 +604,11 @@ mod tests {
     }
 
     #[test]
-    fn a_variable_rate_clip_parses_as_variable_at_its_base_rate() {
+    fn a_variable_rate_clip_parses_as_variable_at_its_average_rate() {
         let info = parse(VARIABLE.as_bytes(), None).unwrap();
         assert!(info.variable_rate, "{info:?}");
-        assert_eq!(info.fps, 60.0);
+        // A base rate of 60 is more than 1.5 times the average of 24.7: a burst.
+        assert!((info.fps - 2400.0 / 97.0).abs() < 1e-9, "{info:?}");
         assert!((info.duration - 1.616_667).abs() < 1e-9);
     }
 
@@ -729,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn a_variable_rate_plays_at_its_base_rate_up_to_60_and_else_at_its_average() {
+    fn a_variable_rate_plays_at_its_base_rate_and_a_burst_at_its_average() {
         assert_eq!(variable_rate_fps(30.0, 30.0), None, "a constant rate");
         assert_eq!(
             variable_rate_fps(30.0, 100_080.0 / 3337.0),
@@ -738,10 +756,25 @@ mod tests {
         );
         assert_eq!(
             variable_rate_fps(25.0, 7.7),
-            Some(25.0),
-            "a screen recording"
+            Some(24.0),
+            "a screen recording keeps smooth motion"
         );
-        assert_eq!(variable_rate_fps(60.0, 24.0), Some(60.0));
+        assert_eq!(variable_rate_fps(60.0, 24.0), Some(24.0));
+        assert_eq!(
+            variable_rate_fps(60.0, 30.0),
+            Some(30.0),
+            "a phone clip with bursts plays at its average, not with duplicates"
+        );
+        assert_eq!(
+            variable_rate_fps(30.0, 25.0),
+            Some(30.0),
+            "below the burst ratio"
+        );
+        assert_eq!(
+            variable_rate_fps(20.0, 5.0),
+            Some(20.0),
+            "the floor stays below real"
+        );
         assert_eq!(
             variable_rate_fps(120.0, 29.6),
             Some(29.6),
@@ -765,7 +798,7 @@ mod tests {
     #[test]
     fn the_pacing_rate_follows_the_rate_that_ffmpeg_writes() {
         assert_eq!(pacing_rate(Some(30.0), Some(30.0), false), (30.0, false));
-        assert_eq!(pacing_rate(Some(25.0), Some(7.7), false), (25.0, true));
+        assert_eq!(pacing_rate(Some(25.0), Some(7.7), false), (24.0, true));
         assert_eq!(
             pacing_rate(Some(25.0), Some(7.7), true),
             (7.7, false),
@@ -853,7 +886,8 @@ mod tests {
             };
             let info = probe(&ffprobe, &path).unwrap();
             assert_eq!(info.variable_rate, variable, "{name}: {info:?}");
-            let fps = if variable { 60.0 } else { 24.0 };
+            // The variable clip has bursts at 60 and an average of 24.7, so it plays at 24.7.
+            let fps = if variable { 2400.0 / 97.0 } else { 24.0 };
             assert!((info.fps - fps).abs() < 1e-9, "{name}: {info:?}");
             assert!(!info.animation, "{name}");
         }

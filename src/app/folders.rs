@@ -357,8 +357,11 @@ mod tests {
         list.push_batch(vec![PathBuf::from("/x/y/only.png")]);
         list.mark_complete();
         app.refresh_from_scanner();
-        assert_eq!(app.mode, ViewMode::Fullscreen);
-        assert_eq!(app.current, 1);
+        assert_eq!(
+            app.mode,
+            ViewMode::Gallery,
+            "one image next to a folder stays in the grid"
+        );
         assert_eq!(app.filenames, ["..", "only.png"]);
     }
 

@@ -240,7 +240,7 @@ pub(crate) fn detect_transfer(
     }
 }
 
-/// The medium for the status bar, with the key of the protocol.
+/// The medium for the help popup, with the key of the protocol.
 pub(crate) fn describe(transfer: Transfer) -> &'static str {
     match transfer {
         Transfer::Direct => "direct (t=d)",

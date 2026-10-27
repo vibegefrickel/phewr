@@ -121,8 +121,27 @@ pub(crate) fn add_file_color(decoded: &mut Decoded, path: &Path, format: Option<
                 decoded.color = SourceColor::icc(icc);
             }
         }
+        Some(ImageFormat::Jpeg)
+            if decoded.color == SourceColor::Srgb
+                && jpeg_header(path).is_some_and(|header| color::exif_marks_adobe_rgb(&header)) =>
+        {
+            decoded.color = SourceColor::AdobeRgb;
+        }
         _ => {}
     }
+}
+
+/// The first 128 KB of a JPEG file: the APP segments with the EXIF block come before the
+/// image data.
+fn jpeg_header(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut header = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(128 * 1024)
+        .read_to_end(&mut header)
+        .ok()?;
+    Some(header)
 }
 
 /// The ICC profile that the decoder reads (JPEG, PNG, TIFF, WebP, GIF). A broken profile

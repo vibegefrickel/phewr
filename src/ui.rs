@@ -30,7 +30,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
         draw_info_panel(frame, app, info);
     }
     if app.help_visible {
-        draw_help_popup(frame);
+        draw_help_popup(frame, app.graphics.transfer());
     }
 }
 
@@ -387,6 +387,8 @@ pub(crate) fn status_area(area: Rect) -> Rect {
 /// the cell. The selected border comes last, so it wins on a gap that two cells share.
 fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     app.gallery.update_grid(grid_rect);
+    // The help popup hides the pictures, so it hides the icons and the play markers too.
+    let icons = !app.help_visible;
     let first_visible = app.gallery.scroll_offset * app.gallery.grid_cols;
     let mut selected_border = None;
 
@@ -416,7 +418,7 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
             };
             draw_cell_icon(frame, app, app.gallery.cell_rect(vis_idx), icon, grid_rect);
         }
-        if app.gallery.show_filenames {
+        if app.gallery.show_filenames && !is_parent(app, img_idx) {
             draw_label(frame, app, vis_idx, img_idx, label_style, grid_rect);
         }
     }
@@ -430,7 +432,7 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
             grid_rect,
         );
     }
-    if !app.gallery.show_filenames {
+    if icons && !app.gallery.show_filenames {
         for (vis_idx, img_idx) in app.gallery.visible_items() {
             if shows_play_marker(app, img_idx) {
                 draw_animation_marker(frame, app, vis_idx, grid_rect);
@@ -461,7 +463,8 @@ fn draw_animation_marker(frame: &mut Frame<'_>, app: &App, vis_idx: usize, grid_
 
 /// A large dim icon in the center of `cell`, or the one-cell symbol when the cell is small or
 /// the grid edge cuts the icon. Kitty draws a thumbnail above the text, so the icon of a cell
-/// that loads needs no redraw when the thumbnail arrives. Returns the row below the icon.
+/// that loads needs no redraw when the thumbnail arrives. The help popup hides the pictures,
+/// so it hides the icons too. Returns the row below the icon.
 fn draw_cell_icon(
     frame: &mut Frame<'_>,
     app: &App,
@@ -472,20 +475,29 @@ fn draw_cell_icon(
     let shape =
         icons::icon_rect(cell, app.cell_px).filter(|area| grid_rect.intersection(*area) == *area);
     if let Some(area) = shape {
-        icons::draw_icon(frame.buffer_mut(), area, icon, STYLES.dim);
+        if !app.help_visible {
+            icons::draw_icon(frame.buffer_mut(), area, icon, STYLES.dim);
+        }
         return Some(area.bottom());
     }
     let center = Position::new(cell.x + cell.width / 2, cell.y + cell.height / 2);
     if !grid_rect.contains(center) {
         return None;
     }
-    frame
-        .buffer_mut()
-        .set_string(center.x, center.y, icon.symbol(), STYLES.dim);
+    if !app.help_visible {
+        frame
+            .buffer_mut()
+            .set_string(center.x, center.y, icon.symbol(), STYLES.dim);
+    }
     Some(center.y + 1)
 }
 
-/// A folder cell: a folder icon, or an arrow for `..`, and the name below it. The name goes inside the
+/// True for the `..` entry, which shows two dots and no name.
+fn is_parent(app: &App, img_idx: usize) -> bool {
+    app.is_folder(img_idx) && app.filenames[img_idx] == ".."
+}
+
+/// A folder cell: a folder icon and the name below it, or two dots for `..`. The name goes inside the
 /// cell when the filename labels are off, because the label row then does not exist.
 fn draw_folder_cell(
     frame: &mut Frame<'_>,
@@ -504,7 +516,7 @@ fn draw_folder_cell(
     let Some(below) = draw_cell_icon(frame, app, cell, icon, grid_rect) else {
         return;
     };
-    if app.gallery.show_filenames {
+    if app.gallery.show_filenames || icon == Icon::Parent {
         return;
     }
     let name_rect = Rect {
@@ -655,7 +667,7 @@ fn help_gallery_rows() -> Vec<HelpRow> {
 fn help_viewer_rows() -> Vec<HelpRow> {
     vec![
         ("", "Fullscreen"),
-        ("\u{2190} / \u{2192}, h / l", "Previous / next image"),
+        ("\u{2190} / \u{2192}, h j / k l", "Previous / next image"),
         ("Edge click", "Previous / next image"),
         ("Home / End", "First / last"),
         ("+ / -, wheel", "Zoom in / out"),
@@ -675,11 +687,7 @@ fn help_viewer_rows() -> Vec<HelpRow> {
         #[cfg(feature = "video")]
         ("", "Video player (no sound)"),
         #[cfg(feature = "video")]
-        ("Space / click", "Pause / resume"),
-        #[cfg(feature = "video")]
-        ("\u{2190}/\u{2192}, h/l, wheel", "Seek 5 s back / forward"),
-        #[cfg(feature = "video")]
-        ("n / N", "Next / previous file"),
+        ("\u{2190}/\u{2192}, h j / k l", "Previous / next file"),
         #[cfg(feature = "video")]
         ("Home / End", "First / last file"),
         #[cfg(feature = "video")]
@@ -712,7 +720,8 @@ fn help_lines(rows: &[HelpRow]) -> Vec<Line<'static>> {
 
 /// The help popup. A terminal of 100 columns or more gets two columns, so that it fits into 40
 /// rows. A narrower one gets one column that the popup clips.
-fn draw_help_popup(frame: &mut Frame<'_>) {
+/// The help popup. Its last row names the Kitty medium that the start probe found.
+fn draw_help_popup(frame: &mut Frame<'_>, transfer: crate::encoder::Transfer) {
     let area = frame.area();
     let two_columns = area.width >= HELP_TWO_COLUMN_WIDTH;
     let left = help_gallery_rows();
@@ -759,7 +768,10 @@ fn draw_help_popup(frame: &mut Frame<'_>) {
     }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " press any key to close",
+            format!(
+                " press any key to close \u{b7} Kitty transfer: {}",
+                crate::encoder::kitty::describe(transfer)
+            ),
             STYLES.dim,
         ))),
         chunks[1],
@@ -1284,7 +1296,7 @@ mod tests {
         let below = icon_area(&app, 1).bottom();
         let row = &screen_rows(&buffer)[usize::from(below)];
         assert!(row.contains("summer"), "{screen}");
-        assert!(row.contains(".."), "{screen}");
+        assert!(!row.contains(".."), "the two dots stand for `..`: {screen}");
         assert_eq!(
             buffer[(x, below)].symbol(),
             "m",
@@ -1328,6 +1340,27 @@ mod tests {
         let buffer = render_buffer(&mut app, None, 100, 30);
         assert!(shows_icon(&app, &buffer, 1, Some(Icon::Video)));
         assert!(shows_icon(&app, &buffer, 0, Some(Icon::Loading)));
+    }
+
+    #[test]
+    fn the_help_popup_hides_the_icons_with_the_pictures() {
+        let mut app = folder_app(&["..", "summer"], &["a.jpg", "clip.mp4"]);
+        app.help_visible = true;
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        for vis_index in 0..4 {
+            let area = icon_area(&app, vis_index);
+            let popup_free = area
+                .positions()
+                .filter(|position| buffer[*position].symbol() != " ")
+                .all(|position| buffer[position].fg != Color::DarkGray);
+            assert!(
+                popup_free,
+                "cell {vis_index} shows no dim icon under the help"
+            );
+        }
+        app.help_visible = false;
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        assert!(shows_icon(&app, &buffer, 2, Some(Icon::Loading)));
     }
 
     #[test]
@@ -1644,16 +1677,14 @@ mod tests {
         .unwrap();
         decoder.feed(vec![0; 64 * 48 * 4]);
         assert!(player.poll());
-        player.toggle_pause();
         app.video = Some(player);
         let screen = render(&mut app, None, 100, 30);
         assert!(
-            status_row(&screen).starts_with(" \u{23f8} clip.mp4 00:00/1:02:05 [1/2] "),
+            status_row(&screen).starts_with(" \u{25b6} clip.mp4 00:00/1:02:05 [1/2] "),
             "{screen}"
         );
         assert_eq!(crate::file_meta::format_time(65.9), "01:05");
 
-        app.video.as_mut().unwrap().toggle_pause();
         decoder.end();
         assert!(
             !app.video.as_mut().unwrap().poll(),
@@ -1724,11 +1755,14 @@ mod tests {
         assert_shows(&screen, "Shorter / longer interval");
         assert_shows(&screen, " Mouse");
         assert_shows(&screen, "Shift+drag  Select terminal text");
-        assert_shows(&screen, " press any key to close");
+        assert_shows(
+            &screen,
+            " press any key to close \u{b7} Kitty transfer: direct (t=d)",
+        );
         #[cfg(feature = "video")]
         {
             assert_shows(&screen, " Video player (no sound)");
-            assert_shows(&screen, "Seek 5 s back / forward");
+            assert_shows(&screen, "Previous / next file");
         }
 
         let rows = screen_rows(&render_buffer(&mut app, None, 120, 52));

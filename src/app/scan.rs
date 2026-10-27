@@ -1,7 +1,7 @@
 //! The results of the directory scan, the sort at its end and the filename filter.
 
+use super::App;
 use super::cell_shape::SHAPE_SAMPLE;
-use super::{App, ViewMode};
 use crate::search;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -50,12 +50,9 @@ impl App {
             self.scan_complete = true;
             self.finalize_scan_order();
             self.request_cell_shape();
+            // viewr always starts in the grid, also with one image: it never opens the
+            // fullscreen view by itself.
             self.place_cursor_on_return();
-
-            // One image opens at once, also next to folder entries. `q` goes back to the grid.
-            if self.file_count() == 1 && self.mode == ViewMode::Gallery {
-                self.enter_fullscreen_at(self.first_file());
-            }
         }
     }
 
@@ -201,13 +198,13 @@ mod tests {
     }
 
     #[test]
-    fn a_single_scanned_image_opens_in_fullscreen() {
+    fn a_single_scanned_image_stays_in_the_grid() {
         let list = SharedImageList::new();
         let mut app = App::new((8, 16), list.clone());
         list.push_batch(vec![PathBuf::from("/x/only.png")]);
         list.mark_complete();
         app.refresh_from_scanner();
-        assert_eq!(app.mode, ViewMode::Fullscreen);
+        assert_eq!(app.mode, ViewMode::Gallery);
         // A second refresh after the end changes nothing.
         app.refresh_from_scanner();
         assert_eq!(app.images.len(), 1);

@@ -105,7 +105,7 @@ On a folder, `g v` opens that folder. On a file, it opens the folder of the file
 | `q` `Esc` | Quit |
 | `?` | Full help |
 
-The grid lists the subfolders of the folder first, with `..` for the parent. A folder cell shows `▸` and its name. Hidden folders and symlinks to folders stay out. Folders take no mark and no delete, and the fullscreen view and the slideshow skip them. The search matches folder names. A folder with exactly one image opens it in fullscreen. When the cursor rests on a folder, viewr prepares the thumbnails of that folder in the background, so `Enter` shows them at once.
+The grid lists the subfolders of the folder first, with `..` for the parent. A folder cell shows a large folder icon and its name, and `..` shows two dots. Hidden folders and symlinks to folders stay out. Folders take no mark and no delete, and the fullscreen view and the slideshow skip them. The search matches folder names. viewr always starts in the grid, also in a folder with one image. When the cursor rests on a folder, viewr prepares the thumbnails of that folder in the background, so `Enter` shows them at once.
 
 The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. The grid separates the thumbnails with 1-cell gaps. A thick blue border marks the thumbnail under the cursor. A thin yellow border marks each selected image (`Space`). A cell shows a dim ◌ (image) or ▶ (video) while its thumbnail loads.
 
@@ -117,7 +117,7 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 
 | Key | Action |
 |-----|--------|
-| `h` `l`, arrows | Previous / next image |
+| `h` `j` / `k` `l`, `←` `→` | Previous / next image (`hjkl` pan when zoomed) |
 | `Home` `End` | First / last |
 | `+` `-` `0` | Zoom in, out, fit. `hjkl` pans when zoomed |
 | `s` | Start / stop the slideshow |
@@ -132,13 +132,12 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 
 ### Video
 
-viewr plays a video in the terminal with its own player. ffmpeg from Homebrew decodes on the media engine of the Mac, scales the frame on the GPU and maps HLG and PQ (iPhone HDR, Dolby Vision 8.4, HDR10) to SDR with a tone mapping cube. Every video and animation converts into the color space of the terminal, like the still images. viewr sends each frame through the Kitty temp file medium, and the terminal scales it to the window. A 1080p video plays at 30 fps without dropped frames in Ghostty. Opaque images and video frames go to the terminal as RGB, with a quarter fewer bytes than RGBA. Videos with a variable frame rate, for example screen recordings and phone clips, play at their real speed. The terminal player has no sound.
+viewr plays a video in the terminal with its own player. ffmpeg from Homebrew decodes on the media engine of the Mac, scales the frame on the GPU and maps HLG and PQ (iPhone HDR, Dolby Vision 8.4, HDR10) to SDR with a tone mapping cube. Every video and animation converts into the color space of the terminal, like the still images. viewr sends each frame through the Kitty temp file medium, and the terminal scales it to the window. A 1080p video plays at 30 fps without dropped frames in Ghostty. Opaque images and video frames go to the terminal as RGB, with a quarter fewer bytes than RGBA. Videos with a variable frame rate, for example screen recordings and phone clips, play at their real speed. The terminal player has no sound, no pause and no seek: it plays like an animated image, and it always keeps real time. If the decode or the terminal is too slow, it drops frames and never plays in slow motion. `p` opens the mpv window for sound and all controls.
 
 | Key | Action |
 |-----|--------|
-| `Space` | Pause / resume |
-| `←` `→`, `h` `l` | Seek 5 s back / forward |
-| `n` `N` | Next / previous file |
+| `←` `→`, `h` `j` / `k` `l`, `N` `n` | Previous / next file |
+| `Space` | Pause / resume a running slideshow |
 | `Home` `End` | First / last file |
 | `p` | Continue in the mpv window, with sound |
 | `q` `Esc` | Back to the view that opened the video |
@@ -172,8 +171,7 @@ viewr reads the mouse in every view. `[gallery] mouse = false` turns this off, a
 | Fullscreen | Drag | Pan the zoomed image |
 | Fullscreen | Click near the left or right edge | Previous / next image |
 | Fullscreen | Right click | Info panel |
-| Player | Click on the video / beside it or right click | Pause / back |
-| Player | Wheel | Seek 5 s |
+| Player | Click beside the video or right click | Back |
 | Every view | Click on the status row | Help |
 
 A click closes the help and the info panel. While an mpv window plays, viewr releases the mouse.
@@ -218,13 +216,13 @@ viewr uses the default foreground and background of the terminal and the 16 ANSI
 
 ### Kitty transfer
 
-At start, viewr asks the terminal whether it reads image data from a temp file. If the terminal answers yes, viewr writes each picture to a file in `$TMPDIR` and sends only the path. Otherwise the pixels go through the terminal as text. The first status note shows the result, for example `Kitty transfer: temp file (t=t)`. The environment variable `VIEWR_KITTY_TRANSFER=direct|png|file` skips the question and forces one medium. Over SSH, viewr sends PNG.
+At start, viewr asks the terminal whether it reads image data from a temp file. If the terminal answers yes, viewr writes each picture to a file in `$TMPDIR` and sends only the path. Otherwise the pixels go through the terminal as text. The last row of the help popup (`?`) shows the result, for example `Kitty transfer: temp file (t=t)`. The environment variable `VIEWR_KITTY_TRANSFER=direct|png|file` skips the question and forces one medium. Over SSH, viewr sends PNG.
 
 ## Formats
 
 **Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, TGA.
 
-**Colors:** viewr converts the colors of each image into the color space of the terminal. Ghostty shows image pixels as Display P3, so that is the default. viewr reads ICC profiles (JPEG, PNG, WebP, TIFF, HEIC, AVIF), the nclx box of HEIC and AVIF, and the cICP, gAMA and cHRM chunks of PNG. An image without color information is sRGB. iPhone photos are already Display P3 and need no conversion.
+**Colors:** viewr converts the colors of each image into the color space of the terminal. Ghostty shows image pixels as Display P3, so that is the default. viewr reads ICC profiles (JPEG, PNG, WebP, TIFF, HEIC, AVIF), the nclx box of HEIC and AVIF, and the cICP, gAMA and cHRM chunks of PNG. A camera JPEG in Adobe RGB without a profile carries an EXIF mark, and viewr reads it too. An image without color information is sRGB. iPhone photos are already Display P3 and need no conversion.
 
 **Animated images:** animated GIF, WebP, APNG (`.png`, `.apng`) and AVIF image sequences (AVIS) play in the terminal player, in a loop. The grid shows the first frame with a dim `▶` marker. Videos get the same marker. `Enter` plays the animation, and `p` opens it in the mpv window. In a slideshow, the terminal player plays an animation for at least the slideshow interval. Animated WebP needs FFmpeg 9 or later (the `webp_anim` decoder).
 

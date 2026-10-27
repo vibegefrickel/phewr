@@ -66,6 +66,28 @@ impl Primaries {
         }
     }
 
+    /// The primaries of a still color source, for an animation whose profile ffprobe does not
+    /// report. `None` for a source without a cube of its own, for example Adobe RGB.
+    pub(crate) fn of_source_color(source: &SourceColor) -> Option<Self> {
+        match source {
+            SourceColor::Srgb => Some(Self::Bt709),
+            SourceColor::DisplayP3 => Some(Self::DisplayP3),
+            SourceColor::Cicp { primaries, .. } => match primaries {
+                1 => Some(Self::Bt709),
+                5 => Some(Self::Bt470Bg),
+                6 | 7 => Some(Self::Smpte170m),
+                9 => Some(Self::Bt2020),
+                11 => Some(Self::DciP3),
+                12 => Some(Self::DisplayP3),
+                _ => None,
+            },
+            SourceColor::Icc(data) => {
+                Self::of_source_color(&crate::decode::color::icc_known_space(data)?)
+            }
+            SourceColor::AdobeRgb | SourceColor::PngGamma { .. } => None,
+        }
+    }
+
     /// The color of the pixels for `decode::color`, the same source as in the cube.
     pub(crate) fn source_color(self) -> SourceColor {
         // The CICP code points of ITU-T H.273, with the sRGB curve (13).

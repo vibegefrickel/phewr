@@ -420,7 +420,9 @@ mod tests {
     fn libheif_scales_planes_with_and_without_row_padding() {
         let dir = test_dir();
         let mut padding = Vec::new();
-        for (width, height) in [(256, 128), (250, 126)] {
+        // libheif 1.23 adds 64 bytes to a row of a multiple of 512 bytes, so a 256 px row has
+        // padding too. A 320 px row (1280 bytes) has none.
+        for (width, height) in [(320, 128), (250, 126)] {
             let path = dir.path().join(format!("red-{width}.avif"));
             write_red_avif(&path, width, height);
             padding.push(rows_have_padding(&path));

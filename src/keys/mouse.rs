@@ -220,32 +220,26 @@ fn edge_step(app: &mut App, content: Rect, at: Position) {
     app.slideshow_touch();
 }
 
-/// The player: a click on the picture pauses, a click beside it or a right click goes back like
-/// `q`, and the wheel seeks. The status row and the info panel act as in the other views.
+/// The player: a click on the picture does nothing, a click beside it or a right click goes
+/// back like `q`. The wheel does nothing: the player has no seek, and a trackpad swipe would
+/// start ffmpeg again for each step. The status row and the info panel act as in the other
+/// views.
 #[cfg(feature = "video")]
 fn video_mouse(app: &mut App, mouse: MouseEvent, at: Position) -> io::Result<bool> {
-    use super::video::{leave_player, seek};
-    use crate::player::SEEK_STEP;
+    use super::video::leave_player;
 
     let regions = regions(app);
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) if shared_click(app, &regions, at)? => {}
-        MouseEventKind::Down(MouseButton::Left) if video_picture(app).contains(at) => {
-            if let Some(ref mut video) = app.video {
-                video.toggle_pause();
-                app.needs_render = true;
-            }
-        }
+        MouseEventKind::Down(MouseButton::Left) if video_picture(app).contains(at) => {}
         MouseEventKind::Down(MouseButton::Left | MouseButton::Right) => leave_player(app)?,
-        MouseEventKind::ScrollDown | MouseEventKind::ScrollRight => seek(app, SEEK_STEP),
-        MouseEventKind::ScrollUp | MouseEventKind::ScrollLeft => seek(app, -SEEK_STEP),
         _ => {}
     }
     Ok(false)
 }
 
 /// The cells of the video frame, as `render_video_frame_to` places it. Before the first frame,
-/// the whole box counts as the picture, so an early click pauses and does not leave.
+/// the whole box counts as the picture, so an early click does not leave.
 #[cfg(feature = "video")]
 fn video_picture(app: &App) -> Rect {
     let frame = app
@@ -546,7 +540,7 @@ mod tests {
 
     #[cfg(feature = "video")]
     #[test]
-    fn the_player_pauses_on_a_click_seeks_with_the_wheel_and_leaves_on_a_right_click() {
+    fn the_player_ignores_a_click_and_the_wheel_and_leaves_on_a_right_click() {
         use crate::player::Player;
         use crate::test_support::video::{clip_info, fake_decoder, shared, video_app};
         use std::path::Path;
@@ -570,15 +564,12 @@ mod tests {
         );
 
         click(&mut app, (content.width / 2, content.height / 2));
-        assert!(!app.video.as_ref().unwrap().playing());
-        click(&mut app, (content.width / 2, content.height / 2));
-        assert!(app.video.as_ref().unwrap().playing());
-
+        assert!(app.video.as_ref().unwrap().playing(), "no pause");
         mouse(&mut app, MouseEventKind::ScrollDown, (10, 10));
-        assert!(decoder.last_args().contains(" -ss 5.000 "));
         mouse(&mut app, MouseEventKind::ScrollUp, (10, 10));
-        assert!(!decoder.last_args().contains("-ss"));
+        assert_eq!(decoder.starts().len(), 1, "no seek");
         assert_eq!(app.mode, ViewMode::Video);
+        assert!(app.video.is_some());
 
         mouse(&mut app, RIGHT, (10, 10));
         assert_eq!(app.mode, ViewMode::Gallery);
@@ -625,7 +616,11 @@ mod tests {
         let middle = (rect.x + rect.width / 2, rect.y + rect.height / 2);
 
         click(&mut app, middle);
-        assert!(!app.video.as_ref().unwrap().playing(), "the picture pauses");
+        assert!(
+            app.video.as_ref().unwrap().playing(),
+            "a click on the picture does nothing"
+        );
+        assert_eq!(app.mode, ViewMode::Video);
         click(&mut app, (rect.x + 1, middle.1));
         assert_eq!(app.mode, ViewMode::Gallery);
         assert!(app.video.is_none());

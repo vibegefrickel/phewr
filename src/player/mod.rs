@@ -3,7 +3,9 @@
 //! ffmpeg decodes small frames into a pipe ([`decoder`]). The player paces them at the frame
 //! rate of the video and hands the due frame to the Kitty write, which sends it through the
 //! temp file medium with one image id. The terminal scales the frame to the window with `c=`
-//! and `r=`. There is no sound: `p` opens the video in the mpv window.
+//! and `r=`. The player keeps real time: a slow decode or a slow terminal drops frames, and a
+//! clip never plays in slow motion. It has no pause, no seek and no sound: `p` opens the video
+//! in the mpv window.
 
 pub(crate) mod animation;
 mod decoder;
@@ -26,20 +28,22 @@ use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
-/// How far one seek key moves, in seconds.
-pub(crate) const SEEK_STEP: f64 = 5.0;
-/// The wait of the run loop while the player is paused.
-const PAUSED_POLL: Duration = Duration::from_millis(250);
+/// The wait of the run loop when the player takes no frames.
+const IDLE_POLL: Duration = Duration::from_millis(250);
 /// The wait of the run loop while the player waits for a frame from ffmpeg.
 const DECODE_POLL: Duration = Duration::from_millis(10);
-/// A seek never lands closer than this to the end, so that ffmpeg still has frames to give.
+/// A restart never lands closer than this to the end, so that ffmpeg still has frames to give.
 const END_MARGIN: f64 = 0.5;
+/// The frames may lag the clock by this much. Behind it, ffmpeg starts again at the clock.
+const MAX_LAG: Duration = Duration::from_millis(300);
+/// A restart begins this far ahead of the clock, so that the first frame of the new ffmpeg
+/// arrives in time. The start of ffmpeg takes about 100 ms to 250 ms.
+const RESTART_LEAD: f64 = 0.3;
 
 /// Whether the player takes frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Playing,
-    Paused,
     /// The clip without a repeat is over, or the decode failed.
     Finished,
 }
@@ -101,7 +105,8 @@ pub(crate) struct Player {
     /// The time of the open.
     opened: Instant,
     interval: Duration,
-    /// The time of the first frame of this run. `None` until it arrives.
+    /// The time at which the first frame of this run is due. The first frame sets it, or the
+    /// restart keeps the clock of the run before.
     start: Option<Instant>,
     /// The frames due since `start`: the shown and the dropped ones.
     due_frames: u32,
@@ -109,7 +114,8 @@ pub(crate) struct Player {
     base: f64,
     /// True after the first frame of this run. A run without a frame failed.
     delivered: bool,
-    /// The frames that came too late and never reached the screen.
+    /// The frames that came too late and never reached the screen, also the frames that a
+    /// restart skipped.
     pub(crate) dropped: u32,
 }
 
@@ -184,11 +190,12 @@ impl Player {
 
     /// Take the frame that is due at `now`. `true` means that a new frame is on `current_frame`.
     ///
-    /// A frame that is more than one interval late drops when a newer frame already waits, so
-    /// a slow terminal never falls behind the clock. Without a newer frame, the decode is slow:
-    /// the clock moves to the frame and the clip plays slower instead of frozen. The end of
-    /// the run starts the clip again with `repeat`, or ends the playback. A GPU run without a
-    /// single frame runs again in software.
+    /// The clock runs at the wall time and never waits for a frame, so a clip plays for its
+    /// length. A frame that is more than one interval late drops when a newer frame already
+    /// waits. A late frame without a newer one shows, and the clock stays. When the frames lag
+    /// the clock by more than `MAX_LAG`, ffmpeg starts again ahead of the clock
+    /// ([`Player::catch_up`]). The end of the run starts the clip again with `repeat`, or ends
+    /// the playback. A GPU run without a single frame runs again in software.
     pub(crate) fn poll_at(&mut self, now: Instant) -> bool {
         if self.state != State::Playing {
             return false;
@@ -197,7 +204,10 @@ impl Player {
             if self.pending.is_none() {
                 match self.stream.as_mut().map(FrameStream::try_next) {
                     Some(Ok(frame)) => self.pending = Some(frame),
-                    Some(Err(TryRecvError::Empty)) => return false,
+                    Some(Err(TryRecvError::Empty)) => {
+                        self.catch_up(now);
+                        return false;
+                    }
                     Some(Err(TryRecvError::Disconnected)) | None => {
                         self.end_of_run(now);
                         return false;
@@ -210,18 +220,13 @@ impl Player {
                 return false;
             }
             self.delivered = true;
-            if now > due + self.interval {
-                if let Some(Ok(newer)) = self.stream.as_mut().map(FrameStream::try_next) {
-                    self.pending = Some(newer);
-                    self.due_frames += 1;
-                    self.dropped += 1;
-                    continue;
-                }
-                // The clock moves to this frame. An `Instant` before the start of time stays
-                // at the old clock, which cannot happen on a running machine.
-                self.start = now
-                    .checked_sub(self.interval.mul_f64(f64::from(self.due_frames)))
-                    .or(self.start);
+            if now > due + self.interval
+                && let Some(Ok(newer)) = self.stream.as_mut().map(FrameStream::try_next)
+            {
+                self.pending = Some(newer);
+                self.due_frames += 1;
+                self.dropped += 1;
+                continue;
             }
             self.due_frames += 1;
             let Some(frame) = self.pending.take() else {
@@ -229,8 +234,50 @@ impl Player {
             };
             let (_, bytes_per_pixel) = pixel_format(&self.info);
             self.current_frame = Frame::new(self.frame, bytes_per_pixel == 4, frame);
+            self.catch_up(now);
             return true;
         }
+    }
+
+    /// Start ffmpeg again ahead of the clock when the frames lag it by more than `MAX_LAG`.
+    /// The new run keeps the clock, so the time of the restart counts, and the frames in
+    /// between count as dropped. Close to the end, the run plays out instead, and a run whose
+    /// clock passed the length of the clip while its frames lag ends at once.
+    fn catch_up(&mut self, now: Instant) {
+        let Some(start) = self.start else {
+            return;
+        };
+        if !self.delivered {
+            return;
+        }
+        let next_due = start + self.interval.mul_f64(f64::from(self.due_frames));
+        let lag = now.saturating_duration_since(next_due);
+        let clock = self.base + now.saturating_duration_since(start).as_secs_f64();
+        if lag > self.interval && self.info.duration > 0.0 && clock >= self.info.duration {
+            self.stream = None;
+            self.pending = None;
+            self.end_of_run(now);
+            return;
+        }
+        if lag <= MAX_LAG {
+            return;
+        }
+        let target = clock + RESTART_LEAD;
+        if self.info.duration > 0.0 && target > self.info.duration - END_MARGIN {
+            return;
+        }
+        let skipped = (target - self.position()) * self.info.fps;
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the skipped frames of one restart are few and never negative"
+        )]
+        let skipped = skipped.max(0.0).round() as u32;
+        let run_start = start + Duration::from_secs_f64(target - self.base);
+        let started = self.start_run(target);
+        self.start = Some(run_start);
+        self.dropped += skipped;
+        self.fail_if_error(started);
     }
 
     /// Take the due frame now, see [`Player::poll_at`].
@@ -306,41 +353,6 @@ impl Player {
         }
     }
 
-    /// Pause, or play on with a fresh clock, so that the frames of the pause do not drop.
-    pub(crate) fn toggle_pause(&mut self) {
-        self.state = match self.state {
-            State::Playing => {
-                self.base = self.position();
-                self.start = None;
-                self.due_frames = 0;
-                State::Paused
-            }
-            State::Paused => State::Playing,
-            State::Finished => State::Finished,
-        };
-    }
-
-    /// Move the position by `seconds` and start ffmpeg there. The end of the clip wraps to the
-    /// start with `repeat`, and ends the playback without it.
-    pub(crate) fn seek_by(&mut self, seconds: f64) {
-        if self.error.is_some() {
-            return;
-        }
-        let mut target = (self.position() + seconds).max(0.0);
-        let end = (self.info.duration - END_MARGIN).max(0.0);
-        if self.info.duration > 0.0 && target > end {
-            if !self.repeats_at(Instant::now()) {
-                self.stream = None;
-                self.state = State::Finished;
-                return;
-            }
-            target = 0.0;
-        }
-        self.state = State::Playing;
-        let started = self.start_run(target);
-        self.fail_if_error(started);
-    }
-
     /// The position in seconds: the time of the last due frame.
     pub(crate) fn position(&self) -> f64 {
         self.base + f64::from(self.due_frames) / self.info.fps
@@ -359,7 +371,7 @@ impl Player {
     /// How long the run loop can wait before the next frame is due at `now`.
     pub(crate) fn time_until_next_frame_at(&self, now: Instant) -> Duration {
         if self.state != State::Playing {
-            return PAUSED_POLL;
+            return IDLE_POLL;
         }
         match (self.pending.as_ref(), self.start) {
             (Some(_), Some(start)) => (start + self.interval.mul_f64(f64::from(self.due_frames)))
@@ -376,7 +388,7 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
-    use super::{DECODE_POLL, Frame, PAUSED_POLL, Player, SEEK_STEP, VideoInfo};
+    use super::{DECODE_POLL, Frame, IDLE_POLL, Player, VideoInfo};
     use crate::test_support::video::{FakeDecoder, fake_decoder, info_of, shared};
     use std::path::Path;
     use std::rc::Rc;
@@ -466,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_decode_moves_the_clock_and_plays_slower_instead_of_frozen() {
+    fn a_slow_decode_keeps_the_clock_and_shows_the_late_frame() {
         let decoder = fake_decoder(info_of(640, 480, 10.0));
         let mut player = player(&decoder, true);
         let clock = Instant::now();
@@ -474,46 +486,45 @@ mod tests {
         assert!(player.poll_at(clock));
         decoder.feed(frame(2));
         assert!(player.poll_at(clock + FRAME));
-        // Frame 3 is due at 200 ms and comes alone at 350 ms: no newer frame waits.
+        // Frame 3 is due at 200 ms and comes at 250 ms, with no newer frame: it shows.
         decoder.feed(frame(3));
         assert!(
-            player.poll_at(clock + FRAME * 7 / 2),
+            player.poll_at(clock + FRAME * 5 / 2),
             "the late frame shows"
         );
         assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 3);
         assert_eq!(player.dropped, 0);
-        // The clock moved: frame 4 is due one interval after frame 3, at 450 ms.
+        // The clock stays: frame 4 is due at 300 ms, not one interval after the late frame.
         decoder.feed(frame(4));
-        assert!(!player.poll_at(clock + FRAME * 4));
+        assert!(!player.poll_at(clock + FRAME * 29 / 10));
         assert_eq!(
-            player.time_until_next_frame_at(clock + FRAME * 4),
+            player.time_until_next_frame_at(clock + FRAME * 5 / 2),
             FRAME / 2
         );
-        assert!(player.poll_at(clock + FRAME * 9 / 2));
-        assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 4);
-        assert!((player.position() - 0.4).abs() < 1e-9);
-        // Every later frame is on time again at the new clock.
-        for value in 5..15 {
-            decoder.feed(frame(value));
-            assert!(
-                player.poll_at(clock + FRAME * 9 / 2 + FRAME * u32::from(value - 4)),
-                "frame {value}"
-            );
-        }
-        assert_eq!(player.dropped, 0);
+        assert!(player.poll_at(clock + FRAME * 3));
+        assert_eq!(
+            decoder.starts().len(),
+            1,
+            "a small lag starts no new ffmpeg"
+        );
     }
 
     #[test]
-    fn a_seek_past_the_end_of_the_stream_ends_the_clip_without_an_error() {
+    fn a_restart_past_the_end_of_the_stream_ends_the_clip_without_an_error() {
         for repeat in [false, true] {
             let mut info = info_of(640, 480, 10.0);
             info.duration = 20.0;
             let decoder = fake_decoder(info);
             let mut player = player(&decoder, repeat);
-            player.seek_by(SEEK_STEP);
+            let clock = Instant::now();
+            decoder.feed(frame(1));
+            assert!(player.poll_at(clock));
+            // 1 s without a frame: ffmpeg starts again ahead of the clock.
+            assert!(!player.poll_at(clock + FRAME * 10));
             assert_eq!(decoder.starts().len(), 2);
+            // The stream is shorter than the container says: the new run has no frame.
             decoder.end();
-            assert!(!player.poll_at(Instant::now()));
+            assert!(!player.poll_at(clock + FRAME * 11));
             assert_eq!(player.error, None, "repeat {repeat}");
             assert_eq!(player.finished(), !repeat, "repeat {repeat}");
             if repeat {
@@ -526,32 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pause_holds_the_frames_and_the_resume_starts_a_fresh_clock() {
-        let decoder = fake_decoder(info_of(640, 480, 10.0));
-        let mut player = player(&decoder, true);
-        let clock = Instant::now();
-        decoder.feed(frame(1));
-        assert!(player.poll_at(clock));
-        player.toggle_pause();
-        assert!(!player.playing());
-        decoder.feed(frame(2));
-        assert!(!player.poll_at(clock + FRAME * 10));
-        assert_eq!(player.time_until_next_frame_at(clock), PAUSED_POLL);
-        assert!((player.position() - 0.1).abs() < 1e-9, "the position stays");
-
-        player.toggle_pause();
-        assert!(player.playing());
-        assert!(
-            player.poll_at(clock + FRAME * 20),
-            "the first frame after the pause is on time"
-        );
-        assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 2);
-        assert_eq!(player.dropped, 0);
-        assert!((player.position() - 0.2).abs() < 1e-9);
-    }
-
-    #[test]
-    fn a_seek_restarts_ffmpeg_at_the_new_position() {
+    fn a_lag_beyond_the_limit_restarts_ffmpeg_ahead_of_the_clock() {
         let mut info = info_of(640, 480, 10.0);
         info.duration = 20.0;
         let decoder = fake_decoder(info);
@@ -559,33 +545,87 @@ mod tests {
         let clock = Instant::now();
         decoder.feed(frame(1));
         assert!(player.poll_at(clock));
-        player.seek_by(SEEK_STEP);
+        // Frame 2 is due at 100 ms. At 400 ms it lags by exactly the limit: no restart yet.
+        assert!(!player.poll_at(clock + FRAME * 4));
+        assert_eq!(decoder.starts().len(), 1);
+        // At 500 ms the lag passes the limit: ffmpeg starts at the clock plus the lead.
+        assert!(!player.poll_at(clock + FRAME * 5));
         assert_eq!(decoder.starts().len(), 2);
         assert!(
-            decoder.last_args().contains(" -ss 5.100 -i "),
+            decoder.last_args().contains(" -ss 0.800 -i "),
             "{}",
             decoder.last_args()
         );
-        assert!((player.position() - 5.1).abs() < 1e-9);
-        assert!(player.playing());
-        player.seek_by(-SEEK_STEP);
-        assert!(
-            decoder.last_args().contains(" -ss 0.100 -i "),
-            "{}",
-            decoder.last_args()
+        assert_eq!(player.dropped, 7, "the frames from 100 ms to 700 ms");
+        // The new run keeps the clock: its first frame is due at 800 ms.
+        decoder.feed(frame(9));
+        assert!(!player.poll_at(clock + FRAME * 5));
+        assert_eq!(
+            player.time_until_next_frame_at(clock + FRAME * 5),
+            FRAME * 3
         );
-        player.seek_by(-SEEK_STEP);
-        assert!(
-            !decoder.last_args().contains("-ss"),
-            "a seek to 0 needs no -ss"
-        );
-        assert_eq!(player.position(), 0.0);
-        // Past the end with a repeat: the clip starts again.
-        for _ in 0..4 {
-            player.seek_by(SEEK_STEP);
+        assert!(!player.poll_at(clock + FRAME * 7));
+        assert!(player.poll_at(clock + FRAME * 8));
+        assert!((player.position() - 0.9).abs() < 1e-9);
+        // Close to the end, the run plays out and starts nothing.
+        let mut info = info_of(640, 480, 10.0);
+        info.duration = 1.0;
+        let short_decoder = fake_decoder(info);
+        let mut short = self::player(&short_decoder, true);
+        short_decoder.feed(frame(1));
+        assert!(short.poll_at(clock));
+        assert!(!short.poll_at(clock + FRAME * 5));
+        assert_eq!(short_decoder.starts().len(), 1);
+    }
+
+    /// The rule of the player: a slow terminal drops frames, and the clip ends on time. Here
+    /// each frame write takes 3 intervals, and ffmpeg keeps two frames ready, as the queue of
+    /// the reader thread does.
+    #[test]
+    fn a_slow_terminal_drops_frames_and_the_clip_ends_on_time() {
+        const CLIP_FRAMES: u32 = 60;
+        let mut info = info_of(640, 480, 10.0);
+        info.duration = 6.0;
+        let decoder = fake_decoder(info);
+        let mut player = player(&decoder, false);
+        let clock = Instant::now();
+        let mut now = clock;
+        let (mut runs, mut fed, mut shown) = (1, 0, 0);
+        while !player.finished() && now < clock + FRAME * 200 {
+            if decoder.starts().len() > runs {
+                (runs, fed) = (decoder.starts().len(), 0);
+            }
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "the start of a run of the 6 s test clip, in frames"
+            )]
+            let first = (player.base * 10.0).round() as u32;
+            let taken = player.due_frames + u32::from(player.pending.is_some());
+            while fed < taken + 2 && first + fed < CLIP_FRAMES {
+                decoder.feed(frame(1));
+                fed += 1;
+            }
+            if first + fed >= CLIP_FRAMES && taken >= fed {
+                decoder.end();
+            }
+            if player.poll_at(now) {
+                shown += 1;
+                now += FRAME * 3;
+            } else {
+                now += FRAME / 10;
+            }
         }
-        assert_eq!(player.position(), 0.0);
-        assert_eq!(decoder.starts().len(), 8);
+        assert!(player.finished());
+        let played = now.duration_since(clock);
+        // The last frame shows at most one slow write after the 6 s, and the loop adds the
+        // time of that write: 6.6 s at the most, against 18 s at the old moving clock.
+        assert!(
+            played <= FRAME * 66,
+            "the 6 s clip ended after {played:?}, not in slow motion"
+        );
+        assert!(player.dropped > 0, "frames dropped instead");
+        assert!(shown >= 15, "{shown} frames shown");
     }
 
     #[test]
@@ -661,18 +701,6 @@ mod tests {
         }
         assert_eq!(player.dropped, 0);
         assert!((player.position() - 0.5).abs() < 1e-9);
-
-        player.toggle_pause();
-        player.toggle_pause();
-        player.seek_by(1.0);
-        let args = decoder.last_args();
-        assert!(
-            args.contains("-ss 1.500 -i /videos/clip.mp4 -map 0:0 -fps_mode cfr -r 20.0000 "),
-            "{args}"
-        );
-        decoder.feed(frame(11));
-        assert!(player.poll_at(clock + step * 20));
-        assert!((player.position() - 1.55).abs() < 1e-9);
     }
 
     /// The played clips of the real tests: the name, the player at the end, the frames that
@@ -783,16 +811,6 @@ mod tests {
     }
 
     #[test]
-    fn a_seek_past_the_end_without_repeat_ends_the_clip() {
-        let decoder = fake_decoder(info_of(640, 480, 10.0));
-        let mut player = player(&decoder, false);
-        player.seek_by(5.0);
-        assert!(player.finished());
-        assert!(!player.playing());
-        assert_eq!(decoder.starts().len(), 1, "no new ffmpeg");
-    }
-
-    #[test]
     fn the_end_of_the_clip_starts_again_with_repeat_and_ends_without() {
         for repeat in [true, false] {
             let decoder = fake_decoder(info_of(640, 480, 10.0));
@@ -836,12 +854,7 @@ mod tests {
             Some("ffmpeg could not decode clip.mp4")
         );
         assert_eq!(decoder.starts().len(), 2, "no third try");
-        player.seek_by(1.0);
-        assert_eq!(
-            decoder.starts().len(),
-            2,
-            "a seek on a failed clip starts nothing"
-        );
+        assert_eq!(player.time_until_next_frame_at(clock), IDLE_POLL);
     }
 
     #[test]
