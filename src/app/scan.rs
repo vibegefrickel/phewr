@@ -100,11 +100,7 @@ impl App {
             self.folder_count,
         );
         self.known_len = self.images.len();
-        self.forget_thumbnails();
-        self.prefetcher.invalidate();
-        self.graphics_storage_dirty = true;
-        self.loaded = None;
-        self.needs_render = true;
+        self.mark_dirty();
     }
 
     pub(crate) fn is_scanning(&self) -> bool {

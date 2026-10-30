@@ -12,21 +12,21 @@ pub(crate) enum DeleteMode {
 }
 
 pub(crate) struct PendingDelete {
-    pub paths: Vec<PathBuf>,
-    pub from_fullscreen: bool,
-    pub mode: DeleteMode,
+    pub(crate) paths: Vec<PathBuf>,
+    pub(crate) from_fullscreen: bool,
+    pub(crate) mode: DeleteMode,
 }
 
 impl App {
     /// Mark or unmark the file under the cursor. A folder takes no mark.
     pub(crate) fn toggle_selection_at_cursor(&mut self) {
-        let Some(idx) = self.gallery.selected_index() else {
+        let Some(index) = self.gallery.selected_index() else {
             return;
         };
-        if self.is_folder(idx) {
+        if self.is_folder(index) {
             return;
         }
-        let path = &self.images[idx];
+        let path = &self.images[index];
         if !self.selection.remove(path) {
             self.selection.insert(path.clone());
         }
@@ -34,9 +34,9 @@ impl App {
 
     /// Mark every file of the view. The folders stay unmarked.
     pub(crate) fn select_all_filtered(&mut self) {
-        for &idx in &self.gallery.filtered_indices {
-            if idx >= self.folder_count {
-                self.selection.insert(self.images[idx].clone());
+        for &index in &self.gallery.filtered_indices {
+            if index >= self.folder_count {
+                self.selection.insert(self.images[index].clone());
             }
         }
     }
@@ -45,9 +45,9 @@ impl App {
         self.selection.clear();
     }
 
-    pub(crate) fn is_marked(&self, img_idx: usize) -> bool {
+    pub(crate) fn is_marked(&self, index: usize) -> bool {
         self.images
-            .get(img_idx)
+            .get(index)
             .is_some_and(|p| self.selection.contains(p))
     }
 
@@ -79,10 +79,10 @@ impl App {
                 v = self.selection.iter().cloned().collect();
             }
             v
-        } else if let Some(idx) = self.gallery.selected_index()
-            && !self.is_folder(idx)
+        } else if let Some(index) = self.gallery.selected_index()
+            && !self.is_folder(index)
         {
-            vec![self.images[idx].clone()]
+            vec![self.images[index].clone()]
         } else {
             return;
         };
@@ -163,12 +163,8 @@ impl App {
             self.filter_cursor = Some(cursor_target);
         }
 
-        self.forget_thumbnails();
-        self.prefetcher.invalidate();
-        self.graphics_storage_dirty = true;
-        self.fullscreen_rx = None;
-        self.fullscreen_target = None;
-        self.loaded = None;
+        self.mark_dirty();
+        self.fullscreen_decode = None;
 
         self.delete_error = if errors.is_empty() {
             None

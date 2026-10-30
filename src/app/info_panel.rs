@@ -27,19 +27,25 @@ impl App {
     /// that yazi stays where viewr was.
     pub(crate) fn reveal_path(&self) -> Option<PathBuf> {
         let index = self.view_index()?;
-        if self.is_folder(index) && self.filenames[index] == ".." {
+        if self.is_parent_entry(index) {
             return Some(self.gallery_dir());
         }
         self.images.get(index).cloned()
     }
 
-    /// Path the info panel describes: the fullscreen image, or the hovered thumbnail. A folder has no info.
-    pub(crate) fn info_path(&self) -> Option<PathBuf> {
+    /// The file that the info panel and the status row describe: the open file, or the gallery
+    /// cursor. A folder is no file.
+    pub(crate) fn view_file(&self) -> Option<PathBuf> {
         let index = self.view_index()?;
         if self.is_folder(index) {
             return None;
         }
         self.images.get(index).cloned()
+    }
+
+    /// The file of the info panel, for `ui.rs`. It goes when `ui.rs` calls `view_file`.
+    pub(crate) fn info_path(&self) -> Option<PathBuf> {
+        self.view_file()
     }
 
     /// Metadata for `path`, read on first use and cached for the session.
@@ -72,7 +78,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn info_path_follows_the_view_and_info_is_cached() {
+    fn the_view_file_follows_the_view_and_info_is_cached() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
         app.toggle_info();
@@ -81,10 +87,10 @@ mod tests {
         assert!(!app.info_visible);
 
         app.gallery.cursor = 1;
-        assert_eq!(app.info_path(), Some(app.images[1].clone()));
+        assert_eq!(app.view_file(), Some(app.images[1].clone()));
         app.mode = ViewMode::Fullscreen;
         app.current = 0;
-        assert_eq!(app.info_path(), Some(app.images[0].clone()));
+        assert_eq!(app.view_file(), Some(app.images[0].clone()));
 
         let path = app.images[0].clone();
         let first = app.info_for(&path);

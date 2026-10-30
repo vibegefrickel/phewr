@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 impl App {
     /// The kind of the entry `index`. The folders are the first `folder_count` entries.
-    pub(crate) fn kind_at(&self, index: usize) -> Option<EntryKind> {
+    fn kind_at(&self, index: usize) -> Option<EntryKind> {
         if index < self.folder_count {
             Some(EntryKind::Folder)
         } else if index < self.images.len() {
@@ -18,6 +18,11 @@ impl App {
 
     pub(crate) fn is_folder(&self, index: usize) -> bool {
         self.kind_at(index) == Some(EntryKind::Folder)
+    }
+
+    /// True for the `..` entry. No folder can carry that name.
+    pub(crate) fn is_parent_entry(&self, index: usize) -> bool {
+        self.is_folder(index) && self.filenames.get(index).is_some_and(|name| name == "..")
     }
 
     /// The count of the files, without the folders.

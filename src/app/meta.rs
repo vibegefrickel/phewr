@@ -1,7 +1,7 @@
 //! The facts of the file under the cursor for the status row. A thread reads them, so a cursor
 //! move never waits for a header, an EXIF block or `ffprobe`.
 
-use super::{App, ViewMode};
+use super::App;
 use crate::file_meta::{self, FileMeta};
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -28,27 +28,13 @@ impl Default for MetaState {
 }
 
 impl App {
-    /// The file whose facts the status row shows: the selected entry in the grid, the open file
-    /// in the other views. A folder has none.
-    fn meta_subject(&self) -> Option<PathBuf> {
-        let index = if self.mode == ViewMode::Gallery {
-            self.gallery.selected_index()?
-        } else {
-            self.current
-        };
-        if self.is_folder(index) {
-            return None;
-        }
-        self.images.get(index).cloned()
-    }
-
     /// Start a read for the subject if the cache does not hold it. One read runs at a time. A
     /// newer subject starts when the running read ends, so fast cursor moves start no threads.
     pub(crate) fn request_meta(&mut self) {
         if self.meta.in_flight.is_some() {
             return;
         }
-        let Some(path) = self.meta_subject() else {
+        let Some(path) = self.view_file() else {
             return;
         };
         if self.meta.cache.contains(&path) {
@@ -85,7 +71,7 @@ impl App {
 
     /// The status line of the subject, or `None` before its read ends.
     pub(crate) fn meta_line(&self) -> Option<String> {
-        let path = self.meta_subject()?;
+        let path = self.view_file()?;
         self.meta.cache.peek(&path).map(FileMeta::describe)
     }
 

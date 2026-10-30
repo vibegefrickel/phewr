@@ -2,85 +2,86 @@
 
 #[cfg(feature = "video")]
 use super::VideoReturn;
-use super::{App, ViewMode};
+use super::{App, ViewMode, box_px};
 use crate::decode::resize::load_and_resize_px;
 use crate::decode::{EmbeddedThumbnail, spawn_foreground};
+use image::RgbaImage;
 use ratatui::layout::Rect;
+use std::io;
+use std::sync::mpsc;
+
+/// The decode of the fullscreen image that runs: the image, the box that it decodes for, and
+/// the receiver of the result.
+pub(super) struct FullscreenDecode {
+    pub(super) index: usize,
+    pub(super) rect: Rect,
+    rx: mpsc::Receiver<io::Result<RgbaImage>>,
+}
 
 impl App {
     pub(crate) fn enter_fullscreen_selected(&mut self) {
-        if let Some(idx) = self.gallery.selected_index() {
-            self.enter_fullscreen_at(idx);
+        if let Some(index) = self.gallery.selected_index() {
+            self.enter_fullscreen_at(index);
         }
     }
 
-    /// Open the file `idx`. A folder entry opens nothing.
-    pub(crate) fn enter_fullscreen_at(&mut self, idx: usize) {
-        if idx >= self.images.len() || self.is_folder(idx) {
+    /// Open the file `index`. A folder entry opens nothing.
+    pub(crate) fn enter_fullscreen_at(&mut self, index: usize) {
+        if index >= self.images.len() || self.is_folder(index) {
             return;
         }
         #[cfg(feature = "video")]
-        if self.plays_at(idx) {
-            self.enter_video(idx);
+        if self.opens_in_player(index) {
+            self.enter_video(index);
             return;
         }
-        self.current = idx;
+        self.current = index;
         self.mode = ViewMode::Fullscreen;
         self.error = None;
         self.needs_render = true;
-        self.fullscreen_rx = None;
-        self.fullscreen_target = None;
+        self.fullscreen_decode = None;
         self.loaded = None;
-        self.reset_zoom_state();
+        self.reset_zoom_and_source();
     }
 
-    fn start_fullscreen_decode(&mut self, idx: usize, rect: Rect) {
-        self.fullscreen_target = Some((idx, rect));
-        let path = self.images[idx].clone();
-        let target = (
-            u32::from(rect.width) * self.cell_px.0,
-            u32::from(rect.height) * self.cell_px.1,
-        );
-        self.fullscreen_rx = Some(spawn_foreground(move || {
-            load_and_resize_px(&path, target, EmbeddedThumbnail::Deny)
-        }));
+    fn start_fullscreen_decode(&mut self, index: usize, rect: Rect) {
+        let path = self.images[index].clone();
+        let target = box_px(rect, self.cell_px);
+        let rx =
+            spawn_foreground(move || load_and_resize_px(&path, target, EmbeddedThumbnail::Deny));
+        self.fullscreen_decode = Some(FullscreenDecode { index, rect, rx });
     }
 
     pub(crate) fn poll_fullscreen(&mut self) -> bool {
-        let result = self
-            .fullscreen_rx
-            .as_ref()
-            .and_then(|rx| rx.try_recv().ok());
-        if let Some(result) = result {
-            if let Some((idx, rect)) = self.fullscreen_target
-                && idx == self.current
-                && rect == self.image_rect
-                && self.mode == ViewMode::Fullscreen
-            {
-                match result {
-                    Ok(img) => {
-                        self.loaded = Some(img);
-                        self.error = None;
-                        self.loaded_for_rect = rect;
-                        self.needs_render = true;
-                    }
-                    Err(e) => {
-                        self.error = Some(e.to_string());
-                    }
+        let Some(decode) = &self.fullscreen_decode else {
+            return false;
+        };
+        let Ok(result) = decode.rx.try_recv() else {
+            return false;
+        };
+        let (index, rect) = (decode.index, decode.rect);
+        self.fullscreen_decode = None;
+        if index == self.current && rect == self.image_rect && self.mode == ViewMode::Fullscreen {
+            match result {
+                Ok(img) => {
+                    self.loaded = Some(img);
+                    self.error = None;
+                    self.loaded_for_rect = rect;
+                    self.needs_render = true;
+                }
+                Err(e) => {
+                    self.error = Some(e.to_string());
                 }
             }
-            self.fullscreen_rx = None;
-            self.fullscreen_target = None;
-            return true;
         }
-        false
+        true
     }
 
     pub(crate) fn enter_gallery(&mut self) {
         self.slideshow = None;
         self.mode = ViewMode::Gallery;
         self.loaded = None;
-        self.reset_zoom_state();
+        self.reset_zoom_and_source();
         self.needs_render = true;
     }
 
@@ -130,12 +131,11 @@ impl App {
         self.current = target;
         self.error = None;
         self.needs_render = true;
-        self.fullscreen_rx = None;
-        self.fullscreen_target = None;
-        self.reset_zoom_state();
+        self.fullscreen_decode = None;
+        self.reset_zoom_and_source();
 
         #[cfg(feature = "video")]
-        if self.plays_at(self.current) {
+        if self.opens_in_player(self.current) {
             self.mode = ViewMode::Video;
             self.video_return = VideoReturn::Fullscreen;
             self.loaded = None;
@@ -162,12 +162,12 @@ impl App {
     /// once. Without the hint, the decode came back at full size and `take_resized` scaled a
     /// 24 MP frame on the UI thread (50 ms to 70 ms).
     pub(crate) fn pre_decode_hovered(&mut self) {
-        if let Some(idx) = self.gallery.selected_index()
-            && !self.is_folder(idx)
+        if let Some(index) = self.gallery.selected_index()
+            && !self.is_folder(index)
         {
             self.prefetcher
                 .set_target_hint(self.fullscreen_box, self.cell_px);
-            self.prefetcher.kick_gallery(idx, &self.images);
+            self.prefetcher.kick_gallery(index, &self.images);
         }
     }
 
@@ -183,11 +183,9 @@ impl App {
         if self.fullscreen_on_video() {
             return;
         }
-        // Zoomed view: crop the full-resolution source around the pan point and
-        // resize that crop to fill the viewport.
         if self.zoom > 1.0 {
-            if self.source_for == Some(self.current) {
-                if (self.zoom_dirty
+            if self.zoom_state.source_for == Some(self.current) {
+                if (self.zoom_state.dirty
                     || self.loaded.is_none()
                     || self.loaded_for_rect != self.image_rect)
                     && let Some(view) = self.build_zoom_view()
@@ -195,26 +193,28 @@ impl App {
                     self.loaded = Some(view);
                     self.error = None;
                     self.loaded_for_rect = self.image_rect;
-                    self.zoom_dirty = false;
+                    self.zoom_state.dirty = false;
                 }
                 return;
             }
-            // Source not decoded yet: request it and keep showing the fit image
-            // until it arrives (poll_source will trigger the rebuild).
-            if self.source_target != Some(self.current) && self.source_failed != Some(self.current)
+            if self.zoom_state.source_target != Some(self.current)
+                && self.zoom_state.source_failed != Some(self.current)
             {
                 self.start_source_decode(self.current);
             }
-            self.zoom_dirty = false;
+            self.zoom_state.dirty = false;
             if self.loaded.is_some() {
                 return;
             }
         }
 
-        if self.loaded.is_some() && self.loaded_for_rect == self.image_rect && !self.zoom_dirty {
+        if self.loaded.is_some()
+            && self.loaded_for_rect == self.image_rect
+            && !self.zoom_state.dirty
+        {
             return;
         }
-        self.zoom_dirty = false;
+        self.zoom_state.dirty = false;
 
         if let Some(img) = self
             .prefetcher
@@ -226,8 +226,10 @@ impl App {
             return;
         }
 
-        if let Some((_, rect)) = self.fullscreen_target
-            && rect == self.image_rect
+        if self
+            .fullscreen_decode
+            .as_ref()
+            .is_some_and(|decode| decode.rect == self.image_rect)
         {
             return;
         }
@@ -263,7 +265,7 @@ mod tests {
 
         // Loaded for this rect: nothing to do.
         app.load_if_needed();
-        assert!(app.fullscreen_target.is_none());
+        assert!(app.fullscreen_decode.is_none());
 
         // A result for an image that is no longer current is dropped.
         app.loaded = None;
@@ -303,7 +305,7 @@ mod tests {
         assert_eq!(app.current, 0);
         app.next();
         assert_eq!(app.current, 1);
-        assert!(app.fullscreen_target.is_some(), "the move starts a decode");
+        assert!(app.fullscreen_decode.is_some(), "the move starts a decode");
         app.last();
         assert_eq!(app.current, 2);
         app.next();
@@ -324,7 +326,7 @@ mod tests {
         });
         app.next();
         assert!(app.loaded.is_some());
-        assert!(app.fullscreen_target.is_none());
+        assert!(app.fullscreen_decode.is_none());
 
         app.start_slideshow();
         app.enter_gallery();
@@ -343,11 +345,11 @@ mod tests {
         app.zoom_in();
         app.load_if_needed();
         wait_until(|| app.poll_source());
-        assert!(app.source.is_some());
+        assert!(app.zoom_state.source.is_some());
 
         app.enter_gallery();
-        assert!(app.source.is_none());
-        assert!(app.source_for.is_none());
+        assert!(app.zoom_state.source.is_none());
+        assert!(app.zoom_state.source_for.is_none());
     }
 
     #[test]
@@ -365,7 +367,7 @@ mod tests {
         app.current = 1;
         app.load_if_needed();
         assert!(app.loaded.is_some());
-        assert!(app.fullscreen_target.is_none());
+        assert!(app.fullscreen_decode.is_none());
     }
 
     /// Regression: a gallery pre-decode before the first fullscreen view has no size hint.

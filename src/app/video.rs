@@ -27,19 +27,19 @@ pub(super) struct VideoWindow {
 #[cfg(feature = "video")]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct WindowExit {
-    pub code: Option<i32>,
-    pub path: PathBuf,
+    pub(crate) code: Option<i32>,
+    pub(crate) path: PathBuf,
 }
 
 impl App {
     #[cfg(feature = "video")]
-    pub(crate) fn enter_video(&mut self, idx: usize) {
+    pub(crate) fn enter_video(&mut self, index: usize) {
         self.video_return = if self.mode == ViewMode::Fullscreen {
             VideoReturn::Fullscreen
         } else {
             VideoReturn::Gallery
         };
-        self.current = idx;
+        self.current = index;
         self.mode = ViewMode::Video;
         self.error = None;
         self.needs_render = true;
@@ -82,9 +82,8 @@ impl App {
         self.video = None;
         self.mode = ViewMode::Fullscreen;
         self.loaded = None;
-        self.fullscreen_rx = None;
-        self.fullscreen_target = None;
-        self.reset_zoom_state();
+        self.fullscreen_decode = None;
+        self.reset_zoom_and_source();
         self.needs_render = true;
     }
 
@@ -99,7 +98,7 @@ impl App {
             if self
                 .video
                 .as_ref()
-                .is_some_and(super::super::player::Player::finished)
+                .is_some_and(crate::player::Player::finished)
             {
                 self.return_from_video();
                 self.slideshow_step();
@@ -215,7 +214,7 @@ impl App {
     /// After a video that a slideshow played one time: the end of the clip moves the slideshow
     /// on. A quit by the user stops the slideshow and keeps the placeholder.
     #[cfg(feature = "video")]
-    pub(crate) fn after_slideshow_video(&mut self, reached_end: bool) {
+    fn after_slideshow_video(&mut self, reached_end: bool) {
         if reached_end {
             self.slideshow_step();
         } else {
@@ -246,12 +245,12 @@ impl App {
 
     /// The image decode cannot read a video, so the fullscreen view must not try it.
     pub(super) fn fullscreen_on_video(&self) -> bool {
-        self.is_video_at(self.current) && self.mode == ViewMode::Fullscreen
+        self.is_video(self.current) && self.mode == ViewMode::Fullscreen
     }
 
     /// True when the image `index` is a video, for the placeholder and the loading icon.
     #[cfg(feature = "video")]
-    pub(crate) fn is_video_at(&self, index: usize) -> bool {
+    pub(crate) fn is_video(&self, index: usize) -> bool {
         self.images
             .get(index)
             .is_some_and(|path| crate::video::is_video(path))
@@ -260,12 +259,12 @@ impl App {
     /// True when a thumbnail job found the image `index` to be an animated GIF, WebP, APNG or
     /// AVIS. The grid marker reads it in the draw, so the draw reads no file. Until the job
     /// is done, the cell shows no marker.
-    pub(crate) fn is_animated_at(&self, index: usize) -> bool {
-        self.animation_flag_at(index).unwrap_or(false)
+    pub(crate) fn is_animated(&self, index: usize) -> bool {
+        self.stored_animation_flag(index).unwrap_or(false)
     }
 
     /// The stored animation flag of the image `index`, `None` before a thumbnail job read it.
-    fn animation_flag_at(&self, index: usize) -> Option<bool> {
+    fn stored_animation_flag(&self, index: usize) -> Option<bool> {
         let path = self.images.get(index)?;
         self.animated.get(path).copied()
     }
@@ -274,7 +273,7 @@ impl App {
     /// a key press, so a file that an export tool rewrote in place takes the right route. The
     /// stored flag of the grid marker can be older.
     #[cfg(feature = "video")]
-    fn reads_as_animated_at(&self, index: usize) -> bool {
+    fn reads_as_animated(&self, index: usize) -> bool {
         self.images
             .get(index)
             .is_some_and(|path| crate::player::is_animated(path))
@@ -282,15 +281,15 @@ impl App {
 
     /// True when the image `index` opens in a player: a video or an animated image.
     #[cfg(feature = "video")]
-    pub(crate) fn plays_at(&self, index: usize) -> bool {
-        self.is_video_at(index) || self.reads_as_animated_at(index)
+    pub(crate) fn opens_in_player(&self, index: usize) -> bool {
+        self.is_video(index) || self.reads_as_animated(index)
     }
 
     /// True in the fullscreen view on the still frame of an animated image, where Enter
     /// plays it and `p` opens the mpv window.
     #[cfg(feature = "video")]
     pub(crate) fn fullscreen_on_animation(&self) -> bool {
-        self.mode == ViewMode::Fullscreen && self.reads_as_animated_at(self.current)
+        self.mode == ViewMode::Fullscreen && self.reads_as_animated(self.current)
     }
 
     /// True when the gallery cursor is on a video or an animated image, for `p` in the gallery.
@@ -299,14 +298,19 @@ impl App {
         self.gallery
             .filtered_indices
             .get(self.gallery.cursor)
-            .is_some_and(|&index| self.plays_at(index))
+            .is_some_and(|&index| self.opens_in_player(index))
     }
 
     /// Without the `video` feature, the scan lists no videos.
     #[cfg(not(feature = "video"))]
     #[expect(clippy::unused_self, reason = "the same signature as the video build")]
-    pub(crate) fn is_video_at(&self, _index: usize) -> bool {
+    pub(crate) fn is_video(&self, _index: usize) -> bool {
         false
+    }
+
+    /// [`App::is_video`] under its old name, for `ui.rs`. It goes when `ui.rs` calls `is_video`.
+    pub(crate) fn is_video_at(&self, index: usize) -> bool {
+        self.is_video(index)
     }
 
     /// The play hint for a video in fullscreen. A failed open shows its error instead.
@@ -345,7 +349,7 @@ mod tests {
 
         // The placeholder needs no decode and no zoom.
         app.load_if_needed();
-        assert!(app.fullscreen_target.is_none());
+        assert!(app.fullscreen_decode.is_none());
         app.zoom_in();
         assert_eq!(app.zoom, 1.0);
 
@@ -392,17 +396,17 @@ mod tests {
         let still = fixture("still.gif");
         let anim = fixture("anim.webp");
         let mut app = app_with(&[still.to_str().unwrap(), anim.to_str().unwrap()]);
-        assert!(!app.plays_at(0));
+        assert!(!app.opens_in_player(0));
         assert!(
-            app.plays_at(1),
+            app.opens_in_player(1),
             "a key press reads the header of the one file"
         );
         assert!(
-            !app.is_animated_at(1),
+            !app.is_animated(1),
             "the draw reads no header, so the grid marker waits for the thumbnail job"
         );
         assert!(
-            !app.is_video_at(1),
+            !app.is_video(1),
             "the loading icon and the placeholder are for videos"
         );
 
@@ -422,7 +426,10 @@ mod tests {
         assert!(!app.shows_video_placeholder());
         assert!(app.fullscreen_on_animation());
         app.load_if_needed();
-        assert_eq!(app.fullscreen_target.map(|(index, _)| index), Some(1));
+        assert_eq!(
+            app.fullscreen_decode.as_ref().map(|decode| decode.index),
+            Some(1)
+        );
 
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.mode, ViewMode::Video, "Enter plays it again");
@@ -483,6 +490,9 @@ mod tests {
         assert_eq!(app.mode, ViewMode::Fullscreen);
         // b.png is not prefetched, so its decode starts.
         assert!(app.loaded.is_none());
-        assert_eq!(app.fullscreen_target.map(|(index, _)| index), Some(1));
+        assert_eq!(
+            app.fullscreen_decode.as_ref().map(|decode| decode.index),
+            Some(1)
+        );
     }
 }

@@ -33,7 +33,7 @@ use crate::info::ImageInfo;
 use crate::kitty_output::TerminalImages;
 use crate::prefetch::Prefetcher;
 use disk_cache::default_disk_cache_dir;
-use image::{DynamicImage, RgbaImage};
+use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::collections::{HashMap, HashSet};
@@ -42,7 +42,6 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
-use thumbnails::{JobSlots, ThumbResult};
 #[cfg(feature = "video")]
 use video::VideoWindow;
 
@@ -63,41 +62,41 @@ pub(crate) enum ViewMode {
 pub(crate) struct App {
     /// The entries of the grid: the folders first, then the files. The fullscreen view, the
     /// slideshow, the prefetch, the thumbnails and the delete never touch the folders.
-    pub images: Vec<PathBuf>,
-    pub filenames: Vec<String>,
+    pub(crate) images: Vec<PathBuf>,
+    pub(crate) filenames: Vec<String>,
     /// The first `folder_count` entries of `images` are folders. `..` is the first one.
-    pub folder_count: usize,
-    pub mode: ViewMode,
-    pub cell_px: (u32, u32),
-    pub graphics: KittyBackend,
+    pub(crate) folder_count: usize,
+    pub(crate) mode: ViewMode,
+    pub(crate) cell_px: (u32, u32),
+    pub(crate) graphics: KittyBackend,
     /// Where `graphics_delete_all` and the render functions write. A test app writes to a buffer.
-    pub graphics_out: GraphicsOutput,
+    pub(crate) graphics_out: GraphicsOutput,
 
     // Info panel (gallery + fullscreen)
-    pub info_visible: bool,
+    pub(crate) info_visible: bool,
     info_cache: LruCache<PathBuf, ImageInfo>,
 
     /// The state file that remembers the grid zoom. Tests point it into a temp directory.
-    pub state_file: PathBuf,
+    pub(crate) state_file: PathBuf,
     /// The directory of the thumbnail disk cache. Tests point it into a temp directory.
-    pub disk_cache_dir: PathBuf,
+    pub(crate) disk_cache_dir: PathBuf,
 
     // Slideshow (fullscreen)
-    pub slideshow: Option<Slideshow>,
-    pub slideshow_interval: Duration,
-    pub slideshow_loop: bool,
+    pub(crate) slideshow: Option<Slideshow>,
+    pub(crate) slideshow_interval: Duration,
+    pub(crate) slideshow_loop: bool,
     /// `--slideshow`: start once the scan has produced the image list.
-    pub slideshow_autostart: bool,
+    pub(crate) slideshow_autostart: bool,
 
     // Gallery state
-    pub gallery: GalleryState,
-    pub thumb_cache: ThumbnailCache,
-    pub selection: HashSet<PathBuf>,
-    pub pending_delete: Option<PendingDelete>,
-    pub delete_error: Option<String>,
+    pub(crate) gallery: GalleryState,
+    pub(crate) thumb_cache: ThumbnailCache,
+    pub(crate) selection: HashSet<PathBuf>,
+    pub(crate) pending_delete: Option<PendingDelete>,
+    pub(crate) delete_error: Option<String>,
 
-    pub current_dir: Option<PathBuf>,
-    pub initial_dir: Option<PathBuf>,
+    pub(crate) current_dir: Option<PathBuf>,
+    pub(crate) initial_dir: Option<PathBuf>,
     /// The entry that the cursor lands on when the next scan ends: the folder that the user
     /// came from after a step to the parent.
     return_to: Option<PathBuf>,
@@ -107,42 +106,33 @@ pub(crate) struct App {
     meta: meta::MetaState,
 
     // Fullscreen state
-    pub current: usize,
-    pub prefetcher: Prefetcher,
-    pub loaded: Option<RgbaImage>,
-    pub error: Option<String>,
-    pub needs_render: bool,
-    pub image_rect: Rect,
+    pub(crate) current: usize,
+    pub(crate) prefetcher: Prefetcher,
+    pub(crate) loaded: Option<RgbaImage>,
+    pub(crate) error: Option<String>,
+    pub(crate) needs_render: bool,
+    /// The content box of the last fullscreen or video draw. The gallery draw leaves it alone.
+    pub(crate) image_rect: Rect,
     /// The box that a fullscreen image gets in the current terminal. The draw of each frame sets
     /// it, also in the gallery, so that the pre-decode of the hovered cell has the exact size.
-    pub fullscreen_box: Rect,
-    pub help_visible: bool,
+    pub(crate) fullscreen_box: Rect,
+    pub(crate) help_visible: bool,
     /// The areas of the last draw that a click lands on.
-    pub layout: ScreenLayout,
-    pub mouse: MouseState,
+    pub(crate) layout: ScreenLayout,
+    pub(crate) mouse: MouseState,
     loaded_for_rect: Rect,
+    /// The decode of the fullscreen image, while it runs.
+    fullscreen_decode: Option<fullscreen::FullscreenDecode>,
 
-    // Async fullscreen decode
-    fullscreen_rx: Option<mpsc::Receiver<io::Result<RgbaImage>>>,
-    fullscreen_target: Option<(usize, Rect)>,
-
-    // Fullscreen zoom / pan
-    pub zoom: f64,
-    pan_x: f64,
-    pan_y: f64,
-    zoom_dirty: bool,
-    /// Full-resolution decoded source for the current fullscreen image, used for zoomed crops.
-    source: Option<DynamicImage>,
-    source_for: Option<usize>,
-    source_rx: Option<mpsc::Receiver<io::Result<DynamicImage>>>,
-    source_target: Option<usize>,
-    /// The image whose full-resolution decode failed, so that no later request tries again.
-    source_failed: Option<usize>,
+    /// The zoom factor of the fullscreen view, 1.0 for the fitted image.
+    pub(crate) zoom: f64,
+    /// The pan and the full-resolution source of the zoomed view.
+    zoom_state: zoom::ZoomState,
 
     #[cfg(feature = "video")]
-    pub video: Option<crate::player::Player>,
+    pub(crate) video: Option<crate::player::Player>,
     #[cfg(feature = "video")]
-    pub video_return: VideoReturn,
+    pub(crate) video_return: VideoReturn,
     /// `p` asked for the mpv window. The run loop takes the request.
     #[cfg(feature = "video")]
     video_window_request: bool,
@@ -157,12 +147,11 @@ pub(crate) struct App {
     // Scanner state
     shared_list: SharedImageList,
     known_len: usize,
-    pub scan_complete: bool,
+    pub(crate) scan_complete: bool,
 
-    /// The header read for the cell shape, while it runs. The thumbnail decodes wait for it.
-    shape_rx: Option<mpsc::Receiver<f64>>,
-    /// The start of the last header read, for the short wait of the run loop.
-    shape_started: Option<std::time::Instant>,
+    /// The header read for the cell shape and its start, while it runs. The thumbnail decodes
+    /// wait for it, and the run loop waits less during its first milliseconds.
+    shape_rx: Option<(mpsc::Receiver<f64>, std::time::Instant)>,
     /// True after the header read started for this scan. The shape stays until the next scan.
     shape_requested: bool,
 
@@ -171,35 +160,23 @@ pub(crate) struct App {
     /// The cursor position for the next filter result. A delete sets it, a new query clears it.
     filter_cursor: Option<usize>,
 
-    // Async thumbnails
-    thumb_tx: mpsc::Sender<ThumbResult>,
-    thumb_rx: mpsc::Receiver<ThumbResult>,
-    /// The sharp thumbnail decodes, at most `MAX_THUMB_JOBS` at once.
-    thumb_jobs: JobSlots,
-    /// The HEIC preview decodes, at most `MAX_PREVIEW_JOBS` at once.
-    preview_jobs: JobSlots,
-    /// The disk cache reads of the cells that wait for a decode slot, at most
-    /// `MAX_CACHE_READS` at once.
-    cache_reads: JobSlots,
-    /// The cells whose disk cache read missed in this generation. They read again only after
-    /// their sharp decode.
-    cache_misses: HashSet<usize>,
-    thumb_generation: u32,
+    /// The thumbnail jobs of the grid.
+    thumb_jobs: thumbnails::ThumbnailJobs,
     /// The Kitty ids of previews that a sharp thumbnail replaced, with their cell. The next
     /// write of the grid deletes them in the terminal.
-    pub stale_image_ids: Vec<(usize, u32)>,
+    pub(crate) stale_image_ids: Vec<(usize, u32)>,
     /// The animation flag of each file that a thumbnail job read: true for an animated GIF,
     /// WebP, APNG or AVIS. The grid marker reads it, so the draw reads no file header.
     pub(crate) animated: HashMap<PathBuf, bool>,
 
     /// The images that the terminal stores, so a cell can place one by its id instead of a
     /// transmit. The grid keeps their bytes below a budget.
-    pub terminal_images: TerminalImages,
+    pub(crate) terminal_images: TerminalImages,
     /// The loops of the visible video and animated cells.
     pub(crate) grid_loops: grid_loops::GridLoops,
     /// True when the LRU thumb cache was invalidated but backend storage has not been cleared yet.
     /// Consumed by `render_gallery_images` to issue a full `d=A` at the next redraw.
-    pub graphics_storage_dirty: bool,
+    pub(crate) graphics_storage_dirty: bool,
 }
 
 impl App {
@@ -229,7 +206,6 @@ impl App {
         shared_list: SharedImageList,
         config: &Config,
     ) -> Self {
-        let (thumb_tx, thumb_rx) = mpsc::channel();
         let mut gallery = GalleryState::with_zoom_rows(0, usize::from(config.visible_rows));
         gallery.default_zoom_rows = usize::from(config.configured_visible_rows).clamp(
             usize::from(config::MIN_VISIBLE_ROWS),
@@ -272,17 +248,9 @@ impl App {
             layout: ScreenLayout::default(),
             mouse: MouseState::default(),
             loaded_for_rect: Rect::default(),
-            fullscreen_rx: None,
-            fullscreen_target: None,
+            fullscreen_decode: None,
             zoom: 1.0,
-            pan_x: 0.0,
-            pan_y: 0.0,
-            zoom_dirty: false,
-            source: None,
-            source_for: None,
-            source_rx: None,
-            source_target: None,
-            source_failed: None,
+            zoom_state: zoom::ZoomState::default(),
             #[cfg(feature = "video")]
             video: None,
             #[cfg(feature = "video")]
@@ -297,18 +265,11 @@ impl App {
             known_len: 0,
             scan_complete: false,
             shape_rx: None,
-            shape_started: None,
             shape_requested: false,
             folder_prefetch: folder_prefetch::FolderPrefetch::default(),
             filter_rx: None,
             filter_cursor: None,
-            thumb_tx,
-            thumb_rx,
-            thumb_jobs: Self::thumb_slots(),
-            preview_jobs: Self::preview_slots(),
-            cache_reads: Self::cache_read_slots(),
-            cache_misses: HashSet::new(),
-            thumb_generation: 0,
+            thumb_jobs: thumbnails::ThumbnailJobs::new(),
             stale_image_ids: Vec::new(),
             animated: HashMap::new(),
             terminal_images: TerminalImages::new(),
@@ -350,8 +311,8 @@ impl App {
     /// thumbnail, a grid loop, a filter, or the scan. The loop then looks for results every few milliseconds.
     /// The prefetch counts, because only `Prefetcher::poll` starts its waiting jobs.
     pub(crate) fn has_pending_work(&self) -> bool {
-        self.fullscreen_rx.is_some()
-            || self.source_rx.is_some()
+        self.fullscreen_decode.is_some()
+            || self.zoom_state.source_rx.is_some()
             || self.thumbnails_pending()
             || self.prefetcher.has_jobs()
             || self.filter_rx.is_some()
@@ -361,6 +322,8 @@ impl App {
             || self.grid_loops_pending()
     }
 
+    /// Drop the shown image, the thumbnails and the prefetch, because the list or the cell size
+    /// changed.
     pub(crate) fn mark_dirty(&mut self) {
         self.loaded = None;
         self.forget_thumbnails();
@@ -368,6 +331,14 @@ impl App {
         self.graphics_storage_dirty = true;
         self.needs_render = true;
     }
+}
+
+/// The pixel size of `rect` in terminal cells of `cell_px`: the box that a decode fits into.
+pub(crate) fn box_px(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
+    (
+        u32::from(rect.width) * cell_px.0,
+        u32::from(rect.height) * cell_px.1,
+    )
 }
 
 #[cfg(test)]

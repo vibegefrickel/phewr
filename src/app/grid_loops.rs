@@ -490,7 +490,7 @@ impl App {
             && !loops.running.contains_key(&index)
             && !loops.failed.contains(&index)
             && !loops.over_budget.contains(&index)
-            && (self.is_video_at(index) || self.is_animated_at(index))
+            && (self.is_video(index) || self.is_animated(index))
     }
 
     /// Read the loop of `index` from the disk cache, or decode it, on a thread of its own. The
@@ -547,7 +547,11 @@ fn loop_frames(
         return Ok(frames);
     }
     let frames = decode_loop(cache_dir, path, target, cancel)?;
-    try_save_loop(cache_dir, path, target, &frames);
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a loop that misses the disk cache decodes again on the next visit"
+    )]
+    let _ = try_save_loop(cache_dir, path, target, &frames);
     Ok(frames)
 }
 

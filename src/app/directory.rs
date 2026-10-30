@@ -7,9 +7,8 @@ use crate::scanner::{self, canonicalize_or_self};
 use std::path::Path;
 
 impl App {
-    /// Replace image list with the contents of `dir` and reset all view state.
-    /// Spawns a fresh scanner thread; the previous scanner (if any) is orphaned
-    /// against an unused `SharedImageList` clone and will be dropped as it completes.
+    /// Show the folder `dir` and start the view state again. A new scanner thread fills a new
+    /// list. The old scanner fills its old list, which nobody reads, and ends.
     pub(crate) fn switch_to_dir(&mut self, dir: &Path) {
         // The thumbnails of this folder stay parked for the way back, keyed by the size that
         // this folder decoded them for, so the park comes before the zoom of the new folder.
@@ -33,7 +32,7 @@ impl App {
         self.pending_delete = None;
         self.delete_error = None;
         self.slideshow = None;
-        self.reset_zoom_state();
+        self.reset_zoom_and_source();
 
         self.gallery.search_active = false;
         self.gallery.search_query.clear();
@@ -44,15 +43,9 @@ impl App {
         self.shape_requested = false;
 
         self.current = 0;
-        self.forget_thumbnails();
-        self.prefetcher.invalidate();
-        self.graphics_storage_dirty = true;
-        self.fullscreen_rx = None;
-        self.fullscreen_target = None;
-        self.loaded = None;
+        self.mark_dirty();
+        self.fullscreen_decode = None;
         self.error = None;
-
-        self.needs_render = true;
     }
 
     /// Apply the saved zoom level for `dir`. This runs when viewr opens a folder at start and

@@ -12,8 +12,8 @@ const MAX_SLIDESHOW_INTERVAL: f64 = 600.0;
 
 /// A running slideshow in fullscreen mode.
 pub(crate) struct Slideshow {
-    pub interval: Duration,
-    pub paused: bool,
+    pub(crate) interval: Duration,
+    pub(crate) paused: bool,
     /// When the next advance is due. Pushed back while an image is still decoding.
     pub(super) next_at: Instant,
 }
@@ -99,7 +99,7 @@ impl App {
         self.needs_render = true;
     }
 
-    /// Restart the countdown, e.g. after the user navigated manually.
+    /// Restart the countdown, for example after a step of the user.
     pub(crate) fn slideshow_touch(&mut self) {
         if let Some(show) = self.slideshow.as_mut() {
             show.next_at = Instant::now() + show.interval;

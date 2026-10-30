@@ -4,17 +4,13 @@
 use super::grid_loops::LoopFrames;
 use directories::ProjectDirs;
 use image::RgbaImage;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// The version in the disk cache key. Change it when the thumbnail output changes. v7: a
-/// rotated JPEG gets the DCT scale of its turned box, and RAW and PSD files take their
-/// embedded JPEG. v9: each thumbnail is in the color space of the terminal. The key also holds
-/// the color target, so a change of `[terminal] colorspace` decodes again. v10: the first frame
-/// of a video gets the rotation and the HDR tone mapping. v11: the cache files are QOI, not PNG.
-/// v12: the first frame of a video is in the color space of the terminal too.
+/// The version in the disk cache key. Change it when the thumbnail output changes.
 const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v13";
 
 /// The version in the key of a loop file. Change it when the loop output changes.
@@ -118,11 +114,17 @@ pub(super) fn try_save_to_disk_cache(
     path: &Path,
     target: (u32, u32),
     img: &RgbaImage,
-) -> Option<()> {
-    let cache_path = get_cache_file_path(cache_dir, path, target)?;
+) -> io::Result<()> {
+    let cache_path = get_cache_file_path(cache_dir, path, target).ok_or_else(no_cache_key)?;
     write_cache_file(&cache_path, |temp_path| {
-        img.save_with_format(temp_path, CACHE_FORMAT).is_ok()
+        img.save_with_format(temp_path, CACHE_FORMAT)
+            .map_err(io::Error::other)
     })
+}
+
+/// The error of a file without a cache key: the file is gone, or its time does not read.
+fn no_cache_key() -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, "the file has no cache key")
 }
 
 /// The frames of the grid loop of `path` for a grid picture of `target` pixels, from the disk
@@ -152,12 +154,16 @@ pub(super) fn try_save_loop(
     path: &Path,
     target: (u32, u32),
     frames: &LoopFrames,
-) -> Option<()> {
-    let cache_path = cache_file_path(cache_dir, path, target, LOOP_CACHE_VERSION, LOOP_EXTENSION)?;
-    let bytes = encode_loop_file(frames)?;
-    write_cache_file(&cache_path, |temp_path| {
-        std::fs::write(temp_path, &bytes).is_ok()
-    })
+) -> io::Result<()> {
+    let cache_path = cache_file_path(cache_dir, path, target, LOOP_CACHE_VERSION, LOOP_EXTENSION)
+        .ok_or_else(no_cache_key)?;
+    let bytes = encode_loop_file(frames).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the loop does not fit the loop file",
+        )
+    })?;
+    write_cache_file(&cache_path, |temp_path| std::fs::write(temp_path, &bytes))
 }
 
 /// A loop file: [`LOOP_MAGIC`], the frame count and the size of the still, then the time in
@@ -172,7 +178,7 @@ fn encode_loop_file(frames: &LoopFrames) -> Option<Vec<u8>> {
     for (frame, delay) in frames.frames.iter().zip(&frames.delays) {
         let mut qoi = Vec::new();
         frame
-            .write_to(&mut std::io::Cursor::new(&mut qoi), CACHE_FORMAT)
+            .write_to(&mut io::Cursor::new(&mut qoi), CACHE_FORMAT)
             .ok()?;
         let micros = u32::try_from(delay.as_micros()).ok()?;
         let length = u32::try_from(qoi.len()).ok()?;
@@ -219,7 +225,10 @@ fn take_u32(rest: &mut &[u8]) -> Option<u32> {
 /// Write a cache file through a temp file and a rename, so that a reader never sees half a
 /// file. `write` fills the temp file. The first write of the session prunes the cache, and
 /// each 64th write too.
-fn write_cache_file(cache_path: &Path, write: impl FnOnce(&Path) -> bool) -> Option<()> {
+fn write_cache_file(
+    cache_path: &Path,
+    write: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
     static CACHE_PRUNED: OnceLock<()> = OnceLock::new();
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -232,49 +241,53 @@ fn write_cache_file(cache_path: &Path, write: impl FnOnce(&Path) -> bool) -> Opt
 /// counts the prune runs.
 fn write_cache_file_with(
     cache_path: &Path,
-    write: impl FnOnce(&Path) -> bool,
+    write: impl FnOnce(&Path) -> io::Result<()>,
     pruned: &OnceLock<()>,
     temp_sequence: &AtomicU64,
     prune: &dyn Fn(&Path),
-) -> Option<()> {
+) -> io::Result<()> {
     use std::fs;
 
-    let parent = cache_path.parent()?;
-    fs::create_dir_all(parent).ok()?;
+    let no_name = || io::Error::new(io::ErrorKind::InvalidInput, "the cache file has no name");
+    let parent = cache_path.parent().ok_or_else(no_name)?;
+    fs::create_dir_all(parent)?;
     pruned.get_or_init(|| prune(parent));
     if cache_path.exists() {
-        return Some(());
+        return Ok(());
     }
 
     let sequence = temp_sequence.fetch_add(1, Ordering::Relaxed);
-    let cache_name = cache_path.file_name()?.to_string_lossy();
+    let cache_name = cache_path
+        .file_name()
+        .ok_or_else(no_name)?
+        .to_string_lossy();
     let temp_path = parent.join(format!(
         ".{cache_name}.{}.{}.tmp",
         std::process::id(),
         sequence
     ));
-    if !write(&temp_path) {
+    if let Err(error) = write(&temp_path) {
         #[expect(
             clippy::let_underscore_must_use,
             reason = "a cache file that stays is only disk space, the cache prunes it"
         )]
         let _ = fs::remove_file(temp_path);
-        return None;
+        return Err(error);
     }
-    if fs::rename(&temp_path, cache_path).is_err() {
+    if let Err(error) = fs::rename(&temp_path, cache_path) {
         #[expect(
             clippy::let_underscore_must_use,
             reason = "a cache file that stays is only disk space, the cache prunes it"
         )]
         let _ = fs::remove_file(temp_path);
         if !cache_path.exists() {
-            return None;
+            return Err(error);
         }
     }
     if prunes_after_write(sequence) {
         prune(parent);
     }
-    Some(())
+    Ok(())
 }
 
 /// Whether the write with this sequence number prunes. Write 0 skips it, because the first
@@ -409,7 +422,7 @@ mod tests {
             let path = dir.path().join("cache").join(name);
             write_cache_file_with(
                 &path,
-                |temp| fs::write(temp, b"x").is_ok(),
+                |temp| fs::write(temp, b"x"),
                 &pruned,
                 &sequence,
                 &prune,
@@ -478,11 +491,6 @@ mod tests {
         assert_eq!(first.parent(), Some(cache.as_path()));
         assert_ne!(first, resized);
         assert_ne!(first, changed);
-        assert_eq!(
-            super::THUMBNAIL_CACHE_VERSION,
-            "viewr-thumbnail-v13",
-            "camera JPEGs with the Adobe RGB mark of EXIF need a new cache generation"
-        );
         assert_eq!(first.extension().and_then(|ext| ext.to_str()), Some("qoi"));
     }
 
@@ -497,14 +505,8 @@ mod tests {
 
         assert!(get_cache_file_path(&cache, &dir.path().join("missing.png"), (1, 1)).is_none());
         assert!(try_load_from_disk_cache(&cache, &source, (2, 3)).is_none());
-        assert_eq!(
-            try_save_to_disk_cache(&cache, &source, (2, 3), &thumb),
-            Some(())
-        );
-        assert_eq!(
-            try_save_to_disk_cache(&cache, &source, (2, 3), &thumb),
-            Some(())
-        );
+        try_save_to_disk_cache(&cache, &source, (2, 3), &thumb).unwrap();
+        try_save_to_disk_cache(&cache, &source, (2, 3), &thumb).unwrap();
         assert_eq!(
             try_load_from_disk_cache(&cache, &source, (2, 3)),
             Some(thumb.clone()),
@@ -519,7 +521,7 @@ mod tests {
         // A cache directory that is a file cannot hold entries.
         let blocked = dir.path().join("blocked");
         fs::write(&blocked, b"file").unwrap();
-        assert!(try_save_to_disk_cache(&blocked, &source, (2, 3), &thumb).is_none());
+        assert!(try_save_to_disk_cache(&blocked, &source, (2, 3), &thumb).is_err());
     }
 
     #[test]

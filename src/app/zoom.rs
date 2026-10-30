@@ -1,28 +1,43 @@
 //! Zoom and pan in the fullscreen view, with the full-resolution source behind them.
 
-use super::App;
+use super::{App, box_px};
 use crate::decode::resize::resize_to_exact;
 use crate::decode::{EmbeddedThumbnail, decode_image_with_hint, spawn_foreground};
-use image::RgbaImage;
+use image::{DynamicImage, RgbaImage};
+use std::io;
+use std::sync::mpsc;
 
 /// Multiplier applied on each zoom step.
 const ZOOM_STEP: f64 = 1.25;
 /// Maximum zoom factor (relative to fit-to-window).
 const MAX_ZOOM: f64 = 16.0;
 
+/// The pan position of the zoomed fullscreen view and the full-resolution source behind it.
+#[derive(Default)]
+pub(super) struct ZoomState {
+    pan_x: f64,
+    pan_y: f64,
+    /// True when the zoomed view needs a new crop.
+    pub(super) dirty: bool,
+    /// Full-resolution decoded source for the current fullscreen image, used for zoomed crops.
+    pub(super) source: Option<DynamicImage>,
+    pub(super) source_for: Option<usize>,
+    pub(super) source_rx: Option<mpsc::Receiver<io::Result<DynamicImage>>>,
+    pub(super) source_target: Option<usize>,
+    /// The image whose full-resolution decode failed, so that no later request tries again.
+    pub(super) source_failed: Option<usize>,
+}
+
 impl App {
-    /// Reset zoom/pan and drop the cached full-resolution source. Called when the
-    /// current fullscreen image changes.
-    pub(super) fn reset_zoom_state(&mut self) {
+    /// Reset zoom and pan and drop the full-resolution source, because the fullscreen file
+    /// changed. `reset_zoom` keeps the source.
+    pub(super) fn reset_zoom_and_source(&mut self) {
         self.zoom = 1.0;
-        self.pan_x = 0.5;
-        self.pan_y = 0.5;
-        self.zoom_dirty = false;
-        self.source = None;
-        self.source_for = None;
-        self.source_rx = None;
-        self.source_target = None;
-        self.source_failed = None;
+        self.zoom_state = ZoomState {
+            pan_x: 0.5,
+            pan_y: 0.5,
+            ..ZoomState::default()
+        };
     }
 
     /// Return to fit-to-window, keeping the cached source for fast re-zoom.
@@ -31,9 +46,9 @@ impl App {
             return;
         }
         self.zoom = 1.0;
-        self.pan_x = 0.5;
-        self.pan_y = 0.5;
-        self.zoom_dirty = true;
+        self.zoom_state.pan_x = 0.5;
+        self.zoom_state.pan_y = 0.5;
+        self.zoom_state.dirty = true;
         self.needs_render = true;
     }
 
@@ -45,7 +60,7 @@ impl App {
         if new > self.zoom {
             self.zoom = new;
             self.clamp_pan();
-            self.zoom_dirty = true;
+            self.zoom_state.dirty = true;
             self.needs_render = true;
         }
     }
@@ -55,7 +70,7 @@ impl App {
         if new < self.zoom {
             self.zoom = new;
             self.clamp_pan();
-            self.zoom_dirty = true;
+            self.zoom_state.dirty = true;
             self.needs_render = true;
         }
     }
@@ -66,10 +81,10 @@ impl App {
             return;
         }
         let step = 0.15 / self.zoom;
-        self.pan_x += dx * step;
-        self.pan_y += dy * step;
+        self.zoom_state.pan_x += dx * step;
+        self.zoom_state.pan_y += dy * step;
         self.clamp_pan();
-        self.zoom_dirty = true;
+        self.zoom_state.dirty = true;
         self.needs_render = true;
     }
 
@@ -78,10 +93,10 @@ impl App {
         if self.zoom <= 1.0 || (dx == 0.0 && dy == 0.0) {
             return;
         }
-        self.pan_x += dx;
-        self.pan_y += dy;
+        self.zoom_state.pan_x += dx;
+        self.zoom_state.pan_y += dy;
         self.clamp_pan();
-        self.zoom_dirty = true;
+        self.zoom_state.dirty = true;
         self.needs_render = true;
     }
 
@@ -89,7 +104,7 @@ impl App {
     /// minus the box, as `build_zoom_view` crops. A drag divides by it, so the picture follows
     /// the pointer also for a letterboxed image. Zero on an axis where the image fits the box.
     pub(crate) fn pan_range_px(&self) -> (f64, f64) {
-        let (ow, oh) = match (&self.source, &self.loaded) {
+        let (ow, oh) = match (&self.zoom_state.source, &self.loaded) {
             (Some(source), _) => (source.width(), source.height()),
             (None, Some(loaded)) => loaded.dimensions(),
             (None, None) => return (0.0, 0.0),
@@ -97,8 +112,8 @@ impl App {
         if ow == 0 || oh == 0 {
             return (0.0, 0.0);
         }
-        let vw = f64::from(self.image_rect.width) * f64::from(self.cell_px.0);
-        let vh = f64::from(self.image_rect.height) * f64::from(self.cell_px.1);
+        let (vw, vh) = box_px(self.image_rect, self.cell_px);
+        let (vw, vh) = (f64::from(vw), f64::from(vh));
         let (ow, oh) = (f64::from(ow), f64::from(oh));
         let eff = f64::min(vw / ow, vh / oh).min(1.0) * self.zoom;
         ((eff * ow - vw).max(0.0), (eff * oh - vh).max(0.0))
@@ -107,37 +122,41 @@ impl App {
     /// The pan position, for the tests of the mouse drag outside this module.
     #[cfg(test)]
     pub(crate) fn pan_position(&self) -> (f64, f64) {
-        (self.pan_x, self.pan_y)
+        (self.zoom_state.pan_x, self.zoom_state.pan_y)
     }
 
     fn clamp_pan(&mut self) {
-        self.pan_x = self.pan_x.clamp(0.0, 1.0);
-        self.pan_y = self.pan_y.clamp(0.0, 1.0);
+        self.zoom_state.pan_x = self.zoom_state.pan_x.clamp(0.0, 1.0);
+        self.zoom_state.pan_y = self.zoom_state.pan_y.clamp(0.0, 1.0);
     }
 
-    pub(super) fn start_source_decode(&mut self, idx: usize) {
-        self.source_target = Some(idx);
-        let path = self.images[idx].clone();
-        self.source_rx = Some(spawn_foreground(move || {
+    pub(super) fn start_source_decode(&mut self, index: usize) {
+        self.zoom_state.source_target = Some(index);
+        let path = self.images[index].clone();
+        self.zoom_state.source_rx = Some(spawn_foreground(move || {
             decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny)
         }));
     }
 
     /// Receive an async full-resolution source decode for zooming.
     pub(crate) fn poll_source(&mut self) -> bool {
-        let result = self.source_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        let result = self
+            .zoom_state
+            .source_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
         if let Some(result) = result {
-            let idx = self.source_target.take();
-            self.source_rx = None;
-            match (idx, result) {
-                (Some(idx), Ok(img)) if idx == self.current => {
-                    self.source = Some(img);
-                    self.source_for = Some(idx);
-                    self.zoom_dirty = true;
+            let index = self.zoom_state.source_target.take();
+            self.zoom_state.source_rx = None;
+            match (index, result) {
+                (Some(index), Ok(img)) if index == self.current => {
+                    self.zoom_state.source = Some(img);
+                    self.zoom_state.source_for = Some(index);
+                    self.zoom_state.dirty = true;
                     self.needs_render = true;
                 }
-                (Some(idx), Err(e)) if idx == self.current => {
-                    self.source_failed = Some(idx);
+                (Some(index), Err(e)) if index == self.current => {
+                    self.zoom_state.source_failed = Some(index);
                     self.error = Some(e.to_string());
                     self.needs_render = true;
                 }
@@ -151,27 +170,25 @@ impl App {
     /// Build the zoomed, panned crop of the current full-resolution source, sized
     /// to fill the viewport. Returns `None` when no source is available.
     pub(super) fn build_zoom_view(&self) -> Option<RgbaImage> {
-        let src = self.source.as_ref()?;
+        let src = self.zoom_state.source.as_ref()?;
         let (ow, oh) = (src.width(), src.height());
         if ow == 0 || oh == 0 {
             return None;
         }
 
-        let vw = (u32::from(self.image_rect.width) * self.cell_px.0).max(1);
-        let vh = (u32::from(self.image_rect.height) * self.cell_px.1).max(1);
+        let (vw, vh) = box_px(self.image_rect, self.cell_px);
+        let (vw, vh) = (vw.max(1), vh.max(1));
 
-        // Fit-to-window scale, never upscaling the base image (matches zoom == 1.0).
         let fit = f64::min(f64::from(vw) / f64::from(ow), f64::from(vh) / f64::from(oh));
         let base = fit.min(1.0);
         let eff = base * self.zoom;
 
-        // Source-pixel crop window that maps onto the viewport at the effective scale.
         let crop_w = ((f64::from(vw) / eff).round() as u32).clamp(1, ow);
         let crop_h = ((f64::from(vh) / eff).round() as u32).clamp(1, oh);
         let max_x = ow.saturating_sub(crop_w);
         let max_y = oh.saturating_sub(crop_h);
-        let x = (self.pan_x * f64::from(max_x)).round() as u32;
-        let y = (self.pan_y * f64::from(max_y)).round() as u32;
+        let x = (self.zoom_state.pan_x * f64::from(max_x)).round() as u32;
+        let y = (self.zoom_state.pan_y * f64::from(max_y)).round() as u32;
 
         let cropped = src.crop_imm(x, y, crop_w, crop_h);
         let dst_w = ((f64::from(crop_w) * eff).round() as u32).max(1).min(vw);
@@ -186,23 +203,23 @@ mod tests {
     #[test]
     fn pan_fraction_moves_the_zoomed_view_and_clamps_at_the_edges() {
         let mut app = app_with(&["a.jpg"]);
-        app.pan_x = 0.5;
-        app.pan_y = 0.5;
+        app.zoom_state.pan_x = 0.5;
+        app.zoom_state.pan_y = 0.5;
         app.pan_fraction(0.3, 0.0);
         assert!(
-            (app.pan_x - 0.5).abs() < f64::EPSILON,
+            (app.zoom_state.pan_x - 0.5).abs() < f64::EPSILON,
             "no pan without zoom"
         );
 
         app.zoom = 2.0;
         app.needs_render = false;
         app.pan_fraction(0.3, -0.2);
-        assert!((app.pan_x - 0.8).abs() < 1e-9);
-        assert!((app.pan_y - 0.3).abs() < 1e-9);
+        assert!((app.zoom_state.pan_x - 0.8).abs() < 1e-9);
+        assert!((app.zoom_state.pan_y - 0.3).abs() < 1e-9);
         assert!(app.needs_render);
         app.pan_fraction(0.5, -0.5);
-        assert!((app.pan_x - 1.0).abs() < f64::EPSILON);
-        assert!(app.pan_y.abs() < f64::EPSILON);
+        assert!((app.zoom_state.pan_x - 1.0).abs() < f64::EPSILON);
+        assert!(app.zoom_state.pan_y.abs() < f64::EPSILON);
     }
 
     #[test]
@@ -241,8 +258,8 @@ mod tests {
         let mut app = App::new((1, 1), SharedImageList::new());
         app.image_rect = Rect::new(0, 0, 100, 100);
         // 400x400 source, viewport 100x100 -> fit scale 0.25 (base image is 100x100).
-        app.source = Some(DynamicImage::new_rgba8(400, 400));
-        app.source_for = Some(0);
+        app.zoom_state.source = Some(DynamicImage::new_rgba8(400, 400));
+        app.zoom_state.source_for = Some(0);
         app.current = 0;
 
         // At 2x zoom the effective scale is 0.5, so the crop is 200x200 source px
@@ -258,13 +275,17 @@ mod tests {
         app.mode = ViewMode::Fullscreen;
         app.reset_zoom();
         app.pan(1.0, 1.0);
-        assert_eq!((app.pan_x, app.pan_y), (0.0, 0.0), "no pan at fit size");
+        assert_eq!(
+            (app.zoom_state.pan_x, app.zoom_state.pan_y),
+            (0.0, 0.0),
+            "no pan at fit size"
+        );
 
         app.zoom_out();
         assert_eq!(app.zoom, 1.0);
         app.zoom_in();
         assert_eq!(app.zoom, 1.25);
-        assert!(app.zoom_dirty);
+        assert!(app.zoom_state.dirty);
         for _ in 0..30 {
             app.zoom_in();
         }
@@ -273,20 +294,20 @@ mod tests {
         app.zoom_in();
         assert!(!app.needs_render, "the maximum stops the zoom");
 
-        app.pan_x = 0.5;
-        app.pan_y = 0.5;
+        app.zoom_state.pan_x = 0.5;
+        app.zoom_state.pan_y = 0.5;
         app.pan(-1.0, 1.0);
-        assert!(app.pan_x < 0.5 && app.pan_y > 0.5);
+        assert!(app.zoom_state.pan_x < 0.5 && app.zoom_state.pan_y > 0.5);
         for _ in 0..200 {
             app.pan(-1.0, 1.0);
         }
-        assert_eq!((app.pan_x, app.pan_y), (0.0, 1.0));
+        assert_eq!((app.zoom_state.pan_x, app.zoom_state.pan_y), (0.0, 1.0));
 
         app.zoom_out();
         assert_eq!(app.zoom, 12.8);
         app.reset_zoom();
         assert_eq!(app.zoom, 1.0);
-        assert_eq!((app.pan_x, app.pan_y), (0.5, 0.5));
+        assert_eq!((app.zoom_state.pan_x, app.zoom_state.pan_y), (0.5, 0.5));
     }
 
     #[test]
@@ -298,19 +319,19 @@ mod tests {
         let source = RgbaImage::from_fn(40, 40, |x, _| {
             image::Rgba(if x < 20 { [0, 0, 0, 255] } else { [255; 4] })
         });
-        app.source = Some(DynamicImage::ImageRgba8(source));
+        app.zoom_state.source = Some(DynamicImage::ImageRgba8(source));
         app.zoom = 4.0;
-        app.pan_x = 0.0;
+        app.zoom_state.pan_x = 0.0;
         let left = app.build_zoom_view().unwrap();
-        app.pan_x = 1.0;
+        app.zoom_state.pan_x = 1.0;
         let right = app.build_zoom_view().unwrap();
         assert_eq!(left.dimensions(), (10, 10));
         assert_eq!(left.get_pixel(5, 5).0, [0, 0, 0, 255]);
         assert_eq!(right.get_pixel(5, 5).0, [255; 4]);
 
-        app.source = Some(DynamicImage::new_rgba8(0, 0));
+        app.zoom_state.source = Some(DynamicImage::new_rgba8(0, 0));
         assert!(app.build_zoom_view().is_none());
-        app.source = None;
+        app.zoom_state.source = None;
         assert!(app.build_zoom_view().is_none());
     }
 
@@ -325,34 +346,34 @@ mod tests {
         assert!(!app.poll_source(), "nothing requested yet");
 
         app.load_if_needed();
-        assert_eq!(app.source_target, Some(0));
+        assert_eq!(app.zoom_state.source_target, Some(0));
         assert_eq!(
             app.loaded.as_ref().unwrap().dimensions(),
             (1, 1),
             "keeps the fit image"
         );
         wait_until(|| app.poll_source());
-        assert_eq!(app.source_for, Some(0));
-        assert!(app.zoom_dirty);
+        assert_eq!(app.zoom_state.source_for, Some(0));
+        assert!(app.zoom_state.dirty);
 
         app.load_if_needed();
-        assert!(!app.zoom_dirty);
+        assert!(!app.zoom_state.dirty);
         // The 8x8 source at zoom 1.25 fills 10x10 of the 16x32 viewport.
         assert_eq!(app.loaded.as_ref().unwrap().dimensions(), (10, 10));
 
         // A source that arrives for an old image is dropped.
-        app.source_for = None;
-        app.source = None;
+        app.zoom_state.source_for = None;
+        app.zoom_state.source = None;
         app.load_if_needed();
         app.current = 1;
         wait_until(|| app.poll_source());
-        assert!(app.source.is_none());
+        assert!(app.zoom_state.source.is_none());
 
         // Zoom without a fit image: request the source and decode the fit image too.
         app.loaded = None;
         app.load_if_needed();
-        assert_eq!(app.source_target, Some(1));
-        assert!(app.fullscreen_target.is_some());
+        assert_eq!(app.zoom_state.source_target, Some(1));
+        assert!(app.fullscreen_decode.is_some());
     }
 
     #[test]
@@ -366,13 +387,13 @@ mod tests {
         std::fs::remove_file(&app.images[0]).unwrap();
 
         app.load_if_needed();
-        assert_eq!(app.source_target, Some(0));
+        assert_eq!(app.zoom_state.source_target, Some(0));
         wait_until(|| app.poll_source());
         assert!(app.error.is_some());
-        assert_eq!(app.source_failed, Some(0));
+        assert_eq!(app.zoom_state.source_failed, Some(0));
 
         app.load_if_needed();
-        assert!(app.source_target.is_none(), "no second decode");
-        assert!(app.source_rx.is_none());
+        assert!(app.zoom_state.source_target.is_none(), "no second decode");
+        assert!(app.zoom_state.source_rx.is_none());
     }
 }

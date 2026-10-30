@@ -8,34 +8,34 @@ use std::time::{Duration, Instant};
 pub(crate) const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// The areas of the last draw that the mouse handler needs and that the view state does not
-/// hold otherwise. `ui::draw` sets them each frame. Each is empty until the first draw.
+/// hold otherwise. `ui::draw` sets them each frame. They are empty until the first draw.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ScreenLayout {
     /// The whole terminal.
-    pub screen: Rect,
+    pub(crate) screen: Rect,
 }
 
 /// The click before the current one, for the double-click.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LastClick {
-    pub at: Instant,
+    pub(crate) at: Instant,
     /// The cell position in the gallery.
-    pub target: usize,
+    pub(crate) target: usize,
 }
 
 /// A left button that went down in the zoomed fullscreen view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Drag {
     /// The last position that the pan used.
-    pub last: Position,
+    pub(crate) last: Position,
     /// True once the mouse moved: the release is then no click.
-    pub moved: bool,
+    pub(crate) moved: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MouseState {
-    pub last_click: Option<LastClick>,
-    pub drag: Option<Drag>,
+    pub(crate) last_click: Option<LastClick>,
+    pub(crate) drag: Option<Drag>,
 }
 
 impl MouseState {

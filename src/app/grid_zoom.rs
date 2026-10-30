@@ -6,13 +6,15 @@ use crate::config;
 impl App {
     pub(crate) fn thumb_zoom_in(&mut self) {
         if self.gallery.thumb_zoom_in() {
-            self.after_grid_zoom_change(true);
+            self.remember_grid_zoom();
+            self.after_grid_zoom_change();
         }
     }
 
     pub(crate) fn thumb_zoom_out(&mut self) {
         if self.gallery.thumb_zoom_out() {
-            self.after_grid_zoom_change(true);
+            self.remember_grid_zoom();
+            self.after_grid_zoom_change();
         }
     }
 
@@ -22,7 +24,7 @@ impl App {
             config::clear_folder_zoom(&self.state_file, dir);
         }
         if self.gallery.reset_zoom() {
-            self.after_grid_zoom_change(false);
+            self.after_grid_zoom_change();
         }
     }
 
@@ -45,12 +47,14 @@ impl App {
         self.mark_dirty();
     }
 
-    fn after_grid_zoom_change(&mut self, remember: bool) {
-        if remember {
-            let rows = u16::try_from(self.gallery.zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS);
-            config::save_visible_rows(&self.state_file, self.current_dir.as_deref(), rows);
-        }
-        // Thumbnails are decoded for a pixel size, so every cached one is stale.
+    /// Save the zoom level for this folder and as the global fallback, for the next start.
+    fn remember_grid_zoom(&self) {
+        let rows = u16::try_from(self.gallery.zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS);
+        config::save_visible_rows(&self.state_file, self.current_dir.as_deref(), rows);
+    }
+
+    /// Thumbnails are decoded for a pixel size, so every cached one is stale.
+    fn after_grid_zoom_change(&mut self) {
         self.mark_dirty();
     }
 }

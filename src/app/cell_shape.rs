@@ -28,8 +28,7 @@ impl App {
             .cloned()
             .collect();
         let (tx, rx) = mpsc::channel();
-        self.shape_rx = Some(rx);
-        self.shape_started = Some(Instant::now());
+        self.shape_rx = Some((rx, Instant::now()));
         // A thread of its own: the rayon pool can be full of decodes of the old folder after a
         // directory switch, and the first screen of the new folder waits for this read.
         thread::spawn(move || {
@@ -50,14 +49,18 @@ impl App {
     /// How long the running header read takes so far, `None` when no read runs. The run loop
     /// waits less during the first milliseconds, because a local read takes 2 ms to 4 ms.
     pub(crate) fn cell_shape_running_for(&self, now: Instant) -> Option<Duration> {
-        self.shape_rx.as_ref()?;
-        Some(now.saturating_duration_since(self.shape_started?))
+        let (_, started) = self.shape_rx.as_ref()?;
+        Some(now.saturating_duration_since(*started))
     }
 
     /// Take the folder shape. A changed grid drops the thumbnails. The gallery draws again,
     /// because its first screen waited for the shape. A fullscreen image stays as it is.
     pub(crate) fn poll_cell_shape(&mut self) {
-        let Some(aspect) = self.shape_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+        let Some(aspect) = self
+            .shape_rx
+            .as_ref()
+            .and_then(|(rx, _)| rx.try_recv().ok())
+        else {
             return;
         };
         self.shape_rx = None;

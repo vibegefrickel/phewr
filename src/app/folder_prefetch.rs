@@ -161,8 +161,9 @@ struct FirstScreen {
     target: (u32, u32),
 }
 
-/// The first screen that a switch to `request.folder` shows. A folder with one file opens it in
-/// the fullscreen view, so it has no grid to prefetch.
+/// The first screen that a switch to `request.folder` shows. A folder with fewer than 2 files
+/// gets no prefetch. Its grid holds one picture at most, so the prefetch saves one decode at
+/// most.
 fn first_screen(request: &Request) -> FirstScreen {
     let (files, names) = scanner::files_of(&request.folder);
     if files.len() < 2 {
@@ -317,11 +318,6 @@ impl App {
             .filter(|&index| index < self.images.len())
     }
 
-    /// True for the `..` entry. No folder can carry that name.
-    fn is_parent_entry(&self, index: usize) -> bool {
-        self.is_folder(index) && self.filenames.get(index).is_some_and(|name| name == "..")
-    }
-
     /// Start the thread for the folder of the rest. It starts paused while the grid has work.
     fn start_folder_prefetch(&mut self) {
         let Some((key, _)) = self.folder_prefetch.rest.clone() else {
@@ -447,7 +443,7 @@ mod tests {
     }
 
     fn queue_grid_job(app: &mut App) {
-        app.thumb_jobs.waiting.push_back(ThumbJob {
+        app.thumb_jobs.sharp.waiting.push_back(ThumbJob {
             index: 0,
             rect: Rect::new(0, 0, 10, 5),
         });
@@ -622,7 +618,7 @@ mod tests {
         let app = &mut tree.app;
         let a = tree.root.join("a");
         let start = Instant::now();
-        app.cache_reads.waiting.push_back(ThumbJob {
+        app.thumb_jobs.cache_reads.waiting.push_back(ThumbJob {
             index: 0,
             rect: Rect::new(0, 0, 10, 5),
         });
