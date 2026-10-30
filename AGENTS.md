@@ -207,7 +207,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   and `box_px` (the pixel box of a rect). One file per topic: `info_panel.rs` (`view_file`, the
   file of the info panel and the status row), `grid_zoom.rs` (the cell size and the state file),
   `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter), `cell_shape.rs`,
-  `fullscreen.rs` (enter, leave, the steps and the decode, `FullscreenDecode`), `zoom.rs` (zoom,
+  `fullscreen.rs` (enter, leave, the steps and the decode, `FullscreenDecode`, the image as a
+  `ScreenImage`), `zoom.rs` (zoom,
   pan and the full-resolution source in `ZoomState`), `delete.rs` (the marks and the delete question), `directory.rs` (the
   directory switch), `folder_prefetch.rs` (the decode of the first screen of the folder under the
   cursor into the disk cache), `mouse.rs` (the mouse state and the screen layout of the last draw),
@@ -222,7 +223,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   for. `raster.rs` (the `image` crate, the EXIF orientation and `header_dimensions`, the size from
   the header for `info::dimensions` and `shape::shown_size`), `turbo.rs` (libjpeg-turbo with DCT
   scaling), `libheif.rs` (HEIC, HEIF, AVIF, the embedded thumbnails, `fitted_size` on
-  `scaled_down_size`, and the core share `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom), `jxl.rs` (JPEG XL, ICC profiles
+  `scaled_down_size`, and the core share `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom,
+  `Layout`, `rgb_resize_is_fastest` and `resize_region`, a resize of a region through a view),
+  `screen.rs` (`ScreenImage` with `Rgb`, `Rgba` and `Opaque`, and `load_for_screen`, the
+  fullscreen decode), `jxl.rs` (JPEG XL, ICC profiles
   through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
   (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and `ispe`),
   `shape.rs` (the image dimensions from the file headers, for the cell shape), `embedded_jpeg.rs`
@@ -468,7 +472,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   than 300 ms sends the answer as key presses. Through this medium an animation frame of the
   grid loops and of the terminal player goes out as RGBA as it is (`Pixels::keep_alpha`), with no
   scan for a transparent pixel and no RGB copy, so an opaque frame is `f=32` and the temp file
-  is 18 % larger. The direct and PNG media and the stills keep the RGB conversion.
+  is 18 % larger. The direct and PNG media keep the RGB conversion, and so does a grid picture.
+  An opaque fullscreen still arrives as RGB, so its transmit does no scan and no copy.
 - **Kitty images are not ratatui widgets.** ratatui draws the frame and the borders. viewr then
   writes the pictures with Kitty escape sequences at the cell positions of the last draw. A
   popup must delete the pictures first (`graphics_delete_all`), because Kitty draws them above
@@ -586,6 +591,16 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   stays until the next directory switch, so the columns never move while the user browses.
 - **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `decode/resize.rs`). It is
   one third faster than Lanczos3, and the difference is not visible.
+- **Pixel layouts:** every resize picks the fastest layout of `fast_image_resize`
+  (`resize::Layout`, `rgb_resize_is_fastest`). An opaque RGBA image (`Decoded::opaque`,
+  `ScreenImage::Opaque`) resizes without the alpha multiply, the fastest at every scale, with the
+  same pixels. Only a downscale to 1/2 or less resizes as RGB, and libjpeg-turbo and libheif
+  decode in the layout of the resize that follows. An image with a transparent pixel keeps the
+  alpha multiply. The fullscreen image and the zoom crop reach the Kitty write as RGB when they
+  are opaque (`ScreenImage::Rgb`), so the write does no scan and no copy, and a zoom crop is a
+  view of the source. `App::loaded`, the prefetch and the zoom carry a `ScreenImage`. The grid
+  thumbnails keep their RGBA with the padding, with the same pixels as before (a test compares 46
+  fixtures), so the cache version did not change.
 - **Process start:** about 30 ms pass before `main`, most of it the dylib load of libheif and its
   codec libraries (a C program that links libheif needs 24.9 ms, with no library 4.6 ms).
   Foundation (the `trash` crate) costs about 3.5 ms. The `dist` profile and `target-cpu` give no
@@ -601,7 +616,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   length and the mtime). A job computes it at most one time, and the folder prefetch one time per
   file (`warm_disk_cache` calls `sharp_thumbnail` with the same key). A test rebuilds the hash from
   its inputs, so a change of the input or of its order fails the test. The prune removes temp
-  files of the cache that are older than 1 hour.
+  files of the cache and partial cube files of the tone map that are older than 1 hour.
 - **Folder prefetch:** after the cursor rests on a folder cell for `FOLDER_PREFETCH_DELAY`
   (300 ms) and `App::has_pending_work` is false, one thread decodes the first screen of that
   folder into the disk cache (`app/folder_prefetch.rs`). It computes what Enter computes, with
@@ -620,7 +635,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   34675 and HEIF `prof`/`rICC`, CICP from HEIF `nclx` and PNG `cICP`, PNG `gAMA`/`cHRM`, and
   the Adobe RGB mark of a camera JPEG without a profile (EXIF `ColorSpace` 0xFFFF with the
   interoperability index `R03`, `color::jpeg_color`).
-  The conversion runs after the resize, as one cached `moxcms` transform with the rows in
+  The conversion runs after the resize, in the layout of the image (RGB through
+  `color::convert_rgb`, or RGBA), as one cached `moxcms` transform with the rows in
   parallel. A source in the target space converts nothing, so iPhone photos (Display P3) cost
   nothing. A source that cannot convert (an unreadable or non-RGB ICC profile, unknown CICP
   codes) converts as sRGB. PQ and HLG sources keep their values. `main` sets the target, and
