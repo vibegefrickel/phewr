@@ -180,10 +180,14 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   so that the tests read the escape sequences. `App::with_graphics_out` runs a write against the
   graphics output.
 - `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
-  and the way back. `mod.rs` holds `VideoState` and `play_videos`. `window.rs` holds
-  `poll_mpv_window`.
-- `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` and the pacing,
-  `decoder.rs` the ffmpeg command line and the `Decoder` trait, `probe.rs` `VideoInfo`, `layout.rs`
+  and the way back. `mod.rs` holds `VideoState` and `play_videos`. The ffprobe path lives in the
+  decoder only (`Decoder::has_ffprobe`). `window.rs` holds `poll_mpv_window`.
+- `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` with its `Run` and
+  `Repeat`, the pacing, `catch_up` (the restart ahead of the clock) and `end_of_run` (the repeat,
+  the software fallback, the failure). `decoder.rs` holds the ffmpeg command line (one `build`
+  with `Extras` and `Output`), the `Decoder` trait and the fallback order (`Pipeline::first`,
+  `Pipeline::next`, `with_fallback`: an animation decodes in software only, also its first frame
+  and its loops). `probe.rs` holds `VideoInfo`, `layout.rs`
   the frame box and the cell box, `tone_map.rs` the color cubes (the HDR tone mapping, the SDR
   primaries conversion and the cube files), `animation.rs` the header check for animated GIF, WebP,
   APNG and AVIS.
@@ -246,8 +250,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - `icons.rs`: the large octant icons of the grid cells.
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config.rs`: `config.toml` and the state file.
-- `video.rs` (feature `video`): `Tools`, the session lookup of ffmpeg and ffprobe, the first-frame
-  thumbnails and the video extensions.
+- `video.rs` (feature `video`): `Tools`, the session lookup of ffmpeg and ffprobe, `cube_dirs` (the
+  places of the cube files) and `session_decoder` (ffmpeg with a decoder that has ffprobe), the
+  first-frame thumbnails and the video extensions.
 - `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
   and the `Runner` trait for the process start.
 - `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
@@ -278,8 +283,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `-fps_mode cfr -r` too: the probe calls it VFR when `r_frame_rate` and `avg_frame_rate` differ
   by more than 1 %. The output rate is `r_frame_rate`, but a base rate above 1.5 times the
   average is a burst, and then the output rate is the average, at least 24 fps and never above
-  `r_frame_rate`. Every rate stays at or below 60 fps (`pacing_rate`, `variable_rate_fps` in
-  `player/probe.rs`). Without `-r`,
+  `r_frame_rate`. Every rate stays at or below 60 fps (`pacing_fps`, `variable_fps` in
+  `player/probe.rs`). `VideoInfo.rate` is `Rate::Constant`, `Rate::Variable` or
+  `Rate::Animation`. Without `-r`,
   ffmpeg writes raw frames at `r_frame_rate`, so the pacing uses the same rate. iPhone clips
   (30 and 29.99) stay constant-rate. ffmpeg writes `-pix_fmt rgb24` for a video and `rgba` for an
   animation, and `pixel_format` in `player/decoder.rs` is the one source for the frame layout
@@ -327,7 +333,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   holds an animation for at least the slideshow interval (`Player::play_at_least`). The mpv window
   has no such hold.
 - **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
-  terminal player reports `finished`, and the slideshow moves on. Outside a slideshow, the clip
+  terminal player stops playing (`playing()` is false), and the slideshow moves on. Outside a slideshow, the clip
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
   `--loop-playlist=no` and `--input-commands` that bind `q`, `Q` and `CLOSE_WIN` to `quit 4`.
   Exit code 0 is the end of the file. Each other exit stops the slideshow on the placeholder.
