@@ -411,7 +411,15 @@ impl App {
             } else {
                 animation_flag(&path)
             };
-            let image = image.map(|image| pad_for_grid(image, target, cell_px, sharp));
+            // The still of a video or an animation carries the play triangle until its loop
+            // starts. The disk cache keeps the still without the stamp.
+            let playable = is_playable(&path, animated);
+            let image = image.map(|mut image| {
+                if playable {
+                    crate::icons::stamp_play(&mut image);
+                }
+                pad_for_grid(image, target, cell_px, sharp)
+            });
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
@@ -466,6 +474,17 @@ fn animation_flag(path: &Path) -> Option<bool> {
 #[cfg(not(feature = "video"))]
 fn animation_flag(_path: &Path) -> Option<bool> {
     None
+}
+
+/// True for a file whose still gets the play stamp: a video, or an animated image.
+#[cfg(feature = "video")]
+fn is_playable(path: &Path, animated: Option<bool>) -> bool {
+    crate::video::is_video(path) || animated == Some(true)
+}
+
+#[cfg(not(feature = "video"))]
+fn is_playable(_path: &Path, _animated: Option<bool>) -> bool {
+    false
 }
 
 /// Put the sharp thumbnail of `path` at `target` into the disk cache, as the sharp job of the

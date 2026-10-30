@@ -19,11 +19,9 @@ State of the main goal:
 
 ## Now
 
-Maintainer tests in Ghostty: run the 13 steps in `~/Pictures/viewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders and placeholders).
+Maintainer tests in Ghostty and in herdr: run the 13 steps in `~/Pictures/viewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders and placeholders). Steps 9 and 10 now include the grid loops: every video and animated cell must loop after its still, and the CPU of viewr and Ghostty with 30 looping cells is the open measurement. In herdr, the frames must swap (herdr must relay `d=i`).
 
-Test run of 2026-10-24 (plain Ghostty, build 27dcfa2): steps 1 and 2 passed (medium `file`, the dim text is readable, no temp files after the quit, the warm grid fills at once, the file facts show). The run stopped at step 3a. Continue at step 3.
-
-The four fixes from the test run are in (see Done).
+Test run of 2026-10-24 (plain Ghostty): steps 1 and 2 passed. The run stopped at step 3a, and the fixes from it are in (see Done). Continue at step 3 with the current build.
 
 After the tests:
 
@@ -63,15 +61,8 @@ Order: speed first, then formats, then the delete removal, then the first releas
 3. Delete removal, after the terminal tests in "Now"
    - viewr is a viewer only. Remove trash, permanent delete, the delete question, the `d` / `D` keys, their tests and docs, and the `trash` crate if nothing else needs it.
    - Keep the marks (`Space`, `a`, `A`) for a later use, for example a slideshow of the marked images.
-4. Grid loops (decided 2026-10-23, one heavy worker, spawn on request)
-   - Every visible video and animated cell plays a loop in the grid, always, not only under the cursor. The loop replaces the `▶` marker.
-   - Video: 12 keyframes spread over the whole clip, about 3 fps, a 4 s loop. Extract them with `-skip_frame nokey` (measured: 0.11 s to 0.15 s per 4K clip). For a long clip, seek to 12 points instead.
-   - Animated GIF, WebP, APNG and AVIS: their own frames and delays, with a cap on the frame count.
-   - Ghostty has no Kitty animation frames (Ghostty #5255). viewr drives the loop: each frame goes to the terminal once as its own image, then each tick deletes the old placement and places the next frame (about 100 bytes per cell), in one synchronized update.
-   - Count the frames against `TERMINAL_IMAGE_BUDGET` (128 MB, herdr stores each image twice). Only visible cells loop. Above the budget, a cell keeps its still thumbnail.
-   - Keep the frames in the disk cache. The run loop wakes at the next due frame, not on a fixed poll.
-   - Config key `[gallery] animate = false` turns the loops off. Measure the CPU of viewr and Ghostty with 30 looping cells, also in herdr.
-5. First release: make ffmpeg a recommendation in the formula and drop the `libavcodec` check from `install.sh`, because viewr runs without ffmpeg. Then create the Codeberg repository `viewr`, then `just render` and `just release`. The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
+4. Grid loops: done (merged 2026-10-27, see Done). Open: the terminal test of the loops in Ghostty and in herdr ("Now").
+5. First release: create the Codeberg repository `viewr`, then `just render` and `just release`. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 
 ## Later
 
@@ -86,6 +77,8 @@ Order: speed first, then formats, then the delete removal, then the first releas
 
 ## Done
 
+- No small `▶` marker anymore. The still of a video or an animated image carries the large play triangle (white with a dark edge, stamped into the pixels) until its loop starts, because the loop frames take a moment.
+- Grid loops (2026-10-27): every visible video and animated cell plays a loop of its frames, in place of the `▶` marker. A video shows 12 keyframes at 3 fps, an animation its own frames (at most 48 and 12 fps). The frames are half the size of the grid picture (the budget), go out one time, and a frame swap costs 75 bytes per cell. Warm folder: the first loop frame after 11 ms, all 30 loops after 65 ms. 30 loops: 12 wakeups and 4 ms CPU per second. The still grid is unchanged over 16 alternating runs. Decisions: a short clip with fewer than 12 keyframes decodes 12 frames at a constant rate, 2 decode threads per loop run, new stills cancel the loop runs, the prune removes loop files before stills, `[gallery] animate = false` turns the loops off.
 - One `q` leaves the player for the grid, also after a step from the fullscreen view onto a video (before, the first `q` showed the fullscreen placeholder). The first frame of a new video removes the pictures of the view before, so no photo shows around the video.
 - Player measured without a terminal (2026-10-27, `just bench` per clip of `07-video`): every clip decodes at 160 fps to 500 fps at 1080p and plays in real time with 0 drops. The first frame comes 170 ms to 305 ms after the open (ffmpeg start, VideoToolbox, the HDR cube). In plain Ghostty, the player has no bottleneck.
 - VFR bursts: a base rate above 1.5 times the average plays at the average, at least 24 fps. A phone clip at 60 with an average of 30 plays at 30 fps instead of 60 duplicated frames. A screen recording at 25 with an average of 7.7 plays at 24 fps.

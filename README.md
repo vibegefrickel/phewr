@@ -24,12 +24,12 @@ brew tap webgefrickel/tap https://codeberg.org/webgefrickel/homebrew-tap.git
 brew install webgefrickel/tap/viewr
 ```
 
-The formula installs libheif, ffmpeg and mpv as dependencies.
+The formula installs libheif as a dependency. ffmpeg and mpv are recommended dependencies: `brew install` adds them by default, and `--without-ffmpeg` or `--without-mpv` leaves them out.
 
 ### Installer script
 
 ```bash
-brew install libheif ffmpeg mpv
+brew install libheif ffmpeg mpv   # ffmpeg and mpv are optional
 curl -fsSL https://codeberg.org/webgefrickel/viewr/releases/latest/download/install.sh | sh
 ```
 
@@ -82,6 +82,12 @@ desc = "Image grid of the hovered folder, or at the hovered file (viewr)"
 
 On a folder, `g v` opens that folder. On a file, it opens the folder of the file with the cursor on the file. When viewr quits, yazi moves its cursor to the last file of viewr. viewr runs `ya emit reveal <path>` for this. If `YAZI_ID` is not set or `ya` is not on PATH, nothing happens.
 
+Inside a multiplexer that relays Kitty graphics slowly, open viewr in a new Ghostty window instead. `YAZI_ID` goes along, so the reveal still works:
+
+```toml
+run  = 'shell -- open -na Ghostty.app --args -e sh -c "YAZI_ID=$YAZI_ID exec $HOME/.local/bin/viewr %h"'
+```
+
 ## Controls
 
 ### Gallery
@@ -107,7 +113,7 @@ On a folder, `g v` opens that folder. On a file, it opens the folder of the file
 
 The grid lists the subfolders of the folder first, with `..` for the parent. A folder cell shows a large folder icon and its name, and `..` shows two dots. Hidden folders and symlinks to folders stay out. Folders take no mark and no delete, and the fullscreen view and the slideshow skip them. The search matches folder names. viewr always starts in the grid, also in a folder with one image. When the cursor rests on a folder, viewr prepares the thumbnails of that folder in the background, so `Enter` shows them at once.
 
-The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. The grid separates the thumbnails with 1-cell gaps. A thick blue border marks the thumbnail under the cursor. A thin yellow border marks each selected image (`Space`). A cell shows a dim ◌ (image) or ▶ (video) while its thumbnail loads.
+The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. The grid separates the thumbnails with 1-cell gaps. A thick blue border marks the thumbnail under the cursor. A thin yellow border marks each selected image (`Space`). A cell shows a large dim picture (image) or play triangle (video) while its thumbnail loads. The still of a video or an animated image carries a play triangle until its loop starts.
 
 The grid also works under a multiplexer that relays Kitty graphics, such as herdr. The filename toggle and a font size change decode the thumbnails again.
 
@@ -180,6 +186,7 @@ viewr reads `~/.config/viewr/config.toml`. If `XDG_CONFIG_HOME` is set, viewr re
 ```toml
 [gallery]
 mouse = true         # read the mouse; false keeps the terminal's own mouse
+animate = true       # video and animated cells play a short loop in the grid; false keeps the still with its play triangle
 visible_rows = 4     # thumbnail rows in the grid (the zoom level, 2 to 12), the columns fill the width
 
 [slideshow]
@@ -201,7 +208,7 @@ player = "terminal"
 colorspace = "display-p3"
 ```
 
-The terminal player and the video thumbnails need `ffmpeg` and `ffprobe` on PATH. Without them, a video cell shows `▶`, and a video opens in the mpv window. Without the temp file medium, a video also opens in the mpv window. Without mpv, a note shows.
+The terminal player and the video thumbnails need `ffmpeg` and `ffprobe` on PATH. Without them, a video cell shows the large play icon, and a video opens in the mpv window. Without the temp file medium, a video also opens in the mpv window. Without mpv, a note shows.
 
 When you zoom the grid with `+` / `-`, viewr remembers the size for the current folder and as the last size in `~/.local/state/viewr/state.toml`. A folder opens with its own size. A folder without one opens with the last size, or with `[gallery] visible_rows`. `0` returns the current folder to the configured size and erases its entry. viewr keeps the sizes of the last 200 folders.
 
@@ -221,7 +228,7 @@ At start, viewr asks the terminal whether it reads image data from a temp file. 
 
 **Colors:** viewr converts the colors of each image into the color space of the terminal. Ghostty shows image pixels as Display P3, so that is the default. viewr reads ICC profiles (JPEG, PNG, WebP, TIFF, HEIC, AVIF), the nclx box of HEIC and AVIF, and the cICP, gAMA and cHRM chunks of PNG. A camera JPEG in Adobe RGB without a profile carries an EXIF mark, and viewr reads it too. An image without color information is sRGB. iPhone photos are already Display P3 and need no conversion.
 
-**Animated images:** animated GIF, WebP, APNG (`.png`, `.apng`) and AVIF image sequences (AVIS) play in the terminal player, in a loop. The grid shows the first frame with a dim `▶` marker. Videos get the same marker. `Enter` plays the animation, and `p` opens it in the mpv window. In a slideshow, the terminal player plays an animation for at least the slideshow interval. Animated WebP needs FFmpeg 9 or later (the `webp_anim` decoder).
+**Animated images:** animated GIF, WebP, APNG (`.png`, `.apng`) and AVIF image sequences (AVIS) play in the terminal player, in a loop. In the grid, every visible animated cell and video cell plays a short loop after its still thumbnail shows: a video shows 12 frames from the whole clip at 3 fps, an animation its own frames. `[gallery] animate = false` in the config turns the loops off, and the still keeps its play triangle. `Enter` plays the animation, and `p` opens it in the mpv window. In a slideshow, the terminal player plays an animation for at least the slideshow interval. Animated WebP needs FFmpeg 9 or later (the `webp_anim` decoder).
 
 **JPEG XL:** viewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors into the color space of the terminal, also from ICC profiles and wide gamut, tone-maps PQ and HLG to SDR, and applies the orientation of the file. An animated JPEG XL shows its first frame.
 

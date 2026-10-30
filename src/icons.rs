@@ -1,7 +1,8 @@
 //! The large icons of the grid cells: a picture for an image that loads, a play triangle for
 //! a video, a folder, and two dots for the parent folder. They are octant blocks (2x4 dots per
 //! cell), which Ghostty draws itself, in a terminal color. A cell too small for an icon of two
-//! rows gets the old one-cell symbol.
+//! rows gets the old one-cell symbol. `stamp_play` draws the play triangle into the pixels of
+//! the still thumbnail of a video or an animation, because Kitty draws a picture above text.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -41,7 +42,7 @@ impl Icon {
 
     /// True when the point `(u, v)` of the square from -1 to 1 belongs to the shape. `v` grows
     /// downward, like the rows.
-    fn covers(self, u: f64, v: f64) -> bool {
+    pub(crate) fn covers(self, u: f64, v: f64) -> bool {
         match self {
             Self::Loading => picture_covers(u, v),
             // The tip at the right, the flat side at the left, centered on its area.
@@ -72,7 +73,57 @@ fn picture_covers(u: f64, v: f64) -> bool {
     sun || big_mountain || small_mountain
 }
 
-/// The box of the icon in `cell`: a square in pixels, about 40 % of the cell height, centered.
+/// Draw the play triangle into the middle of `image`: white with a dark edge, so it shows on a
+/// light and on a dark picture. The box is a square of `ICON_HEIGHT_SHARE` of the image height.
+/// The loop frames of the cell replace the stamped still, so the stamp means "not playing yet".
+pub(crate) fn stamp_play(image: &mut image::RgbaImage) {
+    const FILL: [u8; 4] = [255, 255, 255, 230];
+    const EDGE: [u8; 4] = [0, 0, 0, 140];
+    /// The edge is the triangle at this scale, drawn first.
+    const EDGE_SCALE: f64 = 1.18;
+    let (width, height) = image.dimensions();
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a share of the image height in pixels fits into u32"
+    )]
+    let size = (f64::from(height) * ICON_HEIGHT_SHARE).round() as u32;
+    if size < 4 || size > width {
+        return;
+    }
+    let (left, top) = ((width - size) / 2, (height - size) / 2);
+    for y in 0..size {
+        for x in 0..size {
+            let u = (f64::from(x) + 0.5) / f64::from(size) * 2.0 - 1.0;
+            let v = (f64::from(y) + 0.5) / f64::from(size) * 2.0 - 1.0;
+            let color = if Icon::Video.covers(u, v) {
+                FILL
+            } else if Icon::Video.covers(u / EDGE_SCALE, v / EDGE_SCALE) {
+                EDGE
+            } else {
+                continue;
+            };
+            let pixel = image.get_pixel_mut(left + x, top + y);
+            *pixel = image::Rgba(blend(pixel.0, color));
+        }
+    }
+}
+
+/// `over` on `under`, with the alpha of `over`.
+fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
+    let alpha = u32::from(over[3]);
+    let mix = |u: u8, o: u8| {
+        u8::try_from((u32::from(o) * alpha + u32::from(u) * (255 - alpha)) / 255).unwrap_or(u8::MAX)
+    };
+    [
+        mix(under[0], over[0]),
+        mix(under[1], over[1]),
+        mix(under[2], over[2]),
+        under[3].max(over[3]),
+    ]
+}
+
+/// The box of the icon in `cell`: a square in pixels, about 30 % of the cell height, centered.
 /// `None` when the cell is too small for two rows, or the box would not fit.
 pub(crate) fn icon_rect(cell: Rect, cell_px: (u32, u32)) -> Option<Rect> {
     #[expect(
@@ -138,7 +189,7 @@ impl Shape for IconShape {
 
 #[cfg(test)]
 mod tests {
-    use super::{Icon, draw_icon, icon_rect};
+    use super::{Icon, draw_icon, icon_rect, stamp_play};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Style};
@@ -190,5 +241,33 @@ mod tests {
         assert!(!Icon::Video.covers(0.8, 0.5));
         assert!(Icon::Parent.covers(-0.5, 0.0) && Icon::Parent.covers(0.5, 0.0));
         assert!(!Icon::Parent.covers(0.0, 0.0), "two dots, not one bar");
+    }
+
+    #[test]
+    fn the_stamp_puts_a_white_triangle_with_a_dark_edge_into_the_middle() {
+        let mut image = image::RgbaImage::from_pixel(200, 100, image::Rgba([40, 40, 40, 255]));
+        stamp_play(&mut image);
+        let center = image.get_pixel(100, 50).0;
+        assert!(
+            center[0] > 200 && center[3] == 255,
+            "white fill: {center:?}"
+        );
+        assert_eq!(
+            image.get_pixel(2, 2).0,
+            [40, 40, 40, 255],
+            "the corner stays"
+        );
+        // Left of the flat side of the triangle sits the dark edge.
+        let box_left = (200 - 30) / 2;
+        let edge = image.get_pixel(box_left + 4, 50).0;
+        assert!(edge[0] < 40, "dark edge: {edge:?}");
+
+        let mut tiny = image::RgbaImage::from_pixel(8, 8, image::Rgba([40, 40, 40, 255]));
+        stamp_play(&mut tiny);
+        assert_eq!(
+            tiny.get_pixel(4, 4).0,
+            [40, 40, 40, 255],
+            "too small for a stamp"
+        );
     }
 }

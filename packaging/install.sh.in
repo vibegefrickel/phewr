@@ -8,11 +8,15 @@ main() {
     echo "viewr needs macOS on Apple Silicon"
     exit 1
   }
-  # The binary links these Homebrew libraries.
-  for lib in libheif/lib/libheif.1.dylib ffmpeg/lib/libavcodec.dylib; do
-    [ -e "/opt/homebrew/opt/$lib" ] || {
-      echo "viewr: Homebrew libheif and ffmpeg are missing: brew install libheif ffmpeg mpv" >&2
-      exit 1
+  # The binary links the Homebrew library libheif. ffmpeg and mpv are programs that viewr
+  # starts from PATH when they exist, so they are a note, not a stop.
+  [ -e /opt/homebrew/opt/libheif/lib/libheif.1.dylib ] || {
+    echo "viewr: Homebrew libheif is missing: brew install libheif" >&2
+    exit 1
+  }
+  for program in ffmpeg mpv; do
+    command -v "$program" >/dev/null 2>&1 || {
+      echo "Note: $program is not on your PATH. Videos need ffmpeg, and 'p' needs mpv: brew install ffmpeg mpv"
     }
   done
   url="https://codeberg.org/webgefrickel/viewr/releases/download/v@VERSION@/viewr-macos-arm64.tar.gz"

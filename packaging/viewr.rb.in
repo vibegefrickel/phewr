@@ -9,10 +9,12 @@ class Viewr < Formula
   license "MIT"
 
   depends_on arch: :arm64
-  depends_on "ffmpeg"
   depends_on "libheif"
   depends_on :macos
-  depends_on "mpv"
+  # viewr starts these programs from PATH when they exist. Without ffmpeg, videos and animations
+  # do not play in the terminal and have no thumbnail. Without mpv, `p` has no window.
+  depends_on "ffmpeg" => :recommended
+  depends_on "mpv" => :recommended
 
   def install
     bin.install "bin/viewr"
@@ -21,6 +23,7 @@ class Viewr < Formula
   def caveats
     <<~EOS
       viewr draws through the Kitty graphics protocol. Run it in Ghostty or another terminal with this protocol.
+      Videos and animations need ffmpeg on PATH, and `p` opens them in mpv: brew install ffmpeg mpv
     EOS
   end
 

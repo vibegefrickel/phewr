@@ -294,7 +294,9 @@ impl App {
             && !self.info_visible
     }
 
-    /// True when the cell `index` plays its loop, so that it shows no play marker.
+    /// True when the cell `index` plays its loop: a frame of it is placed. The tests of the
+    /// Kitty output read it.
+    #[cfg(test)]
     pub(crate) fn loop_plays(&self, index: usize) -> bool {
         self.grid_loops_shown()
             && self

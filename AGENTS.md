@@ -65,7 +65,8 @@ Files at run time:
 - Config: `~/.config/viewr/config.toml`, or `$XDG_CONFIG_HOME/viewr/config.toml`. The sections
   are `[gallery]`, `[slideshow]`, `[info]` and `[video]`.
 - State (the remembered zoom levels): `~/.local/state/viewr/state.toml`.
-- Thumbnail cache: `~/Library/Caches/viewr/`, QOI files, pruned at 512 MB.
+- Thumbnail cache: `~/Library/Caches/viewr/`, QOI files and the `.loop` files of the grid loops,
+  pruned at 512 MB.
 
 ### Release (maintainer only)
 
@@ -87,9 +88,8 @@ For each release:
    release with the asset and `install.sh`, and pushes the formula to the tap.
 
 The release binary is arm64 only, because Homebrew's libheif is an arm64 library. The formula
-depends on libheif, ffmpeg and mpv. `install.sh` stops if libheif or ffmpeg is missing. Before the
-next release, make ffmpeg a recommendation in the formula and drop the `libavcodec` check from
-`install.sh`: viewr runs without ffmpeg.
+depends on libheif, and ffmpeg and mpv are recommended dependencies. `install.sh` stops if libheif
+is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without them.
 
 ## Rules
 
@@ -187,6 +187,11 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   the frame box and the cell box, `tone_map.rs` the color cubes (the HDR tone mapping, the SDR
   primaries conversion and the cube files), `animation.rs` the header check for animated GIF, WebP,
   APNG and AVIS.
+- `grid_loop.rs` (feature `video`): the frames of the grid loops: the ffmpeg runs and the frame
+  choice (12 keyframes, the constant-rate run for a short clip, the 12 seeks for a long one, the
+  caps of an animation).
+- `app/grid_loops.rs`: the loops of the grid: `GridLoops`, their jobs, their cancel flags and the
+  loop clock.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its construction.
   One file per topic: `info_panel.rs`, `grid_zoom.rs` (the cell size and the state file),
@@ -273,7 +278,8 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   (30 and 29.99) stay constant-rate. ffmpeg writes `-pix_fmt rgb24` for a video and `rgba` for an
   animation, and `pixel_format` in `player/decoder.rs` is the one source for the frame layout
   (`player::Frame`). One frame per temp file, image id `u32::MAX - 1`
-  (the grid ids count up from 1), `c=` / `r=` to the cell box, no `X=` / `Y=`. The first frame
+  (the grid ids count up from 1, the loop frames from 2^31), `c=` / `r=` to the cell box, no
+  `X=` / `Y=`. The first frame
   of a new video removes all other placements in the same synchronized update
   (`App::clear_before_video`), so the photo of the view before does not show around the frame.
   The frame box is the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the
@@ -301,17 +307,19 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because the image decode cannot read
   a video. `p` on the placeholder opens the mpv window.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
-  video. The thumbnail job reads the animation flag into `App::animated`, and the grid marker (a dim
-  `▶` in the label, or in the gap below the cell) reads only that flag, so the draw reads no file. A
-  video gets the same marker once its thumbnail is in `thumb_cache` (`shows_play_marker` in
-  `ui.rs`). The route (`App::plays_at`) reads the header of the one file after a key press.
-  `App::is_video_at` still drives the placeholder and the loading icon. The probe reads at most 16
-  packets: the rate is the GCD of the frame delays, or the mean rate above 50 fps, and the length
-  comes from the container. An AVIS file holds two video streams, and the probe maps the one with
-  the most frames. ffmpeg gets no `-hwaccel` for an animation, because the AV1 decoder stops with
-  it. Esc from an animation returns to its still frame in the fullscreen view. In a running
-  slideshow, the terminal player holds an animation for at least the slideshow interval
-  (`Player::play_at_least`). The mpv window has no such hold.
+  video. The thumbnail job reads the animation flag into `App::animated`, so the draw reads no file.
+  The job stamps the large play triangle into the still of a video or an animated image
+  (`icons::stamp_play`, white with a dark edge, 30 % of the height), after the disk cache read, so
+  the cache keeps the still without the stamp. The loop frames replace the stamped still, so the
+  stamp means "not playing yet". There is no small `▶` marker in the label or in the gap. The route
+  (`App::plays_at`) reads the header of the one file after a key press. `App::is_video_at` still
+  drives the placeholder and the loading icon. The probe reads at most 16 packets: the rate is the
+  GCD of the frame delays, or the mean rate above 50 fps, and the length comes from the container.
+  An AVIS file holds two video streams, and the probe maps the one with the most frames. ffmpeg gets
+  no `-hwaccel` for an animation, because the AV1 decoder stops with it. Esc from an animation
+  returns to its still frame in the fullscreen view. In a running slideshow, the terminal player
+  holds an animation for at least the slideshow interval (`Player::play_at_least`). The mpv window
+  has no such hold.
 - **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
   terminal player reports `finished`, and the slideshow moves on. Outside a slideshow, the clip
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
@@ -354,7 +362,7 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   rotation and, for HLG and PQ, the tone mapping cube, and waits at most 5 s. An SDR first frame
   converts after the decode with `color::convert` (`convert_first_frame` in `video.rs`), so it
   pays no cube parse. The player maps the probed stream with
-  `-map 0:N` for every video. Without the programs, a video cell keeps its `▶` icon, and
+  `-map 0:N` for every video. Without the programs, a video cell keeps its large play icon, and
   `Enter` opens the mpv window with a note.
 - **One file argument:** `cli::start_paths` turns one file argument into its canonical folder
   and a cursor target (`App::place_cursor_after_scan`, the `return_to` of `Backspace`). Several
@@ -376,9 +384,11 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   because no event wakes it, and every 1 ms during the first 20 ms of the header read for the
   cell shape (`SHAPE_POLL`, `SHAPE_POLL_WINDOW`), every 2 ms while a cache read runs or waits
   (`CACHE_READ_POLL`), and every 2 ms while the grid decodes and shows no picture yet
-  (`FIRST_PICTURE_POLL`, `App::waits_for_the_first_picture`). There is no wait while the grid
-  has emits left from the last pass.
-  Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
+  (`FIRST_PICTURE_POLL`, `App::waits_for_the_first_picture`), and until the next frame of a
+  playing grid loop (`App::grid_loop_timeout`). There is no wait while the grid has emits left
+  from the last pass, or while new loop frames wait for their write (`App::loops_to_send`).
+  `has_pending_work` counts the loop jobs. Otherwise it waits 250 ms (`next_timeout` in
+  `run_loop.rs`).
 - **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
   and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
@@ -460,11 +470,32 @@ next release, make ffmpeg a recommendation in the formula and drop the `libavcod
   plain form `"/path" = 3` also loads. `+` / `-` save the level for the folder and as the
   global fallback. `0` resets the folder and removes its entry. The table keeps the 200 most
   recent folders.
+- **Grid loops:** every visible video and animated cell loops, and the loop replaces the stamped
+  still. A video takes 12 keyframes (`-skip_frame nokey`), 333 ms each. A clip of at most 20 s with
+  fewer than 12 keyframes decodes 12 frames at a constant rate, and a clip above 60 s seeks to 12
+  points. An animation keeps its frames and delays, at most 48 frames and 12 fps, at least one frame
+  per minute. The frames are half the size of the grid picture, padded to the cells of the still
+  (`pad_loop_frame`), and the terminal scales them. Each frame goes out one time with `a=t` and an
+  id from 2^31 (`LOOP_ID_BASE`). A tick sends `a=d,d=i` for the old frame and `a=p` for the new one
+  (`play_grid_loops` in `kitty_output.rs`), about 75 bytes per cell, in one synchronized update. The
+  loop clock has 12 ticks per second, and each loop starts on a multiple of 4 ticks. Only visible
+  cells loop. A loop above `TERMINAL_IMAGE_BUDGET` keeps its still until the visible cells change. A
+  cell that leaves the screen deletes its frames with `d=I`. Loop jobs start after all stills of the
+  screen are out, at most 4, each on its own thread, and each ffmpeg run takes at most 2 decode
+  threads (`-threads 2 -filter_threads 1`). New stills or another view cancel the running loop runs
+  (the flag ends ffmpeg within 20 ms), and the cells get new jobs later. A `ResultGuard` sends
+  `Failed` for a job that panics. The help popup, the info panel and the other views stop the loops,
+  the delete question does not. `[gallery] animate = false` turns them off. The disk cache keeps the
+  frames as `<hash>.loop` files (QOI frames with their times, key version `viewr-loop-v1`,
+  `LOOP_CACHE_VERSION` in `app/disk_cache.rs`): change the version when the loop output changes. The
+  prune removes the loop files before the stills, each oldest first. The bench `grid_loops` reads
+  `07-video` and `06-animation` beside `VIEWR_TEST_DIR` and needs ffmpeg on PATH. `FakeTerminal`
+  reads `a=t` and `d=i`.
 - **Cell icons:** a grid cell without a thumbnail shows a large dim picture (image) or play
   triangle (video), a folder cell a folder, and `..` two dots without a name (`icons.rs`,
   `draw_cell_icon` in `ui.rs`). The icons are octant blocks (2x4 dots per cell, drawn by Ghostty
   itself) on a ratatui canvas, about 30 % of the cell height and square in pixels
-  (`App::cell_px`). The help popup hides the icons and the play markers, as it hides the
+  (`App::cell_px`). The help popup hides the icons, as it hides the
   pictures. A cell that cannot hold
   2 rows, or an icon that the grid edge cuts, gets the one-cell symbol (`Icon::symbol`). The
   icon is text in the ratatui frame, so the thumbnail that Kitty draws above it covers it. The

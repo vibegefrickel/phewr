@@ -11,9 +11,6 @@ use ratatui::{
 const INFO_PANEL_WIDTH: u16 = 42;
 /// The status row at the bottom of the gallery, the fullscreen view and the video view.
 const STATUS_ROWS: u16 = 1;
-/// The marker of a playable file in the grid, a video or an animated image: a play symbol
-/// before the label, or in the gap below the cell when the labels are off.
-const ANIMATION_MARKER: &str = "\u{25b6}";
 
 /// Draw the whole frame. `status` is a one-line note of the run loop, in place of the file facts.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
@@ -387,8 +384,6 @@ pub(crate) fn status_area(area: Rect) -> Rect {
 /// the cell. The selected border comes last, so it wins on a gap that two cells share.
 fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
     app.gallery.update_grid(grid_rect);
-    // The help popup hides the pictures, so it hides the icons and the play markers too.
-    let icons = !app.help_visible;
     let first_visible = app.gallery.scroll_offset * app.gallery.grid_cols;
     let mut selected_border = None;
 
@@ -432,35 +427,6 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
             grid_rect,
         );
     }
-    if icons && !app.gallery.show_filenames {
-        for (vis_idx, img_idx) in app.gallery.visible_items() {
-            if shows_play_marker(app, img_idx) {
-                draw_animation_marker(frame, app, vis_idx, grid_rect);
-            }
-        }
-    }
-}
-
-/// True when the entry `img_idx` is playable and its thumbnail is shown. A video counts by its
-/// extension and an animated image by the flag of its thumbnail job, so the draw reads no file.
-/// A cell that plays its grid loop needs no marker.
-fn shows_play_marker(app: &App, img_idx: usize) -> bool {
-    (app.is_animated_at(img_idx) || (app.is_video_at(img_idx) && app.thumb_cache.contains(img_idx)))
-        && !app.loop_plays(img_idx)
-}
-
-/// The play symbol of a playable file, in the middle of the gap below its cell. It comes
-/// after the borders, so the border of the selected cell does not cover it. Kitty draws the
-/// picture only inside the cell, so the gap stays visible.
-fn draw_animation_marker(frame: &mut Frame<'_>, app: &App, vis_idx: usize, grid_rect: Rect) {
-    let cell = app.gallery.cell_rect(vis_idx).intersection(grid_rect);
-    let marker = Position::new(cell.x + cell.width / 2, cell.y + cell.height);
-    if cell.width == 0 || !grid_rect.contains(marker) {
-        return;
-    }
-    frame
-        .buffer_mut()
-        .set_string(marker.x, marker.y, ANIMATION_MARKER, STYLES.dim);
 }
 
 /// A large dim icon in the center of `cell`, or the one-cell symbol when the cell is small or
@@ -596,13 +562,11 @@ fn draw_label(
     );
 }
 
-/// The label of the entry `img_idx`, cut to `width` with a margin, with a dot for a mark and a
-/// play symbol for a playable file.
+/// The label of the entry `img_idx`, cut to `width` with a margin, with a dot for a mark.
 fn label_text(app: &App, img_idx: usize, width: u16) -> String {
     let is_marked = app.is_marked(img_idx);
-    let is_playable = shows_play_marker(app, img_idx);
     let raw_filename = app.filenames[img_idx].clone();
-    let prefix_len = 2 * (usize::from(is_marked) + usize::from(is_playable));
+    let prefix_len = 2 * usize::from(is_marked);
     let max_label = usize::from(width).saturating_sub(2 + prefix_len);
     let trimmed = if raw_filename.chars().count() > max_label {
         let head: String = raw_filename
@@ -616,10 +580,6 @@ fn label_text(app: &App, img_idx: usize, width: u16) -> String {
     let mut label = String::new();
     if is_marked {
         label.push_str("\u{25cf} ");
-    }
-    if is_playable {
-        label.push_str(ANIMATION_MARKER);
-        label.push(' ');
     }
     label.push_str(&trimmed);
     label
@@ -1465,7 +1425,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "video")]
-    fn gallery_marks_an_animated_image_in_the_label_or_in_the_gap_below_the_cell() {
+    fn the_still_of_an_animated_image_carries_the_play_stamp() {
         use crate::test_support::fixture;
         let anim = fixture("anim.gif");
         let still = fixture("still.gif");
@@ -1475,7 +1435,7 @@ mod tests {
         let screen = render(&mut app, None, 100, 30);
         assert!(
             !screen.contains('\u{25b6}'),
-            "the draw reads no header, no marker before the thumbnail job: {screen}"
+            "no small marker anywhere: {screen}"
         );
 
         let rect = app.gallery.thumb_box();
@@ -1485,24 +1445,22 @@ mod tests {
             app.poll_thumbnails();
             app.animated.len() == 2
         });
+        // Both fixtures are 16x12 and yellow. The stamp turns the middle of the animation white.
+        let middle = |index: usize| {
+            let (picture, _) = app.thumb_cache.peek(index).unwrap();
+            let image = &picture.image;
+            image.get_pixel(image.width() / 2, image.height() / 2).0
+        };
+        assert!(
+            middle(0)[2] > 200,
+            "the animation has the stamp: {:?}",
+            middle(0)
+        );
+        assert_eq!(middle(1)[2], 0, "the still has no stamp: {:?}", middle(1));
         app.mark_dirty();
         let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, "\u{25b6} anim.gif");
-        assert!(!screen.contains("\u{25b6} still.gif"), "{screen}");
-
-        app.gallery.show_filenames = false;
-        app.mark_dirty();
-        let buffer = render_buffer(&mut app, None, 100, 30);
-        let cell = app.gallery.cell_rect(0);
-        let below = buffer[(cell.x + cell.width / 2, cell.y + cell.height)].symbol();
-        assert_eq!(below, "\u{25b6}", "{}", screen_rows(&buffer).join("\n"));
-        let still_cell = app.gallery.cell_rect(1);
-        let below_still = buffer[(
-            still_cell.x + still_cell.width / 2,
-            still_cell.y + still_cell.height,
-        )]
-            .symbol();
-        assert_ne!(below_still, "\u{25b6}");
+        assert!(!screen.contains('\u{25b6}'), "{screen}");
+        assert_shows(&screen, "anim.gif");
     }
 
     #[test]
@@ -1832,65 +1790,6 @@ mod tests {
         assert!(
             !rows.iter().any(|row| row.contains(" Mouse")),
             "the end of the one column is clipped"
-        );
-    }
-
-    #[cfg(feature = "video")]
-    #[test]
-    fn a_video_cell_gets_the_play_marker_after_its_thumbnail() {
-        let mut app = app_with(&["a.jpg", "clip.mp4"]);
-        app.thumb_cache.insert(0, RgbaImage::new(4, 4));
-        let buffer = render_buffer(&mut app, None, 100, 30);
-        let cell = app.gallery.cell_rect(1);
-        let below = |buffer: &Buffer| {
-            buffer[(cell.x + cell.width / 2, cell.y + cell.height)]
-                .symbol()
-                .to_owned()
-        };
-        assert_ne!(below(&buffer), "\u{25b6}", "no marker before the thumbnail");
-
-        app.thumb_cache.insert(1, RgbaImage::new(4, 4));
-        let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_eq!(below(&buffer), "\u{25b6}");
-        let still = app.gallery.cell_rect(0);
-        let below_still = buffer[(still.x + still.width / 2, still.y + still.height)].symbol();
-        assert_ne!(below_still, "\u{25b6}", "a still image gets no marker");
-
-        app.gallery.show_filenames = true;
-        let screen = render(&mut app, None, 100, 30);
-        assert_shows(&screen, "\u{25b6} clip.mp4");
-        assert!(!screen.contains("\u{25b6} a.jpg"), "{screen}");
-    }
-
-    #[cfg(feature = "video")]
-    #[test]
-    fn a_playing_grid_loop_replaces_the_play_marker() {
-        let mut app = app_with(&["clip.mp4"]);
-        app.thumb_cache.insert(0, RgbaImage::new(4, 4));
-        let frames = vec![RgbaImage::new(2, 2).into(), RgbaImage::new(2, 2).into()];
-        app.grid_loops
-            .insert(0, frames, &[std::time::Duration::from_millis(333); 2]);
-        let buffer = render_buffer(&mut app, None, 100, 30);
-        let cell = app.gallery.cell_rect(0);
-        let below = |buffer: &Buffer| {
-            buffer[(cell.x + cell.width / 2, cell.y + cell.height)]
-                .symbol()
-                .to_owned()
-        };
-        assert_eq!(below(&buffer), "\u{25b6}", "the frames are not out yet");
-
-        if let Some(cell) = app.grid_loops.loops.get_mut(&0) {
-            cell.placed = Some(cell.ids[0]);
-        }
-        let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_ne!(below(&buffer), "\u{25b6}");
-
-        app.grid_loops.enabled = false;
-        let buffer = render_buffer(&mut app, None, 100, 30);
-        assert_eq!(
-            below(&buffer),
-            "\u{25b6}",
-            "without loops, the marker stays"
         );
     }
 }
