@@ -87,6 +87,9 @@ pub(crate) struct Pixels<'a> {
     /// True for 4 bytes per pixel.
     pub alpha: bool,
     pub data: &'a [u8],
+    /// Send RGBA as it is through the temp file medium: no scan and no RGB copy. The frames of
+    /// an animation set it, because most of them hold a transparent pixel or the next one does.
+    pub keep_alpha: bool,
 }
 
 impl Pixels<'_> {
@@ -130,6 +133,7 @@ impl<'a> From<&'a RgbaImage> for Pixels<'a> {
             height: image.height(),
             alpha: true,
             data: image.as_raw(),
+            keep_alpha: false,
         }
     }
 }
@@ -141,6 +145,7 @@ impl<'a> From<&'a RgbImage> for Pixels<'a> {
             height: image.height(),
             alpha: false,
             data: image.as_raw(),
+            keep_alpha: false,
         }
     }
 }

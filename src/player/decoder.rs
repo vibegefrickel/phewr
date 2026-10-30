@@ -30,6 +30,10 @@ use std::time::Duration;
 /// ffmpeg back during a pause, because the pipe fills up after them.
 const FRAME_QUEUE: usize = 2;
 
+/// How many frame buffers one run owns: the queue, the one the reader fills, the pending frame
+/// and the frame on the screen. A run allocates no buffer beyond these.
+const FRAME_POOL: usize = FRAME_QUEUE + 3;
+
 /// The filter chain of ffmpeg: on the GPU, or in software for a format that the GPU chain
 /// cannot take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,23 +374,94 @@ pub(crate) fn cube_for(info: &VideoInfo, target: ColorTarget, dirs: &[&Path]) ->
 /// The frames of one ffmpeg run. The channel ends when ffmpeg ends or the stream stops.
 pub(crate) struct FrameStream {
     frames: mpsc::Receiver<Vec<u8>>,
+    /// Where the consumer hands a used buffer back to the reader. `None` for a fake stream.
+    recycle: Option<mpsc::Sender<Vec<u8>>>,
     child: Option<Child>,
 }
 
 impl FrameStream {
     /// A stream over `frames`. `child` is the ffmpeg process, which the drop kills.
     pub(crate) fn new(frames: mpsc::Receiver<Vec<u8>>, child: Option<Child>) -> Self {
-        Self { frames, child }
+        Self {
+            frames,
+            recycle: None,
+            child,
+        }
     }
 
-    /// The next decoded frame, if one waits. `Disconnected` is the end of the run.
+    /// The stream whose reader takes its buffers back through `recycle`.
+    fn with_recycling(mut self, recycle: mpsc::Sender<Vec<u8>>) -> Self {
+        self.recycle = Some(recycle);
+        self
+    }
+
+    /// The next decoded frame in its pool buffer, if one waits. The drop of the frame hands the
+    /// buffer back to the reader. `Disconnected` is the end of the run.
+    pub(crate) fn try_next_pooled(&mut self) -> Result<PooledFrame, mpsc::TryRecvError> {
+        self.frames.try_recv().map(|data| self.pooled(data))
+    }
+
+    /// The next decoded frame as an owned `Vec`, if one waits. The buffer leaves the pool.
+    #[cfg(test)]
     pub(crate) fn try_next(&mut self) -> Result<Vec<u8>, mpsc::TryRecvError> {
-        self.frames.try_recv()
+        self.try_next_pooled().map(PooledFrame::into_vec)
     }
 
-    /// Wait for the next decoded frame, at most `timeout`. `Disconnected` is the end of the run.
+    /// Wait for the next decoded frame as an owned `Vec`, at most `timeout`. The buffer leaves
+    /// the pool. `Disconnected` is the end of the run.
     pub(crate) fn wait_next(&self, timeout: Duration) -> Result<Vec<u8>, mpsc::RecvTimeoutError> {
-        self.frames.recv_timeout(timeout)
+        self.frames
+            .recv_timeout(timeout)
+            .map(|data| self.pooled(data).into_vec())
+    }
+
+    fn pooled(&self, data: Vec<u8>) -> PooledFrame {
+        PooledFrame {
+            data,
+            home: self.recycle.clone(),
+        }
+    }
+}
+
+/// The bytes of one frame. The drop returns the buffer to the reader of its run, so the next
+/// frame needs no allocation.
+pub(crate) struct PooledFrame {
+    data: Vec<u8>,
+    home: Option<mpsc::Sender<Vec<u8>>>,
+}
+
+impl PooledFrame {
+    #[cfg(test)]
+    /// A frame that belongs to no pool, for a frame that the tests build.
+    pub(crate) fn unpooled(data: Vec<u8>) -> Self {
+        Self { data, home: None }
+    }
+
+    /// Keep only the first `bytes` bytes.
+    pub(crate) fn truncate(&mut self, bytes: usize) {
+        self.data.truncate(bytes);
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// The buffer as an owned `Vec`. The pool gets an empty token back and allocates a new
+    /// buffer for it.
+    fn into_vec(mut self) -> Vec<u8> {
+        std::mem::take(&mut self.data)
+    }
+}
+
+impl Drop for PooledFrame {
+    fn drop(&mut self) {
+        if let Some(home) = &self.home {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a reader that ended needs no buffer, and the drop frees it"
+            )]
+            let _ = home.send(std::mem::take(&mut self.data));
+        }
     }
 }
 
@@ -471,15 +546,53 @@ impl Decoder for SystemDecoder {
             .take()
             .ok_or_else(|| io::Error::other("ffmpeg has no stdout"))?;
         let (frame_tx, frame_rx) = mpsc::sync_channel(FRAME_QUEUE);
-        thread::spawn(move || read_frames(stdout, frame_bytes, &frame_tx));
-        Ok(FrameStream::new(frame_rx, Some(child)))
+        let (recycle_tx, recycle_rx) = mpsc::channel();
+        let pool = FramePool::new(recycle_rx, frame_bytes, FRAME_POOL);
+        thread::spawn(move || read_frames(stdout, pool, &frame_tx));
+        Ok(FrameStream::new(frame_rx, Some(child)).with_recycling(recycle_tx))
+    }
+}
+
+/// The frame buffers of one run. A buffer is zeroed one time, then it goes round: reader,
+/// channel, player, and back through `returned`.
+struct FramePool {
+    returned: mpsc::Receiver<Vec<u8>>,
+    frame_bytes: usize,
+    /// How many buffers the pool may own.
+    limit: usize,
+    made: usize,
+}
+
+impl FramePool {
+    fn new(returned: mpsc::Receiver<Vec<u8>>, frame_bytes: usize, limit: usize) -> Self {
+        Self {
+            returned,
+            frame_bytes,
+            limit,
+            made: 0,
+        }
+    }
+
+    /// A buffer of `frame_bytes`: a returned one, a new one while the pool is below its limit,
+    /// else wait for a return. `None` when the player is gone.
+    fn take(&mut self) -> Option<Vec<u8>> {
+        let mut buffer = match self.returned.try_recv() {
+            Ok(buffer) => buffer,
+            Err(mpsc::TryRecvError::Disconnected) => return None,
+            Err(mpsc::TryRecvError::Empty) if self.made < self.limit => {
+                self.made += 1;
+                Vec::with_capacity(self.frame_bytes)
+            }
+            Err(mpsc::TryRecvError::Empty) => self.returned.recv().ok()?,
+        };
+        buffer.resize(self.frame_bytes, 0);
+        Some(buffer)
     }
 }
 
 /// Read whole frames from `pipe` into `frames`, until the pipe or the receiver ends.
-fn read_frames(mut pipe: impl Read, frame_bytes: usize, frames: &mpsc::SyncSender<Vec<u8>>) {
-    loop {
-        let mut frame = vec![0; frame_bytes];
+fn read_frames(mut pipe: impl Read, mut pool: FramePool, frames: &mpsc::SyncSender<Vec<u8>>) {
+    while let Some(mut frame) = pool.take() {
         if pipe.read_exact(&mut frame).is_err() || frames.send(frame).is_err() {
             return;
         }
@@ -489,8 +602,8 @@ fn read_frames(mut pipe: impl Read, frame_bytes: usize, frames: &mpsc::SyncSende
 #[cfg(test)]
 mod tests {
     use super::{
-        Decoder, Pipeline, Rate, SystemDecoder, VideoInfo, args, cube_for, first_frame_args,
-        read_frames,
+        Decoder, FramePool, Pipeline, Rate, SystemDecoder, VideoInfo, args, cube_for,
+        first_frame_args, read_frames,
     };
     use crate::decode::color::{self, ColorTarget, SourceColor};
     use crate::player::tone_map::{Hdr, Primaries};
@@ -1043,11 +1156,61 @@ mod tests {
     fn the_reader_cuts_the_pipe_into_frames_and_drops_a_short_tail() {
         let (frame_tx, frame_rx) = mpsc::sync_channel(8);
         let pipe: &[u8] = &[1, 1, 1, 1, 2, 2, 2, 2, 3, 3];
-        read_frames(pipe, 4, &frame_tx);
+        let (_recycle_tx, recycle_rx) = mpsc::channel();
+        read_frames(pipe, FramePool::new(recycle_rx, 4, 8), &frame_tx);
         drop(frame_tx);
         assert_eq!(frame_rx.recv(), Ok(vec![1, 1, 1, 1]));
         assert_eq!(frame_rx.recv(), Ok(vec![2, 2, 2, 2]));
         assert!(frame_rx.recv().is_err(), "the tail of 2 bytes is no frame");
+    }
+
+    #[test]
+    fn the_pool_reuses_a_returned_buffer_and_never_grows_past_its_limit() {
+        let (recycle_tx, recycle_rx) = mpsc::channel();
+        let mut pool = FramePool::new(recycle_rx, 4, 2);
+        let mut first = pool.take().unwrap();
+        let second = pool.take().unwrap();
+        first.fill(9);
+        let address = first.as_ptr();
+        recycle_tx.send(first).unwrap();
+        let again = pool.take().unwrap();
+        assert_eq!(again.as_ptr(), address, "the returned buffer comes back");
+        assert_eq!(again.len(), 4);
+        assert_eq!(pool.made, 2, "no third buffer");
+        // At the limit, the pool waits for a return instead of allocating.
+        let waiter =
+            std::thread::spawn(move || (pool.take().map(|buffer| buffer.len()), pool.made));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!waiter.is_finished());
+        recycle_tx.send(second).unwrap();
+        assert_eq!(waiter.join().unwrap(), (Some(4), 2));
+        drop(again);
+    }
+
+    #[test]
+    fn a_dropped_frame_returns_its_buffer_and_an_owned_frame_returns_a_token() {
+        let (frame_tx, frame_rx) = mpsc::sync_channel(4);
+        let (recycle_tx, recycle_rx) = mpsc::channel();
+        let mut stream = super::FrameStream::new(frame_rx, None).with_recycling(recycle_tx);
+        frame_tx.send(vec![1; 4]).unwrap();
+        frame_tx.send(vec![2; 4]).unwrap();
+        drop(stream.try_next_pooled().unwrap());
+        assert_eq!(
+            recycle_rx.try_recv(),
+            Ok(vec![1; 4]),
+            "the drop gives it back"
+        );
+        assert_eq!(stream.try_next(), Ok(vec![2; 4]));
+        assert_eq!(recycle_rx.try_recv(), Ok(Vec::new()), "the slot stays free");
+    }
+
+    #[test]
+    fn the_pool_ends_when_the_player_is_gone() {
+        let (recycle_tx, recycle_rx) = mpsc::channel();
+        let mut pool = FramePool::new(recycle_rx, 4, 1);
+        let _held = pool.take().unwrap();
+        drop(recycle_tx);
+        assert!(pool.take().is_none());
     }
 
     #[test]

@@ -15,8 +15,8 @@ pub(crate) mod tone_map;
 
 pub(crate) use animation::is_animated;
 pub(crate) use decoder::{
-    Decoder, FrameStream, LoopSampling, Pipeline, SystemDecoder, args, cube_for, first_frame_args,
-    loop_args, pixel_format, with_fallback,
+    Decoder, FrameStream, LoopSampling, Pipeline, PooledFrame, SystemDecoder, args, cube_for,
+    first_frame_args, loop_args, pixel_format, with_fallback,
 };
 pub(crate) use layout::{cell_box, frame_box, frame_limit};
 #[cfg(test)]
@@ -97,14 +97,20 @@ impl Run {
 pub(crate) struct Frame {
     size: (u32, u32),
     alpha: bool,
-    data: Vec<u8>,
+    data: PooledFrame,
 }
 
 impl Frame {
+    #[cfg(test)]
     /// The frame of `size` pixels in `data`. `None` when `data` is shorter than such a frame.
-    pub(crate) fn new(size: (u32, u32), alpha: bool, mut data: Vec<u8>) -> Option<Self> {
+    pub(crate) fn new(size: (u32, u32), alpha: bool, data: Vec<u8>) -> Option<Self> {
+        Self::pooled(size, alpha, PooledFrame::unpooled(data))
+    }
+
+    /// The frame of `size` pixels in a buffer of the pool. The drop of the frame returns it.
+    fn pooled(size: (u32, u32), alpha: bool, mut data: PooledFrame) -> Option<Self> {
         let bytes = size.0 as usize * size.1 as usize * if alpha { 4 } else { 3 };
-        if data.len() < bytes {
+        if data.bytes().len() < bytes {
             return None;
         }
         data.truncate(bytes);
@@ -120,7 +126,8 @@ impl Frame {
             width: self.size.0,
             height: self.size.1,
             alpha: self.alpha,
-            data: &self.data,
+            data: self.data.bytes(),
+            keep_alpha: self.alpha,
         }
     }
 }
@@ -137,7 +144,7 @@ pub(crate) struct Player {
     stream: Option<FrameStream>,
     pipeline: Pipeline,
     /// The decoded frame that waits for its due time.
-    pending: Option<Vec<u8>>,
+    pending: Option<PooledFrame>,
     /// The frame on the screen.
     pub(crate) current_frame: Option<Frame>,
     state: State,
@@ -231,7 +238,7 @@ impl Player {
         }
         loop {
             if self.pending.is_none() {
-                match self.stream.as_mut().map(FrameStream::try_next) {
+                match self.stream.as_mut().map(FrameStream::try_next_pooled) {
                     Some(Ok(frame)) => self.pending = Some(frame),
                     Some(Err(TryRecvError::Empty)) => {
                         if !self.run.delivered
@@ -257,7 +264,7 @@ impl Player {
             }
             self.run.delivered = true;
             if now > due + self.interval
-                && let Some(Ok(newer)) = self.stream.as_mut().map(FrameStream::try_next)
+                && let Some(Ok(newer)) = self.stream.as_mut().map(FrameStream::try_next_pooled)
             {
                 self.pending = Some(newer);
                 self.run.due_frames += 1;
@@ -269,7 +276,7 @@ impl Player {
                 return false;
             };
             let (_, bytes_per_pixel) = pixel_format(&self.info);
-            self.current_frame = Frame::new(self.frame, bytes_per_pixel == 4, frame);
+            self.current_frame = Frame::pooled(self.frame, bytes_per_pixel == 4, frame);
             self.catch_up(now);
             return true;
         }

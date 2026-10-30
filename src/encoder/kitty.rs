@@ -34,7 +34,7 @@ pub(crate) fn transmit_to<W: Write + ?Sized>(
     opts: &DisplayOptions,
     transfer: Transfer,
 ) -> io::Result<()> {
-    with_opaque_as_rgb(pixels, |pixels| {
+    with_opaque_as_rgb(pixels, transfer, |pixels| {
         let keys = Keys {
             first: &|format| header_keys(pixels, opts, format),
             chunk: "",
@@ -46,6 +46,10 @@ pub(crate) fn transmit_to<W: Write + ?Sized>(
 /// Write `pixels` to `out` as a new frame of the animation of the image `id` (`a=f`), through
 /// `transfer`. The frame shows for `gap_ms` milliseconds when the animation runs.
 ///
+/// Through the temp file medium, the frame goes out in the format that it has: no scan and no
+/// RGB copy per frame. An opaque RGBA frame costs a third more bytes in the file. The direct
+/// and the PNG medium keep the RGB conversion, because their bytes cost more.
+///
 /// The frame covers the whole image, so it needs no base frame (`c=`), and the keys of the
 /// cell box and of the cursor do not apply: in a frame, `c=` and `r=` name frames.
 pub(crate) fn transmit_frame_to<W: Write + ?Sized>(
@@ -55,7 +59,11 @@ pub(crate) fn transmit_frame_to<W: Write + ?Sized>(
     gap_ms: u32,
     transfer: Transfer,
 ) -> io::Result<()> {
-    with_opaque_as_rgb(pixels, |pixels| {
+    let pixels = Pixels {
+        keep_alpha: true,
+        ..pixels
+    };
+    with_opaque_as_rgb(pixels, transfer, |pixels| {
         let (w, h) = pixels.dimensions();
         let gap = gap_ms.max(1);
         let keys = Keys {
@@ -93,7 +101,15 @@ fn apc<W: Write + ?Sized>(out: &mut W, keys: fmt::Arguments<'_>, payload: &[u8])
 }
 
 /// Call `send` with the RGB copy of `pixels` when every pixel is opaque, else with `pixels`.
-fn with_opaque_as_rgb<T>(pixels: Pixels<'_>, send: impl FnOnce(Pixels<'_>) -> T) -> T {
+/// `keep_alpha` pixels skip the scan and the copy through the temp file medium.
+fn with_opaque_as_rgb<T>(
+    pixels: Pixels<'_>,
+    transfer: Transfer,
+    send: impl FnOnce(Pixels<'_>) -> T,
+) -> T {
+    if pixels.keep_alpha && transfer == Transfer::TempFile {
+        return send(pixels);
+    }
     match pixels.opaque_rgb() {
         Some(rgb) => send(Pixels {
             alpha: false,
@@ -870,14 +886,118 @@ mod tests {
         let mut out = Vec::new();
         transmit_frame_to(&mut out, (&opaque).into(), 9, 0, Transfer::TempFile).unwrap();
         for path in temp_file_paths(&out) {
-            assert_eq!(fs::read(&path).unwrap(), [1, 2, 3, 1, 2, 3]);
+            assert_eq!(fs::read(&path).unwrap(), [1, 2, 3, 255, 1, 2, 3, 255]);
             fs::remove_file(path).unwrap();
         }
         let text = String::from_utf8(out).unwrap();
         assert!(
-            text.starts_with("\x1b_Ga=f,q=2,f=24,s=2,v=1,i=9,z=1,t=t;"),
-            "an opaque frame goes out as RGB, and a gap of 0 ms becomes 1 ms: {text}"
+            text.starts_with("\x1b_Ga=f,q=2,f=32,s=2,v=1,i=9,z=1,t=t;"),
+            "an opaque frame stays RGBA, and a gap of 0 ms becomes 1 ms: {text}"
         );
+    }
+
+    #[test]
+    fn an_opaque_animation_frame_keeps_its_rgba_format_and_the_root_frame_does_not() {
+        let image = RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255]));
+        let mut frame = Vec::new();
+        transmit_frame_to(&mut frame, (&image).into(), 9, 83, Transfer::TempFile).unwrap();
+        let frame_text = String::from_utf8(frame.clone()).unwrap();
+        assert!(
+            frame_text.contains("a=f,q=2,f=32,s=4,v=2,i=9,z=83"),
+            "{frame_text}"
+        );
+        let paths = temp_file_paths(&frame);
+        assert_eq!(
+            fs::metadata(&paths[0]).unwrap().len(),
+            4 * 2 * 4,
+            "no RGB copy"
+        );
+        let root = transmit(&image, &options(Some(9)), Transfer::TempFile);
+        assert!(
+            root.contains("f=24"),
+            "a still or a root frame goes out as RGB: {root}"
+        );
+        for path in paths.into_iter().chain(temp_file_paths(root.as_bytes())) {
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn only_the_temp_file_medium_keeps_the_rgba_of_an_opaque_animation_frame() {
+        let image = RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255]));
+        let kept = Pixels {
+            keep_alpha: true,
+            ..Pixels::from(&image)
+        };
+        let direct = transmit_pixels(kept, &options(Some(9)), Transfer::Direct);
+        assert!(direct.contains("f=24"), "{direct}");
+        let mut frame = Vec::new();
+        transmit_frame_to(&mut frame, (&image).into(), 9, 83, Transfer::Direct).unwrap();
+        assert!(String::from_utf8(frame).unwrap().contains("f=24,"));
+        let file = transmit_pixels(kept, &options(Some(9)), Transfer::TempFile);
+        assert!(
+            file.contains("f=32"),
+            "the player path skips the scan: {file}"
+        );
+        for path in temp_file_paths(file.as_bytes()) {
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "measurement: cargo test --release frame_format_write -- --ignored --nocapture"]
+    fn frame_format_write() {
+        use super::{Keys, write_pixels};
+        for (w, h) in [(400u32, 300u32), (1280, 720), (1920, 1080)] {
+            let image = RgbaImage::from_pixel(w, h, image::Rgba([1, 2, 3, 255]));
+            let keys = Keys {
+                first: &|f| format!("a=f,q=2,f={f},s={w},v={h},i=7,z=83"),
+                chunk: "a=f,",
+            };
+            for name in ["scan and copy", "copy only (scan once)", "as is (RGBA)"] {
+                let mut times = Vec::new();
+                for _ in 0..200 {
+                    let mut out = Vec::new();
+                    let start = std::time::Instant::now();
+                    let pixels = Pixels::from(&image);
+                    match name {
+                        "as is (RGBA)" => {
+                            write_pixels(&mut out, pixels, &keys, Transfer::TempFile).unwrap();
+                        }
+                        "scan and copy" => {
+                            let rgb = pixels.opaque_rgb().unwrap();
+                            let rgb_pixels = Pixels {
+                                alpha: false,
+                                data: &rgb,
+                                ..pixels
+                            };
+                            write_pixels(&mut out, rgb_pixels, &keys, Transfer::TempFile).unwrap();
+                        }
+                        _ => {
+                            let (source, _) = pixels.data.as_chunks::<4>();
+                            let mut rgb = vec![0; source.len() * 3];
+                            for (&[r, g, b, _], target) in
+                                source.iter().zip(rgb.as_chunks_mut::<3>().0)
+                            {
+                                *target = [r, g, b];
+                            }
+                            let rgb_pixels = Pixels {
+                                alpha: false,
+                                data: &rgb,
+                                ..pixels
+                            };
+                            write_pixels(&mut out, rgb_pixels, &keys, Transfer::TempFile).unwrap();
+                        }
+                    }
+                    times.push(start.elapsed());
+                    for path in temp_file_paths(&out) {
+                        fs::remove_file(path).unwrap();
+                    }
+                }
+                times.sort();
+                eprintln!("MICRO {w}x{h} {name}: median {:?}", times[100]);
+            }
+        }
     }
 
     #[test]
