@@ -11,7 +11,9 @@ use std::sync::mpsc;
 use std::thread;
 
 /// The exit code of mpv after a quit by the user in [`Playback::Once`]: `q`, `Q`, `Ctrl+C` and,
-/// in a window, the close button. mpv also uses it after a signal.
+/// in a window, the close button. mpv also uses it after a signal. The code depends on the
+/// playback mode: in [`Playback::Loop`], a quit exits with 0, and in [`Playback::Once`], only
+/// the end of the file does.
 pub(crate) const USER_QUIT: i32 = 4;
 
 /// The exit code of mpv after `n`: viewr goes on to the next file of the list.
@@ -123,8 +125,8 @@ fn push_file(args: &mut Vec<OsString>, video: &Path) {
 
 /// The status note for an mpv exit code, or `None` when the user quit mpv or stepped on.
 ///
-/// mpv exits with 0 when the user quits and with 4 after a signal. A process that a signal
-/// killed has no code.
+/// Which code means a quit depends on the playback mode, see [`USER_QUIT`]. A process that a
+/// signal killed has no code.
 pub(crate) fn exit_note(code: Option<i32>, video: &Path) -> Option<String> {
     match code {
         None | Some(0 | USER_QUIT | NEXT_FILE | PREVIOUS_FILE) => None,

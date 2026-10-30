@@ -14,7 +14,7 @@
 //! probe, see [`super::probe`]. A video with a constant rate gets no `-r`, and ffmpeg writes
 //! its frames as they are.
 
-use super::probe::VideoInfo;
+use super::probe::{Rate, VideoInfo};
 use super::tone_map::{Cube, cube_file};
 use crate::decode::color::ColorTarget;
 use std::ffi::OsString;
@@ -38,17 +38,77 @@ pub(crate) enum Pipeline {
     Software,
 }
 
+impl Pipeline {
+    /// The pipeline that runs first for `info`. An animation decodes in software only, because
+    /// the GPU chain cannot take it.
+    pub(crate) fn first(info: &VideoInfo) -> Self {
+        if info.is_animation() {
+            Self::Software
+        } else {
+            Self::Gpu
+        }
+    }
+
+    /// The pipeline to run after `self` gave no frame for `info`, or `None` after the last one.
+    /// A GPU run without a frame runs again in software.
+    pub(crate) fn next(self, info: &VideoInfo) -> Option<Self> {
+        (self == Self::Gpu && !info.is_animation()).then_some(Self::Software)
+    }
+}
+
+/// The result of `attempt` on the first pipeline of `info` that gives one. `Ok(None)` is a run
+/// without a frame, and the next pipeline runs. An error stops at once.
+pub(crate) fn with_fallback<T>(
+    info: &VideoInfo,
+    mut attempt: impl FnMut(Pipeline) -> io::Result<Option<T>>,
+) -> io::Result<T> {
+    let mut pipeline = Some(Pipeline::first(info));
+    while let Some(current) = pipeline {
+        if let Some(result) = attempt(current)? {
+            return Ok(result);
+        }
+        pipeline = current.next(info);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "no frames decoded",
+    ))
+}
+
 /// The raw pixel format of the frames for ffmpeg, and its bytes per pixel.
 ///
 /// An animation keeps the alpha channel, because a GIF, WebP or APNG frame can hold
 /// transparent pixels. A video has none, so RGB saves a quarter of the bytes in the pipe and in
 /// the temp file of each frame.
 pub(crate) fn pixel_format(info: &VideoInfo) -> (&'static str, usize) {
-    if info.animation {
+    if info.is_animation() {
         ("rgba", 4)
     } else {
         ("rgb24", 3)
     }
+}
+
+/// What one ffmpeg run writes to stdout.
+#[derive(Debug, Clone, Copy)]
+struct Output {
+    /// The raw pixel format, see [`pixel_format`].
+    pixels: &'static str,
+    /// Keep every frame with its own time (`-fps_mode passthrough`).
+    passthrough: bool,
+    /// Stop after this many frames.
+    frames: Option<usize>,
+}
+
+/// What differs between the runs of one video: the input position, the input options, a
+/// constant-rate sampling and the output.
+struct Extras<'a> {
+    /// The start position in seconds. ffmpeg seeks in the input, before the decode.
+    seek: f64,
+    /// Options for the input, in front of `-ss` and `-i`.
+    input_options: &'a [&'a str],
+    /// The rate of the `fps` filter in front of the filter graph.
+    sample_fps: Option<f64>,
+    output: Output,
 }
 
 /// The ffmpeg command line that writes raw frames of `frame` pixels to stdout, in the format of
@@ -64,6 +124,28 @@ pub(crate) fn args(
     seek: f64,
     pipeline: Pipeline,
 ) -> Vec<OsString> {
+    let extras = Extras {
+        seek,
+        input_options: &[],
+        sample_fps: None,
+        output: Output {
+            pixels: pixel_format(info).0,
+            passthrough: false,
+            frames: None,
+        },
+    };
+    build(video, info, frame, cube, pipeline, &extras)
+}
+
+/// The command line of one ffmpeg run, see [`args`].
+fn build(
+    video: &Path,
+    info: &VideoInfo,
+    frame: (u32, u32),
+    cube: Option<&Path>,
+    pipeline: Pipeline,
+    extras: &Extras<'_>,
+) -> Vec<OsString> {
     let mut args: Vec<OsString> = [
         "-hide_banner",
         "-loglevel",
@@ -75,34 +157,44 @@ pub(crate) fn args(
     .into_iter()
     .map(OsString::from)
     .collect();
-    if !info.animation {
+    if !info.is_animation() {
         args.extend(["-hwaccel", "videotoolbox"].map(OsString::from));
     }
     if pipeline == Pipeline::Gpu {
         args.extend(["-hwaccel_output_format", "videotoolbox_vld"].map(OsString::from));
     }
-    if seek > 0.0 {
-        args.extend([OsString::from("-ss"), OsString::from(format!("{seek:.3}"))]);
+    args.extend(extras.input_options.iter().map(OsString::from));
+    if extras.seek > 0.0 {
+        args.extend([
+            OsString::from("-ss"),
+            OsString::from(format!("{:.3}", extras.seek)),
+        ]);
     }
     args.extend([OsString::from("-i"), video.as_os_str().to_owned()]);
     // The probe read the size of this stream, so ffmpeg must not pick another one.
     let stream = format!("0:{}", info.stream);
     args.extend(["-map", &stream].map(OsString::from));
-    if info.animation || info.variable_rate {
+    if info.rate != Rate::Constant {
         let rate = format!("{:.4}", info.fps);
         args.extend(["-fps_mode", "cfr", "-r", &rate].map(OsString::from));
     }
-    args.extend(
-        [
-            "-an",
-            "-sn",
-            "-vf",
-            &filter_graph(info, frame, cube, pipeline),
-        ]
-        .map(OsString::from),
-    );
-    let (pixels, _) = pixel_format(info);
-    args.extend(["-f", "rawvideo", "-pix_fmt", pixels, "pipe:1"].map(OsString::from));
+    let graph = filter_graph(info, frame, cube, pipeline);
+    let graph = match extras.sample_fps {
+        Some(fps) => format!("fps=fps={fps:.6},{graph}"),
+        None => graph,
+    };
+    args.extend(["-an", "-sn", "-vf", &graph].map(OsString::from));
+    args.extend(["-f", "rawvideo", "-pix_fmt", extras.output.pixels].map(OsString::from));
+    if extras.output.passthrough {
+        args.extend(["-fps_mode", "passthrough"].map(OsString::from));
+    }
+    if let Some(frames) = extras.output.frames {
+        args.extend([
+            OsString::from("-frames:v"),
+            OsString::from(frames.to_string()),
+        ]);
+    }
+    args.push(OsString::from("pipe:1"));
     args
 }
 
@@ -115,15 +207,17 @@ pub(crate) fn first_frame_args(
     cube: Option<&Path>,
     pipeline: Pipeline,
 ) -> Vec<OsString> {
-    let mut args = args(video, info, frame, cube, 0.0, pipeline);
-    let output = args.pop();
-    // [`args`] ends with `-pix_fmt <format> pipe:1`.
-    if let Some(format) = args.last_mut() {
-        *format = OsString::from("rgba");
-    }
-    args.extend(["-frames:v", "1"].map(OsString::from));
-    args.extend(output);
-    args
+    let extras = Extras {
+        seek: 0.0,
+        input_options: &[],
+        sample_fps: None,
+        output: Output {
+            pixels: "rgba",
+            passthrough: false,
+            frames: Some(1),
+        },
+    };
+    build(video, info, frame, cube, pipeline, &extras)
 }
 
 /// The frames that one ffmpeg run of a grid loop writes, see [`loop_args`].
@@ -135,7 +229,7 @@ pub(crate) enum LoopSampling {
     /// `count` frames at most, at a constant `fps` from the start (the `fps` filter before the
     /// scale). An animation keeps its own delays this way, and a short clip with few keyframes
     /// gets frames between them.
-    Rate { fps: f64, count: usize },
+    Fps { fps: f64, count: usize },
     /// The one keyframe at or before `seconds` (`-noaccurate_seek`), for a long clip.
     KeyframeAt(f64),
 }
@@ -152,52 +246,41 @@ pub(crate) fn loop_args(
 ) -> Vec<OsString> {
     let mut info = info.clone();
     // The sampling sets the rate, so ffmpeg must not fill a variable rate with copies.
-    info.variable_rate = false;
+    if info.rate == Rate::Variable {
+        info.rate = Rate::Constant;
+    }
     let mut seek = 0.0;
+    let mut sample_fps = None;
     // A loop runs in the background, so its decode and its filters take at most 2 cores. A
     // software decode of a 4K clip took 10 s of CPU on 7 cores without the cap.
     let mut input_options: Vec<&str> = vec!["-threads", "2", "-filter_threads", "1"];
-    match sampling {
-        LoopSampling::Keyframes => input_options.extend(["-skip_frame", "nokey"]),
-        LoopSampling::Rate { fps, .. } => info.fps = fps,
+    let frames = match sampling {
+        LoopSampling::Keyframes => {
+            input_options.extend(["-skip_frame", "nokey"]);
+            None
+        }
+        LoopSampling::Fps { fps, count } => {
+            info.fps = fps;
+            sample_fps = Some(fps);
+            Some(count)
+        }
         LoopSampling::KeyframeAt(seconds) => {
             seek = seconds;
             input_options.extend(["-skip_frame", "nokey", "-noaccurate_seek"]);
+            Some(1)
         }
-    }
-    let mut args = args(video, &info, frame, cube, seek, pipeline);
-    let input = args.iter().position(|arg| arg == "-ss" || arg == "-i");
-    let input = input.unwrap_or(args.len());
-    args.splice(input..input, input_options.into_iter().map(OsString::from));
-    if let LoopSampling::Rate { fps, .. } = sampling
-        && let Some(graph) = args.iter().position(|arg| arg == "-vf").map(|vf| vf + 1)
-        && let Some(text) = args
-            .get(graph)
-            .map(|graph| graph.to_string_lossy().into_owned())
-    {
-        args[graph] = OsString::from(format!("fps=fps={fps:.6},{text}"));
-    }
-    let output = args.pop();
-    // [`args`] ends with `-pix_fmt <format> pipe:1`.
-    if let Some(format) = args.last_mut() {
-        *format = OsString::from("rgba");
-    }
-    if !info.animation {
-        args.extend(["-fps_mode", "passthrough"].map(OsString::from));
-    }
-    let count = match sampling {
-        LoopSampling::Keyframes => None,
-        LoopSampling::Rate { count, .. } => Some(count),
-        LoopSampling::KeyframeAt(_) => Some(1),
     };
-    if let Some(count) = count {
-        args.extend([
-            OsString::from("-frames:v"),
-            OsString::from(count.to_string()),
-        ]);
-    }
-    args.extend(output);
-    args
+    let extras = Extras {
+        seek,
+        input_options: &input_options,
+        sample_fps,
+        output: Output {
+            pixels: "rgba",
+            passthrough: !info.is_animation(),
+            frames,
+        },
+    };
+    build(video, &info, frame, cube, pipeline, &extras)
 }
 
 /// The filter graph: the scale, the rotation, the download from the GPU and the color cube.
@@ -260,7 +343,7 @@ fn filter_graph(
 /// because the tone curve spreads the dark values over more levels. An animation keeps its
 /// alpha.
 fn cube_format(info: &VideoInfo) -> &'static str {
-    match (info.animation, info.hdr.is_some()) {
+    match (info.is_animation(), info.hdr.is_some()) {
         (false, false) => "rgb24",
         (false, true) => "rgb48le",
         (true, false) => "rgba",
@@ -329,6 +412,10 @@ impl Drop for FrameStream {
 pub(crate) trait Decoder {
     /// The header facts of `video`, see [`super::probe::probe`].
     fn probe(&self, video: &Path) -> io::Result<VideoInfo>;
+    /// True when the decoder can read a header. A decoder without `ffprobe` fails each probe.
+    fn has_ffprobe(&self) -> bool {
+        true
+    }
     /// Start `program` with `args` and return its frames, each `frame_bytes` long.
     fn start(
         &self,
@@ -353,6 +440,10 @@ impl SystemDecoder {
 }
 
 impl Decoder for SystemDecoder {
+    fn has_ffprobe(&self) -> bool {
+        self.ffprobe.is_some()
+    }
+
     fn probe(&self, video: &Path) -> io::Result<VideoInfo> {
         let Some(program) = self.ffprobe.as_deref() else {
             return Err(io::Error::new(
@@ -398,7 +489,8 @@ fn read_frames(mut pipe: impl Read, frame_bytes: usize, frames: &mpsc::SyncSende
 #[cfg(test)]
 mod tests {
     use super::{
-        Decoder, Pipeline, SystemDecoder, VideoInfo, args, cube_for, first_frame_args, read_frames,
+        Decoder, Pipeline, Rate, SystemDecoder, VideoInfo, args, cube_for, first_frame_args,
+        read_frames,
     };
     use crate::decode::color::{self, ColorTarget, SourceColor};
     use crate::player::tone_map::{Hdr, Primaries};
@@ -432,8 +524,7 @@ mod tests {
                 Primaries::Bt709
             },
             ten_bit,
-            animation: false,
-            variable_rate: false,
+            rate: Rate::Constant,
             stream: 0,
         }
     }
@@ -441,7 +532,7 @@ mod tests {
     #[test]
     fn an_animated_image_maps_its_stream_and_decodes_in_software_at_a_constant_rate() {
         let mut info = info(0, None, false);
-        info.animation = true;
+        info.rate = Rate::Animation;
         info.stream = 1;
         info.fps = 12.5;
         let args = args(
@@ -485,7 +576,7 @@ mod tests {
     #[test]
     fn a_variable_rate_video_decodes_on_the_gpu_at_a_constant_rate() {
         let mut info = info(0, None, false);
-        info.variable_rate = true;
+        info.rate = Rate::Variable;
         info.fps = 60.0;
         let args = strings(&args(
             Path::new("/v/screen.mov"),
@@ -510,7 +601,16 @@ mod tests {
             ]
         );
         assert!(args.contains(&"videotoolbox".to_owned()), "{args:?}");
-        // A constant-rate video gets no `-r`: see the exact line of the SDR test below.
+        info.rate = Rate::Constant;
+        let constant = strings(&super::args(
+            Path::new("/v/screen.mov"),
+            &info,
+            (1280, 720),
+            None,
+            0.0,
+            Pipeline::Gpu,
+        ));
+        assert!(!constant.contains(&"-r".to_owned()), "{constant:?}");
     }
 
     /// The `-vf` graph of `args`.
@@ -593,7 +693,7 @@ mod tests {
             }
             let path = fixture(name);
             let info = decoder.probe(&path).unwrap();
-            assert!(info.animation, "{name}: {info:?}");
+            assert!(info.is_animation(), "{name}: {info:?}");
             assert_eq!(info.primaries, Primaries::Bt709, "{name}: sRGB or untagged");
             let plain = args(&path, &info, (16, 12), None, 0.0, Pipeline::Software);
             let frames = all_frames(&decoder, &program, &plain, 16 * 12 * 4);
@@ -909,7 +1009,7 @@ mod tests {
             format!("scale_vt=w=1280:h=720,hwdownload,format=p010le,format=rgb24,{lut}")
         );
         let animation = VideoInfo {
-            animation: true,
+            rate: Rate::Animation,
             ..sdr
         };
         let frames = args(

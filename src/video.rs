@@ -8,7 +8,7 @@
 
 use crate::decode::color::{self, ColorTarget};
 use crate::player::{
-    Decoder, Pipeline, SystemDecoder, VideoInfo, cube_for, first_frame_args, frame_box,
+    Decoder, SystemDecoder, VideoInfo, cube_for, first_frame_args, frame_box, with_fallback,
 };
 use crate::yazi::find_on_path;
 use image::RgbaImage;
@@ -69,6 +69,34 @@ pub(crate) fn session_tools() -> &'static Tools {
     SESSION_TOOLS.get().unwrap_or(&NO_TOOLS)
 }
 
+/// The places for a color cube: `cache_dir`, else `$TMPDIR/viewr`.
+pub(crate) struct CubeDirs([PathBuf; 2]);
+
+impl CubeDirs {
+    /// The places as the slice that [`cube_for`] takes.
+    pub(crate) fn paths(&self) -> [&Path; 2] {
+        [self.0[0].as_path(), self.0[1].as_path()]
+    }
+}
+
+/// The places for a color cube of the session, see [`CubeDirs`].
+pub(crate) fn cube_dirs(cache_dir: &Path) -> CubeDirs {
+    CubeDirs([cache_dir.to_path_buf(), std::env::temp_dir().join("viewr")])
+}
+
+/// The `ffmpeg` program of the session and a decoder with its `ffprobe`. Without one of them,
+/// the error is `NotFound` and no process starts.
+pub(crate) fn session_decoder() -> io::Result<(&'static Path, SystemDecoder)> {
+    let tools = session_tools();
+    let (Some(ffmpeg), Some(_)) = (tools.ffmpeg.as_deref(), tools.ffprobe.as_ref()) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "ffmpeg or ffprobe not found on PATH",
+        ));
+    };
+    Ok((ffmpeg, SystemDecoder::new(tools.ffprobe.clone())))
+}
+
 /// The first frame of `path` for a grid thumbnail, with the programs of the session. The color
 /// cube goes into `cache_dir`, else into `$TMPDIR/viewr`. Without `ffmpeg` or
 /// `ffprobe`, the error is `NotFound` and no process starts.
@@ -77,22 +105,13 @@ pub(crate) fn session_first_frame(
     target: (u32, u32),
     cache_dir: &Path,
 ) -> io::Result<RgbaImage> {
-    let tools = session_tools();
-    let (Some(ffmpeg), Some(ffprobe)) = (tools.ffmpeg.as_deref(), tools.ffprobe.as_ref()) else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "ffmpeg or ffprobe not found on PATH",
-        ));
-    };
-    let temp = std::env::temp_dir().join("viewr");
-    let decoder = SystemDecoder::new(Some(ffprobe.clone()));
-    let cube_dirs = [cache_dir, temp.as_path()];
+    let (ffmpeg, decoder) = session_decoder()?;
     decode_first_frame(
         &decoder,
         ffmpeg,
         path,
         target,
-        &cube_dirs,
+        &cube_dirs(cache_dir).paths(),
         FIRST_FRAME_TIMEOUT,
     )
 }
@@ -138,38 +157,28 @@ pub(crate) fn decode_first_frame(
     timeout: Duration,
 ) -> io::Result<RgbaImage> {
     let info = decoder.probe(path)?;
-    let frame = frame_box(
-        (info.width, info.height),
-        (target.0.max(1), target.1.max(1)),
-    );
+    let frame = frame_box((info.width, info.height), target);
     let color_target = color::target();
     let cube = first_frame_cube(&info, color_target, cube_dirs);
     let frame_bytes = frame.0 as usize * frame.1 as usize * 4;
-    for pipeline in [Pipeline::Gpu, Pipeline::Software] {
+    let pixels = with_fallback(&info, |pipeline| {
         let args = first_frame_args(path, &info, frame, cube.as_deref(), pipeline);
         // The drop of the stream kills ffmpeg after a timeout.
         match decoder
             .start(ffmpeg, &args, frame_bytes)?
             .wait_next(timeout)
         {
-            Ok(pixels) => {
-                return RgbaImage::from_raw(frame.0, frame.1, pixels)
-                    .map(|image| convert_first_frame(image, &info, color_target))
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid frame"));
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "ffmpeg gave no frame in time",
-                ));
-            }
-            Err(RecvTimeoutError::Disconnected) => {}
+            Ok(pixels) => Ok(Some(pixels)),
+            Err(RecvTimeoutError::Timeout) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "ffmpeg gave no frame in time",
+            )),
+            Err(RecvTimeoutError::Disconnected) => Ok(None),
         }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidData,
-        "no frames decoded",
-    ))
+    })?;
+    RgbaImage::from_raw(frame.0, frame.1, pixels)
+        .map(|image| convert_first_frame(image, &info, color_target))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid frame"))
 }
 
 #[cfg(test)]
@@ -182,7 +191,9 @@ mod tests {
     use crate::player::SystemDecoder;
     use crate::player::tone_map::Hdr;
     use crate::player::tone_map::Primaries;
-    use crate::test_support::video::{fake_decoder, info_of, real_ffmpeg, real_ffprobe};
+    use crate::test_support::video::{
+        animation_info, fake_decoder, info_of, real_ffmpeg, real_ffprobe,
+    };
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -460,5 +471,43 @@ mod tests {
                 decode_first_frame(&decoder, &ffmpeg, &audio, (32, 48), &[], WAIT).unwrap_err();
             assert_eq!(error.to_string(), "no video stream");
         }
+    }
+
+    #[test]
+    fn a_video_without_a_frame_runs_on_the_gpu_and_then_in_software() {
+        let decoder = fake_decoder(info_of(64, 48, 10.0));
+        decoder.queue_run(Vec::new());
+        decoder.queue_run(Vec::new());
+        let result = decode_first_frame(
+            &*decoder,
+            Path::new("/bin/ffmpeg"),
+            Path::new("/v/clip.mp4"),
+            (64, 48),
+            &[],
+            WAIT,
+        );
+        assert!(result.is_err());
+        let starts = decoder.starts();
+        assert_eq!(starts.len(), 2, "{starts:?}");
+        assert!(starts[0].contains("-hwaccel_output_format"), "{starts:?}");
+        assert!(!starts[1].contains("-hwaccel_output_format"), "{starts:?}");
+    }
+
+    #[test]
+    fn an_animation_without_a_frame_runs_in_software_only() {
+        let decoder = fake_decoder(animation_info());
+        decoder.queue_run(Vec::new());
+        let result = decode_first_frame(
+            &*decoder,
+            Path::new("/bin/ffmpeg"),
+            Path::new("/v/anim.gif"),
+            (64, 48),
+            &[],
+            WAIT,
+        );
+        assert!(result.is_err());
+        let starts = decoder.starts();
+        assert_eq!(starts.len(), 1, "{starts:?}");
+        assert!(!starts[0].contains("-hwaccel_output_format"), "{starts:?}");
     }
 }

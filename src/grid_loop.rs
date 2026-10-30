@@ -1,7 +1,7 @@
 //! The frames of the grid loops: 12 keyframes of a video, or the frames of an animated image,
 //! decoded by ffmpeg.
 //!
-//! A video loop shows 12 frames spread over the whole clip, each for [`VIDEO_FRAME_DELAY`]: a
+//! A video loop shows 12 frames spread over the whole clip, each for [`VIDEO_FRAME_INTERVAL`]: a
 //! loop of 4 s. One ffmpeg run decodes only the keyframes (`-skip_frame nokey`), in 0.11 s to
 //! 0.26 s for a 4K clip. iPhone clips have one keyframe per second, so a short clip with fewer
 //! than 12 keyframes decodes at a constant rate instead (0.4 s to 1 s for 3 s to 10 s of 4K). A
@@ -9,7 +9,7 @@
 //! whole file.
 //!
 //! An animated image keeps its own frames and delays, with at most [`MAX_ANIMATION_FRAMES`]
-//! frames and [`MAX_ANIMATION_FPS`]. Above the caps, ffmpeg drops frames evenly.
+//! frames and [`MAX_LOOP_FPS`]. Above the caps, ffmpeg drops frames evenly.
 //!
 //! The frames get the rotation, the scale and the colors of the first-frame thumbnail
 //! (`video::decode_first_frame`), at half the width and the height of the grid picture. The
@@ -19,9 +19,11 @@
 use crate::app::grid_loops::LoopFrames;
 use crate::decode::color;
 use crate::player::{
-    Decoder, LoopSampling, Pipeline, SystemDecoder, VideoInfo, frame_box, loop_args,
+    Decoder, LoopSampling, Pipeline, VideoInfo, frame_box, loop_args, with_fallback,
 };
-use crate::video::{FIRST_FRAME_TIMEOUT, convert_first_frame, first_frame_cube, session_tools};
+use crate::video::{
+    FIRST_FRAME_TIMEOUT, convert_first_frame, cube_dirs, first_frame_cube, session_decoder,
+};
 use image::RgbaImage;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -30,10 +32,10 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 /// The frames of a video loop.
-pub(crate) const VIDEO_LOOP_FRAMES: usize = 12;
+const VIDEO_LOOP_FRAMES: usize = 12;
 
 /// The time that each frame of a video loop shows: about 3 frames per second.
-pub(crate) const VIDEO_FRAME_DELAY: Duration = Duration::from_millis(333);
+const VIDEO_FRAME_INTERVAL: Duration = Duration::from_millis(333);
 
 /// Above this length, a video loop seeks to its 12 frames. 12 ffmpeg starts take about 1.6 s,
 /// and a keyframe run over a long 4K file reads gigabytes.
@@ -44,10 +46,10 @@ const LONG_CLIP_SECONDS: f64 = 60.0;
 const SHORT_CLIP_SECONDS: f64 = 20.0;
 
 /// The most frames of an animation loop.
-pub(crate) const MAX_ANIMATION_FRAMES: usize = 48;
+const MAX_ANIMATION_FRAMES: usize = 48;
 
 /// The highest rate of an animation loop.
-pub(crate) const MAX_ANIMATION_FPS: f64 = 12.0;
+const MAX_LOOP_FPS: f64 = 12.0;
 
 /// The keyframes that a keyframe run keeps in memory at most, see [`Spread`].
 const KEPT_KEYFRAMES: usize = 4 * VIDEO_LOOP_FRAMES;
@@ -68,21 +70,19 @@ pub(crate) fn session_loop(
     cache_dir: &Path,
     cancel: &AtomicBool,
 ) -> io::Result<LoopFrames> {
-    let tools = session_tools();
-    let (Some(ffmpeg), Some(ffprobe)) = (tools.ffmpeg.as_deref(), tools.ffprobe.as_ref()) else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "ffmpeg or ffprobe not found on PATH",
-        ));
-    };
-    let temp = std::env::temp_dir().join("viewr");
-    let decoder = SystemDecoder::new(Some(ffprobe.clone()));
-    let cube_dirs = [cache_dir, temp.as_path()];
-    decode_loop(&decoder, ffmpeg, path, target, &cube_dirs, cancel)
+    let (ffmpeg, decoder) = session_decoder()?;
+    decode_loop(
+        &decoder,
+        ffmpeg,
+        path,
+        target,
+        &cube_dirs(cache_dir).paths(),
+        cancel,
+    )
 }
 
 /// The pixel box of a loop frame: half the sides of the grid picture.
-pub(crate) fn loop_box(target: (u32, u32)) -> (u32, u32) {
+fn loop_box(target: (u32, u32)) -> (u32, u32) {
     ((target.0 / 2).max(2), (target.1 / 2).max(2))
 }
 
@@ -111,15 +111,15 @@ pub(crate) fn decode_loop(
         cube: first_frame_cube(&info, color_target, cube_dirs),
         cancel,
     };
-    let (frames, delays) = if info.animation {
-        let fps = animation_rate(info.fps, info.duration);
-        let sampling = LoopSampling::Rate {
+    let (frames, delays) = if info.is_animation() {
+        let fps = animation_fps(info.fps, info.duration);
+        let sampling = LoopSampling::Fps {
             fps,
             count: MAX_ANIMATION_FRAMES,
         };
         merge_repeats(run.frames(sampling)?, Duration::from_secs_f64(1.0 / fps))
     } else {
-        merge_repeats(run.video_frames()?, VIDEO_FRAME_DELAY)
+        merge_repeats(run.video_frames()?, VIDEO_FRAME_INTERVAL)
     };
     if frames.len() < 2 {
         return Err(io::Error::new(
@@ -163,7 +163,7 @@ impl Run<'_> {
                 reason = "the frame count is 12, exact in f64"
             )]
             let fps = VIDEO_LOOP_FRAMES as f64 / duration;
-            let sampling = LoopSampling::Rate {
+            let sampling = LoopSampling::Fps {
                 fps,
                 count: VIDEO_LOOP_FRAMES,
             };
@@ -190,24 +190,12 @@ impl Run<'_> {
         Ok(frames)
     }
 
-    /// The frames of one sampling. A GPU run without a frame runs again in software, as for the
-    /// first frame. An animation decodes in software only.
+    /// The frames of one sampling, with the pipeline fallback of [`with_fallback`].
     fn frames(&self, sampling: LoopSampling) -> io::Result<Vec<RgbaImage>> {
-        let pipelines: &[Pipeline] = if self.info.animation {
-            &[Pipeline::Software]
-        } else {
-            &[Pipeline::Gpu, Pipeline::Software]
-        };
-        for &pipeline in pipelines {
+        with_fallback(self.info, |pipeline| {
             let frames = self.run(sampling, pipeline)?;
-            if !frames.is_empty() {
-                return Ok(frames);
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "no frames decoded",
-        ))
+            Ok((!frames.is_empty()).then_some(frames))
+        })
     }
 
     /// Start ffmpeg and read its frames until the end. A frame that does not come within
@@ -230,7 +218,7 @@ impl Run<'_> {
         let limit = match sampling {
             LoopSampling::Keyframes => KEPT_KEYFRAMES,
             // ffmpeg stops after `count` frames, so these runs keep every frame.
-            LoopSampling::Rate { count, .. } => count + 1,
+            LoopSampling::Fps { count, .. } => count + 1,
             LoopSampling::KeyframeAt(_) => 2,
         };
         let mut spread = Spread::new(limit);
@@ -263,11 +251,11 @@ impl Run<'_> {
     }
 }
 
-/// The rate of an animation loop: its own rate, at most [`MAX_ANIMATION_FPS`], and low enough
+/// The rate of an animation loop: its own rate, at most [`MAX_LOOP_FPS`], and low enough
 /// that its length fits [`MAX_ANIMATION_FRAMES`], but at least [`MIN_ANIMATION_FPS`]. An
 /// animation without a known length keeps its first frames.
-pub(crate) fn animation_rate(fps: f64, duration: f64) -> f64 {
-    let rate = fps.min(MAX_ANIMATION_FPS);
+fn animation_fps(fps: f64, duration: f64) -> f64 {
+    let rate = fps.min(MAX_LOOP_FPS);
     if duration > 0.0 {
         #[expect(
             clippy::cast_precision_loss,
@@ -282,7 +270,7 @@ pub(crate) fn animation_rate(fps: f64, duration: f64) -> f64 {
 
 /// The times of the [`VIDEO_LOOP_FRAMES`] seeks of a long clip, evenly from the start, so that
 /// the first frame is the still of the cell.
-pub(crate) fn seek_points(duration: f64) -> Vec<f64> {
+fn seek_points(duration: f64) -> Vec<f64> {
     #[expect(
         clippy::cast_precision_loss,
         reason = "the frame count is 12, exact in f64"
@@ -298,7 +286,7 @@ pub(crate) fn seek_points(duration: f64) -> Vec<f64> {
 }
 
 /// `want` items of `items`, evenly spread from the first one. Fewer items stay as they are.
-pub(crate) fn pick_evenly<T>(items: Vec<T>, want: usize) -> Vec<T> {
+fn pick_evenly<T>(items: Vec<T>, want: usize) -> Vec<T> {
     let count = items.len();
     if count <= want {
         return items;
@@ -317,10 +305,7 @@ pub(crate) fn pick_evenly<T>(items: Vec<T>, want: usize) -> Vec<T> {
 /// One frame for each run of equal frames, and its time: `delay` for each frame of the run. A
 /// constant-rate animation repeats a frame with a long delay, and a long clip can give the same
 /// keyframe for two seeks.
-pub(crate) fn merge_repeats(
-    frames: Vec<RgbaImage>,
-    delay: Duration,
-) -> (Vec<RgbaImage>, Vec<Duration>) {
+fn merge_repeats(frames: Vec<RgbaImage>, delay: Duration) -> (Vec<RgbaImage>, Vec<Duration>) {
     let mut kept: Vec<RgbaImage> = Vec::with_capacity(frames.len());
     let mut delays: Vec<Duration> = Vec::with_capacity(frames.len());
     for frame in frames {
@@ -338,15 +323,15 @@ pub(crate) fn merge_repeats(
 
 /// An evenly spread part of a stream of unknown length, in bounded memory: every `stride`-th
 /// item. When `limit` items are kept, every other one goes and the stride doubles.
-pub(crate) struct Spread<T> {
-    pub(crate) kept: Vec<T>,
+struct Spread<T> {
+    kept: Vec<T>,
     stride: usize,
     seen: usize,
     limit: usize,
 }
 
 impl<T> Spread<T> {
-    pub(crate) fn new(limit: usize) -> Self {
+    fn new(limit: usize) -> Self {
         Self {
             kept: Vec::new(),
             stride: 1,
@@ -355,7 +340,7 @@ impl<T> Spread<T> {
         }
     }
 
-    pub(crate) fn push(&mut self, item: T) {
+    fn push(&mut self, item: T) {
         if self.seen.is_multiple_of(self.stride) {
             self.kept.push(item);
             if self.kept.len() >= self.limit {
@@ -374,8 +359,8 @@ impl<T> Spread<T> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_ANIMATION_FPS, MAX_ANIMATION_FRAMES, Spread, VIDEO_FRAME_DELAY, VIDEO_LOOP_FRAMES,
-        animation_rate, decode_loop, loop_box, merge_repeats, pick_evenly, seek_points,
+        MAX_ANIMATION_FRAMES, MAX_LOOP_FPS, Spread, VIDEO_FRAME_INTERVAL, VIDEO_LOOP_FRAMES,
+        animation_fps, decode_loop, loop_box, merge_repeats, pick_evenly, seek_points,
     };
     use crate::player::{VideoInfo, frame_box};
     use crate::test_support::video::{animation_info, fake_decoder, info_of};
@@ -435,13 +420,13 @@ mod tests {
 
     #[test]
     fn an_animation_keeps_its_rate_below_the_caps() {
-        assert!((animation_rate(10.0, 2.0) - 10.0).abs() < 1e-9);
-        assert!((animation_rate(50.0, 1.0) - MAX_ANIMATION_FPS).abs() < 1e-9);
+        assert!((animation_fps(10.0, 2.0) - 10.0).abs() < 1e-9);
+        assert!((animation_fps(50.0, 1.0) - MAX_LOOP_FPS).abs() < 1e-9);
         // 20 s at 10 fps are 200 frames: the cap of 48 frames drops them evenly.
-        assert!((animation_rate(10.0, 20.0) - 2.4).abs() < 1e-9);
-        assert!((animation_rate(10.0, 0.0) - 10.0).abs() < 1e-9, "no length");
+        assert!((animation_fps(10.0, 20.0) - 2.4).abs() < 1e-9);
+        assert!((animation_fps(10.0, 0.0) - 10.0).abs() < 1e-9, "no length");
         // A length of 1e30 s gives one frame per minute, not a frame time above u64 seconds.
-        assert!((animation_rate(10.0, 1e30) - 1.0 / 60.0).abs() < 1e-12);
+        assert!((animation_fps(10.0, 1e30) - 1.0 / 60.0).abs() < 1e-12);
     }
 
     #[test]
@@ -492,7 +477,7 @@ mod tests {
             indices(&frames.frames),
             vec![0, 2, 5, 7, 10, 12, 15, 17, 20, 22, 25, 27]
         );
-        assert_eq!(frames.delays, vec![VIDEO_FRAME_DELAY; 12]);
+        assert_eq!(frames.delays, vec![VIDEO_FRAME_INTERVAL; 12]);
         assert_eq!(frames.frames[0].dimensions(), (320, 180));
         assert_eq!(frames.shown, (640, 360), "the still of the cell");
     }

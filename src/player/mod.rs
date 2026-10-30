@@ -16,9 +16,11 @@ pub(crate) mod tone_map;
 pub(crate) use animation::is_animated;
 pub(crate) use decoder::{
     Decoder, FrameStream, LoopSampling, Pipeline, SystemDecoder, args, cube_for, first_frame_args,
-    loop_args, pixel_format,
+    loop_args, pixel_format, with_fallback,
 };
 pub(crate) use layout::{cell_box, frame_box, frame_limit};
+#[cfg(test)]
+pub(crate) use probe::Rate;
 #[cfg(test)]
 pub(crate) use probe::probe as probe_file;
 pub(crate) use probe::{VideoInfo, probe_cached};
@@ -48,7 +50,47 @@ const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
 enum State {
     Playing,
     /// The clip without a repeat is over, or the decode failed.
-    Finished,
+    Ended,
+}
+
+/// Whether the clip starts again at its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Repeat {
+    /// The clip plays one time.
+    Never,
+    /// The clip starts again until this much time passed since the open. A slideshow sets it
+    /// for a short animation.
+    Until(Duration),
+    /// The clip starts again for ever.
+    Always,
+}
+
+/// One ffmpeg run: its clock and its start position.
+struct Run {
+    /// The time at which the ffmpeg run started.
+    started: Instant,
+    /// The time at which the first frame of this run is due. The first frame sets it, or the
+    /// restart keeps the clock of the run before.
+    start: Option<Instant>,
+    /// The frames due since `start`: the shown and the dropped ones.
+    due_frames: u32,
+    /// The position of the first frame of this run, in seconds.
+    base: f64,
+    /// True after the first frame of this run. A run without a frame failed.
+    delivered: bool,
+}
+
+impl Run {
+    /// A run that starts at `now` at `base` seconds.
+    fn new(base: f64, now: Instant) -> Self {
+        Self {
+            started: now,
+            start: None,
+            due_frames: 0,
+            base,
+            delivered: false,
+        }
+    }
 }
 
 /// A decoded frame: RGB for a video, RGBA for an animation, see [`pixel_format`].
@@ -101,24 +143,11 @@ pub(crate) struct Player {
     state: State,
     /// The note of a failed decode.
     pub(crate) error: Option<String>,
-    repeat: bool,
-    /// The clip starts again at its end until this much time passed since the open, also
-    /// without `repeat`. A slideshow sets it for a short animation.
-    min_play: Option<Duration>,
+    repeat: Repeat,
     /// The time of the open.
     opened: Instant,
     interval: Duration,
-    /// The time at which the first frame of this run is due. The first frame sets it, or the
-    /// restart keeps the clock of the run before.
-    start: Option<Instant>,
-    /// The frames due since `start`: the shown and the dropped ones.
-    due_frames: u32,
-    /// The position of the first frame of this run, in seconds.
-    base: f64,
-    /// True after the first frame of this run. A run without a frame failed.
-    delivered: bool,
-    /// The time at which the current ffmpeg run started.
-    run_started: Instant,
+    run: Run,
     /// The frames that came too late and never reached the screen, also the frames that a
     /// restart skipped.
     pub(crate) dropped: u32,
@@ -127,7 +156,7 @@ pub(crate) struct Player {
 impl Player {
     /// Start ffmpeg for `path`. `limit` is the pixel box of the frame, `cube_dirs` the places
     /// for the color cube. Without `repeat`, the clip plays one time and then
-    /// `finished` turns true.
+    /// `playing` turns false.
     pub(crate) fn open(
         decoder: Rc<dyn Decoder>,
         program: &Path,
@@ -140,11 +169,8 @@ impl Player {
         let frame = frame_box((info.width, info.height), limit);
         let cube = cube_for(&info, crate::decode::color::target(), cube_dirs);
         let interval = info.frame_interval();
-        let pipeline = if info.animation {
-            Pipeline::Software
-        } else {
-            Pipeline::Gpu
-        };
+        let pipeline = Pipeline::first(&info);
+        let opened = Instant::now();
         let mut player = Self {
             path: path.to_path_buf(),
             program: program.to_path_buf(),
@@ -158,18 +184,16 @@ impl Player {
             current_frame: None,
             state: State::Playing,
             error: None,
-            repeat,
-            min_play: None,
-            opened: Instant::now(),
+            repeat: if repeat {
+                Repeat::Always
+            } else {
+                Repeat::Never
+            },
+            opened,
             interval,
-            start: None,
-            due_frames: 0,
-            base: 0.0,
-            delivered: false,
-            run_started: Instant::now(),
+            run: Run::new(0.0, opened),
             dropped: 0,
         };
-        let opened = player.opened;
         player.start_run(0.0, opened)?;
         Ok(player)
     }
@@ -177,13 +201,9 @@ impl Player {
     /// Start ffmpeg at `position` seconds with the current pipeline. `now` starts the deadline
     /// of the first frame.
     fn start_run(&mut self, position: f64, now: Instant) -> std::io::Result<()> {
-        self.run_started = now;
+        self.run = Run::new(position, now);
         self.stream = None;
         self.pending = None;
-        self.start = None;
-        self.due_frames = 0;
-        self.base = position;
-        self.delivered = false;
         let args = args(
             &self.path,
             &self.info,
@@ -214,8 +234,8 @@ impl Player {
                 match self.stream.as_mut().map(FrameStream::try_next) {
                     Some(Ok(frame)) => self.pending = Some(frame),
                     Some(Err(TryRecvError::Empty)) => {
-                        if !self.delivered
-                            && now.saturating_duration_since(self.run_started)
+                        if !self.run.delivered
+                            && now.saturating_duration_since(self.run.started)
                                 > FIRST_FRAME_DEADLINE
                         {
                             self.end_of_run(now);
@@ -230,21 +250,21 @@ impl Player {
                     }
                 }
             }
-            let start = *self.start.get_or_insert(now);
-            let due = start + self.interval.mul_f64(f64::from(self.due_frames));
+            let start = *self.run.start.get_or_insert(now);
+            let due = start + self.interval.mul_f64(f64::from(self.run.due_frames));
             if now < due {
                 return false;
             }
-            self.delivered = true;
+            self.run.delivered = true;
             if now > due + self.interval
                 && let Some(Ok(newer)) = self.stream.as_mut().map(FrameStream::try_next)
             {
                 self.pending = Some(newer);
-                self.due_frames += 1;
+                self.run.due_frames += 1;
                 self.dropped += 1;
                 continue;
             }
-            self.due_frames += 1;
+            self.run.due_frames += 1;
             let Some(frame) = self.pending.take() else {
                 return false;
             };
@@ -260,15 +280,15 @@ impl Player {
     /// between count as dropped. Close to the end, the run plays out instead, and a run whose
     /// clock passed the length of the clip while its frames lag ends at once.
     fn catch_up(&mut self, now: Instant) {
-        let Some(start) = self.start else {
+        let Some(start) = self.run.start else {
             return;
         };
-        if !self.delivered {
+        if !self.run.delivered {
             return;
         }
-        let next_due = start + self.interval.mul_f64(f64::from(self.due_frames));
+        let next_due = start + self.interval.mul_f64(f64::from(self.run.due_frames));
         let lag = now.saturating_duration_since(next_due);
-        let clock = self.base + now.saturating_duration_since(start).as_secs_f64();
+        let clock = self.run.base + now.saturating_duration_since(start).as_secs_f64();
         if lag > self.interval && self.info.duration > 0.0 && clock >= self.info.duration {
             self.stream = None;
             self.pending = None;
@@ -289,9 +309,9 @@ impl Player {
             reason = "the skipped frames of one restart are few and never negative"
         )]
         let skipped = skipped.max(0.0).round() as u32;
-        let run_start = start + Duration::from_secs_f64(target - self.base);
+        let run_start = start + Duration::from_secs_f64(target - self.run.base);
         let started = self.start_run(target, now);
-        self.start = Some(run_start);
+        self.run.start = Some(run_start);
         self.dropped += skipped;
         self.fail_if_error(started);
     }
@@ -304,27 +324,29 @@ impl Player {
     /// Play the clip again at its end until `duration` passed since the open. A slideshow
     /// holds a short animation for its interval this way, instead of a flash of one loop.
     pub(crate) fn play_at_least(&mut self, duration: Duration) {
-        self.min_play = Some(duration);
+        if matches!(self.repeat, Repeat::Never | Repeat::Until(_)) {
+            self.repeat = Repeat::Until(duration);
+        }
     }
 
-    /// True when the clip starts again at its end: always with `repeat`, and until
-    /// `min_play` passed at `now` without it.
+    /// True when the clip starts again at its end at `now`.
     fn repeats_at(&self, now: Instant) -> bool {
-        self.repeat
-            || self
-                .min_play
-                .is_some_and(|min_play| now.saturating_duration_since(self.opened) < min_play)
+        match self.repeat {
+            Repeat::Never => false,
+            Repeat::Until(duration) => now.saturating_duration_since(self.opened) < duration,
+            Repeat::Always => true,
+        }
     }
 
     /// ffmpeg ended at `now`: the clip is over, or the decode failed before its first frame.
     fn end_of_run(&mut self, now: Instant) {
         // A run from the start without a frame failed. A run after a seek without a frame
         // began past the end of the stream, which can be shorter than the container says.
-        let failed = !self.delivered && self.base == 0.0;
-        if failed && self.pipeline == Pipeline::Gpu {
+        let failed = !self.run.delivered && self.run.base == 0.0;
+        if failed && let Some(next) = self.pipeline.next(&self.info) {
             // A format that the GPU chain cannot take decodes in software.
-            self.pipeline = Pipeline::Software;
-            let position = self.base;
+            self.pipeline = next;
+            let position = self.run.base;
             let started = self.start_run(position, now);
             self.fail_if_error(started);
             return;
@@ -341,7 +363,7 @@ impl Player {
             self.fail_if_error(started);
         } else {
             self.stream = None;
-            self.state = State::Finished;
+            self.state = State::Ended;
         }
     }
 
@@ -352,14 +374,14 @@ impl Player {
 
     /// True when the clip without a repeat is over, or the decode failed.
     pub(crate) fn finished(&self) -> bool {
-        self.state == State::Finished
+        !self.playing()
     }
 
     /// Stop with `note` as the error of the player.
     fn fail(&mut self, note: String) {
         self.stream = None;
         self.error = Some(note);
-        self.state = State::Finished;
+        self.state = State::Ended;
     }
 
     /// Stop when a start of ffmpeg failed.
@@ -371,12 +393,12 @@ impl Player {
 
     /// The position in seconds: the time of the last due frame.
     pub(crate) fn position(&self) -> f64 {
-        self.base + f64::from(self.due_frames) / self.info.fps
+        self.run.base + f64::from(self.run.due_frames) / self.info.fps
     }
 
     /// True for an animated image, which a slideshow holds for its interval.
     pub(crate) fn is_animation(&self) -> bool {
-        self.info.animation
+        self.info.is_animation()
     }
 
     /// The length of the clip in seconds, or 0 when the container does not tell it.
@@ -389,9 +411,10 @@ impl Player {
         if self.state != State::Playing {
             return IDLE_POLL;
         }
-        match (self.pending.as_ref(), self.start) {
-            (Some(_), Some(start)) => (start + self.interval.mul_f64(f64::from(self.due_frames)))
-                .saturating_duration_since(now),
+        match (self.pending.as_ref(), self.run.start) {
+            (Some(_), Some(start)) => (start
+                + self.interval.mul_f64(f64::from(self.run.due_frames)))
+            .saturating_duration_since(now),
             _ => DECODE_POLL,
         }
     }
@@ -631,6 +654,27 @@ mod tests {
         assert_eq!(short_decoder.starts().len(), 1);
     }
 
+    #[test]
+    fn a_clip_without_a_known_length_restarts_at_a_lag_and_has_no_end_margin() {
+        let mut info = info_of(640, 480, 10.0);
+        info.duration = 0.0;
+        let decoder = fake_decoder(info);
+        let mut player = player(&decoder, true);
+        assert_eq!(player.duration(), 0.0);
+        let clock = Instant::now();
+        decoder.feed(frame(1));
+        assert!(player.poll_at(clock));
+        // A lag past the limit restarts ffmpeg, and no clip length ends the run or stops it.
+        assert!(!player.poll_at(clock + FRAME * 5));
+        assert_eq!(decoder.starts().len(), 2);
+        assert!(player.playing(), "the unknown length ends nothing");
+        assert!(
+            decoder.last_args().contains(" -ss 0.800 -i "),
+            "{}",
+            decoder.last_args()
+        );
+    }
+
     /// The rule of the player: a slow terminal drops frames, and the clip ends on time. Here
     /// each frame write takes 3 intervals, and ffmpeg keeps two frames ready, as the queue of
     /// the reader thread does.
@@ -653,8 +697,8 @@ mod tests {
                 clippy::cast_sign_loss,
                 reason = "the start of a run of the 6 s test clip, in frames"
             )]
-            let first = (player.base * 10.0).round() as u32;
-            let taken = player.due_frames + u32::from(player.pending.is_some());
+            let first = (player.run.base * 10.0).round() as u32;
+            let taken = player.run.due_frames + u32::from(player.pending.is_some());
             while fed < taken + 2 && first + fed < CLIP_FRAMES {
                 decoder.feed(frame(1));
                 fed += 1;
@@ -729,7 +773,7 @@ mod tests {
     #[test]
     fn a_variable_rate_clip_paces_at_the_constant_rate_that_ffmpeg_writes() {
         let decoder = fake_decoder(VideoInfo {
-            variable_rate: true,
+            rate: super::Rate::Variable,
             ..info_of(640, 480, 20.0)
         });
         let mut player = player(&decoder, true);

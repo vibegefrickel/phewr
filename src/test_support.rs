@@ -806,8 +806,7 @@ pub(crate) mod video {
             hdr: None,
             primaries: crate::player::tone_map::Primaries::Bt709,
             ten_bit: false,
-            animation: false,
-            variable_rate: false,
+            rate: crate::player::Rate::Constant,
             stream: 0,
         }
     }
@@ -816,7 +815,7 @@ pub(crate) mod video {
     pub(crate) fn animation_info() -> VideoInfo {
         VideoInfo {
             duration: 0.3,
-            animation: true,
+            rate: crate::player::Rate::Animation,
             ..info_of(64, 48, 10.0)
         }
     }
@@ -887,7 +886,6 @@ pub(crate) mod video {
                 player,
                 mpv: Some(PathBuf::from("/bin/mpv")),
                 ffmpeg: Some(PathBuf::from("/bin/ffmpeg")),
-                ffprobe: Some(PathBuf::from("/bin/ffprobe")),
                 decoder,
             },
         }

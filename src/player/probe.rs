@@ -24,6 +24,8 @@ pub(crate) struct VideoInfo {
     pub height: u32,
     /// The clockwise rotation that the display matrix asks for: 0, 90, 180 or 270 degrees.
     pub rotation: u16,
+    /// The rate that the player paces at, in frames per second. It comes from `avg_frame_rate`,
+    /// from `r_frame_rate` for a variable rate, or from the packet durations of an animation.
     pub fps: f64,
     /// The length in seconds, or 0 when the container does not tell it.
     pub duration: f64,
@@ -32,17 +34,31 @@ pub(crate) struct VideoInfo {
     pub primaries: Primaries,
     /// A 10 bit stream. The frames that the Mac hardware decoder gives back are `p010le` then.
     pub ten_bit: bool,
-    /// An animated image. ffmpeg decodes it in software at the exact rate `fps`.
-    pub animation: bool,
-    /// A video with a variable frame rate. ffmpeg duplicates or drops frames to the constant
-    /// rate `fps`, see [`variable_rate_fps`].
-    pub variable_rate: bool,
+    /// How ffmpeg gets the rate `fps`.
+    pub rate: Rate,
     /// The index of the stream that ffmpeg maps. An AVIS file holds the still item as its
     /// first stream and the image sequence as its second.
     pub stream: usize,
 }
 
+/// How ffmpeg gets the output rate `fps`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Rate {
+    /// A video with a constant rate. ffmpeg writes its frames as they are.
+    Constant,
+    /// A video with a variable frame rate. ffmpeg duplicates or drops frames to the constant
+    /// rate `fps`, see [`variable_fps`].
+    Variable,
+    /// An animated image. ffmpeg decodes it in software at the exact rate `fps`.
+    Animation,
+}
+
 impl VideoInfo {
+    /// True for an animated image.
+    pub(crate) fn is_animation(&self) -> bool {
+        self.rate == Rate::Animation
+    }
+
     /// The frame interval at the frame rate of the video.
     pub(crate) fn frame_interval(&self) -> Duration {
         Duration::from_secs_f64(1.0 / self.fps)
@@ -70,7 +86,7 @@ const MIN_BURST_FPS: f64 = 24.0;
 
 /// The share by which the average rate can differ from the real base rate of a constant-rate
 /// video. iPhone clips have an average rate of 29.99 at a base rate of 30 (0.03 %).
-const VARIABLE_RATE_TOLERANCE: f64 = 0.01;
+const VARIABLE_FPS_TOLERANCE: f64 = 0.01;
 
 /// How many packets the timing walk reads. The walk runs on the UI thread before the first
 /// frame: 16 frames of a 181 MB GIF of 1280x720 pixels cost about 15 ms, all 300 cost 250 ms.
@@ -177,7 +193,7 @@ fn packet_limit(path: &Path) -> Option<usize> {
 
 /// The `ffprobe` command line for `video`. Only an animation reads packets, at most
 /// `packet_limit`.
-pub(crate) fn probe_args(video: &Path, packet_limit: Option<usize>) -> Vec<OsString> {
+fn probe_args(video: &Path, packet_limit: Option<usize>) -> Vec<OsString> {
     let entries = if packet_limit.is_some() {
         format!("{STREAM_ENTRIES}:packet=stream_index,duration")
     } else {
@@ -211,7 +227,7 @@ pub(crate) fn probe(program: &Path, path: &Path) -> io::Result<VideoInfo> {
     }
     let mut info = parse(&output.stdout, packet_limit)?;
     // ffprobe reports no profile for an animated WebP or APNG. The file can carry one.
-    if info.animation
+    if info.is_animation()
         && info.hdr.is_none()
         && info.primaries == Primaries::Bt709
         && let Some(primaries) = super::animation::embedded_primaries(path)
@@ -230,7 +246,7 @@ pub(crate) fn probe_cached(program: &Path, path: &Path) -> io::Result<VideoInfo>
 
 /// The probes of the session, keyed by path. Each entry keeps the mtime and the length of the
 /// file, so a changed file probes again.
-pub(crate) struct ProbeCache {
+struct ProbeCache {
     entries: Mutex<LruCache<PathBuf, (FileStamp, VideoInfo)>>,
 }
 
@@ -239,7 +255,7 @@ type FileStamp = (Option<SystemTime>, u64);
 
 impl ProbeCache {
     /// A cache of at most `capacity` probes, so a session over many folders stays small.
-    pub(crate) fn new(capacity: usize) -> Self {
+    fn new(capacity: usize) -> Self {
         let capacity = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN);
         Self {
             entries: Mutex::new(LruCache::new(capacity)),
@@ -247,7 +263,7 @@ impl ProbeCache {
     }
 
     /// The cached probe of `path`, or the result of `run`. Only a success goes into the cache.
-    pub(crate) fn get_or_probe(
+    fn get_or_probe(
         &self,
         path: &Path,
         run: impl FnOnce() -> io::Result<VideoInfo>,
@@ -344,7 +360,7 @@ fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<VideoInfo> {
         serde_json::from_slice(json).map_err(|error| invalid(&error.to_string()))?;
     let stream =
         choose_stream(&output.streams, animation).ok_or_else(|| invalid("no video stream"))?;
-    let (mut fps, variable_rate) = pacing_rate(
+    let (mut fps, variable) = pacing_fps(
         fraction(&stream.r_frame_rate),
         fraction(&stream.avg_frame_rate),
         animation,
@@ -361,7 +377,7 @@ fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<VideoInfo> {
         .iter()
         .find(|data| data.side_data_type == "Display Matrix")
         .map_or(0, |data| clockwise_rotation(data.rotation));
-    let (width, height) = if rotation % 180 == 0 {
+    let (width, height) = if rotation.is_multiple_of(180) {
         (stream.width, stream.height)
     } else {
         (stream.height, stream.width)
@@ -386,8 +402,13 @@ fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<VideoInfo> {
         hdr,
         primaries,
         ten_bit,
-        animation,
-        variable_rate,
+        rate: if animation {
+            Rate::Animation
+        } else if variable {
+            Rate::Variable
+        } else {
+            Rate::Constant
+        },
         stream: stream.index,
     })
 }
@@ -403,12 +424,12 @@ fn fraction(text: &str) -> Option<f64> {
 /// The rate that the player paces at, and `true` when ffmpeg must get it as `-r`, from
 /// `r_frame_rate` (`real`) and `avg_frame_rate` (`average`).
 ///
-/// A video with a variable frame rate gets [`variable_rate_fps`]. Another video paces at its
+/// A video with a variable frame rate gets [`variable_fps`]. Another video paces at its
 /// average rate. Without an average rate, it paces at `real`, because ffmpeg writes raw frames
 /// at `real` then. An animation gets its rate from the packets later, see [`timing_of`].
-fn pacing_rate(real: Option<f64>, average: Option<f64>, animation: bool) -> (f64, bool) {
+fn pacing_fps(real: Option<f64>, average: Option<f64>, animation: bool) -> (f64, bool) {
     let variable = (!animation)
-        .then(|| variable_rate_fps(real?, average?))
+        .then(|| variable_fps(real?, average?))
         .flatten();
     match variable {
         Some(rate) => (rate, true),
@@ -421,16 +442,16 @@ fn pacing_rate(real: Option<f64>, average: Option<f64>, animation: bool) -> (f64
 ///
 /// `real` is `r_frame_rate`, the rate of the shortest frame spacing that `FFmpeg` finds in
 /// the first packets. `average` is the frame count over the length. A video is variable when
-/// the two differ by more than [`VARIABLE_RATE_TOLERANCE`]. Without `-r`, ffmpeg writes raw
+/// the two differ by more than [`VARIABLE_FPS_TOLERANCE`]. Without `-r`, ffmpeg writes raw
 /// frames at `real`, but the player paced them at `average`: a screen recording at 25 and
 /// 7.7 played 3.2 times too slow. Up to [`BURST_RATIO`] times the average, the output rate is
 /// `real`, so no frame drops. Above it, `real` is a burst (a phone clip at 60 with an average
 /// of 30, an iPhone slow motion clip at 120 and 29.6) or a time base guess. The output rate is
 /// then `average`, at least [`MIN_BURST_FPS`] (but not above `real`), so ffmpeg does not
 /// duplicate most frames. Every rate stays at or below [`MAX_VARIABLE_FPS`].
-fn variable_rate_fps(real: f64, average: f64) -> Option<f64> {
+fn variable_fps(real: f64, average: f64) -> Option<f64> {
     let valid = |rate: f64| rate.is_finite() && rate > 0.0;
-    if !valid(real) || !valid(average) || (real - average).abs() <= real * VARIABLE_RATE_TOLERANCE {
+    if !valid(real) || !valid(average) || (real - average).abs() <= real * VARIABLE_FPS_TOLERANCE {
         return None;
     }
     let rate = if real > average * BURST_RATIO {
@@ -523,7 +544,7 @@ fn sanitize_fps(fps: f64) -> f64 {
 /// The clockwise rotation in whole quarter turns from the counterclockwise `degrees` of a
 /// display matrix, as `ffprobe` writes it. iPhone portrait clips carry a rotation of -90, and
 /// the player must turn them 90 degrees clockwise.
-pub(crate) fn clockwise_rotation(degrees: f64) -> u16 {
+fn clockwise_rotation(degrees: f64) -> u16 {
     if !degrees.is_finite() {
         return 0;
     }
@@ -540,8 +561,8 @@ pub(crate) fn clockwise_rotation(degrees: f64) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProbeCache, VideoInfo, clockwise_rotation, fraction, gcd, output_within, pacing_rate,
-        packet_limit, parse, probe, probe_args, sanitize_fps, timing_of, variable_rate_fps,
+        ProbeCache, Rate, VideoInfo, clockwise_rotation, fraction, gcd, output_within, pacing_fps,
+        packet_limit, parse, probe, probe_args, sanitize_fps, timing_of, variable_fps,
     };
     use crate::player::tone_map::{Hdr, Primaries};
     use crate::test_support::fixture;
@@ -581,10 +602,7 @@ mod tests {
         assert_eq!((info.width, info.height, info.rotation), (3840, 2160, 0));
         assert_eq!(info.hdr, Some(Hdr::Hlg));
         assert_eq!(info.primaries, Primaries::Bt2020);
-        assert!(
-            info.ten_bit && !info.variable_rate && !info.animation,
-            "{info:?}"
-        );
+        assert!(info.ten_bit && info.rate == Rate::Constant, "{info:?}");
         assert!(
             (info.fps - 249_600.0 / 8323.0).abs() < 1e-9,
             "the average rate"
@@ -604,9 +622,20 @@ mod tests {
     }
 
     #[test]
+    fn a_display_matrix_of_plus_90_and_of_180_parses_the_clockwise_rotation() {
+        let turned = |matrix: &str| {
+            let json = PORTRAIT.replace("\"rotation\":-90", &format!("\"rotation\":{matrix}"));
+            let info = parse(json.as_bytes(), None).unwrap();
+            (info.width, info.height, info.rotation)
+        };
+        assert_eq!(turned("90"), (48, 64, 270), "a quarter turn swaps the size");
+        assert_eq!(turned("180"), (64, 48, 180), "a half turn keeps the size");
+    }
+
+    #[test]
     fn a_variable_rate_clip_parses_as_variable_at_its_average_rate() {
         let info = parse(VARIABLE.as_bytes(), None).unwrap();
-        assert!(info.variable_rate, "{info:?}");
+        assert_eq!(info.rate, Rate::Variable, "{info:?}");
         // A base rate of 60 is more than 1.5 times the average of 24.7: a burst.
         assert!((info.fps - 2400.0 / 97.0).abs() < 1e-9, "{info:?}");
         assert!((info.duration - 1.616_667).abs() < 1e-9);
@@ -615,7 +644,7 @@ mod tests {
     #[test]
     fn animations_parse_their_rate_and_length_from_the_packets() {
         let gif = parse(GIF.as_bytes(), Some(17)).unwrap();
-        assert!(gif.animation, "{gif:?}");
+        assert!(gif.is_animation(), "{gif:?}");
         assert_eq!((gif.width, gif.height, gif.stream), (16, 12, 0));
         assert_eq!(gif.fps, 10.0);
         assert!((gif.duration - 0.8).abs() < 1e-9, "{gif:?}");
@@ -633,7 +662,7 @@ mod tests {
         // Without the animation extension, the packets do not count, and the container rates
         // of 6 and 3.85 make a variable rate.
         let plain = parse(GIF.as_bytes(), None).unwrap();
-        assert!(plain.variable_rate && !plain.animation, "{plain:?}");
+        assert_eq!(plain.rate, Rate::Variable, "{plain:?}");
         assert_eq!(plain.fps, 6.0);
     }
 
@@ -739,8 +768,7 @@ mod tests {
             hdr: None,
             primaries: Primaries::Bt709,
             ten_bit: false,
-            animation: false,
-            variable_rate: false,
+            rate: Rate::Constant,
             stream: 0,
         };
         assert_eq!(info.frame_interval(), Duration::from_millis(40));
@@ -748,40 +776,40 @@ mod tests {
 
     #[test]
     fn a_variable_rate_plays_at_its_base_rate_and_a_burst_at_its_average() {
-        assert_eq!(variable_rate_fps(30.0, 30.0), None, "a constant rate");
+        assert_eq!(variable_fps(30.0, 30.0), None, "a constant rate");
         assert_eq!(
-            variable_rate_fps(30.0, 100_080.0 / 3337.0),
+            variable_fps(30.0, 100_080.0 / 3337.0),
             None,
             "an iPhone clip at 29.99 is constant"
         );
         assert_eq!(
-            variable_rate_fps(25.0, 7.7),
+            variable_fps(25.0, 7.7),
             Some(24.0),
             "a screen recording keeps smooth motion"
         );
-        assert_eq!(variable_rate_fps(60.0, 24.0), Some(24.0));
+        assert_eq!(variable_fps(60.0, 24.0), Some(24.0));
         assert_eq!(
-            variable_rate_fps(60.0, 30.0),
+            variable_fps(60.0, 30.0),
             Some(30.0),
             "a phone clip with bursts plays at its average, not with duplicates"
         );
         assert_eq!(
-            variable_rate_fps(30.0, 25.0),
+            variable_fps(30.0, 25.0),
             Some(30.0),
             "below the burst ratio"
         );
         assert_eq!(
-            variable_rate_fps(20.0, 5.0),
+            variable_fps(20.0, 5.0),
             Some(20.0),
             "the floor stays below real"
         );
         assert_eq!(
-            variable_rate_fps(120.0, 29.6),
+            variable_fps(120.0, 29.6),
             Some(29.6),
             "an iPhone slow motion clip"
         );
         assert_eq!(
-            variable_rate_fps(90_000.0, 75.0),
+            variable_fps(90_000.0, 75.0),
             Some(60.0),
             "a time base guess, capped"
         );
@@ -791,26 +819,26 @@ mod tests {
             (f64::NAN, 24.0),
             (24.0, f64::INFINITY),
         ] {
-            assert_eq!(variable_rate_fps(real, average), None);
+            assert_eq!(variable_fps(real, average), None);
         }
     }
 
     #[test]
-    fn the_pacing_rate_follows_the_rate_that_ffmpeg_writes() {
-        assert_eq!(pacing_rate(Some(30.0), Some(30.0), false), (30.0, false));
-        assert_eq!(pacing_rate(Some(25.0), Some(7.7), false), (24.0, true));
+    fn the_pacing_fps_follows_the_rate_that_ffmpeg_writes() {
+        assert_eq!(pacing_fps(Some(30.0), Some(30.0), false), (30.0, false));
+        assert_eq!(pacing_fps(Some(25.0), Some(7.7), false), (24.0, true));
         assert_eq!(
-            pacing_rate(Some(25.0), Some(7.7), true),
+            pacing_fps(Some(25.0), Some(7.7), true),
             (7.7, false),
             "an animation gets no variable rate"
         );
         assert_eq!(
-            pacing_rate(Some(30.0), None, false),
+            pacing_fps(Some(30.0), None, false),
             (30.0, false),
             "without an average rate, ffmpeg writes at the real rate"
         );
-        assert_eq!(pacing_rate(None, Some(25.0), false), (25.0, false));
-        assert_eq!(pacing_rate(None, None, false), (24.0, false));
+        assert_eq!(pacing_fps(None, Some(25.0), false), (25.0, false));
+        assert_eq!(pacing_fps(None, None, false), (24.0, false));
     }
 
     #[test]
@@ -885,11 +913,16 @@ mod tests {
                 return;
             };
             let info = probe(&ffprobe, &path).unwrap();
-            assert_eq!(info.variable_rate, variable, "{name}: {info:?}");
+            let kind = if variable {
+                Rate::Variable
+            } else {
+                Rate::Constant
+            };
+            assert_eq!(info.rate, kind, "{name}: {info:?}");
             // The variable clip has bursts at 60 and an average of 24.7, so it plays at 24.7.
             let fps = if variable { 2400.0 / 97.0 } else { 24.0 };
             assert!((info.fps - fps).abs() < 1e-9, "{name}: {info:?}");
-            assert!(!info.animation, "{name}");
+            assert!(!info.is_animation(), "{name}");
         }
     }
 
@@ -926,20 +959,20 @@ mod tests {
         };
         // The GIF has delays of 100, 500 and 200 ms: the rate is 10 and the length 0.8.
         let gif = probe(&ffprobe, &fixture("anim.gif")).unwrap();
-        assert!(gif.animation, "{gif:?}");
+        assert!(gif.is_animation(), "{gif:?}");
         assert_eq!((gif.width, gif.height, gif.stream), (16, 12, 0));
         assert_eq!(gif.fps, 10.0);
         assert!((gif.duration - 0.8).abs() < 1e-9, "{gif:?}");
         // The others hold 3 frames of 200 ms.
         for name in ["anim.webp", "anim.png"] {
             let info = probe(&ffprobe, &fixture(name)).unwrap();
-            assert!(info.animation, "{name}: {info:?}");
+            assert!(info.is_animation(), "{name}: {info:?}");
             assert_eq!((info.fps, info.stream), (5.0, 0), "{name}");
             assert!((info.duration - 0.6).abs() < 1e-9, "{name}: {info:?}");
         }
         // The AVIS lists its still item first; the sequence is the second stream.
         let avis = probe(&ffprobe, &fixture("anim.avif")).unwrap();
-        assert!(avis.animation, "{avis:?}");
+        assert!(avis.is_animation(), "{avis:?}");
         assert_eq!((avis.fps, avis.stream), (5.0, 1));
         assert!((avis.duration - 0.6).abs() < 1e-9, "{avis:?}");
     }

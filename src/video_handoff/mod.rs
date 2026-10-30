@@ -8,20 +8,21 @@ use crate::encoder::Transfer;
 use crate::mpv;
 use crate::player::{Decoder, Player, SystemDecoder, frame_limit};
 use crate::run_loop::LoopState;
+use crate::video::cube_dirs;
 use crate::yazi::find_on_path;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 pub(crate) use window::poll_mpv_window;
 
 /// The status note when a video needs mpv and PATH has none.
-pub(crate) const MPV_MISSING_NOTE: &str = "mpv not found on PATH";
+const MPV_MISSING_NOTE: &str = "mpv not found on PATH";
 
-/// The video player of the session, after the PATH lookups for mpv, ffmpeg and ffprobe.
+/// The video player of the session, after the PATH lookups for mpv and ffmpeg. The decoder
+/// holds the ffprobe program.
 pub(crate) struct VideoState {
     pub(crate) player: VideoPlayer,
     pub(crate) mpv: Option<PathBuf>,
     pub(crate) ffmpeg: Option<PathBuf>,
-    pub(crate) ffprobe: Option<PathBuf>,
     /// Starts ffmpeg and ffprobe for the terminal player. The tests put a fake here.
     pub(crate) decoder: Rc<dyn Decoder>,
 }
@@ -35,7 +36,6 @@ impl VideoState {
             player: config.video_player,
             mpv: find_on_path("mpv", std::env::var_os("PATH").as_deref()),
             ffmpeg: tools.ffmpeg.clone(),
-            ffprobe: tools.ffprobe.clone(),
             decoder: Rc::new(SystemDecoder::new(tools.ffprobe.clone())),
         }
     }
@@ -54,10 +54,10 @@ pub(crate) fn play_videos(app: &mut App, state: &mut LoopState, runner: &mut imp
         open_window(app, state, runner, None);
         return;
     }
-    match terminal_player_blocker(app, state) {
-        None => open_terminal_player(app, state),
-        Some(Blocker::Configured) => open_window(app, state, runner, None),
-        Some(Blocker::Missing(reason)) => open_window(app, state, runner, Some(reason)),
+    match terminal_player_program(app, state) {
+        Ok(program) => open_terminal_player(app, state, program),
+        Err(Blocker::Configured) => open_window(app, state, runner, None),
+        Err(Blocker::Missing(reason)) => open_window(app, state, runner, Some(reason)),
     }
 }
 
@@ -69,39 +69,35 @@ enum Blocker {
     Missing(&'static str),
 }
 
-/// Why the terminal player cannot play, or `None` when it can.
-fn terminal_player_blocker(app: &App, state: &LoopState) -> Option<Blocker> {
+/// The ffmpeg program of the terminal player, or why the player cannot play.
+fn terminal_player_program<'a>(app: &App, state: &'a LoopState) -> Result<&'a Path, Blocker> {
     if state.video.player == VideoPlayer::Window {
-        return Some(Blocker::Configured);
+        return Err(Blocker::Configured);
     }
     if app.graphics.transfer() != Transfer::TempFile {
-        return Some(Blocker::Missing("the terminal has no temp file medium"));
+        return Err(Blocker::Missing("the terminal has no temp file medium"));
     }
-    if state.video.ffmpeg.is_none() {
-        return Some(Blocker::Missing("ffmpeg not found on PATH"));
+    let Some(program) = state.video.ffmpeg.as_deref() else {
+        return Err(Blocker::Missing("ffmpeg not found on PATH"));
+    };
+    if !state.video.decoder.has_ffprobe() {
+        return Err(Blocker::Missing("ffprobe not found on PATH"));
     }
-    if state.video.ffprobe.is_none() {
-        return Some(Blocker::Missing("ffprobe not found on PATH"));
-    }
-    None
+    Ok(program)
 }
 
 /// Open the current video in the terminal player. A failed open shows its error in the
 /// fullscreen view, where Enter does not retry it.
-fn open_terminal_player(app: &mut App, state: &LoopState) {
-    let Some(program) = state.video.ffmpeg.as_deref() else {
-        return;
-    };
+fn open_terminal_player(app: &mut App, state: &LoopState, program: &Path) {
     let path = app.current_path().to_path_buf();
     let repeat = !app.slideshow_advancing();
-    let temp = std::env::temp_dir().join("viewr");
     let limit = frame_limit(app.fullscreen_box, app.cell_px);
     match Player::open(
         Rc::clone(&state.video.decoder),
         program,
         &path,
         limit,
-        &[&app.disk_cache_dir, &temp],
+        &cube_dirs(&app.disk_cache_dir).paths(),
         repeat,
     ) {
         Ok(mut player) => {
@@ -211,6 +207,7 @@ mod tests {
     use crate::config::VideoPlayer;
     use crate::encoder::{KittyBackend, Transfer};
     use crate::keys::fullscreen::handle_fullscreen_key;
+    use crate::player::SystemDecoder;
     use crate::test_support::video::{
         clip_info, fake_decoder, fake_runner, fullscreen_video_app, gallery_app_on_video,
         last_start, slideshow_video_app, starts, state_with, terminal_state, video_app,
@@ -432,7 +429,7 @@ mod tests {
     fn without_ffprobe_the_video_goes_to_the_window_with_a_note() {
         let mut app = video_app();
         let mut state = terminal_state();
-        state.video.ffprobe = None;
+        state.video.decoder = std::rc::Rc::new(SystemDecoder::new(None));
         let (log, mut runner) = fake_runner();
 
         play_videos(&mut app, &mut state, &mut runner);
