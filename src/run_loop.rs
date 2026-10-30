@@ -204,6 +204,12 @@ pub(crate) fn poll_background(app: &mut App, pending_emits: &mut Vec<usize>) {
 /// Write the Kitty images of the view. `true` means that the chrome needs a second draw,
 /// because the pictures of a full render cover the text.
 pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io::Result<bool> {
+    // The help popup sits above the pictures, and the key that closes it renders the view
+    // again. So no picture goes out while it is open, also not a thumbnail that came late.
+    if app.help_visible {
+        pending_emits.clear();
+        return Ok(false);
+    }
     let draws = app.needs_render && !app.images.is_empty();
     match app.mode {
         ViewMode::Fullscreen if draws => {
@@ -465,6 +471,43 @@ mod tests {
             std::fs::remove_file(path).unwrap();
         }
         assert!(crate::test_support::text(&out).contains("a=T,"));
+    }
+
+    /// A thumbnail that arrives while the help popup is open waits for the close. The close
+    /// renders the grid again, and that write places the picture.
+    #[test]
+    fn the_help_popup_holds_the_late_thumbnails_of_the_grid() {
+        let mut app = app_with(&["a.jpg"]);
+        app.scan_complete = true;
+        app.gallery.zoom_rows = 4;
+        app.gallery.update_grid(Rect::new(0, 0, 106, 29));
+        let image = image::RgbaImage::from_pixel(160, 96, image::Rgba([9, 9, 9, 255]));
+        let picture = crate::app::thumbnails::pad_for_grid(image, (160, 96), (8, 16), true);
+        app.thumb_cache.insert(0, picture);
+        assert!(!crate::test_support::char_key(&mut app, '?'));
+        assert!(app.help_visible);
+        app.graphics_out.take_bytes();
+
+        let mut pending = vec![0];
+        app.needs_render = true;
+        assert!(!super::render_images(&mut app, &mut pending).unwrap());
+        assert!(
+            app.graphics_out.take_bytes().is_empty(),
+            "no picture while the help is open"
+        );
+        assert!(pending.is_empty(), "the close renders the grid again");
+
+        assert!(!crate::test_support::char_key(&mut app, 'x'));
+        assert!(!app.help_visible);
+        assert!(super::render_images(&mut app, &mut pending).unwrap());
+        let out = app.graphics_out.take_bytes();
+        for path in crate::encoder::kitty::temp_file_paths(&out) {
+            std::fs::remove_file(path).unwrap();
+        }
+        assert!(
+            crate::test_support::text(&out).contains("a=T,"),
+            "the picture comes after the help"
+        );
     }
 
     #[test]
