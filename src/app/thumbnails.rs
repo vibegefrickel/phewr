@@ -2,7 +2,7 @@
 //! the padding to whole cells, the parked thumbnails of the folders before, the generations.
 
 use super::App;
-use super::disk_cache::{get_cache_file_path, try_load_from_disk_cache, try_save_to_disk_cache};
+use super::disk_cache::{CacheEntry, FileStamp, LazyEntry};
 use crate::decode::EmbeddedThumbnail;
 #[cfg(all(feature = "sips", target_os = "macos"))]
 use crate::decode::embedded_jpeg;
@@ -13,9 +13,9 @@ use crate::gallery::box_px;
 use crate::gallery::{GridPicture, ParkKey};
 use image::RgbaImage;
 use ratatui::layout::Rect;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, mpsc};
 
 /// The thumbnail decodes that run at once. 24 parallel decodes of 24 MP HEIC frames held
@@ -56,11 +56,88 @@ pub(super) struct ThumbJob {
     pub(super) rect: Rect,
 }
 
+/// The jobs of one phase that wait, in the order of the grid, with a count per image index
+/// beside them. `holds` runs per visible cell per draw, so the membership test must not scan
+/// the queue.
+#[derive(Debug, Default)]
+pub(super) struct JobQueue {
+    jobs: VecDeque<ThumbJob>,
+    members: HashMap<usize, usize>,
+}
+
+impl JobQueue {
+    pub(super) fn push_back(&mut self, job: ThumbJob) {
+        *self.members.entry(job.index).or_default() += 1;
+        self.jobs.push_back(job);
+    }
+
+    pub(super) fn pop_front(&mut self) -> Option<ThumbJob> {
+        let job = self.jobs.pop_front()?;
+        self.forget(job.index);
+        Some(job)
+    }
+
+    /// Take the job at `position` out of the queue.
+    pub(super) fn remove(&mut self, position: usize) -> Option<ThumbJob> {
+        let job = self.jobs.remove(position)?;
+        self.forget(job.index);
+        Some(job)
+    }
+
+    /// Drop every waiting job of the image `index`.
+    pub(super) fn remove_index(&mut self, index: usize) {
+        if self.members.remove(&index).is_some() {
+            self.jobs.retain(|job| job.index != index);
+        }
+    }
+
+    /// True while a job of the image `index` waits.
+    pub(super) fn contains(&self, index: usize) -> bool {
+        self.members.contains_key(&index)
+    }
+
+    pub(super) fn iter(&self) -> std::collections::vec_deque::Iter<'_, ThumbJob> {
+        self.jobs.iter()
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.jobs.len()
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.jobs.is_empty()
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.jobs.clear();
+        self.members.clear();
+    }
+
+    /// Count one job of `index` less.
+    fn forget(&mut self, index: usize) {
+        if let Some(count) = self.members.get_mut(&index) {
+            *count -= 1;
+            if *count == 0 {
+                self.members.remove(&index);
+            }
+        }
+    }
+}
+
+/// The tests compare the queue with the jobs that they expect, in order.
+#[cfg(test)]
+impl<const N: usize> PartialEq<[ThumbJob; N]> for JobQueue {
+    fn eq(&self, other: &[ThumbJob; N]) -> bool {
+        self.jobs == *other
+    }
+}
+
 /// The slots of one decode phase: the jobs that run, at most `limit`, and the jobs that wait
 /// in the order of the grid.
 pub(super) struct JobSlots {
     pub(super) running: HashSet<usize>,
-    pub(super) waiting: VecDeque<ThumbJob>,
+    pub(super) waiting: JobQueue,
     limit: usize,
 }
 
@@ -68,7 +145,7 @@ impl JobSlots {
     fn new(limit: usize) -> Self {
         Self {
             running: HashSet::new(),
-            waiting: VecDeque::new(),
+            waiting: JobQueue::default(),
             limit,
         }
     }
@@ -79,12 +156,12 @@ impl JobSlots {
 
     /// True while the image `index` runs or waits in this phase.
     fn holds(&self, index: usize) -> bool {
-        self.running.contains(&index) || self.waiting.iter().any(|job| job.index == index)
+        self.running.contains(&index) || self.waiting.contains(index)
     }
 
     /// The images that run or wait in this phase, as one set for many lookups.
     fn indices(&self) -> HashSet<usize> {
-        let waiting = self.waiting.iter().map(|job| job.index);
+        let waiting = self.waiting.members.keys().copied();
         self.running.iter().copied().chain(waiting).collect()
     }
 
@@ -119,6 +196,14 @@ impl ThumbImage {
     }
 }
 
+/// The animation flag of a file and the stamp of the file that the header check read. A job of
+/// a file with the same stamp takes the flag and opens no file for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct AnimationFlag {
+    animated: bool,
+    stamp: Option<FileStamp>,
+}
+
 /// The result of a thumbnail job. `animated` is the header check of a file that can hold an
 /// animation.
 pub(super) struct ThumbResult {
@@ -126,7 +211,7 @@ pub(super) struct ThumbResult {
     index: usize,
     phase: ThumbPhase,
     image: ThumbImage,
-    animated: Option<bool>,
+    animated: Option<AnimationFlag>,
 }
 
 /// The thumbnail jobs of the grid: the channel of their results, the slots of each phase, the
@@ -144,6 +229,9 @@ pub(super) struct ThumbnailJobs {
     /// The cells whose disk cache read missed in this generation. They read again only after
     /// their sharp decode.
     cache_misses: HashSet<usize>,
+    /// The file stamp of each flag in `App::animated`, so that a job of an unchanged file
+    /// skips the header read.
+    flag_stamps: HashMap<PathBuf, FileStamp>,
     generation: u32,
 }
 
@@ -158,6 +246,7 @@ impl ThumbnailJobs {
             previews: JobSlots::new(MAX_PREVIEW_JOBS),
             cache_reads: JobSlots::new(MAX_CACHE_READS),
             cache_misses: HashSet::new(),
+            flag_stamps: HashMap::new(),
             generation: 0,
         }
     }
@@ -303,18 +392,9 @@ impl App {
             if self.thumb_cache.is_sharp(index) {
                 return false;
             }
-            self.thumb_jobs
-                .sharp
-                .waiting
-                .retain(|job| job.index != index);
-            self.thumb_jobs
-                .previews
-                .waiting
-                .retain(|job| job.index != index);
-            self.thumb_jobs
-                .cache_reads
-                .waiting
-                .retain(|job| job.index != index);
+            self.thumb_jobs.sharp.waiting.remove_index(index);
+            self.thumb_jobs.previews.waiting.remove_index(index);
+            self.thumb_jobs.cache_reads.waiting.remove_index(index);
             self.thumb_jobs.cache_misses.remove(&index);
             if let Some(old_id) = self.thumb_cache.insert(index, picture) {
                 self.stale_image_ids.push((index, old_id));
@@ -346,17 +426,31 @@ impl App {
     /// Keep the animation flag of a file that can hold an animation, for the grid marker.
     ///
     /// The flags outlive a folder switch, because a parked thumbnail comes back without a job.
-    /// Each job reads the flag again, and a changed file gets a job, so a flag is as fresh as
-    /// its thumbnail. Above `MAX_ANIMATION_FLAGS` entries, the map starts again.
-    fn store_animation_flag(&mut self, index: usize, animated: Option<bool>) {
-        if let Some(animated) = animated
+    /// A job reads the header only when the flag of the same file stamp is unknown, and a
+    /// changed file gets a job and a new stamp, so a flag is as fresh as its thumbnail. Above
+    /// `MAX_ANIMATION_FLAGS` entries, the map starts again.
+    fn store_animation_flag(&mut self, index: usize, flag: Option<AnimationFlag>) {
+        if let Some(flag) = flag
             && let Some(path) = self.images.get(index)
         {
             if self.animated.len() >= MAX_ANIMATION_FLAGS && !self.animated.contains_key(path) {
                 self.animated.clear();
+                self.thumb_jobs.flag_stamps.clear();
             }
-            self.animated.insert(path.clone(), animated);
+            self.animated.insert(path.clone(), flag.animated);
+            match flag.stamp {
+                Some(stamp) => self.thumb_jobs.flag_stamps.insert(path.clone(), stamp),
+                None => self.thumb_jobs.flag_stamps.remove(path),
+            };
         }
+    }
+
+    /// The animation flag that a job of `path` read before, with its file stamp.
+    fn known_animation_flag(&self, path: &Path) -> Option<AnimationFlag> {
+        Some(AnimationFlag {
+            animated: *self.animated.get(path)?,
+            stamp: Some(*self.thumb_jobs.flag_stamps.get(path)?),
+        })
     }
 
     /// True while a disk cache read runs or waits. The run loop then looks more often, because
@@ -436,7 +530,9 @@ impl App {
     /// the file and writes the result into the disk cache. A cache read only reads the disk
     /// cache, on its own threads, and sends `None` on a miss. A preview or a sharp job of a
     /// cell whose cache read missed does not read the cache again. The job pads the result
-    /// for the grid, so the UI thread copies no pixels.
+    /// for the grid, so the UI thread copies no pixels. The job computes the cache key at most
+    /// one time, at its first use, and its file stamp tells whether the known animation flag
+    /// still holds.
     /// A job that waited across a list change has no file any more and starts nothing.
     fn start_thumb_job(&mut self, phase: ThumbPhase, job: ThumbJob) {
         let Some(path) = self.images.get(job.index).cloned() else {
@@ -449,24 +545,26 @@ impl App {
         let generation = self.thumb_jobs.generation;
         let cache_dir = self.disk_cache_dir.clone();
         let missed = self.thumb_jobs.cache_misses.contains(&job.index);
+        let known = self.known_animation_flag(&path);
         spawn_job(phase, move || {
+            let entry = LazyEntry::new(&cache_dir, &path, target);
             let (image, sharp) = match phase {
-                ThumbPhase::CacheRead => {
-                    (try_load_from_disk_cache(&cache_dir, &path, target), true)
+                ThumbPhase::CacheRead => (entry.load(), true),
+                ThumbPhase::Preview => preview_or_cached(&path, target, &entry, !missed),
+                ThumbPhase::Sharp if missed => {
+                    (decode_into_cache(&cache_dir, &path, target, &entry), true)
                 }
-                ThumbPhase::Preview => preview_or_cached(&cache_dir, &path, target, !missed),
-                ThumbPhase::Sharp if missed => (decode_into_cache(&cache_dir, &path, target), true),
-                ThumbPhase::Sharp => (sharp_thumbnail(&cache_dir, &path, target), true),
+                ThumbPhase::Sharp => (sharp_thumbnail(&cache_dir, &path, target, &entry), true),
             };
             // A missed cache read leaves the header read to the decode job of the cell.
             let animated = if phase == ThumbPhase::CacheRead && image.is_none() {
                 None
             } else {
-                animation_flag(&path)
+                animation_flag(&path, &entry, known)
             };
             // The still of a video or an animation carries the play triangle until its loop
             // starts. The disk cache keeps the still without the stamp.
-            let playable = is_playable(&path, animated);
+            let playable = is_playable(&path, animated.map(|flag| flag.animated));
             let picture = image.map(|mut image| {
                 if playable {
                     crate::icons::stamp_play(&mut image);
@@ -515,18 +613,46 @@ fn cache_read_pool() -> Option<&'static rayon::ThreadPool> {
 }
 
 /// The animation flag of a file that can hold an animation, `None` for the other formats. The
-/// job reads it, because the draw must read no file.
+/// job reads it, because the draw must read no file. The `known` flag of the same file stamp
+/// opens no file, so a cell reads its header one time, not once per job phase. Only a file
+/// that can hold an animation needs the stamp of `entry`.
 #[cfg(feature = "video")]
-fn animation_flag(path: &Path) -> Option<bool> {
-    crate::player::animation::has_animation_extension(path)
-        .then(|| crate::player::is_animated(path))
+fn animation_flag(
+    path: &Path,
+    entry: &LazyEntry<'_>,
+    known: Option<AnimationFlag>,
+) -> Option<AnimationFlag> {
+    if !crate::player::animation::has_animation_extension(path) {
+        return None;
+    }
+    let stamp = entry.get().map(|entry| entry.stamp);
+    if let Some(known) = known
+        && stamp.is_some()
+        && known.stamp == stamp
+    {
+        return Some(known);
+    }
+    #[cfg(test)]
+    HEADER_READS.add(path);
+    Some(AnimationFlag {
+        animated: crate::player::is_animated(path),
+        stamp,
+    })
 }
 
 /// Without the `video` feature, an animated image is a still image.
 #[cfg(not(feature = "video"))]
-fn animation_flag(_path: &Path) -> Option<bool> {
+fn animation_flag(
+    _path: &Path,
+    _entry: &LazyEntry<'_>,
+    _known: Option<AnimationFlag>,
+) -> Option<AnimationFlag> {
     None
 }
+
+/// The header reads of `animation_flag`, per file.
+#[cfg(all(test, feature = "video"))]
+static HEADER_READS: super::disk_cache::PathCounter = super::disk_cache::PathCounter::new();
 
 /// True for a file whose still gets the play stamp: a video, or an animated image.
 #[cfg(feature = "video")]
@@ -540,51 +666,65 @@ fn is_playable(_path: &Path, _animated: Option<bool>) -> bool {
 }
 
 /// Put the sharp thumbnail of `path` at `target` into the disk cache, as the sharp job of the
-/// grid does. A file that the cache holds costs one `stat` and no decode. The folder prefetch
-/// calls it.
+/// grid does. A file that the cache holds costs one key and one `stat` of the cache file, and
+/// no decode. A file without a key cannot go into the cache, so it decodes nothing. The folder
+/// prefetch calls it.
 pub(super) fn warm_disk_cache(cache_dir: &Path, path: &Path, target: (u32, u32)) {
-    if get_cache_file_path(cache_dir, path, target).is_some_and(|file| file.exists()) {
+    let entry = LazyEntry::new(cache_dir, path, target);
+    if entry.get().is_none_or(CacheEntry::exists) {
         return;
     }
-    sharp_thumbnail(cache_dir, path, target);
+    decode_into_cache(cache_dir, path, target, &entry);
 }
 
-/// The sharp thumbnail from the disk cache, or from a decode that then fills the cache.
-fn sharp_thumbnail(cache_dir: &Path, path: &Path, target: (u32, u32)) -> Option<RgbaImage> {
-    try_load_from_disk_cache(cache_dir, path, target)
-        .or_else(|| decode_into_cache(cache_dir, path, target))
+/// The sharp thumbnail from the disk cache `entry`, or from a decode that then fills it.
+fn sharp_thumbnail(
+    cache_dir: &Path,
+    path: &Path,
+    target: (u32, u32),
+    entry: &LazyEntry<'_>,
+) -> Option<RgbaImage> {
+    entry
+        .load()
+        .or_else(|| decode_into_cache(cache_dir, path, target, entry))
 }
 
-/// The sharp thumbnail from a decode, which then goes into the disk cache.
-fn decode_into_cache(cache_dir: &Path, path: &Path, target: (u32, u32)) -> Option<RgbaImage> {
+/// The sharp thumbnail from a decode, which then goes into the disk cache `entry`.
+fn decode_into_cache(
+    cache_dir: &Path,
+    path: &Path,
+    target: (u32, u32),
+    entry: &LazyEntry<'_>,
+) -> Option<RgbaImage> {
     let image = decode_thumbnail(cache_dir, path, target).ok()?;
+    save_into(entry, &image);
+    Some(image)
+}
+
+/// Keep `image` in the disk cache `entry`. A file without a key stays out of the cache.
+fn save_into(entry: &LazyEntry<'_>, image: &RgbaImage) {
     #[expect(
         clippy::let_underscore_must_use,
         reason = "a thumbnail that misses the disk cache decodes again on the next visit"
     )]
-    let _ = try_save_to_disk_cache(cache_dir, path, target, &image);
-    Some(image)
+    let _ = entry.save(image);
 }
 
 /// The sharp thumbnail from the disk cache (`true`), or the embedded preview. An embedded
 /// JPEG that covers the box is sharp too, and goes into the disk cache. Without
 /// `read_cache`, the cache read of the cell missed, and the job reads the cache no more.
 fn preview_or_cached(
-    cache_dir: &Path,
     path: &Path,
     target: (u32, u32),
+    entry: &LazyEntry<'_>,
     read_cache: bool,
 ) -> (Option<RgbaImage>, bool) {
-    if read_cache && let Some(image) = try_load_from_disk_cache(cache_dir, path, target) {
+    if read_cache && let Some(image) = entry.load() {
         return (Some(image), true);
     }
     match decode_preview(path, target) {
         Ok((image, true)) => {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "a thumbnail that misses the disk cache decodes again on the next visit"
-            )]
-            let _ = try_save_to_disk_cache(cache_dir, path, target, &image);
+            save_into(entry, &image);
             (Some(image), true)
         }
         Ok((image, false)) => (Some(image), false),
@@ -765,7 +905,9 @@ mod tests {
         ThumbImage, ThumbJob, ThumbPhase, ThumbResult, pad_for_grid, preview_or_cached,
         warm_disk_cache,
     };
-    use crate::app::disk_cache::{get_cache_file_path, try_load_from_disk_cache};
+    use crate::app::disk_cache::{
+        KEY_COMPUTATIONS, LazyEntry, get_cache_file_path, try_load_from_disk_cache,
+    };
     use crate::decode::libheif::decode_heif_preview;
     use crate::image_list::SharedImageList;
     use crate::test_support::write_heif;
@@ -1000,13 +1142,14 @@ mod tests {
         let app = app_with_files(dir.path(), &["a.png"]);
         let path = &app.images[0];
         warm_disk_cache(&cache, path, (24, 32));
+        let entry = LazyEntry::new(&cache, path, (24, 32));
 
-        let (image, sharp) = preview_or_cached(&cache, path, (24, 32), true);
+        let (image, sharp) = preview_or_cached(path, (24, 32), &entry, true);
         assert!(
             image.is_some() && sharp,
             "a job without a known miss reads the cache"
         );
-        let (image, sharp) = preview_or_cached(&cache, path, (24, 32), false);
+        let (image, sharp) = preview_or_cached(path, (24, 32), &entry, false);
         assert!(
             image.is_none() && !sharp,
             "after a miss, only the embedded preview counts, and a PNG has none"
@@ -1269,6 +1412,44 @@ mod tests {
             assert!(warm.poll_thumbnails().is_empty(), "no second image");
             !warm.has_pending_work()
         });
+    }
+
+    /// A HEIC cell that waits for a preview slot reads the cache ahead and misses. Its preview
+    /// job then reads no cache and saves nothing, so it computes no cache key.
+    #[test]
+    fn a_heic_preview_after_a_missed_cache_read_computes_no_cache_key() {
+        let dir = test_dir();
+        let path = dir.path().join("photo.heic");
+        let normal = ImageOrientation::Normal;
+        write_heif(&path, CompressionFormat::Hevc, normal, Some(normal));
+        let mut app = App::new((8, 16), SharedImageList::new());
+        app.images = vec![path.clone()];
+        app.filenames = vec!["photo.heic".to_owned()];
+        app.gallery.filtered_indices = vec![0];
+        app.disk_cache_dir = dir.path().join("cache");
+        app.scan_complete = true;
+        // Four other previews hold the slots, so the cell waits and reads the cache ahead.
+        app.thumb_jobs.previews.running.extend(100..104);
+
+        app.spawn_thumb_decode(0, Rect::new(0, 0, 20, 10));
+        wait_until(|| {
+            app.poll_thumbnails();
+            app.thumb_jobs.cache_misses.contains(&0)
+        });
+        assert_eq!(KEY_COMPUTATIONS.of(&path), 1, "the missed cache read");
+        app.thumb_jobs.previews.running.clear();
+        wait_until(|| app.poll_thumbnails() == vec![0]);
+        assert!(!app.thumb_cache.is_sharp(0), "the preview comes first");
+        wait_until(|| {
+            app.poll_thumbnails();
+            app.thumb_cache.is_sharp(0)
+        });
+
+        assert_eq!(
+            KEY_COMPUTATIONS.of(&path),
+            2,
+            "the preview computes no key, the sharp decode computes one for its save"
+        );
     }
 
     #[test]
@@ -1774,5 +1955,154 @@ mod folder_switch_tests {
             "a stale thumbnail was stored"
         );
         assert!(!app.thumb_cache.contains(0));
+    }
+}
+
+#[cfg(test)]
+mod read_count_tests {
+    use super::{JobQueue, ThumbJob, warm_disk_cache};
+    use crate::app::App;
+    use crate::app::disk_cache::KEY_COMPUTATIONS;
+    use crate::test_support::{app_with_files, test_dir, wait_until};
+    use ratatui::layout::Rect;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    /// 3x2 cells of 8x16 px: a box of 24x32 px.
+    const RECT: Rect = Rect::new(0, 0, 3, 2);
+
+    /// An app with one real PNG cell and its own disk cache, and the path of the PNG.
+    fn png_app() -> (TempDir, App, PathBuf) {
+        let dir = test_dir();
+        let mut app = app_with_files(dir.path(), &["a.png"]);
+        app.disk_cache_dir = dir.path().join("cache");
+        let path = app.images[0].clone();
+        (dir, app, path)
+    }
+
+    /// Decode the cell 0 and wait until its sharp picture is in the cache.
+    fn decode_sharp(app: &mut App) {
+        app.spawn_thumb_decode(0, RECT);
+        wait_until(|| {
+            app.poll_thumbnails();
+            app.thumb_cache.is_sharp(0)
+        });
+    }
+
+    /// Run a cold cell through a missed cache read and its sharp decode, then a warm cell
+    /// after a zoom. Each job computes its cache key one time.
+    fn cold_then_warm(app: &mut App) {
+        // Four other decodes hold the slots, so the cell waits and reads the cache ahead.
+        app.thumb_jobs.sharp.running.extend(100..104);
+        app.spawn_thumb_decode(0, RECT);
+        wait_until(|| {
+            app.poll_thumbnails();
+            app.thumb_jobs.cache_misses.contains(&0)
+        });
+        app.thumb_jobs.sharp.running.clear();
+        wait_until(|| {
+            app.poll_thumbnails();
+            app.thumb_cache.is_sharp(0)
+        });
+        app.forget_thumbnails();
+        decode_sharp(app);
+    }
+
+    #[test]
+    fn each_thumbnail_job_computes_its_cache_key_one_time() {
+        let (_dir, mut app, path) = png_app();
+
+        cold_then_warm(&mut app);
+
+        assert_eq!(
+            KEY_COMPUTATIONS.of(&path),
+            3,
+            "the missed cache read, the sharp decode with its save, the warm read"
+        );
+    }
+
+    #[test]
+    fn the_folder_prefetch_computes_one_cache_key_per_file() {
+        let (dir, _app, path) = png_app();
+        let cache = dir.path().join("cache");
+
+        warm_disk_cache(&cache, &path, (24, 32));
+        assert_eq!(
+            KEY_COMPUTATIONS.of(&path),
+            1,
+            "the check, the decode and the save"
+        );
+        warm_disk_cache(&cache, &path, (24, 32));
+        assert_eq!(KEY_COMPUTATIONS.of(&path), 2, "a warm file only checks");
+    }
+
+    #[test]
+    #[cfg(feature = "video")]
+    fn a_cell_reads_its_header_one_time_until_the_file_changes() {
+        let (_dir, mut app, path) = png_app();
+
+        cold_then_warm(&mut app);
+        assert_eq!(
+            super::HEADER_READS.of(&path),
+            1,
+            "the sharp decode reads the header, the miss and the warm read do not"
+        );
+        assert_eq!(app.animated.get(&path), Some(&false));
+
+        image::RgbaImage::new(9, 9).save(&path).unwrap();
+        app.forget_thumbnails();
+        decode_sharp(&mut app);
+        assert_eq!(
+            super::HEADER_READS.of(&path),
+            2,
+            "a changed file reads its header again"
+        );
+    }
+
+    /// A cold AVIF cell runs a preview job and a sharp job, and the second takes the flag of
+    /// the first.
+    #[test]
+    #[cfg(all(feature = "video", feature = "heic"))]
+    fn a_cold_avif_cell_reads_its_header_in_the_first_phase_only() {
+        let dir = test_dir();
+        let path = dir.path().join("still.avif");
+        std::fs::copy(crate::test_support::fixture("still.avif"), &path).unwrap();
+        let mut app = crate::test_support::app();
+        app.images = vec![path.clone()];
+        app.filenames = vec!["still.avif".to_owned()];
+        app.gallery.filtered_indices = vec![0];
+        app.disk_cache_dir = dir.path().join("cache");
+
+        decode_sharp(&mut app);
+
+        assert_eq!(
+            KEY_COMPUTATIONS.of(&path),
+            2,
+            "the preview job and the sharp job"
+        );
+        assert_eq!(super::HEADER_READS.of(&path), 1);
+        assert_eq!(app.animated.get(&path), Some(&false));
+    }
+
+    #[test]
+    fn the_queue_tells_its_members_without_a_scan_and_keeps_its_order() {
+        let job = |index| ThumbJob { index, rect: RECT };
+        let mut queue = JobQueue::default();
+        for index in [3, 1, 4, 1, 5] {
+            queue.push_back(job(index));
+        }
+        assert!([3, 1, 4, 5].into_iter().all(|index| queue.contains(index)));
+        assert!(!queue.contains(2));
+
+        assert_eq!(queue.pop_front(), Some(job(3)));
+        assert!(!queue.contains(3));
+        assert_eq!(queue.remove(0), Some(job(1)));
+        assert!(queue.contains(1), "the second job of 1 still waits");
+        queue.remove_index(1);
+        assert!(!queue.contains(1));
+        assert_eq!(queue, [job(4), job(5)]);
+
+        queue.clear();
+        assert!(queue.is_empty() && !queue.contains(4));
     }
 }

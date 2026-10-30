@@ -40,20 +40,171 @@ pub(super) fn default_disk_cache_dir() -> PathBuf {
     )
 }
 
-/// The cache file of `path` at the pixel size `target`. The name hashes the file identity, so a
-/// changed file or another size never hits an old thumbnail.
-pub(super) fn get_cache_file_path(
+/// The identity of a source file in the cache key: its length and its modification time. A
+/// changed file gets another stamp, so its old cache file and its old animation flag never hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FileStamp {
+    len: u64,
+    mtime: Duration,
+}
+
+impl FileStamp {
+    /// The stamp of `metadata`, or `None` when its modification time does not read.
+    fn of(metadata: &std::fs::Metadata) -> Option<Self> {
+        let mtime = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .ok()?;
+        Some(Self {
+            len: metadata.len(),
+            mtime,
+        })
+    }
+}
+
+/// The cache file of one source file at one size, with the stamp that its name hashes. A
+/// thumbnail job computes it one time and reads and writes through it, because the key costs
+/// a `stat` and a `realpath` walk.
+#[derive(Debug)]
+pub(super) struct CacheEntry {
+    file: PathBuf,
+    #[cfg_attr(
+        not(feature = "video"),
+        expect(
+            dead_code,
+            reason = "only the animation flag of the video feature reads it"
+        )
+    )]
+    pub(super) stamp: FileStamp,
+}
+
+impl CacheEntry {
+    /// The cached thumbnail. A file that does not decode is removed.
+    pub(super) fn load(&self) -> Option<RgbaImage> {
+        let bytes = std::fs::read(&self.file).ok()?;
+        if let Ok(image) = image::load_from_memory_with_format(&bytes, CACHE_FORMAT) {
+            Some(image.into_rgba8())
+        } else {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a cache file that stays is only disk space, the cache prunes it"
+            )]
+            let _ = std::fs::remove_file(&self.file);
+            None
+        }
+    }
+
+    /// Keep `img` as the thumbnail of this entry.
+    pub(super) fn save(&self, img: &RgbaImage) -> io::Result<()> {
+        write_cache_file(&self.file, |temp_path| {
+            img.save_with_format(temp_path, CACHE_FORMAT)
+                .map_err(io::Error::other)
+        })
+    }
+
+    /// True when the cache holds this thumbnail, so the folder prefetch decodes nothing.
+    pub(super) fn exists(&self) -> bool {
+        self.file.exists()
+    }
+}
+
+/// The cache entry of the thumbnail of `path` at the pixel size `target`. The name hashes the
+/// file identity, so a changed file or another size never hits an old thumbnail.
+pub(super) fn thumbnail_entry(
     cache_dir: &Path,
     path: &Path,
     target: (u32, u32),
-) -> Option<PathBuf> {
-    cache_file_path(
+) -> Option<CacheEntry> {
+    cache_entry(
         cache_dir,
         path,
         target,
         THUMBNAIL_CACHE_VERSION,
         CACHE_EXTENSION,
     )
+}
+
+/// The cache entry of one thumbnail job, computed at the first use. A job that reads no cache,
+/// saves nothing and needs no file stamp computes no key, for example the HEIC preview of a
+/// cell whose cache read missed.
+pub(super) struct LazyEntry<'a> {
+    cache_dir: &'a Path,
+    path: &'a Path,
+    target: (u32, u32),
+    entry: std::cell::OnceCell<Option<CacheEntry>>,
+}
+
+impl<'a> LazyEntry<'a> {
+    pub(super) fn new(cache_dir: &'a Path, path: &'a Path, target: (u32, u32)) -> Self {
+        Self {
+            cache_dir,
+            path,
+            target,
+            entry: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The entry, computed at the first call. `None` for a file without a key.
+    pub(super) fn get(&self) -> Option<&CacheEntry> {
+        self.entry
+            .get_or_init(|| thumbnail_entry(self.cache_dir, self.path, self.target))
+            .as_ref()
+    }
+
+    /// The cached thumbnail, or `None` for a miss or a file without a key.
+    pub(super) fn load(&self) -> Option<RgbaImage> {
+        self.get()?.load()
+    }
+
+    /// Keep `img` in the cache. A file without a key stays out of the cache.
+    pub(super) fn save(&self, img: &RgbaImage) -> io::Result<()> {
+        self.get().ok_or_else(no_cache_key)?.save(img)
+    }
+}
+
+/// The cache file of the thumbnail of `path` at `target`, for the tests that look for it.
+#[cfg(test)]
+pub(super) fn get_cache_file_path(
+    cache_dir: &Path,
+    path: &Path,
+    target: (u32, u32),
+) -> Option<PathBuf> {
+    thumbnail_entry(cache_dir, path, target).map(|entry| entry.file)
+}
+
+/// The cache entry of `path` at `target` for the output `version`, with `extension`.
+fn cache_entry(
+    cache_dir: &Path,
+    path: &Path,
+    target: (u32, u32),
+    version: &str,
+    extension: &str,
+) -> Option<CacheEntry> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::fs;
+    use std::hash::{Hash, Hasher};
+
+    #[cfg(test)]
+    KEY_COMPUTATIONS.add(path);
+    let stamp = FileStamp::of(&fs::metadata(path).ok()?)?;
+    let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let mut hasher = DefaultHasher::new();
+    version.hash(&mut hasher);
+    crate::decode::color::target().hash(&mut hasher);
+    canonical_path.hash(&mut hasher);
+    stamp.len.hash(&mut hasher);
+    stamp.mtime.as_secs().hash(&mut hasher);
+    stamp.mtime.subsec_nanos().hash(&mut hasher);
+    target.0.hash(&mut hasher);
+    target.1.hash(&mut hasher);
+    let filename = format!("{:016x}.{extension}", hasher.finish());
+
+    Some(CacheEntry {
+        file: cache_dir.join(filename),
+        stamp,
+    })
 }
 
 /// The cache file of `path` at `target` for the output `version`, with `extension`.
@@ -64,63 +215,69 @@ fn cache_file_path(
     version: &str,
     extension: &str,
 ) -> Option<PathBuf> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::fs;
-    use std::hash::{Hash, Hasher};
-
-    let metadata = fs::metadata(path).ok()?;
-    let mtime = metadata
-        .modified()
-        .ok()?
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .ok()?;
-    let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-
-    let mut hasher = DefaultHasher::new();
-    version.hash(&mut hasher);
-    crate::decode::color::target().hash(&mut hasher);
-    canonical_path.hash(&mut hasher);
-    metadata.len().hash(&mut hasher);
-    mtime.as_secs().hash(&mut hasher);
-    mtime.subsec_nanos().hash(&mut hasher);
-    target.0.hash(&mut hasher);
-    target.1.hash(&mut hasher);
-    let filename = format!("{:016x}.{extension}", hasher.finish());
-
-    Some(cache_dir.join(filename))
+    cache_entry(cache_dir, path, target, version, extension).map(|entry| entry.file)
 }
 
+/// The cached thumbnail of `path` at `target`, for the tests that read the cache directly.
+#[cfg(test)]
 pub(super) fn try_load_from_disk_cache(
     cache_dir: &Path,
     path: &Path,
     target: (u32, u32),
 ) -> Option<RgbaImage> {
-    let cache_path = get_cache_file_path(cache_dir, path, target)?;
-    let bytes = std::fs::read(&cache_path).ok()?;
-    if let Ok(image) = image::load_from_memory_with_format(&bytes, CACHE_FORMAT) {
-        Some(image.into_rgba8())
-    } else {
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "a cache file that stays is only disk space, the cache prunes it"
-        )]
-        let _ = std::fs::remove_file(cache_path);
-        None
-    }
+    thumbnail_entry(cache_dir, path, target)?.load()
 }
 
+/// Keep `img` as the thumbnail of `path` at `target`, for the tests that fill the cache.
+#[cfg(test)]
 pub(super) fn try_save_to_disk_cache(
     cache_dir: &Path,
     path: &Path,
     target: (u32, u32),
     img: &RgbaImage,
 ) -> io::Result<()> {
-    let cache_path = get_cache_file_path(cache_dir, path, target).ok_or_else(no_cache_key)?;
-    write_cache_file(&cache_path, |temp_path| {
-        img.save_with_format(temp_path, CACHE_FORMAT)
-            .map_err(io::Error::other)
-    })
+    thumbnail_entry(cache_dir, path, target)
+        .ok_or_else(no_cache_key)?
+        .save(img)
 }
+
+/// The calls per source path of one function, so that a test counts the file reads of a job.
+/// Each test uses its own temp paths, so the tests that run at the same time do not mix. A
+/// `BTreeMap` has a `const` constructor, and one entry per path keeps the cost fixed when all
+/// tests share one process (`cargo test`).
+#[cfg(test)]
+pub(super) struct PathCounter(std::sync::Mutex<std::collections::BTreeMap<PathBuf, usize>>);
+
+#[cfg(test)]
+impl PathCounter {
+    pub(super) const fn new() -> Self {
+        Self(std::sync::Mutex::new(std::collections::BTreeMap::new()))
+    }
+
+    /// Count one call for `path`.
+    pub(super) fn add(&self, path: &Path) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(path.to_path_buf())
+            .or_default() += 1;
+    }
+
+    /// The calls for `path` so far.
+    pub(super) fn of(&self, path: &Path) -> usize {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(path)
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
+/// The cache keys that `cache_entry` computed, per source path.
+#[cfg(test)]
+pub(super) static KEY_COMPUTATIONS: PathCounter = PathCounter::new();
 
 /// The error of a file without a cache key: the file is gone, or its time does not read.
 fn no_cache_key() -> io::Error {
@@ -492,6 +649,39 @@ mod tests {
         assert_ne!(first, resized);
         assert_ne!(first, changed);
         assert_eq!(first.extension().and_then(|ext| ext.to_str()), Some("qoi"));
+    }
+
+    /// The key hashes the same input in the same order as the key code before `CacheEntry`,
+    /// so the cache files of the same version stay valid.
+    #[test]
+    fn the_cache_key_hashes_the_input_of_the_old_key_code() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let dir = test_dir();
+        let cache = dir.path().join("cache");
+        let source = dir.path().join("source.png");
+        fs::write(&source, b"synthetic").unwrap();
+        let metadata = fs::metadata(&source).unwrap();
+        let mtime = metadata
+            .modified()
+            .unwrap()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        let mut hasher = DefaultHasher::new();
+        super::THUMBNAIL_CACHE_VERSION.hash(&mut hasher);
+        crate::decode::color::target().hash(&mut hasher);
+        fs::canonicalize(&source).unwrap().hash(&mut hasher);
+        metadata.len().hash(&mut hasher);
+        mtime.as_secs().hash(&mut hasher);
+        mtime.subsec_nanos().hash(&mut hasher);
+        120_u32.hash(&mut hasher);
+        80_u32.hash(&mut hasher);
+
+        assert_eq!(
+            get_cache_file_path(&cache, &source, (120, 80)),
+            Some(cache.join(format!("{:016x}.qoi", hasher.finish())))
+        );
     }
 
     #[test]
