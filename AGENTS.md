@@ -197,17 +197,19 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - `app/grid_loops.rs`: the loops of the grid: `GridLoops`, their jobs, their cancel flags and the
   loop clock.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
-- `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its construction.
-  One file per topic: `info_panel.rs`, `grid_zoom.rs` (the cell size and the state file),
+- `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields, its construction
+  and `box_px` (the pixel box of a rect). One file per topic: `info_panel.rs` (`view_file`, the
+  file of the info panel and the status row), `grid_zoom.rs` (the cell size and the state file),
   `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter), `cell_shape.rs`,
-  `fullscreen.rs` (enter, leave, the steps and the decode), `zoom.rs` (zoom, pan and the
-  full-resolution source), `delete.rs` (the marks and the delete question), `directory.rs` (the
+  `fullscreen.rs` (enter, leave, the steps and the decode, `FullscreenDecode`), `zoom.rs` (zoom,
+  pan and the full-resolution source in `ZoomState`), `delete.rs` (the marks and the delete question), `directory.rs` (the
   directory switch), `folder_prefetch.rs` (the decode of the first screen of the folder under the
   cursor into the disk cache), `mouse.rs` (the mouse state and the screen layout of the last draw),
   `meta.rs` (the facts of the file under the cursor, read on a thread), `folders.rs` (the folder
-  entries of the grid, `Enter` into a folder, `go_to_parent`), `video.rs` (the terminal player
-  state, the return after a video, the mpv window watch), `thumbnails.rs` (the jobs, the queue, the
-  HEIC previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
+  entries of the grid, `is_parent_entry`, `Enter` into a folder, `go_to_parent`), `video.rs` (the
+  terminal player state, the return after a video, the mpv window watch), `thumbnails.rs`
+  (`ThumbnailJobs`: the channel, the sharp, preview and cache read slots, the misses and the
+  generation, and `ThumbImage`), `disk_cache.rs` (the thumbnail disk cache).
 - `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the route by
   extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the user waits
   for. `raster.rs` (the `image` crate, the EXIF orientation and `header_dimensions`, the size from
@@ -324,7 +326,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   (`icons::stamp_play`, white with a dark edge, 30 % of the height), after the disk cache read, so
   the cache keeps the still without the stamp. The loop frames replace the stamped still, so the
   stamp means "not playing yet". There is no small `▶` marker in the label or in the gap. The route
-  (`App::plays_at`) reads the header of the one file after a key press. `App::is_video_at` still
+  (`App::opens_in_player`) reads the header of the one file after a key press. `App::is_video` still
   drives the placeholder and the loading icon. The probe reads at most 16 packets: the rate is the
   GCD of the frame delays, or the mean rate above 50 fps, and the length comes from the container.
   An AVIS file holds two video streams, and the probe maps the one with the most frames. ffmpeg gets
@@ -413,7 +415,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   most `MAX_CACHE_READS` = 64) on its own pool of at most 8 threads (`cache_read_pool`), so a hit
   never waits behind a cold decode. `LibheifSlot` and `MAX_THUMB_JOBS` do not count these threads,
   and a miss holds one only for a `stat`. A hit drops the waiting jobs of its cell. A miss leaves
-  the cell in the queue and in `App::cache_misses`, and the later jobs of that cell skip their own
+  the cell in the queue and in `ThumbnailJobs::cache_misses` (`App::thumb_jobs`), and the later jobs of that cell skip their own
   cache lookup. A waiting sharp decode does not start while the cache read of its cell runs.
 - **Kitty emits:** a pass writes the new thumbnails in grid order, in one synchronized update, up
   to `EMIT_PASS_BYTES` (4 MB of the RGBA bytes of the cache, not the bytes on the wire). The rest
