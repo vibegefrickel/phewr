@@ -214,7 +214,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   entries of the grid, `is_parent_entry`, `Enter` into a folder, `go_to_parent`), `video.rs` (the
   terminal player state, the return after a video, the mpv window watch), `thumbnails.rs`
   (`ThumbnailJobs`: the channel, the sharp, preview and cache read slots, the misses and the
-  generation, and `ThumbImage`), `disk_cache.rs` (the thumbnail disk cache).
+  generation, and `ThumbImage`, with `JobQueue` for the waiting jobs), `disk_cache.rs` (the
+  thumbnail disk cache, `CacheEntry`, `LazyEntry` and `FileStamp`).
 - `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the route by
   extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the user waits
   for. `raster.rs` (the `image` crate, the EXIF orientation and `header_dimensions`, the size from
@@ -443,7 +444,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   never waits behind a cold decode. `LibheifSlot` and `MAX_THUMB_JOBS` do not count these threads,
   and a miss holds one only for a `stat`. A hit drops the waiting jobs of its cell. A miss leaves
   the cell in the queue and in `ThumbnailJobs::cache_misses` (`App::thumb_jobs`), and the later jobs of that cell skip their own
-  cache lookup. A waiting sharp decode does not start while the cache read of its cell runs.
+  cache lookup. Each job computes its cache key (`CacheEntry`: one `stat` and one `realpath`) at
+  most one time, at its first use (`LazyEntry`), and reads and writes through it. A HEIC preview
+  after a missed cache read computes no key. The job reads the animation header only when
+  `App::animated` holds no flag for the same file stamp (`ThumbnailJobs::flag_stamps`), so a
+  warm cell after a zoom reads none and a changed file reads it again. A waiting sharp decode
+  does not start while the cache read of its cell runs.
 - **Kitty emits:** a pass writes the new thumbnails in grid order, in one synchronized update, up
   to `EMIT_PASS_BYTES` (4 MB of the RGBA bytes of the cache, not the bytes on the wire). The rest
   goes out in the next pass. One write of 36 cells takes about 11 ms.
@@ -580,9 +586,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Thumbnail cache key:** the key hashes `viewr-thumbnail-v13` (`THUMBNAIL_CACHE_VERSION`), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
-  each takes its own version, higher than main and than every branch in flight. The folder prefetch
-  writes the same key (`warm_disk_cache` calls `sharp_thumbnail`). The prune removes temp files of
-  the cache that are older than 1 hour.
+  each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
+  in `app/disk_cache.rs` computes the key, and `CacheEntry` holds the file and the stamp (the
+  length and the mtime). A job computes it at most one time, and the folder prefetch one time per
+  file (`warm_disk_cache` calls `sharp_thumbnail` with the same key). A test rebuilds the hash from
+  its inputs, so a change of the input or of its order fails the test. The prune removes temp
+  files of the cache that are older than 1 hour.
 - **Folder prefetch:** after the cursor rests on a folder cell for `FOLDER_PREFETCH_DELAY`
   (300 ms) and `App::has_pending_work` is false, one thread decodes the first screen of that
   folder into the disk cache (`app/folder_prefetch.rs`). It computes what Enter computes, with
