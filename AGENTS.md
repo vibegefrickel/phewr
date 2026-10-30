@@ -415,8 +415,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   (`FIRST_PICTURE_POLL`, `App::waits_for_the_first_picture`), and until the next frame of a
   playing grid loop (`App::grid_loop_timeout`). There is no wait while the grid has emits left
   from the last pass, or while new loop frames wait for their write (`App::loops_to_send`).
-  `has_pending_work` counts the loop jobs. Otherwise it waits 250 ms (`next_timeout` in
-  `run_loop.rs`).
+  A running loop job alone gives no 10 ms poll (`App::has_pending_work_but_loops`): its result
+  waits for the idle look, so the first loop frame of a cold grid can come 250 ms later.
+  `has_pending_work` still counts the loop jobs, so the folder prefetch can start up to 250 ms
+  after the last loop job. Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
 - **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
   context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
   and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
