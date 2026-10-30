@@ -3,6 +3,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder};
+use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -72,11 +73,23 @@ pub(crate) fn animate_to<W: Write + ?Sized>(
     id: u32,
     root_gap_ms: u32,
 ) -> io::Result<()> {
-    write!(
+    apc(
         out,
-        "\x1b_Ga=a,q=2,i={id},r=1,z={}\x1b\\\x1b_Ga=a,q=2,i={id},s=3,v=1\x1b\\",
-        root_gap_ms.max(1)
-    )
+        format_args!("a=a,q=2,i={id},r=1,z={}", root_gap_ms.max(1)),
+        b"",
+    )?;
+    apc(out, format_args!("a=a,q=2,i={id},s=3,v=1"), b"")
+}
+
+/// Write one Kitty graphics command: `ESC _ G`, the control keys, `;` and the payload, then
+/// `ESC \`. A command without a payload has no `;`.
+fn apc<W: Write + ?Sized>(out: &mut W, keys: fmt::Arguments<'_>, payload: &[u8]) -> io::Result<()> {
+    out.write_fmt(format_args!("\x1b_G{keys}"))?;
+    if !payload.is_empty() {
+        out.write_all(b";")?;
+        out.write_all(payload)?;
+    }
+    out.write_all(b"\x1b\\")
 }
 
 /// Call `send` with the RGB copy of `pixels` when every pixel is opaque, else with `pixels`.
@@ -166,12 +179,10 @@ fn write_direct<W: Write + ?Sized>(
     for (i, chunk) in chunks.iter().enumerate() {
         let more = i32::from(i + 1 < total);
         if i == 0 {
-            write!(out, "\x1b_G{first},m={more};")?;
+            apc(out, format_args!("{first},m={more}"), chunk)?;
         } else {
-            write!(out, "\x1b_G{}m={more};", keys.chunk)?;
+            apc(out, format_args!("{}m={more}", keys.chunk), chunk)?;
         }
-        out.write_all(chunk)?;
-        out.write_all(b"\x1b\\")?;
     }
 
     Ok(())
@@ -186,7 +197,11 @@ fn write_temp_file_reference<W: Write + ?Sized>(
     path: &Path,
 ) -> io::Result<()> {
     let first = (keys.first)(format);
-    write!(out, "\x1b_G{first},t=t;{}\x1b\\", encode_path(path))
+    apc(
+        out,
+        format_args!("{first},t=t"),
+        encode_path(path).as_bytes(),
+    )
 }
 
 /// Write `pixels` to a new file in the temp dir with the marker in its name. The protocol
@@ -237,12 +252,12 @@ pub(crate) fn is_ssh() -> bool {
 }
 
 /// The Kitty query (`a=q`) that asks whether the terminal reads a temp file.
-fn probe_sequence(path: &Path) -> Vec<u8> {
-    format!(
-        "\x1b_Ga=q,i={PROBE_ID},t=t,f=32,s=1,v=1;{}\x1b\\",
-        encode_path(path)
+fn write_probe<W: Write + ?Sized>(out: &mut W, path: &Path) -> io::Result<()> {
+    apc(
+        out,
+        format_args!("a=q,i={PROBE_ID},t=t,f=32,s=1,v=1"),
+        encode_path(path).as_bytes(),
     )
-    .into_bytes()
 }
 
 /// The sequences that ask whether the terminal plays Kitty animations: a silent 1x1 image
@@ -250,13 +265,19 @@ fn probe_sequence(path: &Path) -> Vec<u8> {
 ///
 /// A query (`a=q`) stores no image, so the frame needs a real one. The frame has no `q` key,
 /// because `q=1` suppresses the `OK` answer.
-fn animation_probe_sequence() -> Vec<u8> {
-    format!(
-        "\x1b_Ga=t,q=2,i={ANIMATION_PROBE_ID},f=32,s=1,v=1;{ONE_PIXEL}\x1b\\\
-         \x1b_Ga=f,i={ANIMATION_PROBE_ID},f=32,s=1,v=1;{ONE_PIXEL}\x1b\\\
-         \x1b_Ga=d,d=I,i={ANIMATION_PROBE_ID},q=2\x1b\\"
-    )
-    .into_bytes()
+fn write_animation_probe<W: Write + ?Sized>(out: &mut W) -> io::Result<()> {
+    let pixel = ONE_PIXEL.as_bytes();
+    apc(
+        out,
+        format_args!("a=t,q=2,i={ANIMATION_PROBE_ID},f=32,s=1,v=1"),
+        pixel,
+    )?;
+    apc(
+        out,
+        format_args!("a=f,i={ANIMATION_PROBE_ID},f=32,s=1,v=1"),
+        pixel,
+    )?;
+    apc(out, format_args!("a=d,d=I,i={ANIMATION_PROBE_ID},q=2"), b"")
 }
 
 /// `Some(true)` when `response` holds the `OK` answer for the image `id`, `Some(false)` for
@@ -327,12 +348,13 @@ pub(crate) fn detect_backend(
     };
     let mut sequence = Vec::new();
     let mut answers = 0;
-    if let Some(path) = &probe_file {
-        sequence.extend(probe_sequence(path));
+    // A write into a `Vec` does not fail.
+    if let Some(path) = &probe_file
+        && write_probe(&mut sequence, path).is_ok()
+    {
         answers += 1;
     }
-    if loops.is_none() {
-        sequence.extend(animation_probe_sequence());
+    if loops.is_none() && write_animation_probe(&mut sequence).is_ok() {
         answers += 1;
     }
     let answer = if answers > 0 {
@@ -369,7 +391,6 @@ fn transfer_after_probe(answer: &[u8], path: &Path) -> Transfer {
     }
 }
 
-/// The medium for the help popup, with the key of the protocol.
 /// The loop path for the help popup.
 pub(crate) fn describe_loops(loops: Loops) -> &'static str {
     match loops {
@@ -378,6 +399,7 @@ pub(crate) fn describe_loops(loops: Loops) -> &'static str {
     }
 }
 
+/// The medium for the help popup, with the key of the protocol.
 pub(crate) fn describe(transfer: Transfer) -> &'static str {
     match transfer {
         Transfer::Direct => "direct (t=d)",
@@ -386,38 +408,41 @@ pub(crate) fn describe(transfer: Transfer) -> &'static str {
     }
 }
 
+/// Delete every image with its pixels and its placements (`d=A`), so that the terminal frees
+/// the storage of viewr in one command.
 pub(crate) fn delete_all_to<W: Write + ?Sized>(out: &mut W) -> io::Result<()> {
-    out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\")
+    apc(out, format_args!("a=d,d=A,q=2"), b"")
 }
 
-/// Delete visible placements only; keep stored image data (uppercase `A` would nuke storage).
+/// Delete every placement and keep the pixels (`d=a`), so that a later `a=p` shows an image
+/// again without a transmit. `d=A` would delete the pixels too.
 pub(crate) fn clear_placements_to<W: Write + ?Sized>(out: &mut W) -> io::Result<()> {
-    out.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")
+    apc(out, format_args!("a=d,d=a,q=2"), b"")
 }
 
 /// Delete the image `id` with its placements (`d=I`), so a replaced thumbnail frees its memory.
 pub(crate) fn delete_image_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Result<()> {
-    write!(out, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")
+    apc(out, format_args!("a=d,d=I,i={id},q=2"), b"")
 }
 
 /// Delete the placements of the image `id` and keep its pixels (`d=i`), so that a later `a=p`
 /// shows it again without a transmit. A grid loop swaps its frames this way.
 pub(crate) fn delete_placements_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Result<()> {
-    write!(out, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\")
+    apc(out, format_args!("a=d,d=i,i={id},q=2"), b"")
 }
 
-/// Place an already-transmitted image (by ID) at the cursor position, scaled to `cell_box` if
-/// there is one. Cheap — no PNG payload. `C=1` keeps the text cursor fixed so large placements
-/// never scroll the grid.
+/// Place a stored image by its id at the cursor position, scaled to `cell_box` if there is one.
+/// The command carries no pixels. `C=1` keeps the text cursor fixed, so that a large placement
+/// never scrolls the grid.
 pub(crate) fn place_by_id_to<W: Write + ?Sized>(
     out: &mut W,
     id: u32,
     cell_box: Option<(u16, u16)>,
 ) -> io::Result<()> {
-    write!(
+    apc(
         out,
-        "\x1b_Ga=p,q=2,C=1,i={id}{}\x1b\\",
-        cell_box_keys(cell_box)
+        format_args!("a=p,q=2,C=1,i={id}{}", cell_box_keys(cell_box)),
+        b"",
     )
 }
 

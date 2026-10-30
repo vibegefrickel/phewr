@@ -187,36 +187,6 @@ impl Loops {
     }
 }
 
-pub(crate) trait GraphicsBackend {
-    /// Send `pixels` and show them. An RGBA image without a transparent pixel goes out as RGB.
-    fn transmit(
-        &self,
-        out: &mut dyn Write,
-        pixels: Pixels<'_>,
-        options: &DisplayOptions,
-    ) -> io::Result<()>;
-    fn delete_all_to(&self, out: &mut dyn Write) -> io::Result<()>;
-    fn clear_placements_to(&self, out: &mut dyn Write) -> io::Result<()>;
-    fn place_by_id_to(
-        &self,
-        out: &mut dyn Write,
-        id: u32,
-        cell_box: Option<(u16, u16)>,
-    ) -> io::Result<()>;
-    fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
-    fn delete_placements_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
-    /// Add a frame of `gap_ms` milliseconds to the animation of the image `id`.
-    fn transmit_frame(
-        &self,
-        out: &mut dyn Write,
-        pixels: Pixels<'_>,
-        id: u32,
-        gap_ms: u32,
-    ) -> io::Result<()>;
-    /// Run the animation of the image `id` in a loop forever.
-    fn animate_to(&self, out: &mut dyn Write, id: u32, root_gap_ms: u32) -> io::Result<()>;
-}
-
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct KittyBackend {
     transfer: Transfer,
@@ -246,11 +216,10 @@ impl KittyBackend {
     pub(crate) fn loops(self) -> Loops {
         self.loops
     }
-}
 
-impl GraphicsBackend for KittyBackend {
-    fn transmit(
-        &self,
+    /// Send `pixels` and show them. An RGBA image without a transparent pixel goes out as RGB.
+    pub(crate) fn transmit(
+        self,
         out: &mut dyn Write,
         pixels: Pixels<'_>,
         options: &DisplayOptions,
@@ -258,33 +227,9 @@ impl GraphicsBackend for KittyBackend {
         kitty::transmit_to(out, pixels, options, self.transfer)
     }
 
-    fn delete_all_to(&self, out: &mut dyn Write) -> io::Result<()> {
-        kitty::delete_all_to(out)
-    }
-
-    fn clear_placements_to(&self, out: &mut dyn Write) -> io::Result<()> {
-        kitty::clear_placements_to(out)
-    }
-
-    fn place_by_id_to(
-        &self,
-        out: &mut dyn Write,
-        id: u32,
-        cell_box: Option<(u16, u16)>,
-    ) -> io::Result<()> {
-        kitty::place_by_id_to(out, id, cell_box)
-    }
-
-    fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
-        kitty::delete_image_to(out, id)
-    }
-
-    fn delete_placements_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
-        kitty::delete_placements_to(out, id)
-    }
-
-    fn transmit_frame(
-        &self,
+    /// Add a frame of `gap_ms` milliseconds to the animation of the image `id`.
+    pub(crate) fn transmit_frame(
+        self,
         out: &mut dyn Write,
         pixels: Pixels<'_>,
         id: u32,
@@ -292,17 +237,12 @@ impl GraphicsBackend for KittyBackend {
     ) -> io::Result<()> {
         kitty::transmit_frame_to(out, pixels, id, gap_ms, self.transfer)
     }
-
-    fn animate_to(&self, out: &mut dyn Write, id: u32, root_gap_ms: u32) -> io::Result<()> {
-        kitty::animate_to(out, id, root_gap_ms)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DisplayOptions, GraphicsBackend, GraphicsOutput, KittyBackend, OPACITY_CHUNK, Pixels,
-        Transfer,
+        DisplayOptions, GraphicsOutput, KittyBackend, OPACITY_CHUNK, Pixels, Transfer, kitty,
     };
     use image::{Rgba, RgbaImage};
     use std::io::Write;
@@ -311,7 +251,7 @@ mod tests {
     fn the_test_buffer_collects_the_bytes_until_a_take() {
         let mut out = GraphicsOutput::buffer();
         let mut copy = out.clone();
-        KittyBackend::default().delete_all_to(&mut out).unwrap();
+        kitty::delete_all_to(&mut out).unwrap();
         copy.write_all(b"!").unwrap();
         copy.flush().unwrap();
 
@@ -340,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn kitty_backend_delegates_through_trait() {
+    fn kitty_backend_delegates_to_the_kitty_writers() {
         let backend = KittyBackend::default();
         assert_eq!(backend.transfer(), Transfer::Direct);
         let image = RgbaImage::new(2, 2);
@@ -357,9 +297,9 @@ mod tests {
                 },
             )
             .unwrap();
-        backend.delete_all_to(&mut out).unwrap();
-        backend.clear_placements_to(&mut out).unwrap();
-        backend.place_by_id_to(&mut out, 9, None).unwrap();
+        kitty::delete_all_to(&mut out).unwrap();
+        kitty::clear_placements_to(&mut out).unwrap();
+        kitty::place_by_id_to(&mut out, 9, None).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(",i=7,"));

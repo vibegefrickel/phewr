@@ -2629,6 +2629,7 @@ dependencies = [
  "toml",
  "trash",
  "turbojpeg",
+ "unicode-width",
 ]
 
 [[package]]

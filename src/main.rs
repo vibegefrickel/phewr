@@ -40,7 +40,6 @@ use crossterm::{
     cursor, execute,
     terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
-use encoder::GraphicsBackend;
 use image_list::SharedImageList;
 use run_loop::{LoopState, run};
 use scanner::canonicalize_or_self;
@@ -59,8 +58,7 @@ fn release_terminal_to(
     mouse: bool,
     disable_raw: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
-    let mut first_error = encoder::KittyBackend::default()
-        .delete_all_to(out)
+    let mut first_error = encoder::kitty::delete_all_to(out)
         .and_then(|()| out.flush())
         .err();
     if mouse

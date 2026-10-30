@@ -82,11 +82,6 @@ pub(crate) fn stamp_play(image: &mut image::RgbaImage) {
     /// The edge is the triangle at this scale, drawn first.
     const EDGE_SCALE: f64 = 1.18;
     let (width, height) = image.dimensions();
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a share of the image height in pixels fits into u32"
-    )]
     let size = (f64::from(height) * ICON_HEIGHT_SHARE).round() as u32;
     if size < 4 || size > width {
         return;
@@ -112,9 +107,8 @@ pub(crate) fn stamp_play(image: &mut image::RgbaImage) {
 /// `over` on `under`, with the alpha of `over`.
 fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
     let alpha = u32::from(over[3]);
-    let mix = |u: u8, o: u8| {
-        u8::try_from((u32::from(o) * alpha + u32::from(u) * (255 - alpha)) / 255).unwrap_or(u8::MAX)
-    };
+    // A weighted mean of two bytes fits into a byte.
+    let mix = |u: u8, o: u8| ((u32::from(o) * alpha + u32::from(u) * (255 - alpha)) / 255) as u8;
     [
         mix(under[0], over[0]),
         mix(under[1], over[1]),
@@ -123,29 +117,20 @@ fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
     ]
 }
 
-/// The box of the icon in `cell`: a square in pixels, about 30 % of the cell height, centered.
-/// `None` when the cell is too small for two rows, or the box would not fit.
-pub(crate) fn icon_rect(cell: Rect, cell_px: (u32, u32)) -> Option<Rect> {
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a share of a cell height in rows fits into u16"
-    )]
-    let rows = (f64::from(cell.height) * ICON_HEIGHT_SHARE).round() as u16;
+/// The box of the icon in the thumbnail area `thumb`: a square in pixels, about 30 % of the
+/// height of `thumb`, centered. `None` when `thumb` is too small for two rows, or the box would
+/// not fit.
+pub(crate) fn icon_rect(thumb: Rect, cell_px: (u32, u32)) -> Option<Rect> {
+    let rows = (f64::from(thumb.height) * ICON_HEIGHT_SHARE).round() as u16;
     if rows < MIN_ICON_ROWS || cell_px.0 == 0 {
         return None;
     }
     let height_px = u32::from(rows) * cell_px.1;
     let cols = u16::try_from(height_px.div_ceil(cell_px.0)).ok()?;
-    if cols > cell.width {
+    if cols > thumb.width {
         return None;
     }
-    Some(Rect {
-        x: cell.x + (cell.width - cols) / 2,
-        y: cell.y + (cell.height - rows) / 2,
-        width: cols,
-        height: rows,
-    })
+    Some(crate::gallery::centered(thumb, cols, rows))
 }
 
 /// Draw `icon` into `area` of `buf` in the foreground color of `style`.

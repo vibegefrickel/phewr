@@ -28,11 +28,17 @@ const DEFAULT_CELL_RATIO: f64 = 2.0;
 /// The grid always shows at least this many columns.
 const MIN_GRID_COLS: usize = 2;
 
+/// The grid: its geometry, the cursor and the filter.
+///
+/// A terminal cell is one character cell of the terminal (`cell_px`). The thumbnail area is the
+/// box of terminal cells that shows the picture (`thumb_rect`). A cell is one grid cell: the
+/// thumbnail area and its label (`cell_at`, `border_rect`).
 #[derive(Clone)]
 pub(crate) struct GalleryState {
     pub filtered_indices: Vec<usize>,
     pub cursor: usize,
     pub scroll_offset: usize,
+    /// The count of the grid columns. `thumb_cols` is the width of one column.
     pub grid_cols: usize,
     /// The rows that fit after the zoom level is clamped to the terminal height.
     pub visible_rows: usize,
@@ -43,8 +49,8 @@ pub(crate) struct GalleryState {
     pub show_filenames: bool,
     /// The zoom level: how many thumbnail rows the grid shows.
     pub zoom_rows: usize,
-    /// The base cell size in terminal cells. `update_grid` computes it. Every thumbnail is
-    /// decoded for this size.
+    /// The width and the height of the base thumbnail area in terminal cells. `update_grid`
+    /// computes them. Every thumbnail is decoded for this size.
     pub thumb_cols: u16,
     pub thumb_rows: u16,
     /// The first `extra_cols` columns are one cell wider, and the first `extra_rows` rows one
@@ -66,6 +72,17 @@ pub(crate) fn box_px(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
         u32::from(rect.width) * cell_px.0,
         u32::from(rect.height) * cell_px.1,
     )
+}
+
+/// A box of `cols` x `rows` terminal cells in the middle of `outer`, in whole cells. A box larger
+/// than `outer` starts at its edge.
+pub(crate) fn centered(outer: Rect, cols: u16, rows: u16) -> Rect {
+    Rect {
+        x: outer.x + outer.width.saturating_sub(cols) / 2,
+        y: outer.y + outer.height.saturating_sub(rows) / 2,
+        width: cols,
+        height: rows,
+    }
 }
 
 impl GalleryState {
@@ -142,7 +159,7 @@ impl GalleryState {
     }
 
     /// Height of one grid row: the thumbnail and the optional label, without the gap.
-    pub(crate) fn cell_height_total(&self) -> u16 {
+    fn cell_height_total(&self) -> u16 {
         self.thumb_rows + self.label_rows()
     }
 
@@ -220,9 +237,9 @@ impl GalleryState {
             .saturating_sub(self.label_rows())
             .clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
         self.extra_rows = spread(cell_area_height, self.cell_height_total(), rows);
-        let candidate_cols = (f64::from(self.thumb_rows) * self.cols_per_row).round() as u16;
+        let shaped_width = (f64::from(self.thumb_rows) * self.cols_per_row).round() as u16;
         self.grid_cols = (usize::from(grid_rect.width.saturating_sub(GAP))
-            / usize::from(candidate_cols.max(1) + GAP))
+            / usize::from(shaped_width.max(1) + GAP))
         .max(MIN_GRID_COLS);
         let cols = self.grid_cols as u16;
         let cell_area_width = grid_rect.width.saturating_sub(gaps(cols));
@@ -327,14 +344,14 @@ impl GalleryState {
     /// the thumbnail or its label. A gap or an empty cell gives `None`.
     pub(crate) fn cell_at(&self, column: u16, row: u16) -> Option<usize> {
         let range = self.visible_range();
-        (0..range.len()).find_map(|vis| {
-            let cell = self.cell_rect(vis);
+        (0..range.len()).find_map(|vis_idx| {
+            let thumb = self.thumb_rect(vis_idx);
             let hit = Rect {
-                height: cell.height + self.label_rows(),
-                ..cell
+                height: thumb.height + self.label_rows(),
+                ..thumb
             };
             hit.contains(ratatui::layout::Position::new(column, row))
-                .then_some(range.start + vis)
+                .then_some(range.start + vis_idx)
         })
     }
 
@@ -360,13 +377,13 @@ impl GalleryState {
     pub(crate) fn visible_items(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         self.visible_range()
             .enumerate()
-            .map(|(vis, position)| (vis, self.filtered_indices[position]))
+            .map(|(vis_idx, position)| (vis_idx, self.filtered_indices[position]))
     }
 
-    /// The thumbnail area of the visible cell `vis_index`, without the label row.
-    pub(crate) fn cell_rect(&self, vis_index: usize) -> Rect {
-        let col = (vis_index % self.grid_cols) as u16;
-        let row = (vis_index / self.grid_cols) as u16;
+    /// The thumbnail area of the visible cell `vis_idx`, without the label row.
+    pub(crate) fn thumb_rect(&self, vis_idx: usize) -> Rect {
+        let col = (vis_idx % self.grid_cols) as u16;
+        let row = (vis_idx / self.grid_cols) as u16;
         Rect {
             x: self.col_x(col),
             y: self.row_y(row),
@@ -375,15 +392,15 @@ impl GalleryState {
         }
     }
 
-    /// The border of the visible cell `vis_index`: the thumbnail and the label, plus the gap on
+    /// The border of the visible cell `vis_idx`: the thumbnail and the label, plus the gap on
     /// each side. Two neighbor cells share the gap between them.
-    pub(crate) fn border_rect(&self, vis_index: usize) -> Rect {
-        let cell = self.cell_rect(vis_index);
+    pub(crate) fn border_rect(&self, vis_idx: usize) -> Rect {
+        let thumb = self.thumb_rect(vis_idx);
         Rect {
-            x: cell.x - GAP,
-            y: cell.y - GAP,
-            width: cell.width + 2 * GAP,
-            height: cell.height + self.label_rows() + 2 * GAP,
+            x: thumb.x - GAP,
+            y: thumb.y - GAP,
+            width: thumb.width + 2 * GAP,
+            height: thumb.height + self.label_rows() + 2 * GAP,
         }
     }
 }
@@ -733,6 +750,49 @@ mod tests {
     }
 
     #[test]
+    fn two_rows_and_one_row_fill_the_height() {
+        let mut gallery = GalleryState::with_zoom_rows(50, 2);
+        gallery.update_grid(Rect::new(0, 0, 100, 40));
+        assert_eq!(gallery.visible_rows, 2);
+        let cols = gallery.grid_cols;
+        assert_eq!(
+            gallery.thumb_rect(cols).bottom() + GAP,
+            40,
+            "the second row ends at the bottom edge gap"
+        );
+        assert_eq!(gallery.visible_range(), 0..2 * cols);
+
+        // A terminal with room for one row shows one row and scrolls one row at a time.
+        gallery.update_grid(Rect::new(0, 0, 100, 6));
+        assert_eq!(gallery.visible_rows, 1);
+        let cols = gallery.grid_cols;
+        assert_eq!(
+            (gallery.thumb_rect(0).y, gallery.thumb_rect(0).height),
+            (1, 4)
+        );
+        assert_eq!(gallery.visible_range(), 0..cols);
+        gallery.move_down();
+        assert_eq!(gallery.scroll_offset, 1);
+        assert_eq!(gallery.visible_range(), cols..2 * cols);
+    }
+
+    #[test]
+    fn a_zero_rect_keeps_the_smallest_cells_and_two_columns() {
+        let mut gallery = GalleryState::with_zoom_rows(50, 4);
+        gallery.update_grid(Rect::default());
+        assert_eq!(gallery.grid_cols, 2);
+        assert_eq!(
+            gallery.thumb_box(),
+            Rect::new(0, 0, 8, 3),
+            "the smallest thumbnail area"
+        );
+        assert_eq!(gallery.visible_rows, 4);
+        gallery.move_down();
+        assert_eq!(gallery.cursor, 2);
+        assert_eq!(gallery.cell_at(0, 0), None, "the edge gap");
+    }
+
+    #[test]
     fn zoom_changes_the_row_count_and_clamps() {
         let mut gallery = GalleryState::with_zoom_rows(50, 4);
         gallery.update_grid(Rect::new(0, 0, 100, 40));
@@ -853,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_items_and_cell_rect_match_geometry() {
+    fn visible_items_and_thumb_rect_match_geometry() {
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
         gallery.update_grid(Rect::new(0, 0, 101, 22));
         gallery.scroll_offset = 1;
@@ -861,7 +921,7 @@ mod tests {
         let items: Vec<_> = gallery.visible_items().collect();
         assert_eq!(items.len(), gallery.visible_rows * gallery.grid_cols);
 
-        let first = gallery.cell_rect(0);
+        let first = gallery.thumb_rect(0);
         assert_eq!(first.x, gallery.grid_rect.x + GAP);
         assert_eq!(first.y, gallery.grid_rect.y + GAP);
         assert_eq!(
@@ -876,7 +936,7 @@ mod tests {
         );
 
         let last_col = gallery.grid_cols - 1;
-        let last = gallery.cell_rect(last_col);
+        let last = gallery.thumb_rect(last_col);
         assert_eq!(last.width, gallery.thumb_cols);
         assert_eq!(last.right() + GAP, gallery.grid_rect.right());
     }
@@ -891,7 +951,7 @@ mod tests {
             let cols = gallery.grid_cols;
             let rows = gallery.visible_rows;
 
-            let row: Vec<Rect> = (0..cols).map(|col| gallery.cell_rect(col)).collect();
+            let row: Vec<Rect> = (0..cols).map(|col| gallery.thumb_rect(col)).collect();
             assert_eq!(row[0].x, grid.x + 1, "the left edge gap");
             for pair in row.windows(2) {
                 assert_eq!(pair[1].x, pair[0].right() + 1, "1 gap column between cells");
@@ -927,7 +987,7 @@ mod tests {
     fn the_border_takes_the_gaps_around_the_cell_and_the_label() {
         let mut gallery = GalleryState::with_zoom_rows(12, 2);
         gallery.update_grid(Rect::new(0, 0, 101, 22));
-        assert_eq!(gallery.cell_rect(0), Rect::new(1, 1, 33, 10));
+        assert_eq!(gallery.thumb_rect(0), Rect::new(1, 1, 33, 10));
         assert_eq!(gallery.border_rect(0), Rect::new(0, 0, 35, 12));
         assert_eq!(
             gallery.border_rect(1).x,
@@ -937,7 +997,7 @@ mod tests {
 
         gallery.show_filenames = true;
         gallery.update_grid(Rect::new(0, 0, 101, 22));
-        let cell = gallery.cell_rect(0);
+        let cell = gallery.thumb_rect(0);
         let border = gallery.border_rect(0);
         assert_eq!(
             border.bottom(),
@@ -954,7 +1014,7 @@ mod tests {
         assert_eq!((gallery.grid_cols, gallery.thumb_cols), (3, 32));
         assert_eq!((gallery.extra_cols, gallery.extra_rows), (1, 1));
 
-        let cells: Vec<Rect> = (0..6).map(|index| gallery.cell_rect(index)).collect();
+        let cells: Vec<Rect> = (0..6).map(|index| gallery.thumb_rect(index)).collect();
         assert_eq!(cells[0], Rect::new(6, 8, 33, 10));
         assert_eq!(cells[1], Rect::new(40, 8, 32, 10));
         assert_eq!(cells[2], Rect::new(73, 8, 32, 10));
@@ -980,8 +1040,8 @@ mod tests {
         assert_eq!((gallery.thumb_rows, gallery.cell_height_total()), (10, 11));
         assert_eq!(gallery.extra_rows, 1);
 
-        let first = gallery.cell_rect(0);
-        let second_row = gallery.cell_rect(3);
+        let first = gallery.thumb_rect(0);
+        let second_row = gallery.thumb_rect(3);
         assert_eq!(first.height, 11);
         assert_eq!(
             second_row.y, 14,
@@ -1000,17 +1060,17 @@ mod tests {
         gallery.update_grid(Rect::new(0, 0, 101, 22));
         assert_eq!(gallery.extra_cols, 1);
 
-        let widths: Vec<u16> = (0..3).map(|col| gallery.cell_rect(col).width).collect();
+        let widths: Vec<u16> = (0..3).map(|col| gallery.thumb_rect(col).width).collect();
         assert_eq!(widths, [33, 32, 32]);
         gallery.move_right();
         gallery.move_right();
         gallery.move_down();
         assert_eq!(gallery.selected_index(), Some(5));
-        assert_eq!(gallery.cell_rect(5), Rect::new(68, 12, 32, 9));
+        assert_eq!(gallery.thumb_rect(5), Rect::new(68, 12, 32, 9));
         gallery.move_left();
         gallery.move_left();
         assert_eq!(gallery.selected_index(), Some(3));
-        assert_eq!(gallery.cell_rect(3).width, 33);
+        assert_eq!(gallery.thumb_rect(3).width, 33);
     }
 
     #[test]
@@ -1300,7 +1360,7 @@ mod mouse_tests {
         gallery.update_grid(Rect::new(0, 0, 100, 20));
         let cols = gallery.grid_cols;
         assert!((3..=4).contains(&cols), "{cols} columns, 3 rows");
-        let cell = gallery.cell_rect(cols + 1);
+        let cell = gallery.thumb_rect(cols + 1);
 
         assert_eq!(gallery.cell_at(cell.x, cell.y), Some(cols + 1));
         assert_eq!(
@@ -1315,7 +1375,7 @@ mod mouse_tests {
         assert_eq!(gallery.cell_at(cell.x, cell.y), Some(2 * cols + 1));
         gallery.scroll_offset = 2;
         assert_eq!(gallery.cell_at(cell.x, cell.y), None, "no 4th row");
-        let first = gallery.cell_rect(0);
+        let first = gallery.thumb_rect(0);
         assert_eq!(gallery.cell_at(first.x, first.y), Some(2 * cols));
     }
 
@@ -1323,9 +1383,9 @@ mod mouse_tests {
     fn cell_at_ignores_the_empty_cells_after_the_last_entry() {
         let mut gallery = GalleryState::with_zoom_rows(4, 2);
         gallery.update_grid(Rect::new(0, 0, 100, 20));
-        let empty = gallery.cell_rect(5);
+        let empty = gallery.thumb_rect(5);
         assert_eq!(gallery.cell_at(empty.x, empty.y), None);
-        let last = gallery.cell_rect(3);
+        let last = gallery.thumb_rect(3);
         assert_eq!(gallery.cell_at(last.x, last.y), Some(3));
     }
 

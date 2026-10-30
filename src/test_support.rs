@@ -89,7 +89,7 @@ pub(crate) fn click(app: &mut App, at: (u16, u16)) -> bool {
 
 /// The center of the visible gallery cell `vis`.
 pub(crate) fn cell_center(app: &App, vis: usize) -> (u16, u16) {
-    let cell = app.gallery.cell_rect(vis);
+    let cell = app.gallery.thumb_rect(vis);
     (cell.x + cell.width / 2, cell.y + cell.height / 2)
 }
 

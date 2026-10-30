@@ -25,7 +25,7 @@ pub(crate) use slideshow::Slideshow;
 pub(crate) use video::VideoReturn;
 
 use crate::config::{self, Config};
-use crate::encoder::{GraphicsBackend, GraphicsOutput, KittyBackend};
+use crate::encoder::{GraphicsOutput, KittyBackend};
 use crate::gallery::{GalleryState, ThumbnailCache};
 pub(crate) use crate::image_list::EntryKind;
 use crate::image_list::SharedImageList;
@@ -297,7 +297,7 @@ impl App {
     }
 
     pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
-        self.graphics.delete_all_to(out)?;
+        crate::encoder::kitty::delete_all_to(out)?;
         self.terminal_images.clear();
         self.grid_loops.forget_placements();
         Ok(())

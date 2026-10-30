@@ -1,6 +1,6 @@
 //! The terminal session: raw mode, the alternate screen, the Kitty probe and the cell size.
 
-use crate::encoder::{self, GraphicsBackend};
+use crate::encoder;
 use crossterm::{
     cursor, execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -56,8 +56,7 @@ impl TerminalSession {
         self.restored = true;
 
         let backend = self.terminal.backend_mut();
-        let mut first_error = encoder::KittyBackend::default()
-            .delete_all_to(backend)
+        let mut first_error = encoder::kitty::delete_all_to(backend)
             .and_then(|()| Write::flush(backend))
             .err();
         if self.mouse
