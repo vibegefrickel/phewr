@@ -255,7 +255,8 @@ fn finish_render(app: &mut App, pending_emits: &mut Vec<usize>) {
 ///
 /// No event wakes the loop when a decode finishes, so the wait is the latency of every
 /// background result. While a result is on its way, or thumbnails wait for their emit, the
-/// loop looks every 10 ms, every 2 ms while a disk cache read of the grid is on its way, and
+/// loop looks every 10 ms (a running grid loop job does not count: its result waits for the
+/// idle look), every 2 ms while a disk cache read of the grid is on its way, and
 /// every 1 ms during the first 20 ms of the cell shape read. Otherwise it looks every 250 ms.
 /// The thumbnails that one pass of the grid left for the next pass go out without a wait,
 /// after the loop read the input, and so do the frames of new grid loops. A playing grid loop
@@ -264,7 +265,7 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     if app.mode == ViewMode::Gallery && (!pending_emits.is_empty() || app.loops_to_send()) {
         return Duration::ZERO;
     }
-    let busy = app.has_pending_work() || !pending_emits.is_empty();
+    let busy = app.has_pending_work_but_loops() || !pending_emits.is_empty();
     let mut timeout = {
         #[cfg(feature = "video")]
         if let Some(v) = &app.video {
@@ -329,6 +330,15 @@ mod tests {
             next_timeout(&app, &[0]) > Duration::ZERO,
             "the fullscreen view writes no grid pictures"
         );
+    }
+
+    #[test]
+    fn a_running_loop_job_alone_gives_the_idle_wait() {
+        let mut app = gallery_app(3);
+        app.pretend_loop_job(0);
+        assert!(app.has_pending_work(), "the folder prefetch still waits");
+        assert!(!app.has_pending_work_but_loops());
+        assert_eq!(next_timeout(&app, &[]), IDLE_POLL);
     }
 
     #[test]

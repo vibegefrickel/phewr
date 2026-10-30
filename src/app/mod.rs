@@ -317,6 +317,12 @@ impl App {
     /// thumbnail, a grid loop, a filter, or the scan. The loop then looks for results every few milliseconds.
     /// The prefetch counts, because only `Prefetcher::poll` starts its waiting jobs.
     pub(crate) fn has_pending_work(&self) -> bool {
+        self.has_pending_work_but_loops() || self.grid_loops_pending()
+    }
+
+    /// True while any background job except a grid loop job runs. A loop result needs no short
+    /// poll, so the run loop waits the idle time for it.
+    pub(crate) fn has_pending_work_but_loops(&self) -> bool {
         self.fullscreen_decode.is_some()
             || self.zoom_state.source_rx.is_some()
             || self.thumbnails_pending()
@@ -325,7 +331,6 @@ impl App {
             || self.shape_rx.is_some()
             || !self.scan_complete
             || self.meta_pending()
-            || self.grid_loops_pending()
     }
 
     /// Drop the shown image, the thumbnails and the prefetch, because the list or the cell size

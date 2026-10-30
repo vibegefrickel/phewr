@@ -45,10 +45,14 @@ impl App {
         self.selection.clear();
     }
 
+    /// True when the file `index` carries a mark. The grid asks per cell per frame, so an empty
+    /// selection answers without a path hash.
     pub(crate) fn is_marked(&self, index: usize) -> bool {
-        self.images
-            .get(index)
-            .is_some_and(|p| self.selection.contains(p))
+        !self.selection.is_empty()
+            && self
+                .images
+                .get(index)
+                .is_some_and(|p| self.selection.contains(p))
     }
 
     pub(crate) fn begin_delete(&mut self, mode: DeleteMode) {
@@ -222,6 +226,15 @@ mod tests {
     use crate::app::ViewMode;
     use crate::test_support::{app_with, app_with_files, test_dir, wait_until};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn the_marks_lookup_answers_from_the_selection_and_skips_an_empty_one() {
+        let mut app = app_with(&["a.png", "b.png"]);
+        assert!(app.selection.is_empty());
+        assert!(!app.is_marked(0) && !app.is_marked(1));
+        app.toggle_selection_at_cursor();
+        assert!(app.is_marked(0) && !app.is_marked(1));
+    }
 
     #[test]
     fn selection_marks_and_clears() {

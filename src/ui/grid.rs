@@ -9,7 +9,15 @@ use ratatui::{
     prelude::*,
     widgets::{Block, BorderType, Borders, Paragraph},
 };
+use std::borrow::Cow;
 use unicode_width::UnicodeWidthStr;
+
+/// The style of a cell label and its mark, read once per cell per frame.
+#[derive(Clone, Copy)]
+struct CellLook {
+    style: Style,
+    marked: bool,
+}
 
 /// One cell per visible thumbnail, with an optional filename label. Kitty draws the pictures.
 /// The marked cells get a plain border and the selected cell a thick border, in the gaps around
@@ -28,15 +36,18 @@ pub(super) fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &App, grid_rect: 
         } else if is_marked {
             draw_cell_border(frame, BorderType::Plain, STYLES.marked, border, grid_rect);
         }
-        let label_style = if is_selected {
-            STYLES.cursor_cell
-        } else if is_marked {
-            STYLES.marked
-        } else {
-            STYLES.text
+        let look = CellLook {
+            style: if is_selected {
+                STYLES.cursor_cell
+            } else if is_marked {
+                STYLES.marked
+            } else {
+                STYLES.text
+            },
+            marked: is_marked,
         };
         if app.is_folder(img_idx) {
-            draw_folder_cell(frame, app, vis_idx, img_idx, label_style, grid_rect);
+            draw_folder_cell(frame, app, vis_idx, img_idx, look, grid_rect);
         } else if !app.thumb_cache.contains(img_idx) {
             let icon = if app.is_video(img_idx) {
                 Icon::Video
@@ -46,7 +57,7 @@ pub(super) fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &App, grid_rect: 
             draw_cell_icon(frame, app, app.gallery.thumb_rect(vis_idx), icon, grid_rect);
         }
         if app.gallery.show_filenames && !is_parent(app, img_idx) {
-            draw_label(frame, app, vis_idx, img_idx, label_style, grid_rect);
+            draw_label(frame, app, vis_idx, img_idx, look, grid_rect);
         }
     }
 
@@ -104,7 +115,7 @@ fn draw_folder_cell(
     app: &App,
     vis_idx: usize,
     img_idx: usize,
-    style: Style,
+    look: CellLook,
     grid_rect: Rect,
 ) {
     let thumb = app.gallery.thumb_rect(vis_idx);
@@ -127,8 +138,8 @@ fn draw_folder_cell(
     .intersection(grid_rect);
     draw_centered_text(
         frame,
-        label_text(app, img_idx, name_rect.width),
-        style,
+        label_text(app, img_idx, look.marked, name_rect.width),
+        look.style,
         name_rect,
     );
 }
@@ -171,7 +182,7 @@ fn draw_label(
     app: &App,
     vis_idx: usize,
     img_idx: usize,
-    style: Style,
+    look: CellLook,
     grid_rect: Rect,
 ) {
     let thumb = app.gallery.thumb_rect(vis_idx).intersection(grid_rect);
@@ -186,15 +197,15 @@ fn draw_label(
     };
     draw_centered_text(
         frame,
-        label_text(app, img_idx, thumb.width),
-        style,
+        label_text(app, img_idx, look.marked, thumb.width),
+        look.style,
         label_rect,
     );
 }
 
 /// One line of `text` in the middle of `area`, with `style` on the whole area, as the label row
 /// and the folder name take it.
-fn draw_centered_text(frame: &mut Frame<'_>, text: String, style: Style, area: Rect) {
+fn draw_centered_text(frame: &mut Frame<'_>, text: Cow<'_, str>, style: Style, area: Rect) {
     frame.render_widget(
         Paragraph::new(text)
             .style(style)
@@ -204,9 +215,8 @@ fn draw_centered_text(frame: &mut Frame<'_>, text: String, style: Style, area: R
 }
 
 /// The label of the entry `img_idx`, cut to `width` with a margin, with a dot for a mark.
-fn label_text(app: &App, img_idx: usize, width: u16) -> String {
-    let is_marked = app.is_marked(img_idx);
-    let raw_filename = app.filenames[img_idx].clone();
+fn label_text(app: &App, img_idx: usize, is_marked: bool, width: u16) -> Cow<'_, str> {
+    let raw_filename = app.filenames[img_idx].as_str();
     let prefix_len = 2 * usize::from(is_marked);
     let max_label = usize::from(width).saturating_sub(2 + prefix_len);
     let trimmed = if raw_filename.width() > max_label {
@@ -221,16 +231,15 @@ fn label_text(app: &App, img_idx: usize, width: u16) -> String {
                 break;
             }
         }
-        format!("{head}\u{2026}")
+        Cow::Owned(format!("{head}\u{2026}"))
     } else {
-        raw_filename
+        Cow::Borrowed(raw_filename)
     };
-    let mut label = String::new();
     if is_marked {
-        label.push_str("\u{25cf} ");
+        Cow::Owned(format!("\u{25cf} {trimmed}"))
+    } else {
+        trimmed
     }
-    label.push_str(&trimmed);
-    label
 }
 
 #[cfg(test)]
@@ -721,16 +730,16 @@ mod tests {
     fn a_label_of_wide_characters_fits_the_cell_width_with_its_margin() {
         let name = format!("{}.jpg", "\u{5199}\u{771f}".repeat(10));
         let app = app_with(&[name.as_str()]);
-        let label = super::label_text(&app, 0, 12);
+        let label = super::label_text(&app, 0, false, 12);
         assert!(label.ends_with('\u{2026}'), "{label}");
-        assert!(Line::from(label.as_str()).width() <= 10, "{label}");
+        assert!(Line::from(&*label).width() <= 10, "{label}");
 
         // An emoji with VS16 takes two columns, its base character alone one.
         let name = format!("{}.jpg", "\u{263a}\u{fe0f}".repeat(10));
         let app = app_with(&[name.as_str()]);
-        let label = super::label_text(&app, 0, 12);
+        let label = super::label_text(&app, 0, false, 12);
         assert!(label.ends_with('\u{2026}'), "{label}");
-        assert!(Line::from(label.as_str()).width() <= 10, "{label}");
+        assert!(Line::from(&*label).width() <= 10, "{label}");
     }
 
     #[test]

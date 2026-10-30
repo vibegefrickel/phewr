@@ -344,6 +344,15 @@ impl App {
                 .is_some_and(|cell| cell.placed.is_some())
     }
 
+    /// Count a loop job for `index` as running, without a thread. The tests of the run loop use
+    /// it.
+    #[cfg(test)]
+    pub(crate) fn pretend_loop_job(&mut self, index: usize) {
+        self.grid_loops
+            .running
+            .insert(index, Arc::new(AtomicBool::new(false)));
+    }
+
     /// True while a loop job runs.
     pub(crate) fn grid_loops_pending(&self) -> bool {
         !self.grid_loops.running.is_empty()
@@ -411,17 +420,20 @@ impl App {
     /// When the visible cells change, the cells above the budget try again. The render of the
     /// grid calls this, also after a cursor move without a scroll, which changes nothing here.
     pub(crate) fn drop_hidden_loops(&mut self) {
-        let shown: Vec<usize> = self.gallery.visible_items().map(|(_, i)| i).collect();
         let loops = &mut self.grid_loops;
-        if shown == loops.last_visible {
+        let shown = self.gallery.visible_items().map(|(_, index)| index);
+        if shown.eq(loops.last_visible.iter().copied()) {
             return;
         }
-        let visible: HashSet<usize> = shown.iter().copied().collect();
-        loops.last_visible = shown;
+        loops.last_visible.clear();
+        loops
+            .last_visible
+            .extend(self.gallery.visible_items().map(|(_, index)| index));
         loops.over_budget.clear();
+        let last_visible = &loops.last_visible;
         let mut stale = Vec::new();
         loops.loops.retain(|index, cell| {
-            let keep = visible.contains(index);
+            let keep = last_visible.contains(index);
             if !keep {
                 stale.extend_from_slice(&cell.ids);
             }
@@ -890,5 +902,55 @@ mod tests {
         app.poll_grid_loops();
         assert!(app.grid_loops_pending(), "another screen tries again");
         finish_jobs(&mut app);
+    }
+
+    #[test]
+    fn a_finished_loop_job_goes_out_on_the_next_pass() {
+        let dir = test_dir();
+        let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
+        app.pretend_loop_job(0);
+        app.grid_loops
+            .tx
+            .send(super::LoopResult {
+                generation: 0,
+                index: 0,
+                outcome: super::LoopOutcome::Frames(
+                    vec![picture(), picture()],
+                    vec![Duration::ZERO; 2],
+                ),
+            })
+            .unwrap();
+        assert!(!app.loops_to_send(), "the result waits for the poll");
+        app.poll_grid_loops();
+        assert!(!app.grid_loops_pending());
+        assert!(app.loops_to_send(), "the next pass writes the frames");
+        assert_eq!(crate::run_loop::next_timeout(&app, &[]), Duration::ZERO);
+    }
+
+    #[test]
+    fn the_hidden_loop_check_keeps_its_list_while_the_visible_cells_stay() {
+        let dir = test_dir();
+        let names: Vec<String> = (0..40).map(|index| format!("{index}.mp4")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut app = grid_app(dir.path(), &names, &Config::default());
+        app.drop_hidden_loops();
+        let list = app.grid_loops.last_visible.as_ptr();
+        let shown = app.grid_loops.last_visible.len();
+        assert!(shown > 0);
+        app.drop_hidden_loops();
+        assert_eq!(app.grid_loops.last_visible.as_ptr(), list);
+        app.gallery.scroll_rows(1);
+        app.drop_hidden_loops();
+        assert_ne!(
+            app.grid_loops.last_visible.first(),
+            Some(&0),
+            "the first row left"
+        );
+        assert_eq!(app.grid_loops.last_visible.len(), shown);
+        assert_eq!(
+            app.grid_loops.last_visible.as_ptr(),
+            list,
+            "a change with the same count reuses the buffer"
+        );
     }
 }

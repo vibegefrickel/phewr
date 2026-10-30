@@ -50,6 +50,7 @@ fn emit_new_thumbnails_to(
     let shown = visible_image_ids(app);
     let mut written = 0;
     let mut left = Vec::new();
+    let mut sent = HashSet::new();
     for (vis_idx, position) in app.gallery.visible_range().enumerate() {
         let img_idx = app.gallery.filtered_indices[position];
         if !new_indices.contains(&img_idx) {
@@ -59,9 +60,12 @@ fn emit_new_thumbnails_to(
             left.push(img_idx);
             continue;
         }
-        delete_stale_images_to(app, out, |cell| cell == img_idx)?;
         written += transmit_cell(app, out, vis_idx, img_idx)?;
+        sent.insert(img_idx);
     }
+    // One pass for the cells of this pass. The cells left for the next pass keep their
+    // previews until their sharp image goes out, all inside the same synchronized update.
+    delete_stale_images_to(app, out, |cell| sent.contains(&cell))?;
     trim_to_budget(app, out, &shown)?;
     queue!(out, EndSynchronizedUpdate)?;
     out.flush()?;
@@ -102,15 +106,15 @@ fn delete_stale_images_to(
     out: &mut impl Write,
     select: impl Fn(usize) -> bool,
 ) -> io::Result<()> {
-    let mut kept = Vec::new();
-    for (cell, id) in std::mem::take(&mut app.stale_image_ids) {
-        if select(cell) {
-            delete_image_to(app, out, id)?;
-        } else {
-            kept.push((cell, id));
-        }
+    // Remove in place and keep the order, so that a pass allocates no `Vec` per cell.
+    while let Some(position) = app
+        .stale_image_ids
+        .iter()
+        .position(|&(cell, _)| select(cell))
+    {
+        let (_, id) = app.stale_image_ids.remove(position);
+        delete_image_to(app, out, id)?;
     }
-    app.stale_image_ids = kept;
     Ok(())
 }
 
@@ -216,7 +220,11 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
     let tick = app.grid_loops.tick_at(Instant::now());
     for (vis_idx, position) in app.gallery.visible_range().enumerate() {
         let img_idx = app.gallery.filtered_indices[position];
-        let Some((_, id)) = app.thumb_cache.peek(img_idx) else {
+        let Some((cells, id)) = app
+            .thumb_cache
+            .peek(img_idx)
+            .map(|(picture, id)| (picture.cells, id))
+        else {
             continue;
         };
         if place_loop_frame_to(app, out, vis_idx, img_idx, tick)? {
@@ -224,11 +232,8 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
             app.terminal_images.touch(id);
             continue;
         }
-        let Some((picture, id)) = app.thumb_cache.peek(img_idx) else {
-            continue;
-        };
         if app.terminal_images.contains(id) {
-            place_at(app, out, vis_idx, picture.cells, id)?;
+            place_at(app, out, vis_idx, cells, id)?;
             app.terminal_images.touch(id);
         } else {
             transmit_cell(app, out, vis_idx, img_idx)?;
@@ -465,9 +470,19 @@ mod tests {
             };
             app.thumb_cache.insert(index, picture);
         }
+        app.stale_image_ids = vec![(0, 91), (2, 92)];
+        app.terminal_images.insert(91, 16);
+        app.terminal_images.insert(92, 16);
         let mut out = Vec::new();
         let left = emit_new_thumbnails_to(&mut app, &[2, 0, 1], &mut out).unwrap();
         assert_eq!(left, vec![2], "the cells go out in grid order");
+        assert!(text_of(&out).contains("i=91,"));
+        assert!(!text_of(&out).contains("i=92,"));
+        assert_eq!(
+            app.stale_image_ids,
+            vec![(2, 92)],
+            "the cut cell keeps its preview"
+        );
         assert_eq!(text_of(&out).matches(TRANSMIT).count(), 2);
         let mut out = Vec::new();
         let left = emit_new_thumbnails_to(&mut app, &left, &mut out).unwrap();
@@ -477,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sharp_thumbnail_deletes_its_preview_before_the_transmit() {
+    fn a_sharp_thumbnail_deletes_its_preview_in_the_same_update() {
         let mut app = thumbnail_app(2);
         app.images.push(PathBuf::from("/photos/2.heic"));
         app.gallery.filtered_indices.push(2);
@@ -496,9 +511,10 @@ mod tests {
         let text = text(&out);
         let delete = format!("\x1b_Ga=d,d=I,i={preview_id},q=2\x1b\\");
         assert!(
-            text.find(&delete).unwrap() < text.find(TRANSMIT).unwrap(),
-            "the preview goes before the sharp image comes: {text}"
+            text.find(&delete).unwrap() > text.find(TRANSMIT).unwrap(),
+            "the preview goes after the sharp image, in the same update: {text}"
         );
+        assert!(text.find(&delete).unwrap() < text.find(END_SYNC).unwrap());
         assert_eq!(text.matches(TRANSMIT).count(), 1);
         assert!(text.contains(&format!(",i={sharp_id}")));
         assert!(!app.terminal_images.contains(preview_id));
@@ -525,6 +541,23 @@ mod tests {
         assert!(text(&out).contains(DELETE_ALL));
         assert!(!text(&out).contains("d=I"));
         assert!(app.stale_image_ids.is_empty());
+    }
+
+    #[test]
+    fn one_stale_pass_deletes_the_picked_previews_in_order_and_keeps_the_rest() {
+        let mut app = thumbnail_app(1);
+        app.stale_image_ids = vec![(1, 91), (2, 92), (1, 93), (3, 94)];
+        for id in [91, 92, 93, 94] {
+            app.terminal_images.insert(id, 16);
+        }
+        let mut out = Vec::new();
+        super::delete_stale_images_to(&mut app, &mut out, |cell| cell == 1).unwrap();
+        let written = text(&out);
+        let first = written.find("i=91,").unwrap();
+        let second = written.find("i=93,").unwrap();
+        assert!(first < second, "the order of the list stays");
+        assert!(!written.contains("i=92,") && !written.contains("i=94,"));
+        assert_eq!(app.stale_image_ids, vec![(2, 92), (3, 94)]);
     }
 
     #[test]
