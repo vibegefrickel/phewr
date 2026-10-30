@@ -221,7 +221,7 @@ mod tests {
         // The slideshow loop wraps to the first file, not to the first folder.
         app.slideshow_loop = true;
         app.start_slideshow();
-        app.loaded = Some(RgbaImage::new(1, 1));
+        app.loaded = Some(RgbaImage::new(1, 1).into());
         app.current = 3;
         app.slideshow_step();
         assert_eq!(app.current, 2);

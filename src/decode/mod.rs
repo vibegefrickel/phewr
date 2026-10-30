@@ -1,6 +1,7 @@
 //! The decoders and the decode routes: `image` with libjpeg-turbo, libheif, JPEG XL,
 //! macOS `sips`, the tone map of float images, the HEIF box reader, the resize, the color
-//! conversion and the folder shape from the file headers.
+//! conversion, the fullscreen image in the pixel layout of its decode and the folder shape
+//! from the file headers.
 
 pub(crate) mod color;
 #[cfg(all(feature = "sips", target_os = "macos"))]
@@ -12,6 +13,7 @@ pub(crate) mod jxl;
 pub(crate) mod libheif;
 pub(crate) mod raster;
 pub(crate) mod resize;
+pub(crate) mod screen;
 pub(crate) mod shape;
 #[cfg(all(feature = "sips", target_os = "macos"))]
 pub(crate) mod sips;
@@ -25,6 +27,8 @@ use image::{DynamicImage, RgbaImage};
 #[cfg(feature = "heic")]
 use libheif::{decode_with_libheif, decodes_with_libheif};
 use raster::decode_raster;
+use resize::{rgb_resize_is_fastest, scaled_down_size};
+pub(crate) use screen::ScreenImage;
 use std::cell::Cell;
 use std::io;
 use std::path::Path;
@@ -87,11 +91,15 @@ pub(crate) enum EmbeddedThumbnail {
 pub(crate) struct Decoded {
     pub(crate) image: DynamicImage,
     pub(crate) color: SourceColor,
+    /// True when the decoder knows that every pixel is opaque: the RGBA buffer of a JPEG or of
+    /// a HEIF image without alpha. Such a buffer resizes without the alpha multiply.
+    pub(crate) opaque: bool,
 }
 
 impl Decoded {
-    /// The image at its decoded size in the color space of the terminal. An image that needs no
-    /// conversion keeps its pixel type.
+    /// The image at its decoded size in the color space of the terminal, for the tests and the
+    /// bench. An image that needs no conversion keeps its pixel type.
+    #[cfg(test)]
     pub(crate) fn into_display(self) -> DynamicImage {
         let target = color::target();
         if !color::converts(&self.color, target) {
@@ -100,14 +108,44 @@ impl Decoded {
         DynamicImage::ImageRgba8(color::convert(self.image.into_rgba8(), &self.color, target))
     }
 
-    /// The image fitted into `max_w` x `max_h`, in the color space of the terminal.
+    /// The grid picture fitted into `max_w` x `max_h`, in the color space of the terminal. An
+    /// opaque image resizes without the alpha multiply, and an RGB decode that resizes fastest
+    /// as RGB turns into RGBA after the resize, on the small image.
     pub(crate) fn fit_within(self, max_w: u32, max_h: u32) -> RgbaImage {
-        let fitted = resize::fit_rgba_within(self.image.into_rgba8(), max_w, max_h);
+        let size = (self.image.width(), self.image.height());
+        let rgb_is_fastest = rgb_resize_is_fastest(size, scaled_down_size(size, (max_w, max_h)));
+        let opaque = self.opaque || !self.image.color().has_alpha();
+        let fitted = match self.image {
+            DynamicImage::ImageRgb8(rgb) if rgb_is_fastest => {
+                ScreenImage::Rgb(rgb).fit_within(max_w, max_h).into_rgba()
+            }
+            image if opaque => resize::fit_opaque_rgba_within(image.into_rgba8(), max_w, max_h),
+            image => resize::fit_rgba_within(image.into_rgba8(), max_w, max_h),
+        };
         color::convert(fitted, &self.color, color::target())
+    }
+
+    /// The fullscreen image fitted into `max_w` x `max_h`, in the color space of the terminal,
+    /// with RGB pixels when every pixel is opaque.
+    pub(crate) fn fit_for_screen(self, max_w: u32, max_h: u32) -> ScreenImage {
+        ScreenImage::of_decode(self.image, self.opaque)
+            .fit_within(max_w, max_h)
+            .convert(&self.color, color::target())
+            .opaque_as_rgb()
+    }
+
+    /// The zoom source and the prefetch without a box: the image at its decoded size, in the
+    /// color space of the terminal, in the layout of the fastest crop (`ScreenImage::for_crops`).
+    pub(crate) fn into_screen(self) -> ScreenImage {
+        ScreenImage::of_decode(self.image, self.opaque)
+            .convert(&self.color, color::target())
+            .for_crops()
     }
 }
 
-/// Decode `path` in the color space of the terminal, at the decoded size.
+/// Decode `path` in the color space of the terminal, at the decoded size, for the tests and
+/// the bench.
+#[cfg(test)]
 pub(crate) fn decode_image_with_hint(
     path: &Path,
     target: Option<(u32, u32)>,
@@ -138,6 +176,7 @@ pub(crate) fn decode_image(
             jxl::decode(path, color).map(|image| Decoded {
                 image,
                 color: SourceColor::of_target(color),
+                opaque: false,
             })
         }
         // The grid and the fullscreen view take the embedded JPEG of a RAW or PSD file when

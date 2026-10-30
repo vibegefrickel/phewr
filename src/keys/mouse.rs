@@ -488,7 +488,7 @@ mod tests {
     fn the_fullscreen_wheel_zooms_and_a_drag_pans() {
         let mut app = fullscreen_app(3, 1);
         draw_frame(&mut app, 120, 24);
-        app.loaded = Some(image::RgbaImage::new(4000, 1000));
+        app.loaded = Some(image::RgbaImage::new(4000, 1000).into());
         app.needs_render = false;
 
         mouse(&mut app, MouseEventKind::ScrollUp, (60, 10));

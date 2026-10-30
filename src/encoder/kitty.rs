@@ -27,7 +27,8 @@ pub(crate) const LOOPS_OVERRIDE: &str = "VIEWR_KITTY_LOOPS";
 /// Write `pixels` to `out` with the Kitty transmit-and-display action, through `transfer`.
 ///
 /// An RGBA image without a transparent pixel goes out as RGB (`f=24`): a quarter fewer bytes
-/// in the temp file or the pty, and a smaller PNG.
+/// in the temp file or the pty, and a smaller PNG. RGB pixels go out as they are, without the
+/// scan and the copy.
 pub(crate) fn transmit_to<W: Write + ?Sized>(
     out: &mut W,
     pixels: Pixels<'_>,

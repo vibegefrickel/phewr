@@ -10,7 +10,6 @@ use crate::encoder;
 use crate::gallery::centered;
 use crossterm::{cursor, queue};
 pub(crate) use grid::{emit_new_thumbnails, render_gallery_images};
-use image::RgbaImage;
 pub(crate) use loops::play_grid_loops;
 use ratatui::prelude::*;
 use std::io::{self, Write};
@@ -20,7 +19,8 @@ pub(crate) fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
     app.with_graphics_out(render_fullscreen_image_to)
 }
 
-/// Write the fullscreen image to `out`, so that the tests can read the escape sequences.
+/// Write the fullscreen image to `out`, so that the tests can read the escape sequences. An
+/// opaque image is RGB already (`ScreenImage`), so the transmit sends it without a scan.
 pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
     use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 
@@ -29,7 +29,7 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
     app.graphics_delete_all_to(out)?;
 
     if let Some(img) = &app.loaded {
-        let start = centered_image(app.image_rect, app.cell_px, img);
+        let start = centered_image(app.image_rect, app.cell_px, img.dimensions());
         queue!(out, cursor::MoveTo(start.x, start.y))?;
         app.graphics
             .transmit(out, img.into(), &encoder::DisplayOptions::default())?;
@@ -39,10 +39,11 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
     out.flush()
 }
 
-/// The terminal cells of `img` when it sits in the middle of `rect`, in whole cells.
-fn centered_image(rect: Rect, cell_px: (u32, u32), img: &RgbaImage) -> Rect {
-    let cols = u16::try_from(img.width().div_ceil(cell_px.0)).unwrap_or(u16::MAX);
-    let rows = u16::try_from(img.height().div_ceil(cell_px.1)).unwrap_or(u16::MAX);
+/// The terminal cells of an image of `size` pixels when it sits in the middle of `rect`, in
+/// whole cells.
+fn centered_image(rect: Rect, cell_px: (u32, u32), size: (u32, u32)) -> Rect {
+    let cols = u16::try_from(size.0.div_ceil(cell_px.0)).unwrap_or(u16::MAX);
+    let rows = u16::try_from(size.1.div_ceil(cell_px.1)).unwrap_or(u16::MAX);
     centered(rect, cols, rows)
 }
 
@@ -176,13 +177,13 @@ mod tests {
         let mut app = App::new((8, 16), SharedImageList::new());
         app.image_rect = Rect::new(0, 0, 10, 10);
         let mut image = RgbaImage::from_pixel(16, 32, image::Rgba([9, 9, 9, 255]));
-        app.loaded = Some(image.clone());
+        app.loaded = Some(image.clone().into());
         let mut out = Vec::new();
         render_fullscreen_image_to(&mut app, &mut out).unwrap();
         assert!(text(&out).contains(",f=24,s=16,v=32,"), "{}", text(&out));
 
         image.put_pixel(3, 3, image::Rgba([9, 9, 9, 0]));
-        app.loaded = Some(image);
+        app.loaded = Some(image.into());
         let mut out = Vec::new();
         render_fullscreen_image_to(&mut app, &mut out).unwrap();
         assert!(text(&out).contains(",f=32,s=16,v=32,"), "{}", text(&out));
@@ -191,7 +192,7 @@ mod tests {
     #[test]
     fn fullscreen_centers_the_image_in_a_synchronized_update() {
         let mut app = App::new((8, 16), SharedImageList::new());
-        app.loaded = Some(RgbaImage::new(16, 32));
+        app.loaded = Some(RgbaImage::new(16, 32).into());
         app.image_rect = Rect::new(2, 1, 10, 10);
         app.terminal_images.insert(7, 4);
         let mut out = Vec::new();

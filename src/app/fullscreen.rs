@@ -3,10 +3,9 @@
 #[cfg(feature = "video")]
 use super::VideoReturn;
 use super::{App, ViewMode};
-use crate::decode::resize::load_and_resize_px;
-use crate::decode::{EmbeddedThumbnail, spawn_foreground};
+use crate::decode::screen::load_for_screen;
+use crate::decode::{ScreenImage, spawn_foreground};
 use crate::gallery::box_px;
-use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::io;
 use std::sync::mpsc;
@@ -16,7 +15,7 @@ use std::sync::mpsc;
 pub(super) struct FullscreenDecode {
     pub(super) index: usize,
     pub(super) rect: Rect,
-    rx: mpsc::Receiver<io::Result<RgbaImage>>,
+    rx: mpsc::Receiver<io::Result<ScreenImage>>,
 }
 
 impl App {
@@ -48,8 +47,7 @@ impl App {
     fn start_fullscreen_decode(&mut self, index: usize, rect: Rect) {
         let path = self.images[index].clone();
         let target = box_px(rect, self.cell_px);
-        let rx =
-            spawn_foreground(move || load_and_resize_px(&path, target, EmbeddedThumbnail::Deny));
+        let rx = spawn_foreground(move || load_for_screen(&path, target));
         self.fullscreen_decode = Some(FullscreenDecode { index, rect, rx });
     }
 
@@ -342,7 +340,7 @@ mod tests {
         let mut app = app_with_files(dir.path(), &["a.png"]);
         app.image_rect = Rect::new(0, 0, 2, 2);
         app.enter_fullscreen_at(0);
-        app.loaded = Some(image::RgbaImage::new(1, 1));
+        app.loaded = Some(image::RgbaImage::new(1, 1).into());
         app.zoom_in();
         app.load_if_needed();
         wait_until(|| app.poll_source());

@@ -12,7 +12,7 @@
 //! image, as one `moxcms` transform in parallel rows. A source in the target space converts
 //! nothing.
 
-use image::RgbaImage;
+use image::{RgbImage, RgbaImage};
 use moxcms::{
     Chromaticity, CicpColorPrimaries, CicpProfile, ColorPrimaries, ColorProfile, DataColorSpace,
     Layout, MatrixCoefficients, RenderingIntent, ToneReprCurve, TransferCharacteristics,
@@ -130,12 +130,37 @@ pub(crate) fn convert(
     source: &SourceColor,
     target: ColorTarget,
 ) -> RgbaImage {
-    let Some(transform) = transform(source, target) else {
-        return image;
+    let width = image.width();
+    convert_pixels(&mut image, width, Channels::Rgba, source, target);
+    image
+}
+
+/// Convert the RGB `image` as [`convert`] does, without an alpha channel. An opaque image
+/// keeps 3 bytes per pixel from the decode to the terminal.
+pub(crate) fn convert_rgb(
+    mut image: RgbImage,
+    source: &SourceColor,
+    target: ColorTarget,
+) -> RgbImage {
+    let width = image.width();
+    convert_pixels(&mut image, width, Channels::Rgb, source, target);
+    image
+}
+
+/// Convert the packed `pixels` of an image `width` pixels wide in parallel rows.
+fn convert_pixels(
+    pixels: &mut [u8],
+    width: u32,
+    channels: Channels,
+    source: &SourceColor,
+    target: ColorTarget,
+) {
+    let Some(transform) = transform_for(source, target, channels) else {
+        return;
     };
-    let rows = (PIXELS_PER_TASK / image.width().max(1) as usize).max(1);
-    let chunk = rows * image.width() as usize * 4;
-    let result = image.par_chunks_mut(chunk).try_for_each(|pixels| {
+    let rows = (PIXELS_PER_TASK / width.max(1) as usize).max(1);
+    let chunk = rows * width as usize * channels.count();
+    let result = pixels.par_chunks_mut(chunk).try_for_each(|pixels| {
         let source = pixels.to_vec();
         transform.transform(&source, pixels)
     });
@@ -146,27 +171,77 @@ pub(crate) fn convert(
         reason = "a failed chunk keeps its source values, which is the best picture left"
     )]
     let _ = result;
-    image
 }
 
-/// True when `source` needs a conversion into `target`.
+/// True when `source` needs a conversion into `target`, for the tests and the bench.
+#[cfg(test)]
 pub(crate) fn converts(source: &SourceColor, target: ColorTarget) -> bool {
     transform(source, target).is_some()
 }
 
+/// The pixel layout of a transform: 3 or 4 bytes per pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Channels {
+    Rgb,
+    Rgba,
+}
+
+impl Channels {
+    /// The `moxcms` layout of the source and of the target pixels.
+    fn layout(self) -> Layout {
+        match self {
+            Self::Rgb => Layout::Rgb,
+            Self::Rgba => Layout::Rgba,
+        }
+    }
+
+    /// The bytes per pixel, for the size of a parallel task.
+    fn count(self) -> usize {
+        match self {
+            Self::Rgb => 3,
+            Self::Rgba => 4,
+        }
+    }
+}
+
 /// The built transforms, and `None` for a source that converts nothing.
-type TransformCache = HashMap<(SourceColor, ColorTarget), Option<Arc<Transform8BitExecutor>>>;
+type TransformCache =
+    HashMap<(SourceColor, ColorTarget, Channels), Option<Arc<Transform8BitExecutor>>>;
 
 static TRANSFORMS: OnceLock<Mutex<TransformCache>> = OnceLock::new();
 
-/// The transform of the source into the target, from the cache. `None` when the source is the
-/// target or cannot convert.
+/// The RGBA transform of the source into the target, from the cache. `None` when the source is
+/// the target or cannot convert. The tests read it.
+#[cfg(test)]
 fn transform(source: &SourceColor, target: ColorTarget) -> Option<Arc<Transform8BitExecutor>> {
+    transform_for(source, target, Channels::Rgba)
+}
+
+/// The transform for `channels`. The RGBA transform decides whether a source converts, so
+/// the RGB and the RGBA image of one source always get the same answer.
+fn transform_for(
+    source: &SourceColor,
+    target: ColorTarget,
+    channels: Channels,
+) -> Option<Arc<Transform8BitExecutor>> {
     if *source == SourceColor::of_target(target) {
         return None;
     }
+    let rgba = cached_transform(source, target, Channels::Rgba);
+    match channels {
+        Channels::Rgba => rgba,
+        Channels::Rgb => rgba.and_then(|_| cached_transform(source, target, Channels::Rgb)),
+    }
+}
+
+/// The transform of the key from the cache, built at the first request.
+fn cached_transform(
+    source: &SourceColor,
+    target: ColorTarget,
+    channels: Channels,
+) -> Option<Arc<Transform8BitExecutor>> {
     let cache = TRANSFORMS.get_or_init(Mutex::default);
-    let key = (source.clone(), target);
+    let key = (source.clone(), target, channels);
     let cached = cache
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -176,7 +251,7 @@ fn transform(source: &SourceColor, target: ColorTarget) -> Option<Arc<Transform8
         return cached;
     }
     // Two threads can build the same transform at once. Both results are equal.
-    let built = build_transform(source, target);
+    let built = build_transform(source, target, channels);
     let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
     if cache.len() >= MAX_CACHED_TRANSFORMS {
         cache.clear();
@@ -185,26 +260,29 @@ fn transform(source: &SourceColor, target: ColorTarget) -> Option<Arc<Transform8
     built
 }
 
-/// Build the transform, and drop it when it changes no value: an sRGB ICC profile into sRGB,
-/// a Display P3 profile into Display P3. A profile that `moxcms` cannot convert from RGB, for
-/// example a CMYK profile on a decoded RGB JPEG, converts as sRGB: the values unchanged would
-/// show too saturated in a Display P3 terminal.
+/// Build the transform, and drop an RGBA transform that changes no value: an sRGB ICC profile
+/// into sRGB, a Display P3 profile into Display P3. A profile that `moxcms` cannot convert from
+/// RGB, for example a CMYK profile on a decoded RGB JPEG, converts as sRGB: the values unchanged
+/// would show too saturated in a Display P3 terminal. An RGB transform is built only after the
+/// RGBA transform of its source passed the identity check.
 fn build_transform(
     source: &SourceColor,
     target: ColorTarget,
+    channels: Channels,
 ) -> Option<Arc<Transform8BitExecutor>> {
     let options = TransformOptions {
         rendering_intent: RenderingIntent::RelativeColorimetric,
         ..TransformOptions::default()
     };
     let destination = target.profile();
+    let layout = channels.layout();
     let create = |profile: &ColorProfile| {
-        profile.create_transform_8bit(Layout::Rgba, &destination, Layout::Rgba, options)
+        profile.create_transform_8bit(layout, &destination, layout, options)
     };
     let transform = create(&source_profile(source)?)
         .or_else(|_| create(&ColorProfile::new_srgb()))
         .ok()?;
-    (!is_identity(transform.as_ref())).then_some(transform)
+    (channels == Channels::Rgb || !is_identity(transform.as_ref())).then_some(transform)
 }
 
 /// True when `transform` moves no sample of a 9x9x9 grid of the RGB cube by more than 1.

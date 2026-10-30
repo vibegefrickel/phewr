@@ -1,11 +1,11 @@
 //! The libheif route: HEIC, HEIF and AVIF, the embedded thumbnails and the core share.
 
-use super::resize::{resize_rgba, scaled_down_size};
+use super::resize::{Layout, resize_region, rgb_resize_is_fastest, scaled_down_size};
 use super::{Decoded, EmbeddedThumbnail, FOREGROUND};
 use crate::decode;
 use crate::decode::color::{self, SourceColor};
 use crate::scanner;
-use image::{DynamicImage, RgbaImage};
+use image::{DynamicImage, RgbImage, RgbaImage};
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -56,11 +56,42 @@ pub(super) fn decode_with_libheif(
         .and_then(|target| usable_thumbnail(path, &primary, target))
         .unwrap_or(primary);
     let color = thumbnail_color(&handle, primary_color);
+    let layout = decode_layout(&handle, target);
+    let chroma = if layout == Layout::Rgb {
+        RgbChroma::Rgb
+    } else {
+        RgbChroma::Rgba
+    };
     let image = LibHeif::new()
-        .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
+        .decode(&handle, ColorSpace::Rgb(chroma), None)
         .map_err(invalid)?;
-    let image = heif_image_to_rgba(&image, target).map(DynamicImage::ImageRgba8)?;
-    Ok(Decoded { image, color })
+    let image = if layout == Layout::Rgb {
+        heif_image_to_rgb(&image, target).map(DynamicImage::ImageRgb8)?
+    } else {
+        heif_image_to_rgba(&image, target, layout).map(DynamicImage::ImageRgba8)?
+    };
+    Ok(Decoded {
+        image,
+        color,
+        opaque: layout != Layout::Rgba,
+    })
+}
+
+/// The layout of the decode of `handle` for `target`. libheif writes the same values in RGB
+/// and in RGBA, and RGB about 5 % faster, so an image without alpha decodes as RGB when RGB
+/// is the fastest layout of the resize after (`rgb_resize_is_fastest`): the grid and a 24 MP
+/// photo in the fullscreen box. Else it decodes as RGBA, which resizes without the alpha
+/// multiply. The zoom source (no target) is RGBA too, because its crops resize at a mild scale.
+fn decode_layout(handle: &libheif_rs::ImageHandle, target: Option<(u32, u32)>) -> Layout {
+    if handle.has_alpha_channel() {
+        return Layout::Rgba;
+    }
+    let size = (handle.width(), handle.height());
+    if target.is_some_and(|box_px| rgb_resize_is_fastest(size, scaled_down_size(size, box_px))) {
+        Layout::Rgb
+    } else {
+        Layout::OpaqueRgba
+    }
 }
 
 /// The color space of a thumbnail. A thumbnail without a color profile of its own shows the
@@ -188,7 +219,12 @@ pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result
     let image = LibHeif::new()
         .decode(&thumbnail, ColorSpace::Rgb(RgbChroma::Rgba), None)
         .map_err(invalid)?;
-    let preview = heif_image_to_rgba(&image, Some(sharp_size))?;
+    let layout = if thumbnail.has_alpha_channel() {
+        Layout::Rgba
+    } else {
+        Layout::OpaqueRgba
+    };
+    let preview = heif_image_to_rgba(&image, Some(sharp_size), layout)?;
     Ok(color::convert(preview, &color, color::target()))
 }
 
@@ -230,25 +266,57 @@ fn fitted_size(size: (u32, u32), target: (u32, u32)) -> Option<(u32, u32)> {
 fn heif_image_to_rgba(
     image: &libheif_rs::Image,
     target: Option<(u32, u32)>,
+    layout: Layout,
 ) -> io::Result<RgbaImage> {
+    let ((w, h), pixels) = heif_plane_pixels(image, target, layout)?;
+    RgbaImage::from_raw(w, h, pixels).ok_or_else(invalid_dimensions)
+}
+
+/// The RGB twin of `heif_image_to_rgba`, for an image without an alpha channel.
+fn heif_image_to_rgb(
+    image: &libheif_rs::Image,
+    target: Option<(u32, u32)>,
+) -> io::Result<RgbImage> {
+    let ((w, h), pixels) = heif_plane_pixels(image, target, Layout::Rgb)?;
+    RgbImage::from_raw(w, h, pixels).ok_or_else(invalid_dimensions)
+}
+
+/// The error of a plane whose pixels do not match its size.
+fn invalid_dimensions() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "invalid libheif image dimensions",
+    )
+}
+
+/// The packed pixels of the interleaved plane of `image` in `layout`, fitted into `target`,
+/// and their size.
+fn heif_plane_pixels(
+    image: &libheif_rs::Image,
+    target: Option<(u32, u32)>,
+    layout: Layout,
+) -> io::Result<((u32, u32), Vec<u8>)> {
     let planes = image.planes();
     let plane = planes.interleaved.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "libheif decode produced no RGBA plane",
+            "libheif decode produced no interleaved RGB plane",
         )
     })?;
     let (w, h) = (plane.width, plane.height);
-    let row_bytes = w as usize * 4;
+    let row_bytes = w as usize * layout.pixel_type().size();
     let fitted = target.and_then(|max| scaled_down_size((w, h), max));
+    let resize = |pixels: &[u8], dst| {
+        resize_region(pixels, (w, h), (0, 0, w, h), dst, layout).map(|resized| resized.data)
+    };
     if let Some(dst) = fitted
         && plane.stride == row_bytes
         && let Some(resized) = plane
             .data
             .get(..row_bytes * h as usize)
-            .and_then(|pixels| resize_rgba(pixels, (w, h), dst))
+            .and_then(|pixels| resize(pixels, dst))
     {
-        return Ok(resized);
+        return Ok((dst, resized));
     }
 
     let mut pixels = Vec::with_capacity(row_bytes * h as usize);
@@ -256,16 +324,9 @@ fn heif_image_to_rgba(
         let start = y * plane.stride;
         pixels.extend_from_slice(&plane.data[start..start + row_bytes]);
     }
-    let rgba = RgbaImage::from_raw(w, h, pixels).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid libheif image dimensions",
-        )
-    })?;
-    Ok(match fitted {
-        Some(dst) => resize_rgba(rgba.as_raw(), (w, h), dst).unwrap_or(rgba),
-        None => rgba,
-    })
+    Ok(fitted
+        .and_then(|dst| resize(&pixels, dst).map(|resized| (dst, resized)))
+        .unwrap_or(((w, h), pixels)))
 }
 
 #[cfg(test)]
@@ -274,8 +335,9 @@ mod tests {
         decodes_with_libheif, fitted_size, libheif_dimensions, thumbnail_is_usable,
         usable_thumbnail,
     };
+    use crate::decode::ScreenImage;
     use crate::decode::heif_boxes::HeifItems;
-    use crate::decode::resize::{fit_rgba_within, resize_to_exact};
+    use crate::decode::resize::fit_rgba_within;
     use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use crate::test_support::{BLUE, RED, assert_close, solid_image, test_dir, write_heif};
     use image::GenericImageView;
@@ -578,7 +640,10 @@ mod tests {
         // A shape check misses a 180 degree turn: compare the pixels with the primary image.
         let full =
             decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
-        let reference = resize_to_exact(&full, thumb.width(), thumb.height());
+        let size = (full.width(), full.height());
+        let reference = ScreenImage::of_decode(full, false)
+            .crop_resized((0, 0, size.0, size.1), (thumb.width(), thumb.height()))
+            .into_rgba();
         let thumb = thumb.to_rgba8();
         let total: u64 = thumb
             .as_raw()

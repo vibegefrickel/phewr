@@ -40,7 +40,11 @@ pub(crate) fn decode_jpeg_bytes(
     let mut image = DynamicImage::from_decoder(decoder)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     image.apply_orientation(orientation);
-    Ok(Decoded { image, color })
+    Ok(Decoded {
+        image,
+        color,
+        opaque: false,
+    })
 }
 
 /// The stored size of a file of the `image` route, from the header. `open` takes the format from
@@ -112,6 +116,7 @@ pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
     Ok(Decoded {
         image: decode::tonemap::to_display(img),
         color,
+        opaque: false,
     })
 }
 

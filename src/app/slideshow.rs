@@ -205,7 +205,7 @@ mod tests {
         app.filenames = vec!["a.png".into(), "b.png".into()];
         app.mode = ViewMode::Fullscreen;
         app.current = 0;
-        app.loaded = Some(RgbaImage::new(1, 1));
+        app.loaded = Some(RgbaImage::new(1, 1).into());
 
         app.start_slideshow();
         app.slideshow = Some(Slideshow {
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(app.current, 1);
 
         // Wrap to the first image when looping.
-        app.loaded = Some(RgbaImage::new(1, 1));
+        app.loaded = Some(RgbaImage::new(1, 1).into());
         app.slideshow.as_mut().unwrap().next_at = Instant::now()
             .checked_sub(Duration::from_millis(1))
             .unwrap();
@@ -230,7 +230,7 @@ mod tests {
         // Without looping the show ends on the last image.
         app.slideshow_loop = false;
         app.current = 1;
-        app.loaded = Some(RgbaImage::new(1, 1));
+        app.loaded = Some(RgbaImage::new(1, 1).into());
         app.slideshow.as_mut().unwrap().next_at = Instant::now()
             .checked_sub(Duration::from_millis(1))
             .unwrap();
@@ -325,7 +325,7 @@ mod tests {
         app.slideshow_tick();
         assert_eq!(app.current, 0, "no slideshow");
 
-        app.loaded = Some(RgbaImage::new(1, 1));
+        app.loaded = Some(RgbaImage::new(1, 1).into());
         app.start_slideshow();
         app.slideshow.as_mut().unwrap().next_at = overdue();
         app.slideshow_tick();

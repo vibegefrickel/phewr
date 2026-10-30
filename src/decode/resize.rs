@@ -2,7 +2,7 @@
 
 use super::{EmbeddedThumbnail, decode_image};
 use fast_image_resize as fir;
-use image::{DynamicImage, RgbaImage};
+use image::RgbaImage;
 use std::io;
 use std::path::Path;
 
@@ -24,9 +24,21 @@ pub(crate) fn load_and_resize_px(
 /// Scale `rgba` down into `max_w` x `max_h` with its aspect ratio, and never up. An owned image
 /// needs no second copy.
 pub(crate) fn fit_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
+    fit_within_as(rgba, max_w, max_h, Layout::Rgba)
+}
+
+/// `fit_rgba_within` for an image whose alpha is 255 in every pixel: the resize skips the
+/// alpha multiply.
+pub(super) fn fit_opaque_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
+    fit_within_as(rgba, max_w, max_h, Layout::OpaqueRgba)
+}
+
+/// The fit of both RGBA layouts, so the alpha multiply is the only difference.
+fn fit_within_as(rgba: RgbaImage, max_w: u32, max_h: u32, layout: Layout) -> RgbaImage {
     let size = rgba.dimensions();
     scaled_down_size(size, (max_w, max_h))
-        .and_then(|dst| resize_rgba(rgba.as_raw(), size, dst))
+        .and_then(|dst| resize_region(rgba.as_raw(), size, (0, 0, size.0, size.1), dst, layout))
+        .and_then(|pixels| RgbaImage::from_raw(pixels.width, pixels.height, pixels.data))
         .unwrap_or(rgba)
 }
 
@@ -55,47 +67,81 @@ fn resize_options() -> fir::ResizeOptions {
     fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::CatmullRom))
 }
 
-/// Resize the packed RGBA `pixels` of `size` to `dst` with `fast_image_resize`. The pixels stay
-/// borrowed, so a caller can pass a decoder buffer without a copy. `None` when the resize fails.
-pub(super) fn resize_rgba(pixels: &[u8], size: (u32, u32), dst: (u32, u32)) -> Option<RgbaImage> {
-    let src_image =
-        fir::images::ImageRef::new(size.0, size.1, pixels, fir::PixelType::U8x4).ok()?;
-    let mut dst_image = fir::images::Image::new(dst.0, dst.1, fir::PixelType::U8x4);
-    fir::Resizer::new()
-        .resize(&src_image, &mut dst_image, &resize_options())
-        .ok()?;
-    RgbaImage::from_raw(dst.0, dst.1, dst_image.into_vec())
+/// The pixel layout of a resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Layout {
+    /// 3 bytes per pixel.
+    Rgb,
+    /// 4 bytes per pixel with transparent pixels: the resize multiplies the colors with the
+    /// alpha before and divides after, so a transparent pixel does not darken its neighbors.
+    Rgba,
+    /// 4 bytes per pixel with the alpha at 255 in every pixel. The multiply changes no value,
+    /// so the resize skips it.
+    OpaqueRgba,
 }
 
-/// Resize `img` to exactly `dst_w` x `dst_h` (used for zoomed crops, which may upscale).
-pub(crate) fn resize_to_exact(img: &DynamicImage, dst_w: u32, dst_h: u32) -> RgbaImage {
-    let (ow, oh) = (img.width(), img.height());
-    if dst_w == 0 || dst_h == 0 || ow == 0 || oh == 0 {
-        return img.to_rgba8();
+impl Layout {
+    /// The pixel type of `fast_image_resize` for the layout.
+    pub(super) fn pixel_type(self) -> fir::PixelType {
+        match self {
+            Self::Rgb => fir::PixelType::U8x3,
+            Self::Rgba | Self::OpaqueRgba => fir::PixelType::U8x4,
+        }
     }
-    if dst_w == ow && dst_h == oh {
-        return img.to_rgba8();
-    }
-    let src_rgba = img.to_rgba8();
-    let Ok(src_image) =
-        fir::images::Image::from_vec_u8(ow, oh, src_rgba.into_raw(), fir::PixelType::U8x4)
-    else {
-        return img.to_rgba8();
-    };
-    let mut dst_image = fir::images::Image::new(dst_w, dst_h, fir::PixelType::U8x4);
+}
+
+/// True when RGB is the fastest layout for a resize of `size` to `dst`, or for no resize
+/// (`None`).
+///
+/// Measured 2026-10-30 into a 3392x2052 box: RGBA without the alpha multiply is the fastest
+/// layout at every scale (17.6 ms at 0.75, 9.3 ms at 1.5), and RGB is 35.2 ms and 12.0 ms. Only
+/// from a scale of 1/2 down is RGB as fast, and then it needs no copy into RGB after.
+pub(crate) fn rgb_resize_is_fastest(size: (u32, u32), dst: Option<(u32, u32)>) -> bool {
+    dst.is_none_or(|(w, h)| {
+        2 * u64::from(w) <= u64::from(size.0) && 2 * u64::from(h) <= u64::from(size.1)
+    })
+}
+
+/// The packed pixels of a resize and their size.
+pub(super) struct Resized {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) data: Vec<u8>,
+}
+
+/// Resize the region `crop` (x, y, width, height) of the packed `pixels` of `size` to `dst`
+/// with `fast_image_resize`. The pixels stay borrowed, so a caller can pass a decoder buffer
+/// without a copy. A region smaller than the image is a view: the resize reads only its
+/// pixels, as from a copy, and the zoom pays no crop copy. `None` when the resize fails.
+pub(super) fn resize_region(
+    pixels: &[u8],
+    size: (u32, u32),
+    crop: (u32, u32, u32, u32),
+    dst: (u32, u32),
+    layout: Layout,
+) -> Option<Resized> {
+    let pixel_type = layout.pixel_type();
+    let source = fir::images::ImageRef::new(size.0, size.1, pixels, pixel_type).ok()?;
+    let mut target = fir::images::Image::new(dst.0, dst.1, pixel_type);
+    let options = resize_options().use_alpha(layout == Layout::Rgba);
     let mut resizer = fir::Resizer::new();
-    if resizer
-        .resize(&src_image, &mut dst_image, &resize_options())
-        .is_err()
-    {
-        return img.to_rgba8();
+    let (x, y, width, height) = crop;
+    if (x, y, width, height) == (0, 0, size.0, size.1) {
+        resizer.resize(&source, &mut target, &options).ok()?;
+    } else {
+        let view = fir::images::CroppedImage::new(&source, x, y, width, height).ok()?;
+        resizer.resize(&view, &mut target, &options).ok()?;
     }
-    RgbaImage::from_raw(dst_w, dst_h, dst_image.into_vec()).unwrap_or_else(|| img.to_rgba8())
+    Some(Resized {
+        width: dst.0,
+        height: dst.1,
+        data: target.into_vec(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_rgba_within, load_and_resize_px, resize_to_exact};
+    use super::{fit_rgba_within, load_and_resize_px};
     use crate::decode::EmbeddedThumbnail;
     use crate::test_support::test_dir;
     use image::{DynamicImage, RgbaImage};
@@ -110,14 +156,6 @@ mod tests {
         let image = DynamicImage::new_rgba8(100, 50);
         assert_eq!(fit_decoded_within(&image, 20, 20).dimensions(), (20, 10));
         assert_eq!(fit_decoded_within(&image, 200, 200).dimensions(), (100, 50));
-    }
-
-    #[test]
-    fn resize_to_exact_upscales_to_requested_dimensions() {
-        let image = DynamicImage::new_rgba8(10, 10);
-        // Zoomed crops may upscale, unlike the fit-to-window path.
-        assert_eq!(resize_to_exact(&image, 40, 30).dimensions(), (40, 30));
-        assert_eq!(resize_to_exact(&image, 10, 10).dimensions(), (10, 10));
     }
 
     #[test]

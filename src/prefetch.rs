@@ -1,9 +1,7 @@
 //! The decode of the neighbors of the fullscreen image ahead of time.
 
-use crate::decode::resize::fit_rgba_within;
-use crate::decode::{EmbeddedThumbnail, decode_image};
+use crate::decode::{EmbeddedThumbnail, ScreenImage, decode_image};
 use crate::gallery::box_px;
-use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::collections::{HashSet, VecDeque};
@@ -27,21 +25,22 @@ struct JobResult {
 
 /// A decoded image and the box in pixels that it was fitted into. `None` is the full size.
 struct Prefetched {
-    image: RgbaImage,
+    image: ScreenImage,
     target: Option<(u32, u32)>,
 }
 
 impl Prefetched {
     /// The image fitted into `max`, or `None` if the decode used a smaller box. A smaller decode
     /// cannot fill `max` without an upscale, so the caller decodes again.
-    fn fit_within(self, max: (u32, u32)) -> Option<RgbaImage> {
+    fn fit_within(self, max: (u32, u32)) -> Option<ScreenImage> {
+        // The fit of an image that fits already only turns an `Opaque` decode into RGB.
         if max.0 == 0 || max.1 == 0 || self.target == Some(max) {
-            return Some(self.image);
+            return Some(self.image.fit_within(max.0, max.1));
         }
         let covers = self
             .target
             .is_none_or(|target| target.0 >= max.0 && target.1 >= max.1);
-        covers.then(|| fit_rgba_within(self.image, max.0, max.1))
+        covers.then(|| self.image.fit_within(max.0, max.1))
     }
 }
 
@@ -129,7 +128,7 @@ impl Prefetcher {
         index: usize,
         rect: Rect,
         cell_px: (u32, u32),
-    ) -> Option<RgbaImage> {
+    ) -> Option<ScreenImage> {
         self.cache.pop(&index)?.fit_within(box_px(rect, cell_px))
     }
 
@@ -151,7 +150,7 @@ impl Prefetcher {
     pub(crate) fn store(
         &mut self,
         index: usize,
-        image: RgbaImage,
+        image: ScreenImage,
         rect: Rect,
         cell_px: (u32, u32),
     ) {
@@ -203,8 +202,8 @@ impl Prefetcher {
                 .ok()
                 .map(|decoded| Prefetched {
                     image: match hint {
-                        Some((max_w, max_h)) => decoded.fit_within(max_w, max_h),
-                        None => decoded.into_display().into_rgba8(),
+                        Some((max_w, max_h)) => decoded.fit_for_screen(max_w, max_h),
+                        None => decoded.into_screen(),
                     },
                     target: hint,
                 });
@@ -544,17 +543,35 @@ mod tests {
     }
 
     #[test]
+    fn an_opaque_decode_without_a_hint_comes_back_as_rgb_also_for_a_zero_box() {
+        let (_temp, dir) = synthetic_dir();
+        let path = dir.join("0.png");
+        image::RgbImage::new(8, 4).save(&path).unwrap();
+        let paths = vec![path];
+        for rect in [Rect::default(), Rect::new(0, 0, 1, 1)] {
+            let mut prefetcher = Prefetcher::new();
+            prefetcher.kick_gallery(0, &paths);
+            wait_until_idle(&mut prefetcher);
+            let image = prefetcher.take_resized(0, rect, (4, 4)).unwrap();
+            assert!(
+                matches!(image, crate::decode::ScreenImage::Rgb(_)),
+                "{rect:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_stored_image_comes_back_for_its_box() {
         let mut prefetcher = Prefetcher::new();
         let rect = Rect::new(0, 0, 4, 2);
-        prefetcher.store(3, RgbaImage::new(16, 8), rect, (4, 4));
+        prefetcher.store(3, RgbaImage::new(16, 8).into(), rect, (4, 4));
         assert!(
             prefetcher
                 .take_resized(3, Rect::new(0, 0, 8, 4), (4, 4))
                 .is_none(),
             "a larger box needs a new decode"
         );
-        prefetcher.store(3, RgbaImage::new(16, 8), rect, (4, 4));
+        prefetcher.store(3, RgbaImage::new(16, 8).into(), rect, (4, 4));
         let image = prefetcher.take_resized(3, rect, (4, 4)).unwrap();
         assert_eq!(image.dimensions(), (16, 8));
         assert!(prefetcher.take_resized(3, rect, (4, 4)).is_none());

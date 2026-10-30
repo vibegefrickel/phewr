@@ -458,7 +458,7 @@ mod tests {
         let mut app = app_with(&["a.jpg", "b.jpg"]);
         app.mode = ViewMode::Fullscreen;
         app.current = 1;
-        app.loaded = Some(RgbaImage::new(30, 20));
+        app.loaded = Some(RgbaImage::new(30, 20).into());
         let screen = render(&mut app, None, 100, 30);
         assert!(
             status_row(&screen).trim_end() == " b.jpg [2/2]",

@@ -25,6 +25,7 @@ pub(crate) use slideshow::Slideshow;
 pub(crate) use video::VideoReturn;
 
 use crate::config::{self, Config};
+use crate::decode::ScreenImage;
 use crate::encoder::{GraphicsOutput, KittyBackend};
 use crate::gallery::{GalleryState, ThumbnailCache};
 pub(crate) use crate::image_list::EntryKind;
@@ -33,7 +34,6 @@ use crate::info::ImageInfo;
 use crate::kitty_output::TerminalImages;
 use crate::prefetch::Prefetcher;
 use disk_cache::default_disk_cache_dir;
-use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::collections::{HashMap, HashSet};
@@ -108,7 +108,8 @@ pub(crate) struct App {
     // Fullscreen state
     pub(crate) current: usize,
     pub(crate) prefetcher: Prefetcher,
-    pub(crate) loaded: Option<RgbaImage>,
+    /// The fullscreen image or zoom crop on the screen, RGB when every pixel is opaque.
+    pub(crate) loaded: Option<ScreenImage>,
     pub(crate) error: Option<String>,
     /// The read errors of the scan. Only the status row reads it. Like the status note, the next key press clears it, and a decode does not.
     pub(crate) scan_error: Option<String>,

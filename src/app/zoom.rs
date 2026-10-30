@@ -1,10 +1,8 @@
 //! Zoom and pan in the fullscreen view, with the full-resolution source behind them.
 
 use super::App;
-use crate::decode::resize::resize_to_exact;
-use crate::decode::{EmbeddedThumbnail, decode_image_with_hint, spawn_foreground};
+use crate::decode::{Decoded, EmbeddedThumbnail, ScreenImage, decode_image, spawn_foreground};
 use crate::gallery::box_px;
-use image::{DynamicImage, RgbaImage};
 use std::io;
 use std::sync::mpsc;
 
@@ -21,9 +19,10 @@ pub(super) struct ZoomState {
     /// True when the zoomed view needs a new crop.
     pub(super) dirty: bool,
     /// Full-resolution decoded source for the current fullscreen image, used for zoomed crops.
-    pub(super) source: Option<DynamicImage>,
+    /// It is RGB when every pixel is opaque, so each crop is RGB too.
+    pub(super) source: Option<ScreenImage>,
     pub(super) source_for: Option<usize>,
-    pub(super) source_rx: Option<mpsc::Receiver<io::Result<DynamicImage>>>,
+    pub(super) source_rx: Option<mpsc::Receiver<io::Result<ScreenImage>>>,
     pub(super) source_target: Option<usize>,
     /// The image whose full-resolution decode failed, so that no later request tries again.
     pub(super) source_failed: Option<usize>,
@@ -106,7 +105,7 @@ impl App {
     /// the pointer also for a letterboxed image. Zero on an axis where the image fits the box.
     pub(crate) fn pan_range_px(&self) -> (f64, f64) {
         let (ow, oh) = match (&self.zoom_state.source, &self.loaded) {
-            (Some(source), _) => (source.width(), source.height()),
+            (Some(source), _) => source.dimensions(),
             (None, Some(loaded)) => loaded.dimensions(),
             (None, None) => return (0.0, 0.0),
         };
@@ -135,7 +134,7 @@ impl App {
         self.zoom_state.source_target = Some(index);
         let path = self.images[index].clone();
         self.zoom_state.source_rx = Some(spawn_foreground(move || {
-            decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny)
+            decode_image(&path, None, EmbeddedThumbnail::Deny).map(Decoded::into_screen)
         }));
     }
 
@@ -170,7 +169,7 @@ impl App {
 
     /// Build the zoomed, panned crop of the current full-resolution source, sized
     /// to fill the viewport. Returns `None` when no source is available.
-    pub(super) fn build_zoom_view(&self) -> Option<RgbaImage> {
+    pub(super) fn build_zoom_view(&self) -> Option<ScreenImage> {
         let src = self.zoom_state.source.as_ref()?;
         let (ow, oh) = (src.width(), src.height());
         if ow == 0 || oh == 0 {
@@ -191,10 +190,9 @@ impl App {
         let x = (self.zoom_state.pan_x * f64::from(max_x)).round() as u32;
         let y = (self.zoom_state.pan_y * f64::from(max_y)).round() as u32;
 
-        let cropped = src.crop_imm(x, y, crop_w, crop_h);
         let dst_w = ((f64::from(crop_w) * eff).round() as u32).max(1).min(vw);
         let dst_h = ((f64::from(crop_h) * eff).round() as u32).max(1).min(vh);
-        Some(resize_to_exact(&cropped, dst_w, dst_h))
+        Some(src.crop_resized((x, y, crop_w, crop_h), (dst_w, dst_h)))
     }
 }
 
@@ -231,7 +229,7 @@ mod tests {
         assert_eq!(app.pan_range_px(), (0.0, 0.0), "no image, no range");
 
         // A 200 x 200 picture in a 400 x 200 box: letterboxed, 200 px wide on the screen.
-        app.loaded = Some(RgbaImage::new(200, 200));
+        app.loaded = Some(RgbaImage::new(200, 200).into());
         assert_eq!(app.pan_range_px(), (0.0, 0.0), "fit view");
         app.zoom = 2.0;
         assert_eq!(
@@ -248,7 +246,21 @@ mod tests {
     use image::RgbaImage;
     use ratatui::layout::Rect;
 
-    use image::DynamicImage;
+    #[test]
+    fn the_zoom_crop_of_an_rgb_source_is_rgb() {
+        use crate::decode::ScreenImage;
+        let mut app = app();
+        app.cell_px = (1, 1);
+        app.image_rect = Rect::new(0, 0, 10, 10);
+        let source = image::RgbImage::from_pixel(40, 40, image::Rgb([7, 8, 9]));
+        app.zoom_state.source = Some(source.into());
+        app.zoom = 4.0;
+        let crop = app.build_zoom_view().unwrap();
+        assert_eq!(
+            crop,
+            ScreenImage::from(image::RgbImage::from_pixel(10, 10, image::Rgb([7, 8, 9])))
+        );
+    }
 
     #[test]
     fn zoom_view_crops_and_fills_the_viewport() {
@@ -259,7 +271,7 @@ mod tests {
         let mut app = App::new((1, 1), SharedImageList::new());
         app.image_rect = Rect::new(0, 0, 100, 100);
         // 400x400 source, viewport 100x100 -> fit scale 0.25 (base image is 100x100).
-        app.zoom_state.source = Some(DynamicImage::new_rgba8(400, 400));
+        app.zoom_state.source = Some(RgbaImage::new(400, 400).into());
         app.zoom_state.source_for = Some(0);
         app.current = 0;
 
@@ -320,17 +332,17 @@ mod tests {
         let source = RgbaImage::from_fn(40, 40, |x, _| {
             image::Rgba(if x < 20 { [0, 0, 0, 255] } else { [255; 4] })
         });
-        app.zoom_state.source = Some(DynamicImage::ImageRgba8(source));
+        app.zoom_state.source = Some(source.into());
         app.zoom = 4.0;
         app.zoom_state.pan_x = 0.0;
-        let left = app.build_zoom_view().unwrap();
+        let left = app.build_zoom_view().unwrap().into_rgba();
         app.zoom_state.pan_x = 1.0;
-        let right = app.build_zoom_view().unwrap();
+        let right = app.build_zoom_view().unwrap().into_rgba();
         assert_eq!(left.dimensions(), (10, 10));
         assert_eq!(left.get_pixel(5, 5).0, [0, 0, 0, 255]);
         assert_eq!(right.get_pixel(5, 5).0, [255; 4]);
 
-        app.zoom_state.source = Some(DynamicImage::new_rgba8(0, 0));
+        app.zoom_state.source = Some(RgbaImage::new(0, 0).into());
         assert!(app.build_zoom_view().is_none());
         app.zoom_state.source = None;
         assert!(app.build_zoom_view().is_none());
@@ -342,7 +354,7 @@ mod tests {
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
         app.image_rect = Rect::new(0, 0, 2, 2);
         app.enter_fullscreen_at(0);
-        app.loaded = Some(RgbaImage::new(1, 1));
+        app.loaded = Some(RgbaImage::new(1, 1).into());
         app.zoom_in();
         assert!(!app.poll_source(), "nothing requested yet");
 
@@ -383,7 +395,7 @@ mod tests {
         let mut app = app_with_files(dir.path(), &["a.png"]);
         app.image_rect = Rect::new(0, 0, 2, 2);
         app.enter_fullscreen_at(0);
-        app.loaded = Some(RgbaImage::new(1, 1));
+        app.loaded = Some(RgbaImage::new(1, 1).into());
         app.zoom_in();
         std::fs::remove_file(&app.images[0]).unwrap();
 

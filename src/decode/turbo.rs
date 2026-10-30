@@ -2,10 +2,11 @@
 
 use crate::decode::Decoded;
 use crate::decode::color::jpeg_color;
+use crate::decode::resize::{rgb_resize_is_fastest, scaled_down_size};
 use crate::info;
 use crate::scanner;
 use image::metadata::Orientation;
-use image::{DynamicImage, RgbaImage};
+use image::{DynamicImage, RgbImage, RgbaImage};
 use std::io;
 use std::path::Path;
 
@@ -77,32 +78,54 @@ pub(super) fn decode_jpeg_turbo_bytes(
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     }
 
+    // A JPEG has no alpha channel. libjpeg-turbo writes RGB or RGBA at the same speed, so the
+    // layout is the one of the fastest resize after: RGB without a resize or for a downscale
+    // to 1/2 or less, else RGBA, which resizes without the alpha multiply.
     let scaled = header.scaled(scaling);
-    let pitch = scaled.width * 4;
-    let mut image = turbojpeg::Image {
-        pixels: vec![0u8; scaled.height * pitch],
-        width: scaled.width,
-        pitch,
-        height: scaled.height,
-        format: turbojpeg::PixelFormat::RGBA,
-    };
-
-    decompressor
-        .decompress(data, image.as_deref_mut())
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    let w = image.width as u32;
-    let h = image.height as u32;
-    let mut img = RgbaImage::from_raw(w, h, image.pixels)
-        .map(DynamicImage::ImageRgba8)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid image dimensions"))?;
+    let size = (scaled.width as u32, scaled.height as u32);
+    let rgb =
+        target.is_some_and(|box_px| rgb_resize_is_fastest(size, scaled_down_size(size, box_px)));
+    let mut img = decompress(&mut decompressor, data, scaled, rgb)?;
     if let Some(orientation) = orientation {
         img.apply_orientation(orientation);
     }
     Ok(Decoded {
         image: img,
         color: jpeg_color(data),
+        opaque: true,
     })
+}
+
+/// Decompress `data` at the `scaled` size into RGB or RGBA pixels.
+fn decompress(
+    decompressor: &mut turbojpeg::Decompressor,
+    data: &[u8],
+    scaled: turbojpeg::DecompressHeader,
+    rgb: bool,
+) -> io::Result<DynamicImage> {
+    let format = if rgb {
+        turbojpeg::PixelFormat::RGB
+    } else {
+        turbojpeg::PixelFormat::RGBA
+    };
+    let pitch = scaled.width * format.size();
+    let mut image = turbojpeg::Image {
+        pixels: vec![0u8; scaled.height * pitch],
+        width: scaled.width,
+        pitch,
+        height: scaled.height,
+        format,
+    };
+    decompressor
+        .decompress(data, image.as_deref_mut())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let (w, h) = (image.width as u32, image.height as u32);
+    let image = if rgb {
+        RgbImage::from_raw(w, h, image.pixels).map(DynamicImage::ImageRgb8)
+    } else {
+        RgbaImage::from_raw(w, h, image.pixels).map(DynamicImage::ImageRgba8)
+    };
+    image.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid image dimensions"))
 }
 
 /// The box in the stored orientation: a quarter turn swaps its sides, so the DCT scaling keeps
