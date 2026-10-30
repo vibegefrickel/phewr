@@ -14,7 +14,7 @@ impl App {
     pub(crate) fn refresh_from_scanner(&mut self) {
         let scan_errors = self.shared_list.drain_errors();
         if !scan_errors.is_empty() {
-            self.error = Some(scan_errors.join("; "));
+            self.scan_error = Some(scan_errors.join("; "));
             self.needs_render = true;
         }
 
@@ -158,7 +158,7 @@ mod tests {
         list.push_batch(vec![PathBuf::from("/x/b.png"), PathBuf::from("/x/C.png")]);
         app.refresh_from_scanner();
         assert_eq!(
-            app.error.as_deref(),
+            app.scan_error.as_deref(),
             Some("synthetic: denied; other: denied")
         );
         assert_eq!(app.gallery.filtered_indices, vec![0, 1]);

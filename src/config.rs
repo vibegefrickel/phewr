@@ -303,7 +303,9 @@ pub(crate) fn load_global_zoom(path: &Path) -> Option<u16> {
 /// and `rows` is also stored as the global fallback for folders without an entry.
 pub(crate) fn save_visible_rows(path: &Path, folder: Option<&Path>, rows: u16) {
     let rows = rows.clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS);
-    let mut state = read_state(path);
+    let Some(mut state) = read_state_to_change(path) else {
+        return;
+    };
     state.visible_rows = Some(rows);
     if let Some(folder) = folder {
         state.zoom_counter += 1;
@@ -321,7 +323,9 @@ pub(crate) fn save_visible_rows(path: &Path, folder: Option<&Path>, rows: u16) {
 
 /// Forget the zoom level for `folder`. The global fallback stays unchanged.
 pub(crate) fn clear_folder_zoom(path: &Path, folder: &Path) {
-    let mut state = read_state(path);
+    let Some(mut state) = read_state_to_change(path) else {
+        return;
+    };
     if state.zoom.remove(folder).is_none() {
         return;
     }
@@ -341,6 +345,16 @@ fn prune_oldest_zoom_entries(state: &mut StateFile) {
     state.zoom = entries.into_iter().collect();
 }
 
+/// The state file for a change. A missing file gives the default. A file that cannot be read or
+/// parsed gives `None`, so the save leaves it alone and a bad line cannot erase the folder table.
+fn read_state_to_change(path: &Path) -> Option<StateFile> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => toml::from_str(&contents).ok(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(StateFile::default()),
+        Err(_) => None,
+    }
+}
+
 fn read_state(path: &Path) -> StateFile {
     std::fs::read_to_string(path)
         .ok()
@@ -356,11 +370,17 @@ fn write_state(path: &Path, state: &StateFile) {
         return;
     }
     if let Ok(contents) = toml::to_string(state) {
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "the state file is a convenience; viewr runs without it"
-        )]
-        let _ = std::fs::write(path, contents);
+        // Write beside the file and rename, so a crash never leaves half a state file.
+        let mut temp = path.as_os_str().to_owned();
+        temp.push(format!(".{}.tmp", std::process::id()));
+        let temp = PathBuf::from(temp);
+        if std::fs::write(&temp, contents).is_err() || std::fs::rename(&temp, path).is_err() {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "the state file is a convenience; a leftover temp file is harmless"
+            )]
+            let _ = std::fs::remove_file(&temp);
+        }
     }
 }
 
@@ -691,6 +711,34 @@ mod tests {
         assert!(blocker.is_file());
 
         write_state(Path::new("/"), &state);
+    }
+
+    #[test]
+    fn a_broken_state_file_stays_as_it_is_after_a_zoom_change() {
+        let root = test_root();
+        let path = root.path().join("state.toml");
+        let broken = "visible_rows = 4\n[zoom\nbad line";
+        std::fs::write(&path, broken).unwrap();
+
+        save_visible_rows(&path, Some(Path::new("/photos")), 5);
+        clear_folder_zoom(&path, Path::new("/photos"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+    }
+
+    #[test]
+    fn a_save_leaves_no_temp_file_and_a_failed_rename_cleans_up() {
+        let root = test_root();
+        let path = root.path().join("state.toml");
+        save_visible_rows(&path, Some(Path::new("/photos")), 5);
+        assert_eq!(load_folder_zoom(&path, Path::new("/photos")), Some(5));
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+
+        // A rename onto a directory fails: the target stays and the temp file goes.
+        let blocked = root.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        write_state(&blocked, &StateFile::default());
+        assert!(blocked.is_dir());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
     #[test]

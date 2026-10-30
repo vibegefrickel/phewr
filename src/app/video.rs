@@ -355,6 +355,19 @@ mod tests {
     }
 
     #[test]
+    fn a_scan_error_keeps_the_placeholder_and_survives_enter() {
+        let mut app = app_with(&["a.png", "clip.mp4"]);
+        app.scan_error = Some("denied".to_owned());
+        app.enter_fullscreen_at(0);
+        app.next();
+        app.return_from_video();
+        assert!(app.shows_video_placeholder());
+        assert_eq!(app.scan_error.as_deref(), Some("denied"));
+        app.enter_fullscreen_at(0);
+        assert_eq!(app.scan_error.as_deref(), Some("denied"));
+    }
+
+    #[test]
     fn p_asks_for_the_mpv_window_from_the_grid_and_from_the_placeholder() {
         use crate::test_support::char_key;
 

@@ -214,7 +214,7 @@ fn open_dir(dir: &Path) -> std::io::Result<std::fs::ReadDir> {
     std::fs::read_dir(dir)
 }
 
-/// Visit the folders (not hidden, no symlink) and the supported files of `dir`.
+/// Visit the folders (no symlink) and the supported files of `dir`. Hidden entries stay out.
 fn walk(dir: &Path, list: &SharedImageList, want_files: bool, mut visit: impl FnMut(Item)) {
     let entries = match open_dir(dir) {
         Ok(entries) => entries,
@@ -239,6 +239,12 @@ fn walk(dir: &Path, list: &SharedImageList, want_files: bool, mut visit: impl Fn
 /// Sort one entry into a folder or a supported file, so that `walk` has one rule for both lists.
 fn classify(entry: &DirEntry, list: &SharedImageList, want_files: bool) -> Option<Item> {
     let path = entry.path();
+    let name = entry.file_name();
+    // A hidden folder or file stays out, before any file type check that could push an error. That
+    // covers the AppleDouble files `._x.jpg` of a foreign volume.
+    if name.to_string_lossy().starts_with('.') {
+        return None;
+    }
     let file_type = match entry.file_type() {
         Ok(file_type) => file_type,
         Err(error) => {
@@ -249,8 +255,7 @@ fn classify(entry: &DirEntry, list: &SharedImageList, want_files: bool) -> Optio
     // A symlink to a folder stays out: its canonical parent is not the folder of the link, so
     // `..` from inside would not lead back here.
     if file_type.is_dir() {
-        let name = entry.file_name();
-        return (!name.to_string_lossy().starts_with('.')).then_some(Item::Folder(name));
+        return Some(Item::Folder(name));
     }
     if !want_files {
         return None;
@@ -428,9 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_dir_lists_hidden_files_and_apple_double_files() {
-        // The current behavior: only the extension decides, so `.x.jpg` and the AppleDouble
-        // file `._x.jpg` of a foreign volume show up as images.
+    fn scan_dir_skips_hidden_files_and_apple_double_files() {
         let root = tempfile::tempdir().unwrap();
         for name in [".x.jpg", "._x.jpg", "a.jpg"] {
             fs::write(root.path().join(name), b"synthetic").unwrap();
@@ -445,7 +448,7 @@ mod tests {
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         names.sort();
-        assert_eq!(names, ["._x.jpg", ".x.jpg", "a.jpg"]);
+        assert_eq!(names, ["a.jpg"]);
     }
 
     #[test]

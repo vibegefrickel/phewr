@@ -46,6 +46,7 @@ impl App {
         self.mark_dirty();
         self.fullscreen_decode = None;
         self.error = None;
+        self.scan_error = None;
     }
 
     /// Apply the saved zoom level for `dir`. This runs when viewr opens a folder at start and

@@ -16,6 +16,7 @@ pub(super) fn draw_status_row(
 ) {
     let busy = status.is_some()
         || app.error.is_some()
+        || app.scan_error.is_some()
         || app.pending_delete.is_some()
         || app.delete_error.is_some()
         || app.gallery.search_active;
@@ -186,7 +187,7 @@ pub(super) fn gallery_status_line(
     Line::from(spans)
 }
 
-/// The delete question, the delete error or the error, in this order. They replace the rest of
+/// The delete question, the delete error, the error or the scan error, in this order. They replace the rest of
 /// the status row in the gallery and the fullscreen view.
 fn question_or_error(app: &App) -> Option<Line<'static>> {
     if let Some(pending) = &app.pending_delete {
@@ -212,7 +213,7 @@ fn question_or_error(app: &App) -> Option<Line<'static>> {
             STYLES.error,
         )));
     }
-    let err = app.error.as_ref()?;
+    let err = app.error.as_ref().or(app.scan_error.as_ref())?;
     Some(Line::from(Span::styled(
         format!(" Error: {err} "),
         STYLES.error,
@@ -429,6 +430,19 @@ mod tests {
         let screen = render(&mut app, None, 100, 30);
         assert_shows(&screen, " Delete error: no trash ");
         assert_hides(&screen, "scan failed");
+    }
+
+    #[test]
+    fn gallery_shows_the_scan_error_after_the_error() {
+        let mut app = app_with(&["a.jpg"]);
+        app.scan_error = Some("denied".to_owned());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Error: denied ");
+
+        app.error = Some("scan failed".to_owned());
+        let screen = render(&mut app, None, 100, 30);
+        assert_shows(&screen, " Error: scan failed ");
+        assert_hides(&screen, "denied");
     }
 
     #[test]

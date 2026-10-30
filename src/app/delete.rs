@@ -138,8 +138,9 @@ impl App {
         let current_path = self.images.get(self.current).cloned();
         let cursor_target = self.cursor_after_delete(&removed);
 
-        let mut new_images = Vec::with_capacity(self.images.len() - removed.len());
-        let mut new_filenames = Vec::with_capacity(self.filenames.len() - removed.len());
+        let mut new_images = Vec::with_capacity(self.images.len().saturating_sub(removed.len()));
+        let mut new_filenames =
+            Vec::with_capacity(self.filenames.len().saturating_sub(removed.len()));
         for (i, p) in self.images.iter().enumerate() {
             if !removed.contains(p) {
                 new_images.push(p.clone());
@@ -440,6 +441,26 @@ mod tests {
         assert!(app.images.is_empty());
         assert_eq!(app.current, 0);
         assert_eq!(app.mode, ViewMode::Gallery);
+    }
+
+    #[test]
+    fn confirm_delete_of_more_files_than_the_list_holds_does_not_underflow() {
+        let dir = test_dir();
+        let mut app = app_with_files(dir.path(), &["a.png"]);
+        let extra: Vec<PathBuf> = ["x.png", "y.png"]
+            .iter()
+            .map(|name| dir.path().join(name))
+            .collect();
+        for path in &extra {
+            std::fs::write(path, b"synthetic").unwrap();
+        }
+        app.pending_delete = Some(PendingDelete {
+            paths: extra,
+            from_fullscreen: false,
+            mode: DeleteMode::Permanent,
+        });
+        app.confirm_delete();
+        assert_eq!(app.images.len(), 1);
     }
 
     #[test]

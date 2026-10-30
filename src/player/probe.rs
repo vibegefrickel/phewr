@@ -352,6 +352,36 @@ fn invalid(text: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, text.to_owned())
 }
 
+/// The bits per sample of an ffmpeg pixel format name. The depth is the number at the end of the
+/// name after the byte order (`yuv420p10le`, `gray12be`), or the last two digits of a `p010` style
+/// name. A name without a depth (`yuv410p`, `nv12`, `rgb24`) is 8 bit.
+fn bit_depth(pix_fmt: &str) -> u8 {
+    let name = pix_fmt
+        .strip_suffix("le")
+        .or_else(|| pix_fmt.strip_suffix("be"))
+        .unwrap_or(pix_fmt);
+    if name == "nv20" {
+        return 10;
+    }
+    if name.starts_with("nv") {
+        return 8;
+    }
+    let stem = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    let digits = name.strip_prefix(stem).unwrap_or_default();
+    // `p010`, `p210`, `y210`: the first digit is the layout, the last two are the depth.
+    let digits = match digits.char_indices().nth(1) {
+        Some((offset, _)) if stem.len() == 1 && digits.len() == 3 => {
+            digits.get(offset..).unwrap_or_default()
+        }
+        _ => digits,
+    };
+    digits
+        .parse::<u8>()
+        .ok()
+        .filter(|depth| matches!(depth, 9 | 10 | 12 | 14 | 16))
+        .unwrap_or(8)
+}
+
 /// The header facts from the JSON of `ffprobe`, see [`probe_args`].
 /// `packet_limit` is the limit of the timing walk of an animation, `None` for another file.
 fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<VideoInfo> {
@@ -384,7 +414,7 @@ fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<VideoInfo> {
     };
     let hdr = Hdr::of_transfer(&stream.color_transfer);
     let primaries = Primaries::of_name(&stream.color_primaries);
-    let ten_bit = stream.pix_fmt.contains("10") || stream.pix_fmt.contains("12");
+    let ten_bit = bit_depth(&stream.pix_fmt) == 10;
     if let Some(limit) = packet_limit
         && let Some(timing) = animation_timing(&output.packets, stream, limit)
     {
@@ -561,8 +591,8 @@ fn clockwise_rotation(degrees: f64) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProbeCache, Rate, VideoInfo, clockwise_rotation, fraction, gcd, output_within, pacing_fps,
-        packet_limit, parse, probe, probe_args, sanitize_fps, timing_of, variable_fps,
+        ProbeCache, Rate, VideoInfo, bit_depth, clockwise_rotation, fraction, gcd, output_within,
+        pacing_fps, packet_limit, parse, probe, probe_args, sanitize_fps, timing_of, variable_fps,
     };
     use crate::player::tone_map::{Hdr, Primaries};
     use crate::test_support::fixture;
@@ -609,6 +639,43 @@ mod tests {
         );
         assert!((info.duration - 13.87).abs() < 1e-9);
         assert_eq!(info.stream, 0);
+    }
+
+    #[test]
+    fn the_bit_depth_comes_from_the_suffix_of_the_pixel_format() {
+        for (name, depth) in [
+            ("yuv410p", 8),
+            ("yuv420p", 8),
+            ("nv12", 8),
+            ("rgb24", 8),
+            ("yuv420p10le", 10),
+            ("yuv420p10be", 10),
+            ("yuv420p12le", 12),
+            ("gray12be", 12),
+            ("p010le", 10),
+            ("p012le", 12),
+            ("p210le", 10),
+            ("y210le", 10),
+            ("y212le", 12),
+            ("nv20le", 10),
+        ] {
+            assert_eq!(bit_depth(name), depth, "{name}");
+        }
+    }
+
+    #[test]
+    fn only_a_10_bit_stream_asks_for_p010le() {
+        let probe = |pix_fmt: &str| {
+            let json = PORTRAIT.replace(
+                r#""pix_fmt":"yuv420p""#,
+                &format!(r#""pix_fmt":"{pix_fmt}""#),
+            );
+            assert!(json.contains(pix_fmt), "the fixture names its pixel format");
+            parse(json.as_bytes(), None).unwrap().ten_bit
+        };
+        assert!(!probe("yuv410p"));
+        assert!(probe("yuv420p10le"));
+        assert!(!probe("yuv420p12le"));
     }
 
     #[test]

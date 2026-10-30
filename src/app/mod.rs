@@ -110,6 +110,8 @@ pub(crate) struct App {
     pub(crate) prefetcher: Prefetcher,
     pub(crate) loaded: Option<RgbaImage>,
     pub(crate) error: Option<String>,
+    /// The read errors of the scan. Only the status row reads it. Like the status note, the next key press clears it, and a decode does not.
+    pub(crate) scan_error: Option<String>,
     pub(crate) needs_render: bool,
     /// The content box of the last fullscreen or video draw. The gallery draw leaves it alone.
     pub(crate) image_rect: Rect,
@@ -249,6 +251,7 @@ impl App {
             prefetcher: Prefetcher::new(),
             loaded: None,
             error: None,
+            scan_error: None,
             needs_render: true,
             image_rect: Rect::default(),
             fullscreen_box: Rect::default(),

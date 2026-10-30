@@ -92,9 +92,9 @@ impl Running {
 pub(crate) struct FolderPrefetch {
     rest: Option<(RestKey, Instant)>,
     running: Option<Running>,
-    /// A cancelled thread that still decodes its last file. The next start waits for it, so
-    /// that at most one prefetch decodes at a time.
-    stopping: Option<JoinHandle<()>>,
+    /// The cancelled threads that still decode their last file. The next start waits for all of
+    /// them, so that at most one prefetch decodes at a time.
+    stopping: Vec<JoinHandle<()>>,
     done: HashSet<PathBuf>,
     /// True after the cursor left the `..` entry in this folder. The start and every folder
     /// switch put the cursor on `..`, so only a real move there asks for the parent.
@@ -110,16 +110,14 @@ impl FolderPrefetch {
     fn cancel(&mut self) {
         if let Some(running) = self.running.take() {
             running.cancel();
-            self.stopping = Some(running.handle);
+            self.stopping.push(running.handle);
         }
     }
 
     /// True while a cancelled thread still runs.
     fn is_stopping(&mut self) -> bool {
-        if self.stopping.as_ref().is_some_and(JoinHandle::is_finished) {
-            self.stopping = None;
-        }
-        self.stopping.is_some()
+        self.stopping.retain(|handle| !handle.is_finished());
+        !self.stopping.is_empty()
     }
 
     /// The rest that waits for its start: no thread runs, and the folder is not done.
@@ -350,7 +348,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{
-        Control, FOLDER_PREFETCH_DELAY, START_POLL, first_screen, prefetch, thumb_target_px,
+        Control, FOLDER_PREFETCH_DELAY, Running, START_POLL, first_screen, prefetch,
+        thumb_target_px,
     };
     use crate::app::App;
     use crate::app::disk_cache::get_cache_file_path;
@@ -562,13 +561,13 @@ mod tests {
         let a = tree.root.join("a");
         // A cancelled thread that still decodes its last file.
         let (release, hold) = mpsc::channel::<()>();
-        app.folder_prefetch.stopping = Some(thread::spawn(move || {
+        app.folder_prefetch.stopping = vec![thread::spawn(move || {
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "the test only waits for the release"
             )]
             let _ = hold.recv();
-        }));
+        })];
         let start = Instant::now();
         app.tick_folder_prefetch(start);
         let due = start + FOLDER_PREFETCH_DELAY;
@@ -581,6 +580,38 @@ mod tests {
             app.tick_folder_prefetch(due);
             app.folder_prefetch_running().is_some() || app.folder_prefetched(&a)
         });
+    }
+
+    #[test]
+    fn two_cancels_inside_one_decode_keep_both_threads_in_the_wait() {
+        let mut tree = Tree::new();
+        let key = tree.app.rest_key().unwrap();
+        let prefetch = &mut tree.app.folder_prefetch;
+        let (release_old, hold_old) = mpsc::channel::<()>();
+        let (release_new, hold_new) = mpsc::channel::<()>();
+        let hold = |receiver: mpsc::Receiver<()>| {
+            thread::spawn(move || {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "the test only waits for the release"
+                )]
+                let _ = receiver.recv();
+            })
+        };
+        prefetch.stopping.push(hold(hold_old));
+        prefetch.running = Some(Running {
+            key,
+            control: Arc::new(Control::default()),
+            handle: hold(hold_new),
+        });
+        prefetch.cancel();
+        assert_eq!(prefetch.stopping.len(), 2, "no handle is lost");
+
+        release_old.send(()).unwrap();
+        wait_until(|| prefetch.stopping.iter().filter(|h| h.is_finished()).count() == 1);
+        assert!(prefetch.is_stopping(), "the second thread still decodes");
+        release_new.send(()).unwrap();
+        wait_until(|| !prefetch.is_stopping());
     }
 
     #[test]

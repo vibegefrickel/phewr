@@ -14,7 +14,7 @@ use crate::terminal::{disable_mouse, enable_mouse, query_cell_pixel_size};
 use crate::ui;
 #[cfg(feature = "video")]
 use crate::video_handoff::{VideoState, play_videos, poll_mpv_window};
-use crossterm::event::{self, Event, MouseEventKind};
+use crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::prelude::*;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
@@ -85,10 +85,9 @@ pub(crate) fn run(
             if state.late_answers.swallows(&event) {
                 continue;
             }
-            if matches!(event, Event::Key(_))
-                || matches!(event, Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)))
-            {
+            if clears_status(&event) {
                 state.status = None;
+                app.scan_error = None;
             }
             if matches!(event, Event::Resize(..)) && state.cell_size_from_terminal {
                 // A new font gives new cells. The thumbnails follow. A terminal that answered
@@ -124,6 +123,16 @@ pub(crate) fn run(
 
         // Wait for the next event. The wait is short while a result is on its way.
         event::poll(next_timeout(app, &pending_emits))?;
+    }
+}
+
+/// True for the events that end a status note: a key press and a mouse button press. A key
+/// release or repeat (Kitty keyboard protocol) keeps the note.
+fn clears_status(event: &Event) -> bool {
+    match event {
+        Event::Key(key) => key.kind == KeyEventKind::Press,
+        Event::Mouse(mouse) => matches!(mouse.kind, MouseEventKind::Down(_)),
+        _ => false,
     }
 }
 
@@ -209,6 +218,10 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
     if app.help_visible {
         pending_emits.clear();
         return Ok(false);
+    }
+    // Only the grid writes new thumbnails, and it writes them all again when it returns.
+    if app.mode != ViewMode::Gallery {
+        pending_emits.clear();
     }
     let draws = app.needs_render && !app.images.is_empty();
     let chrome_again = match app.mode {
@@ -312,11 +325,13 @@ fn waits_for_a_fast_shape(running: Option<Duration>) -> bool {
 mod tests {
     use super::{
         CACHE_READ_POLL, FIRST_PICTURE_POLL, IDLE_POLL, LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW,
-        mouse_capture_wanted, next_timeout, sync_mouse_capture, waits_for_a_fast_shape,
+        clears_status, mouse_capture_wanted, next_timeout, sync_mouse_capture,
+        waits_for_a_fast_shape,
     };
     use crate::app::ViewMode;
     use crate::config::Config;
     use crate::test_support::{app, app_with, app_with_files, gallery_app, test_dir, wait_until};
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use ratatui::layout::Rect;
     use std::time::{Duration, Instant};
 
@@ -330,6 +345,45 @@ mod tests {
             next_timeout(&app, &[0]) > Duration::ZERO,
             "the fullscreen view writes no grid pictures"
         );
+    }
+
+    #[test]
+    fn a_pending_emit_in_the_fullscreen_view_gives_the_idle_wait() {
+        let mut app = app_with(&["a.png"]);
+        app.scan_complete = true;
+        app.mode = ViewMode::Fullscreen;
+        app.needs_render = false;
+        let mut pending = vec![0];
+        assert!(!super::render_images(&mut app, &mut pending).unwrap());
+        assert!(pending.is_empty());
+        assert_eq!(next_timeout(&app, &pending), IDLE_POLL);
+    }
+
+    #[test]
+    fn a_key_press_ends_the_scan_error_like_a_status_note() {
+        // The loop clears the scan error where it clears the status note: on `clears_status`.
+        let mut app = app_with(&["a.png"]);
+        app.scan_error = Some("denied".to_owned());
+        app.enter_fullscreen_at(0);
+        assert!(app.scan_error.is_some(), "the automatic work keeps it");
+        let press = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        if clears_status(&press) {
+            app.scan_error = None;
+        }
+        assert!(app.scan_error.is_none());
+    }
+
+    #[test]
+    fn only_a_key_press_clears_the_status_note() {
+        let press = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let release = Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+        assert!(clears_status(&press));
+        assert!(!clears_status(&release));
+        assert!(!clears_status(&Event::Resize(80, 24)));
     }
 
     #[test]

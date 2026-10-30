@@ -462,8 +462,17 @@ fn cube_file_in(dir: &Path, cube: Cube) -> Option<PathBuf> {
             std::process::id(),
             PARTIAL_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        std::fs::write(&partial, cube.text()).ok()?;
-        std::fs::rename(&partial, &file).ok()?;
+        if std::fs::write(&partial, cube.text())
+            .and_then(|()| std::fs::rename(&partial, &file))
+            .is_err()
+        {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "the prune does not remove a partial file, but a missing one is no problem"
+            )]
+            let _ = std::fs::remove_file(&partial);
+            return None;
+        }
     }
     Some(file)
 }
@@ -473,6 +482,21 @@ mod tests {
     use super::*;
     use crate::decode::color;
     use image::RgbaImage;
+
+    #[test]
+    fn a_failed_rename_leaves_no_partial_cube_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cube = hdr_cube(Hdr::Hlg, ColorTarget::Srgb);
+        // A directory in the place of the cube makes the rename fail.
+        std::fs::create_dir(dir.path().join(cube.file_name())).unwrap();
+
+        assert_eq!(cube_file_in(dir.path(), cube), None);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [std::ffi::OsString::from(cube.file_name())]);
+    }
 
     const ALL_PRIMARIES: [Primaries; 6] = [
         Primaries::Bt709,
