@@ -34,7 +34,7 @@ just test [FILTER]   # cargo nextest (falls back to cargo test)
 just test-real [FILTER]  # also the ignored tests that decode real files (VIEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
-just bench [DIR]     # the speed measurements of src/bench.rs on VIEWR_TEST_DIR (default ~/Pictures/viewr-test/01-mixed-big)
+just bench [DIR] [FILTER]  # the speed measurements of src/bench.rs on VIEWR_TEST_DIR (default ~/Pictures/viewr-test/01-mixed-big), FILTER selects a bench (default bench::)
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | audit | outdated   # the single steps
@@ -206,15 +206,17 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   HEIC previews, the generations), `disk_cache.rs` (the thumbnail disk cache).
 - `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the route by
   extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the user waits
-  for. `raster.rs` (the `image` crate and the EXIF orientation), `turbo.rs` (libjpeg-turbo with DCT
-  scaling), `libheif.rs` (HEIC, HEIF, AVIF, the embedded thumbnails and the core share
-  `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom), `jxl.rs` (JPEG XL, ICC profiles
+  for. `raster.rs` (the `image` crate, the EXIF orientation and `header_dimensions`, the size from
+  the header for `info::dimensions` and `shape::shown_size`), `turbo.rs` (libjpeg-turbo with DCT
+  scaling), `libheif.rs` (HEIC, HEIF, AVIF, the embedded thumbnails, `fitted_size` on
+  `scaled_down_size`, and the core share `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom), `jxl.rs` (JPEG XL, ICC profiles
   through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
   (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and `ispe`),
   `shape.rs` (the image dimensions from the file headers, for the cell shape), `embedded_jpeg.rs`
   (the safe reader for the JPEG inside camera RAW and PSD files), `color.rs` (the conversion into
-  the color space of the terminal: `ColorTarget`, `SourceColor`, the transform cache, and the ICC
-  and CICP readers for JPEG APP2, the PNG chunks and the TIFF tag). `decode_image` returns `Decoded`
+  the color space of the terminal: `ColorTarget`, `SourceColor`, the transform cache, the JPEG
+  segment walk `jpeg_segments`, and the ICC and CICP readers for JPEG APP2, the PNG chunks and the
+  TIFF tag). `decode_image` returns `Decoded`
   (the pixels and their `SourceColor`). `Decoded::fit_within` resizes, then converts.
   `decode_image_with_hint` converts at the decoded size.
 - `ui.rs`: the ratatui drawing of each view, the help popup and the info panel. The help popup has
@@ -228,15 +230,16 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   so the grid reaches the edges. `set_cell_shape` picks the column count from the photo aspect
   and the pixel size of a terminal cell.
 - `scanner.rs`: the background directory scan and the lists of supported extensions.
-  `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `subfolders` lists the subfolders
+  `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `has_extension(path, list)` is the
+  extension test of the scanner and the decoders, without an allocation. `subfolders` lists the subfolders
   of one folder argument, `..` first. `files_of` lists the files of one folder in the order of
   the scan, without a thread.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
   `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
-- `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. Results carry a
-  generation. `invalidate()` drops the jobs in flight and forgets the failed indices. Each result
-  (`Prefetched`) keeps its decode box. `take_resized` fits the image into the requested box. If
-  the decode box is smaller, it returns `None`.
+- `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. A job sends a
+  `JobResult` with its generation. `invalidate()` drops the jobs in flight and forgets the failed
+  indices. Each result (`Prefetched`) keeps its decode box. `take_resized` fits the image into
+  the requested box (`Prefetched::fit_within`). If the decode box is smaller, it returns `None`.
 - `search.rs`: fuzzy filename search (nucleo-matcher).
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `file_meta.rs`: the facts of one file for the status row (`FileMeta`, `describe`).
