@@ -109,7 +109,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
             #[cfg(feature = "video")]
             ViewMode::Video => handle_video_key(app, key),
             ViewMode::Gallery if app.gallery.search_active => {
-                handle_search_key(app, key.code);
+                handle_search_key(app, key);
                 Ok(false)
             }
             ViewMode::Gallery => handle_gallery_key(app, key),

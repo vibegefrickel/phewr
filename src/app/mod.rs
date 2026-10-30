@@ -136,6 +136,8 @@ pub(crate) struct App {
     source_for: Option<usize>,
     source_rx: Option<mpsc::Receiver<io::Result<DynamicImage>>>,
     source_target: Option<usize>,
+    /// The image whose full-resolution decode failed, so that no later request tries again.
+    source_failed: Option<usize>,
 
     #[cfg(feature = "video")]
     pub video: Option<crate::player::Player>,
@@ -280,6 +282,7 @@ impl App {
             source_for: None,
             source_rx: None,
             source_target: None,
+            source_failed: None,
             #[cfg(feature = "video")]
             video: None,
             #[cfg(feature = "video")]

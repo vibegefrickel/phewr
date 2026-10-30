@@ -187,6 +187,10 @@ fn encode_loop_file(frames: &LoopFrames) -> Option<Vec<u8>> {
 fn decode_loop_file(bytes: &[u8]) -> Option<LoopFrames> {
     let mut rest = bytes.strip_prefix(LOOP_MAGIC.as_slice())?;
     let count = take_u32(&mut rest)?;
+    // A loop of fewer than 2 frames never plays, and `CellLoop::id_at` needs 2.
+    if count < 2 {
+        return None;
+    }
     let shown = (take_u32(&mut rest)?, take_u32(&mut rest)?);
     let mut frames = LoopFrames {
         frames: Vec::new(),
@@ -216,18 +220,33 @@ fn take_u32(rest: &mut &[u8]) -> Option<u32> {
 /// file. `write` fills the temp file. The first write of the session prunes the cache, and
 /// each 64th write too.
 fn write_cache_file(cache_path: &Path, write: impl FnOnce(&Path) -> bool) -> Option<()> {
-    use std::fs;
     static CACHE_PRUNED: OnceLock<()> = OnceLock::new();
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+    write_cache_file_with(cache_path, write, &CACHE_PRUNED, &TEMP_SEQUENCE, &|dir| {
+        prune_disk_cache(dir, 512 * 1024 * 1024);
+    })
+}
+
+/// [`write_cache_file`] with its session state and its prune as arguments, so that a test
+/// counts the prune runs.
+fn write_cache_file_with(
+    cache_path: &Path,
+    write: impl FnOnce(&Path) -> bool,
+    pruned: &OnceLock<()>,
+    temp_sequence: &AtomicU64,
+    prune: &dyn Fn(&Path),
+) -> Option<()> {
+    use std::fs;
+
     let parent = cache_path.parent()?;
     fs::create_dir_all(parent).ok()?;
-    CACHE_PRUNED.get_or_init(|| prune_disk_cache(parent, 512 * 1024 * 1024));
+    pruned.get_or_init(|| prune(parent));
     if cache_path.exists() {
         return Some(());
     }
 
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let sequence = temp_sequence.fetch_add(1, Ordering::Relaxed);
     let cache_name = cache_path.file_name()?.to_string_lossy();
     let temp_path = parent.join(format!(
         ".{cache_name}.{}.{}.tmp",
@@ -252,10 +271,16 @@ fn write_cache_file(cache_path: &Path, write: impl FnOnce(&Path) -> bool) -> Opt
             return None;
         }
     }
-    if sequence.is_multiple_of(64) {
-        prune_disk_cache(parent, 512 * 1024 * 1024);
+    if prunes_after_write(sequence) {
+        prune(parent);
     }
     Some(())
+}
+
+/// Whether the write with this sequence number prunes. Write 0 skips it, because the first
+/// write of the session pruned the cache a moment before.
+fn prunes_after_write(sequence: u64) -> bool {
+    sequence != 0 && sequence.is_multiple_of(64)
 }
 
 /// The age after which a temp file of the cache counts as left behind. A write takes
@@ -339,14 +364,68 @@ fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
 #[cfg(test)]
 mod tests {
     use super::{
-        LoopFrames, get_cache_file_path, prune_disk_cache, try_load_from_disk_cache, try_load_loop,
-        try_save_loop, try_save_to_disk_cache,
+        LoopFrames, decode_loop_file, get_cache_file_path, prune_disk_cache, prunes_after_write,
+        try_load_from_disk_cache, try_load_loop, try_save_loop, try_save_to_disk_cache,
+        write_cache_file_with,
     };
     use crate::test_support::test_dir;
     use image::RgbaImage;
     use std::fs;
 
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn a_loop_file_of_fewer_than_two_frames_reads_as_a_miss() {
+        for count in [0_u32, 1] {
+            let mut bytes = super::LOOP_MAGIC.to_vec();
+            for number in [count, 8, 4] {
+                bytes.extend_from_slice(&number.to_le_bytes());
+            }
+            if count == 1 {
+                let mut qoi = Vec::new();
+                RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255]))
+                    .write_to(&mut std::io::Cursor::new(&mut qoi), super::CACHE_FORMAT)
+                    .unwrap();
+                bytes.extend_from_slice(&1000_u32.to_le_bytes());
+                bytes.extend_from_slice(&u32::try_from(qoi.len()).unwrap().to_le_bytes());
+                bytes.extend_from_slice(&qoi);
+            }
+            assert!(decode_loop_file(&bytes).is_none(), "count {count}");
+        }
+    }
+
+    #[test]
+    fn the_first_write_prunes_one_time() {
+        use std::cell::Cell;
+        use std::sync::OnceLock;
+        use std::sync::atomic::AtomicU64;
+
+        let dir = test_dir();
+        let pruned = OnceLock::new();
+        let sequence = AtomicU64::new(0);
+        let runs = Cell::new(0_u32);
+        let prune = |_: &std::path::Path| runs.set(runs.get() + 1);
+        for name in ["a.qoi", "b.qoi"] {
+            let path = dir.path().join("cache").join(name);
+            write_cache_file_with(
+                &path,
+                |temp| fs::write(temp, b"x").is_ok(),
+                &pruned,
+                &sequence,
+                &prune,
+            )
+            .unwrap();
+        }
+        assert_eq!(runs.get(), 1, "the first write prunes once, the second not");
+    }
+
+    #[test]
+    fn the_first_write_does_not_prune_a_second_time() {
+        assert!(!prunes_after_write(0));
+        assert!(!prunes_after_write(1));
+        assert!(prunes_after_write(64));
+        assert!(prunes_after_write(128));
+    }
 
     #[test]
     fn a_loop_file_keeps_its_frames_its_times_and_the_size_of_the_still() {

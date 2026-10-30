@@ -80,6 +80,7 @@ impl App {
         self.slideshow = None;
         self.mode = ViewMode::Gallery;
         self.loaded = None;
+        self.reset_zoom_state();
         self.needs_render = true;
     }
 
@@ -200,7 +201,8 @@ impl App {
             }
             // Source not decoded yet: request it and keep showing the fit image
             // until it arrives (poll_source will trigger the rebuild).
-            if self.source_target != Some(self.current) {
+            if self.source_target != Some(self.current) && self.source_failed != Some(self.current)
+            {
                 self.start_source_decode(self.current);
             }
             self.zoom_dirty = false;
@@ -329,6 +331,23 @@ mod tests {
         assert_eq!(app.mode, ViewMode::Gallery);
         assert!(!app.slideshow_running());
         assert!(app.loaded.is_none());
+    }
+
+    #[test]
+    fn enter_gallery_drops_the_zoom_source() {
+        let dir = test_dir();
+        let mut app = app_with_files(dir.path(), &["a.png"]);
+        app.image_rect = Rect::new(0, 0, 2, 2);
+        app.enter_fullscreen_at(0);
+        app.loaded = Some(image::RgbaImage::new(1, 1));
+        app.zoom_in();
+        app.load_if_needed();
+        wait_until(|| app.poll_source());
+        assert!(app.source.is_some());
+
+        app.enter_gallery();
+        assert!(app.source.is_none());
+        assert!(app.source_for.is_none());
     }
 
     #[test]

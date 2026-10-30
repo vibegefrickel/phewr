@@ -40,6 +40,8 @@ const MAX_LAG: Duration = Duration::from_millis(300);
 /// A restart begins this far ahead of the clock, so that the first frame of the new ffmpeg
 /// arrives in time. The start of ffmpeg takes about 100 ms to 250 ms.
 const RESTART_LEAD: f64 = 0.3;
+/// A run that writes no frame within this time ended, as the first-frame thumbnail does.
+const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Whether the player takes frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +117,8 @@ pub(crate) struct Player {
     base: f64,
     /// True after the first frame of this run. A run without a frame failed.
     delivered: bool,
+    /// The time at which the current ffmpeg run started.
+    run_started: Instant,
     /// The frames that came too late and never reached the screen, also the frames that a
     /// restart skipped.
     pub(crate) dropped: u32,
@@ -162,14 +166,18 @@ impl Player {
             due_frames: 0,
             base: 0.0,
             delivered: false,
+            run_started: Instant::now(),
             dropped: 0,
         };
-        player.start_run(0.0)?;
+        let opened = player.opened;
+        player.start_run(0.0, opened)?;
         Ok(player)
     }
 
-    /// Start ffmpeg at `position` seconds with the current pipeline.
-    fn start_run(&mut self, position: f64) -> std::io::Result<()> {
+    /// Start ffmpeg at `position` seconds with the current pipeline. `now` starts the deadline
+    /// of the first frame.
+    fn start_run(&mut self, position: f64, now: Instant) -> std::io::Result<()> {
+        self.run_started = now;
         self.stream = None;
         self.pending = None;
         self.start = None;
@@ -206,6 +214,13 @@ impl Player {
                 match self.stream.as_mut().map(FrameStream::try_next) {
                     Some(Ok(frame)) => self.pending = Some(frame),
                     Some(Err(TryRecvError::Empty)) => {
+                        if !self.delivered
+                            && now.saturating_duration_since(self.run_started)
+                                > FIRST_FRAME_DEADLINE
+                        {
+                            self.end_of_run(now);
+                            return false;
+                        }
                         self.catch_up(now);
                         return false;
                     }
@@ -275,7 +290,7 @@ impl Player {
         )]
         let skipped = skipped.max(0.0).round() as u32;
         let run_start = start + Duration::from_secs_f64(target - self.base);
-        let started = self.start_run(target);
+        let started = self.start_run(target, now);
         self.start = Some(run_start);
         self.dropped += skipped;
         self.fail_if_error(started);
@@ -310,7 +325,7 @@ impl Player {
             // A format that the GPU chain cannot take decodes in software.
             self.pipeline = Pipeline::Software;
             let position = self.base;
-            let started = self.start_run(position);
+            let started = self.start_run(position, now);
             self.fail_if_error(started);
             return;
         }
@@ -322,7 +337,7 @@ impl Player {
             return;
         }
         if self.repeats_at(now) {
-            let started = self.start_run(0.0);
+            let started = self.start_run(0.0, now);
             self.fail_if_error(started);
         } else {
             self.stream = None;
@@ -432,6 +447,43 @@ mod tests {
             DECODE_POLL,
             "no frame yet: a short poll"
         );
+    }
+
+    #[test]
+    fn a_run_without_a_frame_ends_after_the_deadline() {
+        let decoder = fake_decoder(info_of(640, 480, 10.0));
+        let mut player = player(&decoder, false);
+        let clock = Instant::now();
+        assert!(!player.poll_at(clock + Duration::from_secs(4)));
+        assert!(player.playing(), "within the deadline");
+        // The GPU run falls back to software and gets its own deadline.
+        assert!(!player.poll_at(clock + Duration::from_secs(6)));
+        assert_eq!(decoder.starts().len(), 2);
+        assert!(player.playing());
+        assert!(!player.poll_at(clock + Duration::from_secs(12)));
+        assert!(player.finished());
+        assert!(player.error.is_some());
+    }
+
+    #[test]
+    fn a_run_with_a_frame_at_4_seconds_plays() {
+        let decoder = fake_decoder(info_of(640, 480, 10.0));
+        let mut player = player(&decoder, false);
+        let clock = Instant::now();
+        assert!(!player.poll_at(clock + Duration::from_secs(4)));
+        for value in 0..25 {
+            decoder.feed(frame(value));
+        }
+        let first = clock + Duration::from_secs(4);
+        assert!(player.poll_at(first));
+        // The frames keep coming past the 5 s mark of the open: the deadline is for the first
+        // frame only.
+        for step in 1..=21 {
+            player.poll_at(first + FRAME * step);
+        }
+        assert!(player.playing());
+        assert!(player.error.is_none());
+        assert_eq!(decoder.starts().len(), 1);
     }
 
     #[test]

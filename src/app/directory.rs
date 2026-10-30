@@ -33,6 +33,7 @@ impl App {
         self.pending_delete = None;
         self.delete_error = None;
         self.slideshow = None;
+        self.reset_zoom_state();
 
         self.gallery.search_active = false;
         self.gallery.search_query.clear();

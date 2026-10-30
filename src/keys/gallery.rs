@@ -6,8 +6,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io;
 
 /// Keys while the gallery search line takes input.
-pub(super) fn handle_search_key(app: &mut App, code: KeyCode) {
-    match code {
+pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
+    match key.code {
         KeyCode::Esc => {
             app.gallery.search_active = false;
             if !app.gallery.search_query.is_empty() {
@@ -21,7 +21,11 @@ pub(super) fn handle_search_key(app: &mut App, code: KeyCode) {
         KeyCode::Backspace if app.gallery.search_query.pop().is_some() => {
             app.update_filter();
         }
-        KeyCode::Char(c) => {
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
             app.gallery.search_query.push(c);
             app.update_filter();
         }
@@ -372,6 +376,17 @@ mod tests {
         );
         char_key(&mut app, '-');
         assert_eq!(app.gallery.zoom_rows, 5);
+    }
+
+    #[test]
+    fn control_and_alt_keys_do_not_type_into_the_search() {
+        let mut app = gallery_app(3);
+        char_key(&mut app, '/');
+        char_key(&mut app, 'q');
+        press_with(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        press_with(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        press_with(&mut app, KeyCode::Char('w'), KeyModifiers::ALT);
+        assert_eq!(app.gallery.search_query, "q");
     }
 
     #[test]

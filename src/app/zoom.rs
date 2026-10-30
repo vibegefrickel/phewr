@@ -22,6 +22,7 @@ impl App {
         self.source_for = None;
         self.source_rx = None;
         self.source_target = None;
+        self.source_failed = None;
     }
 
     /// Return to fit-to-window, keeping the cached source for fast re-zoom.
@@ -128,13 +129,19 @@ impl App {
         if let Some(result) = result {
             let idx = self.source_target.take();
             self.source_rx = None;
-            if let (Some(idx), Ok(img)) = (idx, result)
-                && idx == self.current
-            {
-                self.source = Some(img);
-                self.source_for = Some(idx);
-                self.zoom_dirty = true;
-                self.needs_render = true;
+            match (idx, result) {
+                (Some(idx), Ok(img)) if idx == self.current => {
+                    self.source = Some(img);
+                    self.source_for = Some(idx);
+                    self.zoom_dirty = true;
+                    self.needs_render = true;
+                }
+                (Some(idx), Err(e)) if idx == self.current => {
+                    self.source_failed = Some(idx);
+                    self.error = Some(e.to_string());
+                    self.needs_render = true;
+                }
+                _ => {}
             }
             return true;
         }
@@ -346,5 +353,26 @@ mod tests {
         app.load_if_needed();
         assert_eq!(app.source_target, Some(1));
         assert!(app.fullscreen_target.is_some());
+    }
+
+    #[test]
+    fn a_failed_source_decode_sets_the_error_and_is_not_repeated() {
+        let dir = test_dir();
+        let mut app = app_with_files(dir.path(), &["a.png"]);
+        app.image_rect = Rect::new(0, 0, 2, 2);
+        app.enter_fullscreen_at(0);
+        app.loaded = Some(RgbaImage::new(1, 1));
+        app.zoom_in();
+        std::fs::remove_file(&app.images[0]).unwrap();
+
+        app.load_if_needed();
+        assert_eq!(app.source_target, Some(0));
+        wait_until(|| app.poll_source());
+        assert!(app.error.is_some());
+        assert_eq!(app.source_failed, Some(0));
+
+        app.load_if_needed();
+        assert!(app.source_target.is_none(), "no second decode");
+        assert!(app.source_rx.is_none());
     }
 }

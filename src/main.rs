@@ -36,15 +36,82 @@ mod yazi;
 use app::App;
 use clap::Parser;
 use cli::{Cli, initial_dir_from_paths, start_paths};
+use crossterm::{
+    cursor, execute,
+    terminal::{LeaveAlternateScreen, disable_raw_mode},
+};
+use encoder::GraphicsBackend;
 use image_list::SharedImageList;
 use run_loop::{LoopState, run};
 use scanner::canonicalize_or_self;
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use terminal::{
     TerminalSession, query_cell_pixel_size, query_cell_size_and_probe, window_cell_pixel_size,
 };
 use yazi::{reveal_in_yazi, run_briefly};
+
+/// Give the terminal back in the order of `TerminalSession::restore`. `disable_raw` runs
+/// between the mouse release and the screen leave. Every step runs, and the first error
+/// returns, so that a failed picture delete cannot leave the shell in raw mode.
+fn release_terminal_to(
+    out: &mut impl Write,
+    mouse: bool,
+    disable_raw: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    let mut first_error = encoder::KittyBackend::default()
+        .delete_all_to(out)
+        .and_then(|()| out.flush())
+        .err();
+    if mouse
+        && let Err(error) = terminal::disable_mouse(out)
+        && first_error.is_none()
+    {
+        first_error = Some(error);
+    }
+    if let Err(error) = disable_raw()
+        && first_error.is_none()
+    {
+        first_error = Some(error);
+    }
+    if let Err(error) = execute!(out, cursor::Show, LeaveAlternateScreen)
+        && first_error.is_none()
+    {
+        first_error = Some(error);
+    }
+    if let Err(error) = out.flush()
+        && first_error.is_none()
+    {
+        first_error = Some(error);
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+/// Leave the alternate screen before the panic message prints, because the restore at the end
+/// of the session would discard text that the default hook writes to the alternate screen. Only
+/// a panic of the main thread releases the terminal: viewr survives a panic of a worker thread.
+/// A main thread panic ends the process after the message, so that the unwind does not restore
+/// the terminal a second time on the normal screen, where `CSI ?1049l` moves the cursor.
+fn install_panic_hook(mouse: bool) {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().name() != Some("main") {
+            previous(info);
+            return;
+        }
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the terminal is in a panic, a failed release cannot be reported"
+        )]
+        let _ = release_terminal_to(&mut io::stdout(), mouse, disable_raw_mode);
+        previous(info);
+        #[expect(
+            clippy::exit,
+            reason = "the unwind would restore the terminal a second time on the normal screen"
+        )]
+        std::process::exit(101);
+    }));
+}
 
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
@@ -109,6 +176,7 @@ fn main() -> io::Result<()> {
     let shared_list = SharedImageList::new();
     scanner::spawn(paths, shared_list.clone());
 
+    install_panic_hook(config.mouse);
     let mut session = TerminalSession::enter(config.mouse)?;
 
     // The cell size query goes out with the probe, in one round trip. Without a probe, it goes
@@ -159,4 +227,31 @@ fn main() -> io::Result<()> {
         );
     }
     run_result.and(restore_result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::release_terminal_to;
+
+    #[test]
+    fn the_release_deletes_pictures_then_leaves_the_alternate_screen() {
+        let mut out = Vec::new();
+        let mut raw_calls = 0;
+        release_terminal_to(&mut out, true, || {
+            raw_calls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(raw_calls, 1);
+        let text = String::from_utf8_lossy(&out);
+        let delete = text.find("a=d").expect("delete all");
+        let mouse = text.find("\x1b[?1006l").expect("mouse off");
+        let show = text.find("\x1b[?25h").expect("cursor shown");
+        let leave = text.find("\x1b[?1049l").expect("alternate screen left");
+        assert!(delete < mouse && mouse < show && show < leave);
+
+        let mut without_mouse = Vec::new();
+        release_terminal_to(&mut without_mouse, false, || Ok(())).unwrap();
+        assert!(!String::from_utf8_lossy(&without_mouse).contains("\x1b[?1006l"));
+    }
 }
