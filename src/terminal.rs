@@ -136,10 +136,10 @@ pub(crate) struct StartAnswers {
     pub(crate) cell_px: Option<(u32, u32)>,
     /// The bytes up to the end of the last Kitty answer that came in time.
     pub(crate) probe: Option<Vec<u8>>,
-    /// True when no Kitty answer can come late: every owed answer came, or the answer to the
-    /// device attributes query came after them. Otherwise a late answer arrives as key
-    /// presses.
-    pub(crate) probe_complete: bool,
+    /// The Kitty answers that can still come late, as key presses: the owed answers that did
+    /// not come in time. Zero when every owed answer came, or when the answer to the device
+    /// attributes query came after them.
+    pub(crate) late_answers: usize,
 }
 
 /// The primary device attributes query (DA1). Every terminal answers it, after the answers to
@@ -186,12 +186,18 @@ fn start_answers_end(answer: &[u8], answers: usize) -> Option<usize> {
 /// The answers in the bytes that the terminal sent at the start, when it owes `answers`
 /// Kitty answers.
 fn start_answers(answer: &[u8], answers: usize) -> StartAnswers {
+    let received = string_terminator_ends(answer).count();
     let last_end = string_terminator_ends(answer).last();
+    let probe_complete = string_terminators_end(answer, answers).is_some()
+        || device_attributes_end(answer).is_some();
     StartAnswers {
         cell_px: parse_cell_size_report(answer),
         probe: last_end.map(|end| answer[..end].to_vec()),
-        probe_complete: string_terminators_end(answer, answers).is_some()
-            || device_attributes_end(answer).is_some(),
+        late_answers: if probe_complete {
+            0
+        } else {
+            answers.saturating_sub(received)
+        },
     }
 }
 
@@ -396,7 +402,7 @@ mod tests {
             assert_eq!(start_answers_end(&answer, 1), Some(answer.len()));
             let answers = start_answers(&answer, 1);
             assert_eq!(answers.cell_px, Some((18, 43)));
-            assert!(answers.probe_complete);
+            assert_eq!(answers.late_answers, 0);
             let probe_answer = answers.probe.unwrap();
             assert!(probe_answer.ends_with(probe), "{probe_answer:?}");
         }
@@ -422,13 +428,13 @@ mod tests {
         let answer = [transfer, cell, animation].concat();
         assert_eq!(start_answers_end(&answer, 2), Some(answer.len()));
         let answers = start_answers(&answer, 2);
-        assert!(answers.probe_complete);
+        assert_eq!(answers.late_answers, 0);
         assert_eq!(answers.probe.as_deref(), Some(answer.as_slice()));
 
         let first_only = [cell, transfer].concat();
         assert_eq!(start_answers_end(&first_only, 2), None);
         let answers = start_answers(&first_only, 2);
-        assert!(!answers.probe_complete, "the second answer can still come");
+        assert!(answers.late_answers > 0, "the second answer can still come");
         assert_eq!(answers.probe.as_deref(), Some(first_only.as_slice()));
         assert_eq!(
             start_answers_end(cell, 0),
@@ -447,7 +453,7 @@ mod tests {
         assert_eq!(start_answers_end(&answer, 2), Some(answer.len()));
         let answers = start_answers(&answer, 2);
         assert_eq!(answers.cell_px, Some((18, 43)));
-        assert!(answers.probe_complete, "no Kitty answer can come late");
+        assert_eq!(answers.late_answers, 0, "no Kitty answer can come late");
         assert_eq!(
             answers.probe.as_deref(),
             Some([cell, transfer].concat().as_slice())
@@ -472,7 +478,7 @@ mod tests {
         let only_cell = start_answers(b"\x1b[6;43;18t", 1);
         assert_eq!(only_cell.cell_px, Some((18, 43)));
         assert_eq!(only_cell.probe, None);
-        assert!(!only_cell.probe_complete);
+        assert!(only_cell.late_answers > 0);
         let only_probe = start_answers(b"\x1b_Gi=31;OK\x1b\\", 1);
         assert_eq!(only_probe.cell_px, None);
         assert_eq!(

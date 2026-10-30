@@ -27,7 +27,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
         draw_info_panel(frame, app, info);
     }
     if app.help_visible {
-        draw_help_popup(frame, app.graphics.transfer());
+        draw_help_popup(frame, app.graphics.transfer(), app.graphics.loops());
     }
 }
 
@@ -54,7 +54,7 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Some(path) = app.info_path() else {
+    let Some(path) = app.view_file() else {
         frame.render_widget(
             Paragraph::new(Span::styled("no image selected", STYLES.dim)),
             inner,
@@ -406,7 +406,7 @@ fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &mut App, grid_rect: Rect) {
         if app.is_folder(img_idx) {
             draw_folder_cell(frame, app, vis_idx, img_idx, label_style, grid_rect);
         } else if !app.thumb_cache.contains(img_idx) {
-            let icon = if app.is_video_at(img_idx) {
+            let icon = if app.is_video(img_idx) {
                 Icon::Video
             } else {
                 Icon::Loading
@@ -462,7 +462,7 @@ fn draw_cell_icon(
 
 /// True for the `..` entry, which shows two dots and no name.
 fn is_parent(app: &App, img_idx: usize) -> bool {
-    app.is_folder(img_idx) && app.filenames[img_idx] == ".."
+    app.is_parent_entry(img_idx)
 }
 
 /// A folder cell: a folder icon and the name below it, or two dots for `..`. The name goes inside the
@@ -683,7 +683,11 @@ fn help_lines(rows: &[HelpRow]) -> Vec<Line<'static>> {
 /// The help popup. A terminal of 100 columns or more gets two columns, so that it fits into 40
 /// rows. A narrower one gets one column that the popup clips.
 /// The help popup. Its last row names the Kitty medium that the start probe found.
-fn draw_help_popup(frame: &mut Frame<'_>, transfer: crate::encoder::Transfer) {
+fn draw_help_popup(
+    frame: &mut Frame<'_>,
+    transfer: crate::encoder::Transfer,
+    loops: crate::encoder::Loops,
+) {
     let area = frame.area();
     let two_columns = area.width >= HELP_TWO_COLUMN_WIDTH;
     let left = help_gallery_rows();
@@ -731,8 +735,9 @@ fn draw_help_popup(frame: &mut Frame<'_>, transfer: crate::encoder::Transfer) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             format!(
-                " press any key to close \u{b7} Kitty transfer: {}",
-                crate::encoder::kitty::describe(transfer)
+                " press any key to close \u{b7} Kitty transfer: {} \u{b7} loops: {}",
+                crate::encoder::kitty::describe(transfer),
+                crate::encoder::kitty::describe_loops(loops)
             ),
             STYLES.dim,
         ))),
@@ -1717,7 +1722,7 @@ mod tests {
         assert_shows(&screen, "Shift+drag  Select terminal text");
         assert_shows(
             &screen,
-            " press any key to close \u{b7} Kitty transfer: direct (t=d)",
+            " press any key to close \u{b7} Kitty transfer: direct (t=d) \u{b7} loops: ticks (a=p)",
         );
         #[cfg(feature = "video")]
         {

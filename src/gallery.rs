@@ -60,6 +60,14 @@ pub(crate) struct GalleryState {
     pub(crate) default_zoom_rows: usize,
 }
 
+/// The pixel size of `rect` in terminal cells of `cell_px`: the box that a decode fits into.
+pub(crate) fn box_px(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
+    (
+        u32::from(rect.width) * cell_px.0,
+        u32::from(rect.height) * cell_px.1,
+    )
+}
+
 impl GalleryState {
     #[cfg(test)]
     pub(crate) fn new(image_count: usize) -> Self {

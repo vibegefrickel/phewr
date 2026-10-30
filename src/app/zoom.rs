@@ -1,8 +1,9 @@
 //! Zoom and pan in the fullscreen view, with the full-resolution source behind them.
 
-use super::{App, box_px};
+use super::App;
 use crate::decode::resize::resize_to_exact;
 use crate::decode::{EmbeddedThumbnail, decode_image_with_hint, spawn_foreground};
+use crate::gallery::box_px;
 use image::{DynamicImage, RgbaImage};
 use std::io;
 use std::sync::mpsc;

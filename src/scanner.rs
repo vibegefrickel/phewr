@@ -32,7 +32,7 @@ pub(crate) const SIPS_EXTENSIONS: &[&str] = &[
 pub(crate) const LIBHEIF_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "avif"];
 
 #[cfg(feature = "video")]
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
+pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
 
 /// The extension test of the scanner and the decoders: it compares without an allocation and ignores ASCII case.
 pub(crate) fn has_extension(path: &Path, list: &[&str]) -> bool {

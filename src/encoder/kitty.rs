@@ -370,6 +370,14 @@ fn transfer_after_probe(answer: &[u8], path: &Path) -> Transfer {
 }
 
 /// The medium for the help popup, with the key of the protocol.
+/// The loop path for the help popup.
+pub(crate) fn describe_loops(loops: Loops) -> &'static str {
+    match loops {
+        Loops::Animation => "Kitty animation (a=f)",
+        Loops::Ticks => "ticks (a=p)",
+    }
+}
+
 pub(crate) fn describe(transfer: Transfer) -> &'static str {
     match transfer {
         Transfer::Direct => "direct (t=d)",

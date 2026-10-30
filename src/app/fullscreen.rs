@@ -2,9 +2,10 @@
 
 #[cfg(feature = "video")]
 use super::VideoReturn;
-use super::{App, ViewMode, box_px};
+use super::{App, ViewMode};
 use crate::decode::resize::load_and_resize_px;
 use crate::decode::{EmbeddedThumbnail, spawn_foreground};
+use crate::gallery::box_px;
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::io;

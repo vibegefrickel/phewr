@@ -1,14 +1,15 @@
 //! The thumbnail jobs of the grid: the queue, the embedded previews (HEIC, camera RAW, PSD),
 //! the padding to whole cells, the parked thumbnails of the folders before, the generations.
 
+use super::App;
 use super::disk_cache::{get_cache_file_path, try_load_from_disk_cache, try_save_to_disk_cache};
-use super::{App, box_px};
 use crate::decode::EmbeddedThumbnail;
 #[cfg(all(feature = "sips", target_os = "macos"))]
 use crate::decode::embedded_jpeg;
 #[cfg(feature = "heic")]
 use crate::decode::libheif::{decode_heif_preview, decodes_with_libheif};
 use crate::decode::resize::load_and_resize_px;
+use crate::gallery::box_px;
 use crate::gallery::{GridPicture, ParkKey};
 use image::RgbaImage;
 use ratatui::layout::Rect;

@@ -2,6 +2,7 @@
 
 use crate::decode::resize::fit_rgba_within;
 use crate::decode::{EmbeddedThumbnail, decode_image};
+use crate::gallery::box_px;
 use image::RgbaImage;
 use lru::LruCache;
 use ratatui::layout::Rect;
@@ -82,8 +83,7 @@ impl Prefetcher {
     }
 
     pub(crate) fn set_target_hint(&mut self, rect: Rect, cell_px: (u32, u32)) {
-        let w = u32::from(rect.width) * cell_px.0;
-        let h = u32::from(rect.height) * cell_px.1;
+        let (w, h) = box_px(rect, cell_px);
         if w > 0 && h > 0 {
             self.target_hint = Some((w, h));
         }
@@ -130,11 +130,7 @@ impl Prefetcher {
         rect: Rect,
         cell_px: (u32, u32),
     ) -> Option<RgbaImage> {
-        let max = (
-            u32::from(rect.width) * cell_px.0,
-            u32::from(rect.height) * cell_px.1,
-        );
-        self.cache.pop(&index)?.fit_within(max)
+        self.cache.pop(&index)?.fit_within(box_px(rect, cell_px))
     }
 
     /// Queue the neighbors of `current` within `first..images.len()`, nearest first, the
@@ -159,10 +155,7 @@ impl Prefetcher {
         rect: Rect,
         cell_px: (u32, u32),
     ) {
-        let target = (
-            u32::from(rect.width) * cell_px.0,
-            u32::from(rect.height) * cell_px.1,
-        );
+        let target = box_px(rect, cell_px);
         self.cache.push(
             index,
             Prefetched {

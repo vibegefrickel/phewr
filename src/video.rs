@@ -19,17 +19,13 @@ use std::sync::OnceLock;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
-
 /// The longest wait for the first frame of a thumbnail, and for each frame of a grid loop. A
 /// 4K HLG clip takes about 240 ms. A file that hangs ffmpeg must not hold one of the 4
 /// thumbnail slots for longer.
 pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn is_video(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+    crate::scanner::has_extension(path, crate::scanner::VIDEO_EXTENSIONS)
 }
 
 /// The `ffmpeg` and `ffprobe` programs. `None` when PATH has no such program.

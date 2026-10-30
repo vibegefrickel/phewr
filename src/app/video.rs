@@ -308,11 +308,6 @@ impl App {
         false
     }
 
-    /// [`App::is_video`] under its old name, for `ui.rs`. It goes when `ui.rs` calls `is_video`.
-    pub(crate) fn is_video_at(&self, index: usize) -> bool {
-        self.is_video(index)
-    }
-
     /// The play hint for a video in fullscreen. A failed open shows its error instead.
     pub(crate) fn shows_video_placeholder(&self) -> bool {
         self.fullscreen_on_video() && self.error.is_none()

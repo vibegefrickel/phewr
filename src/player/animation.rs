@@ -21,11 +21,7 @@ const MAX_CHUNK: u64 = 1 << 31;
 /// True when `path` has the extension of a format that can hold an animation. The player
 /// decodes such a file in software at a constant rate, see [`super::probe`].
 pub(crate) fn has_animation_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            ANIMATION_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
-        })
+    crate::scanner::has_extension(path, ANIMATION_EXTENSIONS)
 }
 
 /// The primaries of the ICC profile or the cICP chunk of a WebP or PNG file. ffprobe reports

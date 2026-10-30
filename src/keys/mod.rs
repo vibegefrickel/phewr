@@ -24,22 +24,23 @@ use video::handle_video_key;
 /// Nothing in viewr uses Alt+`_`, and a key that does not fit an answer ends the swallow.
 #[derive(Debug, Default)]
 pub(crate) struct LateAnswerFilter {
-    armed: bool,
+    /// The Kitty answers that can still come late. Each one ends with Alt+`\\`.
+    owed: usize,
     inside: bool,
 }
 
 impl LateAnswerFilter {
-    /// `armed` when the probe went out and no answer came back in time.
-    pub(crate) fn new(armed: bool) -> Self {
+    /// `owed` is the count of Kitty answers that the start probe did not get in time.
+    pub(crate) fn new(owed: usize) -> Self {
         Self {
-            armed,
+            owed,
             inside: false,
         }
     }
 
-    /// True when `event` belongs to the late answer and the loop must drop it.
+    /// True when `event` belongs to a late answer and the loop must drop it.
     pub(crate) fn swallows(&mut self, event: &Event) -> bool {
-        if !self.armed {
+        if self.owed == 0 {
             return false;
         }
         let Event::Key(key) = event else {
@@ -53,7 +54,7 @@ impl LateAnswerFilter {
             }
             KeyCode::Char('\\') if alt && self.inside => {
                 self.inside = false;
-                self.armed = false;
+                self.owed -= 1;
                 true
             }
             KeyCode::Char(c) if self.inside && !alt && c.is_ascii() && !c.is_ascii_control() => {
@@ -187,7 +188,7 @@ mod tests {
 
     #[test]
     fn an_armed_filter_drops_the_late_probe_answer_and_keeps_the_keys_around_it() {
-        let mut filter = LateAnswerFilter::new(true);
+        let mut filter = LateAnswerFilter::new(1);
         let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert!(!filter.swallows(&j), "a key before the answer");
 
@@ -202,9 +203,20 @@ mod tests {
         );
     }
 
+    /// A start that owed two Kitty answers and got none in time drops both late answers.
+    #[test]
+    fn a_filter_for_two_late_answers_drops_both_and_then_passes_the_keys() {
+        let mut filter = LateAnswerFilter::new(2);
+        for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\") {
+            assert!(filter.swallows(&key), "{key:?}");
+        }
+        let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
+        assert!(!filter.swallows(&alt_underscore), "two answers at most");
+    }
+
     #[test]
     fn an_error_answer_with_a_message_is_dropped_too() {
-        let mut filter = LateAnswerFilter::new(true);
+        let mut filter = LateAnswerFilter::new(1);
         for key in late_answer_keys("\x1b_Gi=31;EBADF:could not open file\x1b\\") {
             assert!(filter.swallows(&key), "{key:?}");
         }
@@ -212,7 +224,7 @@ mod tests {
 
     #[test]
     fn a_key_that_fits_no_answer_ends_the_swallow() {
-        let mut filter = LateAnswerFilter::new(true);
+        let mut filter = LateAnswerFilter::new(1);
         let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
         assert!(filter.swallows(&alt_underscore));
         let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -228,7 +240,7 @@ mod tests {
         for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\") {
             assert!(!filter.swallows(&key), "{key:?}");
         }
-        let mut filter = LateAnswerFilter::new(false);
+        let mut filter = LateAnswerFilter::new(0);
         let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
         assert!(!filter.swallows(&alt_underscore));
     }

@@ -333,14 +333,6 @@ impl App {
     }
 }
 
-/// The pixel size of `rect` in terminal cells of `cell_px`: the box that a decode fits into.
-pub(crate) fn box_px(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
-    (
-        u32::from(rect.width) * cell_px.0,
-        u32::from(rect.height) * cell_px.1,
-    )
-}
-
 #[cfg(test)]
 mod tests {
 

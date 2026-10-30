@@ -43,11 +43,6 @@ impl App {
         self.images.get(index).cloned()
     }
 
-    /// The file of the info panel, for `ui.rs`. It goes when `ui.rs` calls `view_file`.
-    pub(crate) fn info_path(&self) -> Option<PathBuf> {
-        self.view_file()
-    }
-
     /// Metadata for `path`, read on first use and cached for the session.
     pub(crate) fn info_for(&mut self, path: &Path) -> ImageInfo {
         if let Some(cached) = self.info_cache.get(path) {

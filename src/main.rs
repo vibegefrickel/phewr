@@ -184,7 +184,7 @@ fn main() -> io::Result<()> {
     let mut cell_size_answer = None;
     let mut asked_cell_size = false;
     // A probe without an answer in time can still get one: it then arrives as key presses.
-    let mut probe_unanswered = false;
+    let mut late_answers = 0;
     let loops = encoder::kitty::chosen_loops(
         std::env::var(encoder::kitty::LOOPS_OVERRIDE)
             .ok()
@@ -201,7 +201,7 @@ fn main() -> io::Result<()> {
             let start = query_cell_size_and_probe(sequence, answers);
             asked_cell_size = true;
             cell_size_answer = start.cell_px;
-            probe_unanswered = !start.probe_complete;
+            late_answers = start.late_answers;
             start.probe
         },
     );
@@ -211,7 +211,7 @@ fn main() -> io::Result<()> {
     // A terminal that answers the cell size query at start gets it again after each resize.
     state.cell_size_from_terminal = cell_size_answer.is_some();
     let cell_px = cell_size_answer.unwrap_or_else(window_cell_pixel_size);
-    state.late_answers = keys::LateAnswerFilter::new(probe_unanswered);
+    state.late_answers = keys::LateAnswerFilter::new(late_answers);
     let mut app = App::with_config(cell_px, shared_list, &config);
     app.graphics = graphics;
     let initial_dir = canonicalize_or_self(&initial_dir);
@@ -224,10 +224,13 @@ fn main() -> io::Result<()> {
     app.slideshow_autostart = cli.slideshow;
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();
+    let reveal_path = app.reveal_path();
+    // The drop cancels the loop jobs, so their ffmpeg runs end before the process does.
+    drop(app);
     if run_result.is_ok() && restore_result.is_ok() {
         // viewr quits anyway. A yazi that does not answer keeps its old cursor.
         reveal_in_yazi(
-            app.reveal_path().as_deref(),
+            reveal_path.as_deref(),
             std::env::var_os("YAZI_ID").as_deref(),
             std::env::var_os("PATH").as_deref(),
             run_briefly,
