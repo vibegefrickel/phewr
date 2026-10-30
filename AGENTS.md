@@ -176,10 +176,14 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `video.rs` (feature `video`).
   `mouse.rs` holds the mouse handler per view.
-- `kitty_output.rs`: the Kitty writes per frame: the fullscreen image, the video frame, the
-  grid and the new thumbnails. Each `render_*` has a `*_to` twin that writes to any `Write`,
-  so that the tests read the escape sequences. `App::with_graphics_out` runs a write against the
-  graphics output.
+- `kitty_output/`: the Kitty writes per frame. Each `render_*` has a `*_to` twin that writes to
+  any `Write`, so that the tests read the escape sequences. `App::with_graphics_out` runs a write
+  against the graphics output. `mod.rs` holds the fullscreen image and the video frame and
+  re-exports the writes of the grid. `terminal_images.rs` holds `TerminalImages`,
+  `TERMINAL_IMAGE_BUDGET`, `delete_image_to` and `trim_to_budget`. `grid.rs` holds the thumbnail
+  writes (`emit_new_thumbnails_to`, `render_gallery_images`, `place_gallery_images_to`,
+  `grid_placement`, `place_at`, `visible_image_ids`, `EMIT_PASS_BYTES`). `loops.rs` holds the
+  grid loops (`play_grid_loops`, `transmit_animation_to`, `swap_loop_frames_to`).
 - `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
   and the way back. `mod.rs` holds `VideoState` and `play_videos`. The ffprobe path lives in the
   decoder only (`Decoder::has_ffprobe`). `window.rs` holds `poll_mpv_window`.
@@ -226,13 +230,18 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   TIFF tag). `decode_image` returns `Decoded`
   (the pixels and their `SourceColor`). `Decoded::fit_within` resizes, then converts.
   `decode_image_with_hint` converts at the decoded size.
-- `ui.rs`: the ratatui drawing of each view, the help popup and the info panel. The help popup has
-  two columns from 100 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, rows in `help_gallery_rows`
-  and `help_viewer_rows`), else one column that clips. The gallery, the
-  fullscreen view and the video view have no frame. They use the full area minus 1 status row
-  (`content_area`, `status_area`). The help popup and the info panel keep their
-  borders.
-- `gallery.rs`: the grid geometry, the cursor and the in-memory thumbnail cache.
+- `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
+  `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
+  view. `status.rs` holds the status row of each view (`draw_status_row`, `question_or_error`,
+  `gallery_status_line`, `fullscreen_status_line`, `video_status_line`, `is_empty_folder`).
+  `grid.rs` holds the grid cells: the borders, the labels (`label_text`, the column width through
+  `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` holds the help popup: two columns
+  from 100 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, the rows in `HELP_GALLERY_ROWS` and
+  `HELP_FULLSCREEN_ROWS`), else one column that clips. The gallery, the fullscreen view and the
+  video view have no frame. They use the full area minus 1 status row (`content_area`,
+  `status_area`). The help popup and the info panel keep their borders.
+- `gallery.rs`: the grid geometry, the cursor and the in-memory thumbnail cache, and the two
+  geometry helpers `box_px` (the pixel box of a rect) and `centered` (a box centered in a rect).
   `update_grid` gives the remainder of the width and the height to the first columns and rows,
   so the grid reaches the edges. `set_cell_shape` picks the column count from the photo aspect
   and the pixel size of a terminal cell.
@@ -267,8 +276,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `VIEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `Pixels` is a view of RGB or
   RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
   every medium. The check and the copy go in chunks of 4096 pixels and stop at the first
-  transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost. `transmit_frame_to`
-  sends one animation frame (`a=f`), and `animate_to` sends the animation control (`a=a`).
+  transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost. `KittyBackend` has
+  `transmit` and `transmit_frame`. The writers without state are free functions of
+  `encoder::kitty` (`delete_all_to`, `delete_image_to`, `place_by_id_to`, `animate_to`), and `apc`
+  writes each command frame (`ESC _ G ... ESC \`).
 - `test_support.rs` (test only): the app builders, the key press helpers and the synthetic
   file writers that the tests of more than one module share. `test_support::video` holds
   `FakeRunner`, `FakeDecoder` and the app builders of the video tests.
@@ -367,7 +378,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   gets the first file index, and the thumbnail jobs, the marks, the delete, the cell shape and
   the info panel skip folders. A folder cell has no thumbnail and no Kitty image. An empty
   folder (no file, and no folder besides `..`) shows a note in the status row (`is_empty_folder`
-  in `ui.rs`). There is no directory picker. A start with several paths lists no
+  in `ui/status.rs`). There is no directory picker. A start with several paths lists no
   folders. A symlink to a folder stays out. viewr always starts in the grid, also with one
   image: it never opens the fullscreen view or a slideshow by itself (only `--slideshow` does).
 - **Video programs:** viewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
@@ -449,7 +460,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   Neighbors share the gap line. The selected border is drawn last, so it wins. A border that the
   grid edge cuts stays open at that edge. No cell has a background fill. Every thumbnail is
   decoded for the base cell size, so a wider column only has a larger margin.
-- **Terminal storage:** `TerminalImages` in `kitty_output.rs` tracks the images that the
+- **Terminal storage:** `TerminalImages` in `kitty_output/terminal_images.rs` tracks the images that the
   terminal stores, with their bytes (4 bytes per pixel, also for a picture that went out as RGB,
   so the count is an upper bound). The grid deletes evicted and replaced ids with `a=d,d=I`
   and trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB). Ghostty evicts
@@ -503,7 +514,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   one id from 2^31, `LOOP_ID_BASE`), the further frames go out with `a=f,z=<ms>`, then `a=a,r=1,z=`
   sets the gap of the root frame and `a=a,s=3,v=1` loops forever. Then `a=p` places the animation
   over the still and `d=i` removes the placement of the still, in one synchronized update
-  (`transmit_animation_to` in `kitty_output.rs`). No tick and no wakeup: `loop_frames_due` and
+  (`transmit_animation_to` in `kitty_output/loops.rs`). No tick and no wakeup: `loop_frames_due` and
   `grid_loop_timeout` skip an animation. A hidden or replaced cell sends one `d=I`. A grid redraw
   places the running animation again by its id. A `d=A` (the help popup, the info panel, the
   fullscreen view, the zoom) makes the grid send it again with all frames. Ticks (the fallback for
@@ -525,7 +536,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   paths. `FakeTerminal` reads `a=t`, `a=f`, `a=a` and `d=i`.
 - **Cell icons:** a grid cell without a thumbnail shows a large dim picture (image) or play
   triangle (video), a folder cell a folder, and `..` two dots without a name (`icons.rs`,
-  `draw_cell_icon` in `ui.rs`). The icons are octant blocks (2x4 dots per cell, drawn by Ghostty
+  `draw_cell_icon` in `ui/grid.rs`). The icons are octant blocks (2x4 dots per cell, drawn by Ghostty
   itself) on a ratatui canvas, about 30 % of the cell height and square in pixels
   (`App::cell_px`). The help popup hides the icons, as it hides the
   pictures. A cell that cannot hold
