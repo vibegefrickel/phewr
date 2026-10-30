@@ -35,12 +35,23 @@ pub(crate) fn transmit_to<W: Write + ?Sized>(
     opts: &DisplayOptions,
     transfer: Transfer,
 ) -> io::Result<()> {
+    transmit_in(out, pixels, opts, transfer, &std::env::temp_dir())
+}
+
+/// [`transmit_to`] with the directory of the temp file, so that a test can make the write fail.
+fn transmit_in<W: Write + ?Sized>(
+    out: &mut W,
+    pixels: Pixels<'_>,
+    opts: &DisplayOptions,
+    transfer: Transfer,
+    temp_dir: &Path,
+) -> io::Result<()> {
     with_opaque_as_rgb(pixels, transfer, |pixels| {
         let keys = Keys {
             first: &|format| header_keys(pixels, opts, format),
             chunk: "",
         };
-        write_pixels(out, pixels, &keys, transfer)
+        write_pixels(out, pixels, &keys, transfer, temp_dir)
     })
 }
 
@@ -52,13 +63,15 @@ pub(crate) fn transmit_to<W: Write + ?Sized>(
 /// and the PNG medium keep the RGB conversion, because their bytes cost more.
 ///
 /// The frame covers the whole image, so it needs no base frame (`c=`), and the keys of the
-/// cell box and of the cursor do not apply: in a frame, `c=` and `r=` name frames.
+/// cell box and of the cursor do not apply: in a frame, `c=` and `r=` name frames. With
+/// `transient`, the frame carries the usage hint `N=1`.
 pub(crate) fn transmit_frame_to<W: Write + ?Sized>(
     out: &mut W,
     pixels: Pixels<'_>,
     id: u32,
     gap_ms: u32,
     transfer: Transfer,
+    transient: bool,
 ) -> io::Result<()> {
     let pixels = Pixels {
         keep_alpha: true,
@@ -67,11 +80,12 @@ pub(crate) fn transmit_frame_to<W: Write + ?Sized>(
     with_opaque_as_rgb(pixels, transfer, |pixels| {
         let (w, h) = pixels.dimensions();
         let gap = gap_ms.max(1);
+        let hint = if transient { ",N=1" } else { "" };
         let keys = Keys {
-            first: &|format| format!("a=f,q=2,f={format},s={w},v={h},i={id},z={gap}"),
+            first: &|format| format!("a=f,q=2,f={format},s={w},v={h},i={id},z={gap}{hint}"),
             chunk: "a=f,",
         };
-        write_pixels(out, pixels, &keys, transfer)
+        write_pixels(out, pixels, &keys, transfer, &std::env::temp_dir())
     })
 }
 
@@ -129,12 +143,13 @@ struct Keys<'a> {
     chunk: &'static str,
 }
 
-/// Write `pixels` as they are, through `transfer`.
+/// Write `pixels` as they are, through `transfer`. The temp file goes into `temp_dir`.
 fn write_pixels<W: Write + ?Sized>(
     out: &mut W,
     pixels: Pixels<'_>,
     keys: &Keys<'_>,
     transfer: Transfer,
+    temp_dir: &Path,
 ) -> io::Result<()> {
     match transfer {
         Transfer::Direct => {
@@ -154,9 +169,9 @@ fn write_pixels<W: Write + ?Sized>(
         }
         // A temp dir that takes no file (full, read-only) must not stop the program, so the
         // pixels go through the pty instead.
-        Transfer::TempFile => match write_temp_file(pixels.data) {
+        Transfer::TempFile => match write_temp_file(pixels.data, temp_dir) {
             Ok(path) => write_temp_file_reference(out, keys, raw_format(pixels), &path),
-            Err(_) => write_pixels(out, pixels, keys, Transfer::Direct),
+            Err(_) => write_pixels(out, pixels, keys, Transfer::Direct, temp_dir),
         },
     }
 }
@@ -170,9 +185,13 @@ fn raw_format(pixels: Pixels<'_>) -> u32 {
 fn header_keys(pixels: Pixels<'_>, opts: &DisplayOptions, format: u32) -> String {
     let (w, h) = pixels.dimensions();
     let id_part = opts.id.map(|id| format!(",i={id}")).unwrap_or_default();
-    let box_part = cell_box_keys(opts.cell_box);
+    let box_part = match (opts.cell_box, opts.columns) {
+        (None, Some(columns)) => format!(",c={columns}"),
+        (cell_box, _) => cell_box_keys(cell_box),
+    };
     let action = if opts.transmit_only { 't' } else { 'T' };
-    format!("a={action},q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}")
+    let hint = if opts.transient { ",N=1" } else { "" };
+    format!("a={action},q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}{hint}")
 }
 
 /// The `c=` and `r=` keys of the cell box that the terminal scales the picture to.
@@ -223,10 +242,10 @@ fn write_temp_file_reference<W: Write + ?Sized>(
 
 /// Write `pixels` to a new file in the temp dir with the marker in its name. The protocol
 /// accepts a file in `/tmp`, `/dev/shm` or `$TMPDIR`, and `temp_dir` follows `$TMPDIR`.
-fn write_temp_file(pixels: &[u8]) -> io::Result<PathBuf> {
+fn write_temp_file(pixels: &[u8], temp_dir: &Path) -> io::Result<PathBuf> {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
+    let path = temp_dir.join(format!(
         "{TEMP_FILE_MARKER}-viewr-{}-{sequence}.raw",
         std::process::id()
     ));
@@ -359,7 +378,7 @@ pub(crate) fn detect_backend(
 ) -> KittyBackend {
     let fixed = fixed_transfer(override_value, ssh);
     let probe_file = if fixed.is_none() {
-        write_temp_file(&[0, 0, 0, 0]).ok()
+        write_temp_file(&[0, 0, 0, 0], &std::env::temp_dir()).ok()
     } else {
         None
     };
@@ -468,7 +487,8 @@ mod tests {
     use super::{
         ANIMATION_PROBE_ID, PROBE_ID, TEMP_FILE_MARKER, Transfer, animate_to, answer_for,
         chosen_loops, clear_placements_to, delete_all_to, delete_placements_to, detect_backend,
-        detect_transfer, place_by_id_to, temp_file_paths, transmit_frame_to, transmit_to,
+        detect_transfer, place_by_id_to, temp_file_paths, transmit_frame_to, transmit_in,
+        transmit_to,
     };
     use crate::encoder::{DisplayOptions, KittyBackend, Loops, Pixels};
     use base64::Engine;
@@ -546,7 +566,9 @@ mod tests {
             &DisplayOptions {
                 id: None,
                 cell_box: Some((4, 2)),
+                columns: None,
                 transmit_only: false,
+                transient: false,
             },
             Transfer::Direct,
         );
@@ -719,6 +741,98 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_temp_write_sends_the_pixels_through_the_pty_instead() {
+        let image = RgbaImage::from_pixel(8, 4, image::Rgba([1, 2, 3, 255]));
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let mut out = Vec::new();
+
+        transmit_in(
+            &mut out,
+            Pixels::from(&image),
+            &options(Some(5)),
+            Transfer::TempFile,
+            &missing,
+        )
+        .unwrap();
+
+        let encoded = String::from_utf8(out).unwrap();
+        assert!(
+            encoded.starts_with("\x1b_Ga=T,q=2,C=1,f=24,s=8,v=4,i=5,m=0;"),
+            "{encoded}"
+        );
+        assert!(
+            !encoded.contains("t=t"),
+            "no temp file reference: {encoded}"
+        );
+        let payload = encoded
+            .split_once(';')
+            .unwrap()
+            .1
+            .trim_end_matches("\x1b\\");
+        assert_eq!(
+            STANDARD.decode(payload).unwrap(),
+            [[1, 2, 3]; 32].concat(),
+            "the same pixels as base64"
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0, "no file left");
+    }
+
+    #[test]
+    fn the_transient_hint_goes_into_the_first_sequence_only_when_asked() {
+        let image = RgbaImage::from_pixel(8, 4, image::Rgba([1, 2, 3, 255]));
+        let hinted = DisplayOptions {
+            id: Some(5),
+            transient: true,
+            ..DisplayOptions::default()
+        };
+        for transfer in [Transfer::Direct, Transfer::Png, Transfer::TempFile] {
+            let with = transmit(&image, &hinted, transfer);
+            let without = transmit(&image, &options(Some(5)), transfer);
+            // The control keys of the first command, before the payload.
+            let keys = |text: &str| -> Vec<String> {
+                let first = text.split("\x1b_G").nth(1).unwrap();
+                first
+                    .split(';')
+                    .next()
+                    .unwrap()
+                    .split(',')
+                    .map(str::to_owned)
+                    .collect()
+            };
+            assert!(
+                keys(&with).contains(&"N=1".to_owned()),
+                "{transfer:?}: {with}"
+            );
+            assert!(
+                !keys(&without).iter().any(|key| key.starts_with("N=")),
+                "{transfer:?}"
+            );
+            for path in temp_file_paths(with.as_bytes())
+                .into_iter()
+                .chain(temp_file_paths(without.as_bytes()))
+            {
+                fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_column_count_without_rows_names_only_c() {
+        let image = RgbaImage::from_pixel(8, 4, image::Rgba([1, 2, 3, 255]));
+        let encoded = transmit(
+            &image,
+            &DisplayOptions {
+                columns: Some(7),
+                ..DisplayOptions::default()
+            },
+            Transfer::Direct,
+        );
+        assert!(encoded.contains(",s=8,v=4,c=7,m=0;"), "{encoded}");
+        assert!(!encoded.contains(",r="), "{encoded}");
+    }
+
+    #[test]
     fn each_transfer_has_a_note_with_its_protocol_key() {
         assert_eq!(super::describe(Transfer::Direct), "direct (t=d)");
         assert!(super::describe(Transfer::Png).contains("f=100"));
@@ -868,10 +982,10 @@ mod tests {
     fn a_frame_names_its_image_and_gap_in_every_chunk() {
         let image = RgbaImage::from_pixel(64, 64, image::Rgba([1, 2, 3, 4]));
         let mut out = Vec::new();
-        transmit_frame_to(&mut out, (&image).into(), 9, 83, Transfer::Direct).unwrap();
+        transmit_frame_to(&mut out, (&image).into(), 9, 83, Transfer::Direct, true).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(
-            text.starts_with("\x1b_Ga=f,q=2,f=32,s=64,v=64,i=9,z=83,m=1;"),
+            text.starts_with("\x1b_Ga=f,q=2,f=32,s=64,v=64,i=9,z=83,N=1,m=1;"),
             "{text}"
         );
         let chunks = text.matches("\x1b_G").count();
@@ -885,14 +999,14 @@ mod tests {
 
         let opaque = RgbaImage::from_pixel(2, 1, image::Rgba([1, 2, 3, 255]));
         let mut out = Vec::new();
-        transmit_frame_to(&mut out, (&opaque).into(), 9, 0, Transfer::TempFile).unwrap();
+        transmit_frame_to(&mut out, (&opaque).into(), 9, 0, Transfer::TempFile, true).unwrap();
         for path in temp_file_paths(&out) {
             assert_eq!(fs::read(&path).unwrap(), [1, 2, 3, 255, 1, 2, 3, 255]);
             fs::remove_file(path).unwrap();
         }
         let text = String::from_utf8(out).unwrap();
         assert!(
-            text.starts_with("\x1b_Ga=f,q=2,f=32,s=2,v=1,i=9,z=1,t=t;"),
+            text.starts_with("\x1b_Ga=f,q=2,f=32,s=2,v=1,i=9,z=1,N=1,t=t;"),
             "an opaque frame stays RGBA, and a gap of 0 ms becomes 1 ms: {text}"
         );
     }
@@ -901,10 +1015,10 @@ mod tests {
     fn an_opaque_animation_frame_keeps_its_rgba_format_and_the_root_frame_does_not() {
         let image = RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255]));
         let mut frame = Vec::new();
-        transmit_frame_to(&mut frame, (&image).into(), 9, 83, Transfer::TempFile).unwrap();
+        transmit_frame_to(&mut frame, (&image).into(), 9, 83, Transfer::TempFile, true).unwrap();
         let frame_text = String::from_utf8(frame.clone()).unwrap();
         assert!(
-            frame_text.contains("a=f,q=2,f=32,s=4,v=2,i=9,z=83"),
+            frame_text.contains("a=f,q=2,f=32,s=4,v=2,i=9,z=83,N=1"),
             "{frame_text}"
         );
         let paths = temp_file_paths(&frame);
@@ -933,7 +1047,7 @@ mod tests {
         let direct = transmit_pixels(kept, &options(Some(9)), Transfer::Direct);
         assert!(direct.contains("f=24"), "{direct}");
         let mut frame = Vec::new();
-        transmit_frame_to(&mut frame, (&image).into(), 9, 83, Transfer::Direct).unwrap();
+        transmit_frame_to(&mut frame, (&image).into(), 9, 83, Transfer::Direct, true).unwrap();
         assert!(String::from_utf8(frame).unwrap().contains("f=24,"));
         let file = transmit_pixels(kept, &options(Some(9)), Transfer::TempFile);
         assert!(
@@ -952,7 +1066,7 @@ mod tests {
         for (w, h) in [(400u32, 300u32), (1280, 720), (1920, 1080)] {
             let image = RgbaImage::from_pixel(w, h, image::Rgba([1, 2, 3, 255]));
             let keys = Keys {
-                first: &|f| format!("a=f,q=2,f={f},s={w},v={h},i=7,z=83"),
+                first: &|f| format!("a=f,q=2,f={f},s={w},v={h},i=7,z=83,N=1"),
                 chunk: "a=f,",
             };
             for name in ["scan and copy", "copy only (scan once)", "as is (RGBA)"] {
@@ -963,7 +1077,14 @@ mod tests {
                     let pixels = Pixels::from(&image);
                     match name {
                         "as is (RGBA)" => {
-                            write_pixels(&mut out, pixels, &keys, Transfer::TempFile).unwrap();
+                            write_pixels(
+                                &mut out,
+                                pixels,
+                                &keys,
+                                Transfer::TempFile,
+                                &std::env::temp_dir(),
+                            )
+                            .unwrap();
                         }
                         "scan and copy" => {
                             let rgb = pixels.opaque_rgb().unwrap();
@@ -972,7 +1093,14 @@ mod tests {
                                 data: &rgb,
                                 ..pixels
                             };
-                            write_pixels(&mut out, rgb_pixels, &keys, Transfer::TempFile).unwrap();
+                            write_pixels(
+                                &mut out,
+                                rgb_pixels,
+                                &keys,
+                                Transfer::TempFile,
+                                &std::env::temp_dir(),
+                            )
+                            .unwrap();
                         }
                         _ => {
                             let (source, _) = pixels.data.as_chunks::<4>();
@@ -987,7 +1115,14 @@ mod tests {
                                 data: &rgb,
                                 ..pixels
                             };
-                            write_pixels(&mut out, rgb_pixels, &keys, Transfer::TempFile).unwrap();
+                            write_pixels(
+                                &mut out,
+                                rgb_pixels,
+                                &keys,
+                                Transfer::TempFile,
+                                &std::env::temp_dir(),
+                            )
+                            .unwrap();
                         }
                     }
                     times.push(start.elapsed());

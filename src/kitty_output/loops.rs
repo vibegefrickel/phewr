@@ -145,7 +145,9 @@ fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::
             &encoder::DisplayOptions {
                 id: Some(id),
                 cell_box: None,
+                columns: None,
                 transmit_only: true,
+                transient: true,
             },
         )?;
         app.terminal_images.insert(id, frame.image.as_raw().len());
@@ -170,7 +172,9 @@ fn transmit_animation_to(app: &mut App, out: &mut impl Write, img_idx: usize) ->
         &encoder::DisplayOptions {
             id: Some(id),
             cell_box: None,
+            columns: None,
             transmit_only: true,
+            transient: true,
         },
     )?;
     for (frame, picture) in cell_loop.frames.iter().enumerate().skip(1) {
@@ -237,6 +241,7 @@ mod tests {
     use crate::app::ViewMode;
     use crate::app::thumbnails::{pad_for_grid, pad_loop_frame};
     use crate::encoder::Transfer;
+    use crate::encoder::kitty;
     use crate::encoder::{KittyBackend, Loops};
     use crate::image_list::SharedImageList;
     use crate::kitty_output::render_gallery_images;
@@ -406,7 +411,7 @@ mod tests {
         assert_eq!(first.matches("\x1b_Ga=t,").count(), 1, "the root frame");
         assert_eq!(
             first
-                .matches(&format!("\x1b_Ga=f,q=2,f=24,s=80,v=48,i={id},z=333,"))
+                .matches(&format!("\x1b_Ga=f,q=2,f=24,s=80,v=48,i={id},z=333,N=1,"))
                 .count(),
             2,
             "{first}"
@@ -706,6 +711,99 @@ mod tests {
             assert!(!app.terminal_images.contains(*id));
         }
         assert!(app.grid_loops.loops.is_empty());
+    }
+
+    /// The first Kitty command of each transmit in `output` (`a=T`, `a=t`, `a=f`), without its
+    /// payload. A further chunk (`q=2` missing) carries no keys of the image.
+    fn transmits(output: &str) -> Vec<&str> {
+        output
+            .split("\x1b_G")
+            .skip(1)
+            .map(|command| command.split(';').next().unwrap_or_default())
+            .filter(|keys| keys.contains("q=2"))
+            .filter(|keys| ["a=T,", "a=t,", "a=f,"].iter().any(|a| keys.starts_with(a)))
+            .collect()
+    }
+
+    #[test]
+    fn only_the_animation_path_marks_loop_frames_transient_and_a_still_never() {
+        for (mut app, hinted) in [(clip_app(3), false), (animation_app(3), true)] {
+            let mut terminal = FakeTerminal::new();
+            let mut stills = Vec::new();
+            place_gallery_images_to(&mut app, &mut stills).unwrap();
+            let stills = text(&stills);
+            assert!(!transmits(&stills).is_empty());
+            assert!(!stills.contains("N="), "a still is not transient: {stills}");
+            terminal.feed(stills.as_bytes());
+
+            add_loop(&mut app, 1, 3);
+            let (first, _) = play_at(&mut app, 0);
+
+            let frames = transmits(&first);
+            assert!(frames.len() >= 3, "{first}");
+            for keys in frames {
+                let has_hint = keys.split(',').any(|key| key == "N=1");
+                assert_eq!(has_hint, hinted, "{keys}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_loop_frame_that_left_the_terminal_falls_back_to_the_still() {
+        let mut app = clip_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let (_, still) = app.thumb_cache.peek(1).unwrap();
+        let ids = add_loop(&mut app, 1, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+        assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
+
+        // The terminal drops one frame, and viewr forgets it, as after a trim.
+        let mut out = Vec::new();
+        kitty::delete_image_to(&mut out, ids[2]).unwrap();
+        terminal.feed(&out);
+        app.terminal_images.remove(ids[2]);
+        place_stills(&mut app, &mut terminal);
+
+        assert!(
+            placed(&terminal, &ids).is_empty(),
+            "no frame of a broken loop"
+        );
+        assert_eq!(placed(&terminal, &[still]), vec![still], "the still shows");
+        assert!(terminal.black_cells.is_empty());
+    }
+
+    #[test]
+    fn two_loops_due_in_one_tick_swap_in_one_update_in_grid_order() {
+        let mut app = clip_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let first = add_loop(&mut app, 0, 3);
+        let second = add_loop(&mut app, 2, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+
+        let (tick, started) = play_at(&mut app, FRAME_TICKS);
+        terminal.feed(tick.as_bytes());
+
+        assert!(!started);
+        assert_eq!(tick.matches(BEGIN_SYNC).count(), 1, "{tick:?}");
+        assert_eq!(tick.matches(END_SYNC).count(), 1, "{tick:?}");
+        assert!(tick.starts_with(BEGIN_SYNC) && tick.ends_with(END_SYNC));
+        assert_eq!(terminal.synchronized_depth, 0);
+        let position = |keys: String| {
+            tick.find(&keys)
+                .unwrap_or_else(|| panic!("{keys}: {tick:?}"))
+        };
+        let old_first = position(format!("\x1b_Ga=d,d=i,i={},", first[0]));
+        let new_first = position(format!("\x1b_Ga=p,q=2,C=1,i={},", first[1]));
+        let old_second = position(format!("\x1b_Ga=d,d=i,i={},", second[0]));
+        let new_second = position(format!("\x1b_Ga=p,q=2,C=1,i={},", second[1]));
+        assert!(
+            old_first < new_first && new_first < old_second && old_second < new_second,
+            "grid order: {tick:?}"
+        );
+        assert_eq!(placed(&terminal, &first), vec![first[1]]);
+        assert_eq!(placed(&terminal, &second), vec![second[1]]);
     }
 
     #[test]

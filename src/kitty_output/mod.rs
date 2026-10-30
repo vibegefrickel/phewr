@@ -6,12 +6,14 @@ mod loops;
 mod terminal_images;
 
 use crate::app::App;
-use crate::encoder;
+use crate::decode::ScreenImage;
+use crate::encoder::{self, MAX_PAYLOAD_BYTES};
 use crate::gallery::centered;
 use crossterm::{cursor, queue};
 pub(crate) use grid::{emit_new_thumbnails, render_gallery_images};
 pub(crate) use loops::play_grid_loops;
 use ratatui::prelude::*;
+use std::borrow::Cow;
 use std::io::{self, Write};
 pub(crate) use terminal_images::TerminalImages;
 
@@ -31,12 +33,52 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
     if let Some(img) = &app.loaded {
         let start = centered_image(app.image_rect, app.cell_px, img.dimensions());
         queue!(out, cursor::MoveTo(start.x, start.y))?;
-        app.graphics
-            .transmit(out, img.into(), &encoder::DisplayOptions::default())?;
+        let fitted = within_payload_cap(img);
+        // The terminal scales a shrunk image back to the width of the full one in cells, and
+        // takes the rows from the aspect ratio, so the image never stretches to a rounded box.
+        let columns = (fitted.dimensions() != img.dimensions()).then(|| {
+            let columns = (f64::from(img.width()) / f64::from(app.cell_px.0))
+                .round()
+                .max(1.0);
+            columns as u16
+        });
+        app.graphics.transmit(
+            out,
+            fitted.as_ref().into(),
+            &encoder::DisplayOptions {
+                columns,
+                ..encoder::DisplayOptions::default()
+            },
+        )?;
     }
 
     queue!(out, EndSynchronizedUpdate)?;
     out.flush()
+}
+
+/// `img` as it is, or shrunk until its payload on the wire fits [`MAX_PAYLOAD_BYTES`]: Ghostty
+/// 1.4.0 refuses a larger Kitty payload. The resize is the one of the decoders (Catmull-Rom).
+/// The decode box in `app/fullscreen.rs` should keep the image below the cap, so this is the
+/// fallback. An opaque image goes out as RGB (3 bytes per pixel),
+/// so only an image with a transparent pixel counts 4 bytes. A 6016x3384 RGB image (61 MB)
+/// stays as it is.
+fn within_payload_cap(img: &ScreenImage) -> Cow<'_, ScreenImage> {
+    let (width, height) = img.dimensions();
+    let pixels = u64::from(width) * u64::from(height);
+    // The scan runs only for an RGBA image that exceeds the cap as RGBA.
+    let transparent = matches!(img, ScreenImage::Rgba(_))
+        && pixels * 4 > MAX_PAYLOAD_BYTES as u64
+        && encoder::Pixels::from(img).opaque_rgb().is_none();
+    let bytes_per_pixel = if transparent { 4 } else { 3 };
+    let wire_bytes = pixels * bytes_per_pixel;
+    if wire_bytes <= MAX_PAYLOAD_BYTES as u64 {
+        return Cow::Borrowed(img);
+    }
+    // The area scales with the square of the side, so the side scales with the square root.
+    let scale = (MAX_PAYLOAD_BYTES as f64 / wire_bytes as f64).sqrt();
+    let side = |value: u32| ((f64::from(value) * scale) as u32).max(1);
+    let (width, height) = (side(width), side(height));
+    Cow::Owned(img.crop_resized((0, 0, img.width(), img.height()), (width, height)))
 }
 
 /// The terminal cells of an image of `size` pixels when it sits in the middle of `rect`, in
@@ -111,6 +153,8 @@ pub(crate) fn render_video_frame_to(
             id: Some(VIDEO_IMAGE_ID),
             cell_box: Some((cells.width, cells.height)),
             transmit_only: false,
+            columns: None,
+            transient: true,
         },
     )?;
     queue!(out, EndSynchronizedUpdate)?;
@@ -208,6 +252,105 @@ mod tests {
         assert!(!text.contains(",X="), "no pixel offset: {text}");
         assert!(!text.contains(",Y="), "no pixel offset: {text}");
         assert!(app.terminal_images.is_empty());
+    }
+
+    /// A fullscreen image of 6016x3384 px, the 6K window of the review, with one transparent pixel
+    /// when `transparent` is set. As RGBA that is 81 MB on the wire.
+    fn six_k_image(transparent: bool) -> RgbaImage {
+        let mut image = RgbaImage::from_pixel(6016, 3384, image::Rgba([9, 9, 9, 255]));
+        if transparent {
+            image.put_pixel(3, 3, image::Rgba([9, 9, 9, 0]));
+        }
+        image
+    }
+
+    #[test]
+    fn a_fullscreen_payload_above_the_cap_shrinks_and_keeps_the_columns() {
+        use crate::encoder::{KittyBackend, MAX_PAYLOAD_BYTES, Transfer, kitty};
+        use crate::test_support::kitty::FakeTerminal;
+
+        let mut app = App::new((8, 16), SharedImageList::new());
+        app.graphics = KittyBackend::new(Transfer::TempFile);
+        app.image_rect = Rect::new(0, 0, 752, 212);
+        app.loaded = Some(six_k_image(true).into());
+        let mut out = Vec::new();
+
+        render_fullscreen_image_to(&mut app, &mut out).unwrap();
+
+        let mut terminal = FakeTerminal::new();
+        terminal.feed(&out);
+        assert_eq!(terminal.synchronized_depth, 0);
+        let paths = kitty::temp_file_paths(&out);
+        assert_eq!(paths.len(), 1);
+        let size = std::fs::metadata(&paths[0]).unwrap().len();
+        std::fs::remove_file(&paths[0]).unwrap();
+        assert!(size <= MAX_PAYLOAD_BYTES as u64, "{size} bytes");
+        assert!(size > MAX_PAYLOAD_BYTES as u64 * 99 / 100, "{size} bytes");
+        let text = text(&out);
+        let (width, height) = wire_size(&text);
+        assert_eq!(u64::from(width) * u64::from(height) * 4, size, "{text}");
+        assert!(width < 6016 && height < 3384, "{text}");
+        assert!(
+            (f64::from(width) / f64::from(height) - 6016.0 / 3384.0).abs() < 0.01,
+            "the aspect stays: {text}"
+        );
+        let transmit = text.split("\x1b_G").find(|c| c.starts_with("a=T")).unwrap();
+        assert!(
+            transmit.contains(",c=752,"),
+            "the width of the full image: {text}"
+        );
+        assert!(
+            !transmit.contains(",r="),
+            "the rows follow the aspect: {text}"
+        );
+    }
+
+    /// The `s=` and `v=` keys of the first transmit in `text`.
+    fn wire_size(text: &str) -> (u32, u32) {
+        let keys: Vec<&str> = text
+            .split("\x1b_G")
+            .find(|command| command.starts_with("a=T"))
+            .unwrap()
+            .split(',')
+            .collect();
+        let find = |name: &str| {
+            keys.iter()
+                .find_map(|key| key.strip_prefix(name))
+                .and_then(|value| value.parse().ok())
+                .unwrap()
+        };
+        (find("s="), find("v="))
+    }
+
+    #[test]
+    fn an_opaque_6k_image_stays_below_the_cap_without_a_resize() {
+        use crate::decode::ScreenImage;
+
+        let rgb = image::RgbImage::from_pixel(6016, 3384, image::Rgb([9, 9, 9]));
+        assert!(matches!(
+            super::within_payload_cap(&ScreenImage::Rgb(rgb)),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        let rgba = ScreenImage::Rgba(six_k_image(false));
+        assert!(
+            matches!(
+                super::within_payload_cap(&rgba),
+                std::borrow::Cow::Borrowed(_)
+            ),
+            "an RGBA image without a transparent pixel goes out as RGB"
+        );
+    }
+
+    #[test]
+    fn a_fullscreen_image_gets_no_transient_hint() {
+        let mut app = App::new((8, 16), SharedImageList::new());
+        app.image_rect = Rect::new(0, 0, 10, 10);
+        app.loaded = Some(RgbaImage::from_pixel(16, 32, image::Rgba([9, 9, 9, 255])).into());
+        let mut out = Vec::new();
+
+        render_fullscreen_image_to(&mut app, &mut out).unwrap();
+
+        assert!(!text(&out).contains("N="), "{}", text(&out));
     }
 
     #[test]
@@ -317,6 +460,27 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("X=") && !text.contains("Y="), "{text}");
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_video_frame_is_transient_only_for_a_terminal_with_animations() {
+        use crate::encoder::Loops;
+
+        for (loops, hinted) in [(Loops::Ticks, false), (Loops::Animation, true)] {
+            let mut app = playing_app();
+            app.graphics = app.graphics.with_loops(loops);
+            let mut out = Vec::new();
+
+            super::render_video_frame_to(&app, &mut out, false).unwrap();
+
+            for path in crate::encoder::kitty::temp_file_paths(&out) {
+                std::fs::remove_file(path).unwrap();
+            }
+            let text = text(&out);
+            assert_eq!(text.contains(",r=38,N=1,t=t;"), hinted, "{text}");
+            assert_eq!(text.contains("N="), hinted, "{text}");
+        }
     }
 
     #[cfg(feature = "video")]

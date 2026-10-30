@@ -64,16 +64,27 @@ impl Write for GraphicsOutput {
 ///
 /// There is no pixel offset (`X=`, `Y=`): a relaying multiplexer such as herdr turns an offset
 /// into a stretched picture, so every picture starts at a cell border.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct DisplayOptions {
     pub id: Option<u32>,
     /// The cell box (`c=`, `r=`) that the terminal scales the picture to. `None` keeps the
     /// pixel size.
     pub cell_box: Option<(u16, u16)>,
+    /// Scale the picture to this many columns (`c=`) and let the terminal take the rows from the
+    /// aspect ratio. `cell_box` wins when both are set.
+    pub columns: Option<u16>,
     /// Send the picture without a placement (`a=t`). A later `a=p` places it by its id. The
     /// frames of a grid loop go out this way, one time each.
     pub transmit_only: bool,
+    /// Mark the image as transient (`N=1`): the terminal may evict it before other images when
+    /// its storage is full. The frames of the terminal player and of the grid loops ask for it,
+    /// and [`KittyBackend`] sends the key only for [`Loops::Animation`].
+    pub transient: bool,
 }
+
+/// The largest raw payload of one transmission in bytes. Ghostty 1.4.0 refuses a Kitty payload
+/// above 65 MiB, so this cap keeps 1 MiB of room.
+pub(crate) const MAX_PAYLOAD_BYTES: usize = 64 << 20;
 
 /// The pixels per step of [`Pixels::opaque_rgb`]: 16 KB of RGBA, which stays in the L1 cache
 /// between the check and the copy.
@@ -222,6 +233,14 @@ impl KittyBackend {
         self.loops
     }
 
+    /// True when the terminal answered the animation frame probe. Such a terminal is a Ghostty
+    /// 1.4.0 class terminal, which knows the usage hint key `N`. Older terminals and herdr
+    /// 0.9.5 play the loops on the ticks and get no `N` key, because the protocol does not say
+    /// that a terminal ignores an unknown key.
+    fn knows_usage_hints(self) -> bool {
+        self.loops == Loops::Animation
+    }
+
     /// Send `pixels` and show them. An RGBA image without a transparent pixel goes out as RGB.
     pub(crate) fn transmit(
         self,
@@ -229,7 +248,11 @@ impl KittyBackend {
         pixels: Pixels<'_>,
         options: &DisplayOptions,
     ) -> io::Result<()> {
-        kitty::transmit_to(out, pixels, options, self.transfer)
+        let options = DisplayOptions {
+            transient: options.transient && self.knows_usage_hints(),
+            ..*options
+        };
+        kitty::transmit_to(out, pixels, &options, self.transfer)
     }
 
     /// Add a frame of `gap_ms` milliseconds to the animation of the image `id`.
@@ -240,7 +263,14 @@ impl KittyBackend {
         id: u32,
         gap_ms: u32,
     ) -> io::Result<()> {
-        kitty::transmit_frame_to(out, pixels, id, gap_ms, self.transfer)
+        kitty::transmit_frame_to(
+            out,
+            pixels,
+            id,
+            gap_ms,
+            self.transfer,
+            self.knows_usage_hints(),
+        )
     }
 }
 
@@ -251,6 +281,34 @@ mod tests {
     };
     use image::{Rgba, RgbaImage};
     use std::io::Write;
+
+    #[test]
+    fn the_usage_hint_goes_out_only_for_a_terminal_that_plays_animations() {
+        use super::Loops;
+
+        let image = RgbaImage::from_pixel(4, 2, Rgba([1, 2, 3, 255]));
+        let options = DisplayOptions {
+            id: Some(3),
+            transient: true,
+            ..DisplayOptions::default()
+        };
+        for (loops, hinted) in [(Loops::Ticks, false), (Loops::Animation, true)] {
+            let backend = KittyBackend::new(Transfer::Direct).with_loops(loops);
+            let mut out = Vec::new();
+            backend
+                .transmit(&mut out, Pixels::from(&image), &options)
+                .unwrap();
+            backend
+                .transmit_frame(&mut out, Pixels::from(&image), 3, 83)
+                .unwrap();
+            let text = String::from_utf8(out).unwrap();
+            assert_eq!(
+                text.matches(",N=1").count(),
+                if hinted { 2 } else { 0 },
+                "{text}"
+            );
+        }
+    }
 
     #[test]
     fn the_test_buffer_collects_the_bytes_until_a_take() {
@@ -298,7 +356,9 @@ mod tests {
                 &DisplayOptions {
                     id: Some(7),
                     cell_box: Some((5, 3)),
+                    columns: None,
                     transmit_only: false,
+                    transient: false,
                 },
             )
             .unwrap();

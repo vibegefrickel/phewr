@@ -93,6 +93,8 @@ fn transmit_cell(
             id: Some(id),
             cell_box: Some((area.width, area.height)),
             transmit_only: false,
+            columns: None,
+            transient: false,
         },
     )?;
     app.terminal_images.insert(id, bytes);
