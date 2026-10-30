@@ -312,7 +312,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   (`App::clear_before_video`), so the photo of the view before does not show around the frame.
   The frame box is the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the
   cell box. The frame size stays until the next ffmpeg start. The reader thread holds 2 frames
-  (`FRAME_QUEUE`), so a slow terminal blocks ffmpeg on the pipe.
+  (`FRAME_QUEUE`), so a slow terminal blocks ffmpeg on the pipe. The reader of a run owns
+  `FRAME_POOL` (5) frame buffers (`FramePool`), so no run allocates a zeroed 6 MB `Vec` per
+  frame. A `PooledFrame` returns its buffer on drop, also a frame that the catch-up rule drops,
+  and a frame of an old run returns to the pool of its own run.
 - **Player real time (rule):** the terminal player never plays in slow motion. A 6 s clip
   plays for 6 s, and a slow decode or a slow terminal drops frames. The clock of a run never
   moves to a late frame. A frame more than one interval late drops when a newer frame waits,
@@ -440,7 +443,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   the terminal deleted the probe file. A terminal with another `TMPDIR` reads the file but keeps
   it, and viewr would leave a 17 MB file per frame. The file name contains
   `tty-graphics-protocol`, as the protocol requires. A terminal that answers the probe later
-  than 300 ms sends the answer as key presses.
+  than 300 ms sends the answer as key presses. Through this medium an animation frame of the
+  grid loops and of the terminal player goes out as RGBA as it is (`Pixels::keep_alpha`), with no
+  scan for a transparent pixel and no RGB copy, so an opaque frame is `f=32` and the temp file
+  is 18 % larger. The direct and PNG media and the stills keep the RGB conversion.
 - **Kitty images are not ratatui widgets.** ratatui draws the frame and the borders. viewr then
   writes the pictures with Kitty escape sequences at the cell positions of the last draw. A
   popup must delete the pictures first (`graphics_delete_all`), because Kitty draws them above
