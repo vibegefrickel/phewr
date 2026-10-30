@@ -1,16 +1,21 @@
 //! The loops of the video and animated cells of the grid: the jobs, the frames and the clock.
 //!
-//! Ghostty has no Kitty animation frames, so viewr drives each loop itself. A job decodes the
-//! frames of a visible cell in the background, after the still thumbnails of the screen are
-//! out (`grid_loop`, or the disk cache). Each frame goes to the terminal one time as its own
-//! image (`kitty_output::play_grid_loops`). A tick then swaps the placement of one frame for the
-//! next one, about 100 bytes per cell. All loops share one clock of [`TICKS_PER_SECOND`], and
-//! each loop starts at a multiple of [`START_ALIGN`] ticks, so the frames of all cells change
-//! in the same pass of the run loop.
+//! A job decodes the frames of a visible cell in the background, after the still thumbnails of
+//! the screen are out (`grid_loop`, or the disk cache). Then one of two paths plays the loop
+//! (`kitty_output::play_grid_loops`), as the probe at the start or the config picks it
+//! ([`Loops`]):
+//!
+//! - Animation: the loop goes to the terminal one time as one Kitty animation under one id,
+//!   and the terminal plays it. viewr sends nothing per tick, and the run loop does not wake.
+//! - Ticks: each frame goes to the terminal one time as its own image. A tick then swaps the
+//!   placement of one frame for the next one, about 75 bytes per cell. All loops share one
+//!   clock of [`TICKS_PER_SECOND`], and each loop starts at a multiple of [`START_ALIGN`]
+//!   ticks, so the frames of all cells change in the same pass of the run loop.
 
 use super::disk_cache::{try_load_loop, try_save_loop};
 use super::thumbnails::{pad_loop_frame, thumb_target_px};
 use super::{App, ViewMode};
+use crate::encoder::Loops;
 use crate::gallery::GridPicture;
 use image::RgbaImage;
 use std::collections::{BTreeMap, HashSet};
@@ -103,7 +108,12 @@ impl Drop for ResultGuard {
 /// The loop of one visible cell: its padded frames, their Kitty ids and their ends on the clock.
 pub(crate) struct CellLoop {
     pub(crate) frames: Vec<GridPicture>,
+    /// The Kitty id of each frame. A Kitty animation has one id for all frames.
     pub(crate) ids: Vec<u32>,
+    /// The time of each frame in milliseconds, at least 1, the gaps of a Kitty animation.
+    gaps_ms: Vec<u32>,
+    /// True when the terminal plays the loop as one Kitty animation under `ids[0]`.
+    pub(crate) animation: bool,
     /// The tick at which each frame ends, counted from the start of the loop. The last one is
     /// the length of the loop.
     ends: Vec<u64>,
@@ -114,11 +124,18 @@ pub(crate) struct CellLoop {
 }
 
 impl CellLoop {
-    fn new(frames: Vec<GridPicture>, delays: &[Duration], first_id: u32) -> Self {
-        let ids = (first_id..).take(frames.len()).collect();
+    fn new(frames: Vec<GridPicture>, delays: &[Duration], first_id: u32, animation: bool) -> Self {
+        let count = if animation { 1 } else { frames.len() };
+        let ids = (first_id..).take(count).collect();
+        let gaps_ms = delays
+            .iter()
+            .map(|delay| u32::try_from(delay.as_millis()).unwrap_or(u32::MAX).max(1))
+            .collect();
         Self {
             frames,
             ids,
+            gaps_ms,
+            animation,
             ends: tick_ends(delays),
             start: None,
             placed: None,
@@ -131,6 +148,15 @@ impl CellLoop {
             .iter()
             .map(|frame| frame.image.as_raw().len())
             .sum()
+    }
+
+    /// The time of `frame` in milliseconds, the gap of the frame in a Kitty animation. A frame
+    /// without a delay shows for one tick.
+    pub(crate) fn gap_ms(&self, frame: usize) -> u32 {
+        self.gaps_ms
+            .get(frame)
+            .copied()
+            .unwrap_or_else(|| u32::try_from(1000 / TICKS_PER_SECOND).unwrap_or(1))
     }
 
     /// The whole cells of each frame: the cells of the still.
@@ -256,15 +282,19 @@ impl GridLoops {
         }
     }
 
-    /// Store the loop of the cell `index` with new Kitty ids.
-    pub(crate) fn insert(&mut self, index: usize, frames: Vec<GridPicture>, delays: &[Duration]) {
-        let count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
-        let first_id = self.next_id;
+    /// Store the loop of the cell `index` with new Kitty ids: one per frame for the ticks, one
+    /// for a Kitty animation.
+    pub(crate) fn insert(
+        &mut self,
+        index: usize,
+        frames: Vec<GridPicture>,
+        delays: &[Duration],
+        loops: Loops,
+    ) {
+        let cell = CellLoop::new(frames, delays, self.next_id, loops == Loops::Animation);
+        let count = u32::try_from(cell.ids.len()).unwrap_or(u32::MAX);
         self.next_id = self.next_id.wrapping_add(count).max(LOOP_ID_BASE);
-        if let Some(old) = self
-            .loops
-            .insert(index, CellLoop::new(frames, delays, first_id))
-        {
+        if let Some(old) = self.loops.insert(index, cell) {
             self.stale_ids.extend(old.ids);
         }
     }
@@ -281,6 +311,14 @@ impl GridLoops {
         for cancel in self.running.values() {
             cancel.store(true, Ordering::Relaxed);
         }
+    }
+}
+
+/// The jobs run on detached threads. A quit during a loop decode ends their ffmpeg runs within
+/// `CANCEL_POLL`, so that no ffmpeg outlives viewr.
+impl Drop for GridLoops {
+    fn drop(&mut self) {
+        self.cancel_jobs();
     }
 }
 
@@ -323,7 +361,8 @@ impl App {
             })
     }
 
-    /// True when a placed loop shows another frame at `now`.
+    /// True when a placed loop of the ticks shows another frame at `now`. The terminal plays a
+    /// Kitty animation itself.
     pub(crate) fn loop_frames_due(&self, now: Instant) -> bool {
         let tick = self.grid_loops.tick_at(now);
         self.grid_loops_shown()
@@ -331,11 +370,11 @@ impl App {
                 .grid_loops
                 .loops
                 .values()
-                .any(|cell| cell.placed.is_some_and(|id| id != cell.id_at(tick)))
+                .any(|cell| !cell.animation && cell.placed.is_some_and(|id| id != cell.id_at(tick)))
     }
 
-    /// The time until the next frame of a placed loop, `None` without one. The run loop
-    /// sleeps until then.
+    /// The time until the next frame of a placed loop of the ticks, `None` without one. The
+    /// run loop sleeps until then. A Kitty animation needs no wakeup.
     pub(crate) fn grid_loop_timeout(&self, now: Instant) -> Option<Duration> {
         if !self.grid_loops_shown() {
             return None;
@@ -344,7 +383,7 @@ impl App {
         self.grid_loops
             .loops
             .values()
-            .filter(|cell| cell.placed.is_some())
+            .filter(|cell| !cell.animation && cell.placed.is_some())
             .map(|cell| cell.next_change(tick))
             .min()
             .map(|next| {
@@ -402,7 +441,8 @@ impl App {
             match result.outcome {
                 LoopOutcome::Frames(frames, delays) => {
                     if self.gallery.visible_items().any(|(_, i)| i == result.index) {
-                        self.grid_loops.insert(result.index, frames, &delays);
+                        let loops = self.graphics.loops();
+                        self.grid_loops.insert(result.index, frames, &delays, loops);
                     }
                 }
                 LoopOutcome::Failed => {
@@ -596,7 +636,7 @@ mod tests {
     #[test]
     fn a_loop_starts_on_the_shared_clock_and_wraps_around() {
         let delays = [Duration::from_millis(333); 3];
-        let mut cell = CellLoop::new(vec![picture(), picture(), picture()], &delays, 100);
+        let mut cell = CellLoop::new(vec![picture(), picture(), picture()], &delays, 100, false);
         assert_eq!(cell.id_at(3), 100, "before the start, the first frame");
         cell.start_at(3);
         assert_eq!(cell.start, Some(START_ALIGN), "the next multiple of 4");
@@ -780,6 +820,43 @@ mod tests {
             app.poll_thumbnails();
             !app.thumbnails_pending()
         });
+    }
+
+    /// The job of `spawn_loop_job` with the fake ffmpeg of the `grid_loop` tests: without a
+    /// queued run, ffmpeg gives no frame, so the decode waits until the cancel.
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_quit_ends_the_ffmpeg_run_of_a_running_job() {
+        use crate::test_support::video::{clip_info, fake_decoder};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, mpsc};
+
+        let dir = test_dir();
+        let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let job_cancel = Arc::clone(&cancel);
+        let (tx, rx) = mpsc::channel();
+        let job = std::thread::spawn(move || {
+            let decoder = fake_decoder(clip_info());
+            let result = crate::grid_loop::decode_loop(
+                decoder.as_ref(),
+                Path::new("ffmpeg"),
+                Path::new("clip.mp4"),
+                (160, 96),
+                &[],
+                &job_cancel,
+            );
+            tx.send((result.err().map(|error| error.kind()), decoder.streaming()))
+                .unwrap();
+        });
+        app.grid_loops.running.insert(0, cancel);
+
+        drop(app);
+
+        let (error, streaming) = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(error, Some(std::io::ErrorKind::Interrupted));
+        assert!(!streaming, "the job killed its ffmpeg");
+        job.join().unwrap();
     }
 
     #[cfg(feature = "video")]

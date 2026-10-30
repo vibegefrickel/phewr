@@ -130,49 +130,102 @@ impl Drop for TerminalSession {
 /// How long the start waits for the answer of the terminal to the Kitty probe.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// The answers of the terminal at the start: the cell size and the answer to the Kitty probe.
-/// `None` for an answer that did not come in time.
+/// The answers of the terminal at the start: the cell size and the answers to the Kitty
+/// probes. `None` for an answer that did not come in time.
 pub(crate) struct StartAnswers {
     pub(crate) cell_px: Option<(u32, u32)>,
+    /// The bytes up to the end of the last Kitty answer that came in time.
     pub(crate) probe: Option<Vec<u8>>,
+    /// True when no Kitty answer can come late: every owed answer came, or the answer to the
+    /// device attributes query came after them. Otherwise a late answer arrives as key
+    /// presses.
+    pub(crate) probe_complete: bool,
 }
 
-/// Send the cell size query and the Kitty `probe` in one write and wait for both answers, so
-/// the start waits for one round trip instead of two. A terminal that does not answer one of
-/// them costs `PROBE_TIMEOUT` one time.
+/// The primary device attributes query (DA1). Every terminal answers it, after the answers to
+/// the queries before it.
+const DEVICE_ATTRIBUTES_QUERY: &[u8] = b"\x1b[c";
+
+/// Send the cell size query, the Kitty `probe` and the device attributes query in one write,
+/// and wait for the cell size and for `answers` Kitty answers, so the start waits for one
+/// round trip instead of two.
+///
+/// A terminal answers in order, so the answer to the device attributes query ends the wait
+/// also when the terminal skips a Kitty answer, for example the answer to an animation frame
+/// that it does not know. Only a terminal that answers neither costs `PROBE_TIMEOUT` one time.
 ///
 /// The answers must not reach crossterm, which would read them as key presses. The function
-/// runs before the first `event::poll` and reads the tty itself.
-pub(crate) fn query_cell_size_and_probe(probe: &[u8]) -> StartAnswers {
+/// runs before the first `event::poll` and reads the tty itself. A device attributes answer
+/// that comes after the read is no key press: crossterm keeps it as an internal event.
+pub(crate) fn query_cell_size_and_probe(probe: &[u8], answers: usize) -> StartAnswers {
     let mut sequence = CELL_SIZE_QUERY.to_vec();
     sequence.extend_from_slice(probe);
+    sequence.extend_from_slice(DEVICE_ATTRIBUTES_QUERY);
     let mut answer = Vec::new();
     // After a timeout, the answers that came in time are in `answer`.
-    query_terminal_into(&sequence, &mut answer, start_answers_end);
-    start_answers(&answer)
+    query_terminal_into(&sequence, &mut answer, |answer| {
+        start_answers_end(answer, answers)
+    });
+    start_answers(&answer, answers)
 }
 
-/// The length of both start answers in `answer`, once both are complete. They can come in any
-/// order.
-fn start_answers_end(answer: &[u8]) -> Option<usize> {
-    Some(cell_size_report_end(answer)?.max(string_terminator_end(answer)?))
+/// The length of the start answers in `answer`: the cell size and `answers` Kitty answers,
+/// once all are complete, in any order. The answer to the device attributes query ends them
+/// too, with every answer that came before it.
+fn start_answers_end(answer: &[u8], answers: usize) -> Option<usize> {
+    if let Some(attributes) = device_attributes_end(answer) {
+        let others = [
+            cell_size_report_end(answer),
+            string_terminator_ends(answer).last(),
+        ];
+        return Some(others.into_iter().flatten().fold(attributes, usize::max));
+    }
+    Some(cell_size_report_end(answer)?.max(string_terminators_end(answer, answers)?))
 }
 
-/// The answers in the bytes that the terminal sent at the start.
-fn start_answers(answer: &[u8]) -> StartAnswers {
+/// The answers in the bytes that the terminal sent at the start, when it owes `answers`
+/// Kitty answers.
+fn start_answers(answer: &[u8], answers: usize) -> StartAnswers {
+    let last_end = string_terminator_ends(answer).last();
     StartAnswers {
         cell_px: parse_cell_size_report(answer),
-        probe: string_terminator_end(answer).map(|end| answer[..end].to_vec()),
+        probe: last_end.map(|end| answer[..end].to_vec()),
+        probe_complete: string_terminators_end(answer, answers).is_some()
+            || device_attributes_end(answer).is_some(),
     }
 }
 
-/// The length of an answer that ends with the string terminator `ESC \`, such as the answer
+/// The end of the answer to the device attributes query, `CSI ? <numbers> c`.
+fn device_attributes_end(answer: &[u8]) -> Option<usize> {
+    answer.windows(3).enumerate().find_map(|(start, head)| {
+        if head != b"\x1b[?" {
+            return None;
+        }
+        let body = &answer[start + 3..];
+        let length = body
+            .iter()
+            .position(|&byte| !byte.is_ascii_digit() && byte != b';')?;
+        (body[length] == b'c').then_some(start + 3 + length + 1)
+    })
+}
+
+/// The end of each answer that ends with the string terminator `ESC \`, such as the answer
 /// to a Kitty query.
-fn string_terminator_end(answer: &[u8]) -> Option<usize> {
+fn string_terminator_ends(answer: &[u8]) -> impl Iterator<Item = usize> + '_ {
     answer
         .windows(2)
-        .position(|pair| pair == b"\x1b\\")
-        .map(|end| end + 2)
+        .enumerate()
+        .filter(|(_, pair)| *pair == b"\x1b\\")
+        .map(|(start, _)| start + 2)
+}
+
+/// The length of the first `count` answers that end with the string terminator, once they are
+/// all there.
+fn string_terminators_end(answer: &[u8], count: usize) -> Option<usize> {
+    match count.checked_sub(1) {
+        Some(last) => string_terminator_ends(answer).nth(last),
+        None => Some(0),
+    }
 }
 
 /// Send `sequence` to the terminal and read until `end` finds the length of the complete
@@ -340,30 +393,93 @@ mod tests {
         let cell = b"\x1b[6;43;18t".as_slice();
         let probe = b"\x1b_Gi=31;OK\x1b\\".as_slice();
         for answer in [[cell, probe].concat(), [probe, cell].concat()] {
-            assert_eq!(start_answers_end(&answer), Some(answer.len()));
-            let answers = start_answers(&answer);
+            assert_eq!(start_answers_end(&answer, 1), Some(answer.len()));
+            let answers = start_answers(&answer, 1);
             assert_eq!(answers.cell_px, Some((18, 43)));
+            assert!(answers.probe_complete);
             let probe_answer = answers.probe.unwrap();
             assert!(probe_answer.ends_with(probe), "{probe_answer:?}");
         }
         let typed = [cell, probe, b"j"].concat();
-        assert_eq!(start_answers_end(&typed), Some(typed.len() - 1));
-        assert_eq!(start_answers_end(cell), None, "the probe answer is missing");
-        assert_eq!(start_answers_end(probe), None, "the cell size is missing");
+        assert_eq!(start_answers_end(&typed, 1), Some(typed.len() - 1));
+        assert_eq!(
+            start_answers_end(cell, 1),
+            None,
+            "the probe answer is missing"
+        );
+        assert_eq!(
+            start_answers_end(probe, 1),
+            None,
+            "the cell size is missing"
+        );
+    }
+
+    #[test]
+    fn the_start_read_waits_for_every_kitty_answer() {
+        let cell = b"\x1b[6;43;18t".as_slice();
+        let transfer = b"\x1b_Gi=31;OK\x1b\\".as_slice();
+        let animation = b"\x1b_Gi=32;OK\x1b\\".as_slice();
+        let answer = [transfer, cell, animation].concat();
+        assert_eq!(start_answers_end(&answer, 2), Some(answer.len()));
+        let answers = start_answers(&answer, 2);
+        assert!(answers.probe_complete);
+        assert_eq!(answers.probe.as_deref(), Some(answer.as_slice()));
+
+        let first_only = [cell, transfer].concat();
+        assert_eq!(start_answers_end(&first_only, 2), None);
+        let answers = start_answers(&first_only, 2);
+        assert!(!answers.probe_complete, "the second answer can still come");
+        assert_eq!(answers.probe.as_deref(), Some(first_only.as_slice()));
+        assert_eq!(
+            start_answers_end(cell, 0),
+            Some(cell.len()),
+            "no Kitty answer owed"
+        );
+    }
+
+    #[test]
+    fn the_device_attributes_answer_ends_the_read_without_a_missing_kitty_answer() {
+        let cell = b"\x1b[6;43;18t".as_slice();
+        let transfer = b"\x1b_Gi=31;OK\x1b\\".as_slice();
+        let attributes = b"\x1b[?62;22;52c".as_slice();
+        // The terminal does not answer the animation frame.
+        let answer = [cell, transfer, attributes].concat();
+        assert_eq!(start_answers_end(&answer, 2), Some(answer.len()));
+        let answers = start_answers(&answer, 2);
+        assert_eq!(answers.cell_px, Some((18, 43)));
+        assert!(answers.probe_complete, "no Kitty answer can come late");
+        assert_eq!(
+            answers.probe.as_deref(),
+            Some([cell, transfer].concat().as_slice())
+        );
+
+        let typed = [cell, attributes, b"j"].concat();
+        assert_eq!(start_answers_end(&typed, 2), Some(typed.len() - 1));
+        assert_eq!(
+            start_answers_end(b"\x1b[?62;22", 2),
+            None,
+            "an answer in two reads"
+        );
+        assert_eq!(
+            start_answers_end(&[cell, transfer].concat(), 2),
+            None,
+            "the second Kitty answer or the device attributes are missing"
+        );
     }
 
     #[test]
     fn a_timeout_keeps_the_answer_that_came_in_time() {
-        let only_cell = start_answers(b"\x1b[6;43;18t");
+        let only_cell = start_answers(b"\x1b[6;43;18t", 1);
         assert_eq!(only_cell.cell_px, Some((18, 43)));
         assert_eq!(only_cell.probe, None);
-        let only_probe = start_answers(b"\x1b_Gi=31;OK\x1b\\");
+        assert!(!only_cell.probe_complete);
+        let only_probe = start_answers(b"\x1b_Gi=31;OK\x1b\\", 1);
         assert_eq!(only_probe.cell_px, None);
         assert_eq!(
             only_probe.probe.as_deref(),
             Some(b"\x1b_Gi=31;OK\x1b\\".as_slice())
         );
-        let nothing = start_answers(b"");
+        let nothing = start_answers(b"", 1);
         assert_eq!((nothing.cell_px, nothing.probe), (None, None));
     }
 

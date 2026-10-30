@@ -5,6 +5,7 @@
 //! unknown keys, so an old file with the removed keys `theme` and `theme_catalog` still loads.
 
 use crate::decode::color::ColorTarget;
+use crate::encoder::Loops;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -42,6 +43,9 @@ pub(crate) struct Config {
     /// Play a short loop in each visible video and animated cell of the grid. Off, the cells
     /// keep their stills and their play markers.
     pub animate: bool,
+    /// `[gallery] loops`: how the terminal plays the loops of the grid. `None` (`auto`) lets
+    /// the probe at the start decide. `VIEWR_KITTY_LOOPS` wins over it.
+    pub loops: Option<Loops>,
     /// The color space in which the terminal shows the pixels of an image.
     pub colorspace: ColorTarget,
 }
@@ -80,6 +84,7 @@ impl Default for Config {
             video_player: VideoPlayer::default(),
             mouse: true,
             animate: true,
+            loops: None,
             colorspace: ColorTarget::default(),
         }
     }
@@ -104,6 +109,7 @@ struct GallerySection {
     visible_rows: Option<u16>,
     mouse: Option<bool>,
     animate: Option<bool>,
+    loops: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -207,6 +213,10 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     }
     if let Some(animate) = file.gallery.animate {
         config.animate = animate;
+    }
+    // `auto` and an unknown value keep the probe.
+    if let Some(loops) = file.gallery.loops.as_deref() {
+        config.loops = Loops::parse(loops);
     }
     if let Some(show) = file.info.show_on_start {
         config.info_panel = show;
@@ -451,6 +461,33 @@ mod tests {
             let config = load_at(&config_path, &state_path);
             assert_eq!(config.video_player, expected, "player = {value:?}");
             assert!(config.info_panel, "player = {value:?} keeps the other keys");
+        }
+    }
+
+    #[test]
+    fn the_loops_key_fixes_the_loop_path_and_auto_leaves_it_to_the_probe() {
+        let root = test_root();
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("state.toml");
+        assert_eq!(
+            load_at(&config_path, &state_path).loops,
+            None,
+            "auto by default"
+        );
+        for (value, expected) in [
+            ("animation", Some(Loops::Animation)),
+            (" Ticks ", Some(Loops::Ticks)),
+            ("auto", None),
+            ("sometimes", None),
+        ] {
+            std::fs::write(
+                &config_path,
+                format!("[gallery]\nloops = \"{value}\"\nanimate = false\n"),
+            )
+            .unwrap();
+            let config = load_at(&config_path, &state_path);
+            assert_eq!(config.loops, expected, "loops = {value:?}");
+            assert!(!config.animate, "loops = {value:?} keeps the other keys");
         }
     }
 

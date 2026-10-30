@@ -308,6 +308,17 @@ pub(crate) mod kitty {
         pub cell_box: Option<(u16, u16)>,
     }
 
+    /// The animation of one stored image, as `a=f` and `a=a` build it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct Animation {
+        /// The gap of each frame in milliseconds, the root frame first.
+        pub gaps: Vec<u32>,
+        /// The state of the last `s=` key: 1 stops, 2 waits for frames, 3 runs.
+        pub state: Option<u32>,
+        /// The loop count of the last `v=` key: 1 loops forever.
+        pub loops: Option<u32>,
+    }
+
     #[derive(Debug)]
     pub(crate) struct FakeTerminal {
         /// The stored images by id, with their pixel bytes, in the order of their transmit.
@@ -320,6 +331,12 @@ pub(crate) mod kitty {
         cursor: (u16, u16),
         /// The open synchronized updates: `CSI ? 2026 h` adds one, `CSI ? 2026 l` ends one.
         pub synchronized_depth: i32,
+        /// The animations by image id.
+        animations: HashMap<u32, Animation>,
+        /// The frames for an image that the terminal does not store: an error each.
+        pub orphan_frames: Vec<u32>,
+        /// True while a chunked transmission waits for its next chunk (`m=1`).
+        in_chunks: bool,
     }
 
     impl FakeTerminal {
@@ -332,6 +349,9 @@ pub(crate) mod kitty {
                 limit,
                 cursor: (1, 1),
                 synchronized_depth: 0,
+                animations: HashMap::new(),
+                orphan_frames: Vec::new(),
+                in_chunks: false,
             }
         }
 
@@ -349,6 +369,11 @@ pub(crate) mod kitty {
 
         pub(crate) fn stores(&self, id: u32) -> bool {
             self.stored.values().any(|(stored, _)| *stored == id)
+        }
+
+        /// The animation of the stored image `id`, `None` for a still or a missing image.
+        pub(crate) fn animation(&self, id: u32) -> Option<&Animation> {
+            self.animations.get(&id).filter(|_| self.stores(id))
         }
 
         /// Read every sequence in `bytes`: the cursor moves, the Kitty commands and the
@@ -408,6 +433,12 @@ pub(crate) mod kitty {
                 (Some(cols), Some(rows)) => Some((cols as u16, rows as u16)),
                 _ => None,
             };
+            // A further chunk carries only `m=` and, for a frame, `a=f`.
+            let further_chunk = self.in_chunks;
+            self.in_chunks = number("m") == Some(1);
+            if further_chunk {
+                return 2 + end + 2;
+            }
             match keys.get("a").copied() {
                 Some("T") => {
                     let id = number("i").unwrap_or(0);
@@ -421,6 +452,26 @@ pub(crate) mod kitty {
                     self.store(id, bytes);
                 }
                 Some("p") => self.place(number("i").unwrap_or(0), cell_box),
+                Some("f") => {
+                    let id = number("i").unwrap_or(0);
+                    let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
+                    self.add_frame(id, bytes, number("z").unwrap_or(40));
+                }
+                Some("a") => {
+                    let id = number("i").unwrap_or(0);
+                    let animation = self.animations.entry(id).or_insert(Animation {
+                        gaps: vec![0],
+                        state: None,
+                        loops: None,
+                    });
+                    if let (Some(frame), Some(gap)) = (number("r"), number("z"))
+                        && let Some(slot) = animation.gaps.get_mut(frame as usize - 1)
+                    {
+                        *slot = gap;
+                    }
+                    animation.state = number("s").or(animation.state);
+                    animation.loops = number("v").or(animation.loops);
+                }
                 Some("d") => match keys.get("d").copied() {
                     Some("a") => self.placements.clear(),
                     Some("A") => {
@@ -447,6 +498,7 @@ pub(crate) mod kitty {
         /// oldest placed ones. The new image stays.
         fn store(&mut self, id: u32, bytes: usize) {
             self.stored.retain(|_, (stored, _)| *stored != id);
+            self.animations.remove(&id);
             self.sequence += 1;
             self.stored.insert(self.sequence, (id, bytes));
             while self.stored_bytes() > self.limit {
@@ -464,6 +516,22 @@ pub(crate) mod kitty {
                 };
                 self.stored.remove(&victim);
             }
+        }
+
+        /// Add a frame of `bytes` with `gap` ms to the stored image `id`.
+        fn add_frame(&mut self, id: u32, bytes: usize, gap: u32) {
+            let Some((_, stored)) = self.stored.values_mut().find(|(stored, _)| *stored == id)
+            else {
+                self.orphan_frames.push(id);
+                return;
+            };
+            *stored += bytes;
+            let animation = self.animations.entry(id).or_insert(Animation {
+                gaps: vec![0],
+                state: None,
+                loops: None,
+            });
+            animation.gaps.push(gap);
         }
 
         fn place(&mut self, id: u32, cell_box: Option<(u16, u16)>) {
@@ -514,6 +582,31 @@ pub(crate) mod kitty {
         terminal.feed(b"\x1b_Ga=p,q=2,C=1,i=5\x1b\\\x1b_Ga=d,d=i,i=5,q=2\x1b\\");
         assert!(terminal.placements.is_empty());
         assert!(terminal.stores(5));
+    }
+
+    #[test]
+    fn the_fake_terminal_builds_an_animation_from_frames_and_controls() {
+        let mut terminal = FakeTerminal::new();
+        terminal.feed(b"\x1b_Ga=f,q=2,f=32,s=1,v=1,i=5,z=50;AAAA\x1b\\");
+        assert_eq!(terminal.orphan_frames, vec![5], "a frame needs its image");
+
+        terminal.feed(b"\x1b_Ga=t,q=2,C=1,f=32,s=1,v=1,i=5,m=0;AAAA\x1b\\");
+        terminal.feed(b"\x1b_Ga=f,q=2,f=32,s=1,v=1,i=5,z=50,m=1;AA\x1b\\\x1b_Ga=f,m=0;AA\x1b\\");
+        terminal.feed(b"\x1b_Ga=f,q=2,f=32,s=1,v=1,i=5;AAAA\x1b\\");
+        terminal.feed(b"\x1b_Ga=a,q=2,i=5,r=1,z=70\x1b\\\x1b_Ga=a,q=2,i=5,s=3,v=1\x1b\\");
+        assert_eq!(
+            terminal.animation(5),
+            Some(&Animation {
+                gaps: vec![70, 50, 40],
+                state: Some(3),
+                loops: Some(1),
+            })
+        );
+        assert_eq!(terminal.stored_bytes(), 12, "the frames add their bytes");
+        assert_eq!(terminal.orphan_frames, vec![5]);
+
+        terminal.feed(b"\x1b_Ga=d,d=I,i=5,q=2\x1b\\");
+        assert_eq!(terminal.animation(5), None);
     }
 
     #[test]

@@ -1541,7 +1541,7 @@ fn report_video_frame_write(app: &App, frames: usize, file_bytes: u64) {
     for _ in 0..RUNS {
         let mut out = Vec::new();
         let start = Instant::now();
-        crate::kitty_output::render_video_frame_to(app, &mut out).unwrap();
+        crate::kitty_output::render_video_frame_to(app, &mut out, false).unwrap();
         times.push(start.elapsed());
         remove_temp_files(&out);
     }
@@ -1705,6 +1705,19 @@ fn loop_app(files: &[PathBuf], cache: &Path) -> App {
     app.scan_complete = true;
     app.needs_render = true;
     app
+}
+
+/// The backend that the start picks for a terminal like Ghostty 1.4: the probes go to a fake
+/// terminal that reads and deletes the probe file and answers `OK` to both probes.
+#[cfg(feature = "video")]
+fn animation_backend() -> KittyBackend {
+    let backend = crate::encoder::kitty::detect_backend(None, None, false, |sequence, _| {
+        remove_temp_files(sequence);
+        Some(b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\".to_vec())
+    });
+    assert_eq!(backend.transfer(), Transfer::TempFile);
+    assert_eq!(backend.loops(), crate::encoder::Loops::Animation);
+    backend
 }
 
 /// One pass of the run loop with the draw of the screen: the polls, the draw into a test
@@ -1919,8 +1932,8 @@ fn grid_loops() {
     ));
 
     bench.app.mark_dirty();
-    measure_loops(&mut bench.app, &mut screen).report("warm (disk cache)");
-    measure_steady(&mut bench.app, &mut screen, "animate = true");
+    measure_loops(&mut bench.app, &mut screen).report("warm (disk cache), ticks");
+    measure_steady(&mut bench.app, &mut screen, "animate = true, ticks");
 
     bench.app.grid_loops.enabled = false;
     bench.app.needs_render = true;
@@ -1929,4 +1942,11 @@ fn grid_loops() {
         &mut screen,
         "animate = false (the static grid)",
     );
+
+    // The same grid in a terminal that plays Kitty animations.
+    bench.app.graphics = animation_backend();
+    bench.app.grid_loops.enabled = true;
+    bench.app.mark_dirty();
+    measure_loops(&mut bench.app, &mut screen).report("warm (disk cache), animation");
+    measure_steady(&mut bench.app, &mut screen, "animate = true, animation");
 }

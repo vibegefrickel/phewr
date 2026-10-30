@@ -53,8 +53,6 @@ const VIDEO_IMAGE_ID: u32 = u32::MAX - 1;
 
 #[cfg(feature = "video")]
 pub(crate) fn render_video_frame(app: &mut App) -> io::Result<()> {
-    use crossterm::terminal::BeginSynchronizedUpdate;
-
     let clear = app.clear_before_video
         && !app.help_visible
         && app
@@ -62,50 +60,60 @@ pub(crate) fn render_video_frame(app: &mut App) -> io::Result<()> {
             .as_ref()
             .is_some_and(|v| v.current_frame.is_some());
     app.with_graphics_out(|app, out| {
-        if clear {
-            // The same synchronized update holds the delete and the frame, so nothing flashes.
-            queue!(out, BeginSynchronizedUpdate)?;
-            app.graphics.clear_placements_to(out)?;
+        if render_video_frame_to(app, out, clear)? && clear {
             app.clear_before_video = false;
         }
-        render_video_frame_to(app, out)
+        Ok(())
     })
 }
 
 /// Write the current video frame to `out`, so that the tests can read the escape sequences.
+/// Returns true when the frame went out.
 ///
 /// The frame is small. The terminal scales it to the cell box (`c=`, `r=`) in the middle of
-/// the view, in whole cells and without a pixel offset, inside a synchronized update. The
-/// help popup gets no frame, because Kitty draws a picture above the text. The key that
-/// closes the help writes the frame again.
+/// the view, in whole cells and without a pixel offset, inside a synchronized update. With
+/// `clear`, the same update first removes all placements, so the pictures of the view before
+/// do not show around the frame and nothing flashes. The help popup gets no frame, because
+/// Kitty draws a picture above the text. The key that closes the help writes the frame again.
 #[cfg(feature = "video")]
-pub(crate) fn render_video_frame_to(app: &App, out: &mut impl Write) -> io::Result<()> {
+pub(crate) fn render_video_frame_to(
+    app: &App,
+    out: &mut impl Write,
+    clear: bool,
+) -> io::Result<bool> {
     use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 
-    if !app.help_visible
-        && let Some(v) = &app.video
-        && let Some(frame) = &v.current_frame
-    {
-        let pixels = frame.pixels();
-        let cells = crate::player::cell_box(pixels.dimensions(), app.image_rect, app.cell_px);
-        if cells.width == 0 || cells.height == 0 {
-            return Ok(());
-        }
-        queue!(out, BeginSynchronizedUpdate)?;
-        queue!(out, cursor::MoveTo(cells.x, cells.y))?;
-        app.graphics.transmit(
-            out,
-            pixels,
-            &encoder::DisplayOptions {
-                id: Some(VIDEO_IMAGE_ID),
-                cell_box: Some((cells.width, cells.height)),
-                transmit_only: false,
-            },
-        )?;
-        queue!(out, EndSynchronizedUpdate)?;
+    let frame = app
+        .video
+        .as_ref()
+        .and_then(|v| v.current_frame.as_ref())
+        .filter(|_| !app.help_visible);
+    let Some(frame) = frame else {
+        out.flush()?;
+        return Ok(false);
+    };
+    let pixels = frame.pixels();
+    let cells = crate::player::cell_box(pixels.dimensions(), app.image_rect, app.cell_px);
+    if cells.width == 0 || cells.height == 0 {
+        return Ok(false);
     }
-
-    out.flush()
+    queue!(out, BeginSynchronizedUpdate)?;
+    if clear {
+        app.graphics.clear_placements_to(out)?;
+    }
+    queue!(out, cursor::MoveTo(cells.x, cells.y))?;
+    app.graphics.transmit(
+        out,
+        pixels,
+        &encoder::DisplayOptions {
+            id: Some(VIDEO_IMAGE_ID),
+            cell_box: Some((cells.width, cells.height)),
+            transmit_only: false,
+        },
+    )?;
+    queue!(out, EndSynchronizedUpdate)?;
+    out.flush()?;
+    Ok(true)
 }
 
 /// The bytes of RGBA pixels that viewr leaves in the storage of the terminal, at most. Ghostty
@@ -462,7 +470,8 @@ fn place_loop_frame_to(
 }
 
 /// Write the loops of the grid at `now`: the frames of the new loops, then the frames that
-/// are due. Returns `true` when a cell started its loop, so that the draw drops its marker.
+/// are due. A Kitty animation has no due frame, so after its start this writes nothing.
+/// Returns `true` when a cell started its loop, so that the draw drops its marker.
 pub(crate) fn play_grid_loops(app: &mut App, now: Instant) -> io::Result<bool> {
     if !app.loops_to_send() && !app.loop_frames_due(now) {
         return Ok(false);
@@ -512,7 +521,8 @@ fn visible_image_ids(app: &App) -> HashSet<u32> {
 }
 
 /// Send the frames of the visible loops that wait, in grid order, each frame one time without a
-/// placement (`a=t`), then put the current frame in the place of the still. A pass sends up to
+/// placement (`a=t`), or the whole loop as one Kitty animation, then put the current frame or
+/// the animation in the place of the still. A pass sends up to
 /// `EMIT_PASS_BYTES`, and the rest goes out in the next pass. A loop that does not fit the
 /// terminal budget beside the images of the screen goes, and its cell keeps the still.
 fn start_grid_loops_to(app: &mut App, out: &mut impl Write, tick: u64) -> io::Result<bool> {
@@ -560,6 +570,9 @@ fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::
     let Some(cell) = app.grid_loops.loops.get(&img_idx) else {
         return Ok(());
     };
+    if cell.animation {
+        return transmit_animation_to(app, out, img_idx);
+    }
     for (frame, &id) in cell.frames.iter().zip(&cell.ids) {
         if app.terminal_images.contains(id) {
             continue;
@@ -575,6 +588,35 @@ fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::
         )?;
         app.terminal_images.insert(id, frame.image.as_raw().len());
     }
+    Ok(())
+}
+
+/// Send the loop of `img_idx` as one Kitty animation under its one id, without a placement:
+/// the first frame as the root image (`a=t`), each further frame with its gap (`a=f`), then
+/// the control that runs it in a loop forever (`a=a`). The terminal stores the bytes of all
+/// frames under the id.
+fn transmit_animation_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::Result<()> {
+    let Some(cell) = app.grid_loops.loops.get(&img_idx) else {
+        return Ok(());
+    };
+    let (Some(&id), Some(root)) = (cell.ids.first(), cell.frames.first()) else {
+        return Ok(());
+    };
+    app.graphics.transmit(
+        out,
+        (&root.image).into(),
+        &encoder::DisplayOptions {
+            id: Some(id),
+            cell_box: None,
+            transmit_only: true,
+        },
+    )?;
+    for (frame, picture) in cell.frames.iter().enumerate().skip(1) {
+        app.graphics
+            .transmit_frame(out, (&picture.image).into(), id, cell.gap_ms(frame))?;
+    }
+    app.graphics.animate_to(out, id, cell.gap_ms(0))?;
+    app.terminal_images.insert(id, cell.bytes());
     Ok(())
 }
 
@@ -1284,7 +1326,7 @@ mod tests {
         let app = App::new((8, 16), SharedImageList::new());
         let mut out = Vec::new();
 
-        super::render_video_frame_to(&app, &mut out).unwrap();
+        super::render_video_frame_to(&app, &mut out, false).unwrap();
 
         assert!(out.is_empty());
     }
@@ -1357,7 +1399,7 @@ mod tests {
         let app = playing_app();
         let mut out = Vec::new();
 
-        super::render_video_frame_to(&app, &mut out).unwrap();
+        super::render_video_frame_to(&app, &mut out, false).unwrap();
 
         for path in crate::encoder::kitty::temp_file_paths(&out) {
             assert_eq!(std::fs::metadata(&path).unwrap().len(), 64 * 48 * 3);
@@ -1382,7 +1424,7 @@ mod tests {
         app.help_visible = true;
         let mut out = Vec::new();
 
-        super::render_video_frame_to(&app, &mut out).unwrap();
+        super::render_video_frame_to(&app, &mut out, false).unwrap();
 
         assert!(out.is_empty());
     }
@@ -1394,9 +1436,29 @@ mod tests {
         app.image_rect = Rect::default();
         let mut out = Vec::new();
 
-        super::render_video_frame_to(&app, &mut out).unwrap();
+        super::render_video_frame_to(&app, &mut out, false).unwrap();
 
         assert!(out.is_empty());
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_first_frame_in_a_one_row_terminal_leaves_no_synchronized_update_open() {
+        use crate::test_support::kitty::FakeTerminal;
+
+        let mut app = playing_app();
+        crate::test_support::draw_frame(&mut app, 100, 1);
+        assert_eq!(app.image_rect.height, 0, "the status row takes the one row");
+        let mut terminal = FakeTerminal::new();
+
+        super::render_video_frame(&mut app).unwrap();
+        terminal.feed(&app.graphics_out.take_bytes());
+
+        assert_eq!(terminal.synchronized_depth, 0);
+        assert!(
+            app.clear_before_video,
+            "the clear waits for the first frame that goes out"
+        );
     }
 }
 
@@ -1405,8 +1467,9 @@ mod loop_tests {
     use super::{place_gallery_images_to, play_grid_loops, play_grid_loops_to};
     use crate::app::thumbnails::{pad_for_grid, pad_loop_frame};
     use crate::app::{App, ViewMode};
+    use crate::encoder::{KittyBackend, Loops, Transfer};
     use crate::image_list::SharedImageList;
-    use crate::test_support::kitty::FakeTerminal;
+    use crate::test_support::kitty::{Animation, FakeTerminal};
     use crate::test_support::{char_key, text};
     use image::{Rgba, RgbaImage};
     use ratatui::layout::Rect;
@@ -1453,7 +1516,8 @@ mod loop_tests {
             })
             .collect();
         let delays = vec![Duration::from_millis(333); count];
-        app.grid_loops.insert(index, frames, &delays);
+        let loops = app.graphics.loops();
+        app.grid_loops.insert(index, frames, &delays, loops);
         app.grid_loops.loops[&index].ids.clone()
     }
 
@@ -1535,6 +1599,270 @@ mod loop_tests {
         // After the last frame, the loop starts again.
         let (again, _) = play_at(&mut app, 3 * FRAME_TICKS);
         assert!(again.contains(&format!("i={},c=20,r=6", ids[0])), "{again}");
+    }
+
+    /// `clip_app` in a terminal that plays Kitty animations.
+    fn animation_app(count: usize) -> App {
+        let mut app = clip_app(count);
+        app.graphics = KittyBackend::new(Transfer::Direct).with_loops(Loops::Animation);
+        app
+    }
+
+    #[test]
+    fn an_animation_goes_out_once_with_all_frames_and_then_replaces_the_still() {
+        let mut app = animation_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let (_, still) = app.thumb_cache.peek(1).unwrap();
+        let ids = add_loop(&mut app, 1, 3);
+        assert_eq!(ids.len(), 1, "one id for the whole animation");
+        let id = ids[0];
+        assert!(app.loops_to_send());
+
+        let (first, started) = play_at(&mut app, 0);
+        terminal.feed(first.as_bytes());
+        assert!(started, "the draw drops the marker");
+        assert!(first.starts_with(BEGIN_SYNC) && first.ends_with(END_SYNC));
+        assert_eq!(terminal.synchronized_depth, 0);
+        assert_eq!(first.matches("\x1b_Ga=t,").count(), 1, "the root frame");
+        assert_eq!(
+            first
+                .matches(&format!("\x1b_Ga=f,q=2,f=24,s=80,v=48,i={id},z=333,"))
+                .count(),
+            2,
+            "{first}"
+        );
+        let root = first
+            .find(&format!("\x1b_Ga=t,q=2,C=1,f=24,s=80,v=48,i={id},"))
+            .unwrap();
+        let frame = first.find("\x1b_Ga=f,").unwrap();
+        let control = first
+            .find(&format!(
+                "\x1b_Ga=a,q=2,i={id},r=1,z=333\x1b\\\x1b_Ga=a,q=2,i={id},s=3,v=1"
+            ))
+            .unwrap();
+        let place = first
+            .find(&format!("\x1b_Ga=p,q=2,C=1,i={id},c=20,r=6"))
+            .unwrap();
+        let unplace = first.find(&format!("\x1b_Ga=d,d=i,i={still},")).unwrap();
+        assert!(
+            root < frame && frame < control && control < place && control < unplace,
+            "the still shows until the whole animation is in the terminal"
+        );
+        assert_eq!(
+            terminal.animation(id).cloned(),
+            Some(Animation {
+                gaps: vec![333; 3],
+                state: Some(3),
+                loops: Some(1),
+            })
+        );
+        assert!(terminal.orphan_frames.is_empty());
+        assert_eq!(placed(&terminal, &ids), vec![id]);
+        assert!(placed(&terminal, &[still]).is_empty());
+        assert_eq!(app.terminal_images.bytes_of(id), 3 * FRAME_BYTES);
+        assert_eq!(terminal.stored_bytes(), 3 * STILL_BYTES + 3 * FRAME_BYTES);
+        assert!(app.loop_plays(1));
+        assert!(!app.loops_to_send());
+    }
+
+    #[test]
+    fn an_animation_needs_no_tick_and_the_run_loop_waits_idle() {
+        let mut app = animation_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        add_loop(&mut app, 1, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+
+        for tick in [1, FRAME_TICKS, 3 * FRAME_TICKS + 1] {
+            let now = app.grid_loops.instant_of(tick);
+            assert!(!app.loop_frames_due(now), "tick {tick}");
+            assert_eq!(app.grid_loop_timeout(now), None, "tick {tick}");
+            assert!(!play_grid_loops(&mut app, now).unwrap());
+            assert!(app.graphics_out.take_bytes().is_empty(), "tick {tick}");
+            let (out, started) = play_at(&mut app, tick);
+            assert!(!started);
+            assert_eq!(out, format!("{BEGIN_SYNC}{END_SYNC}"), "tick {tick}");
+        }
+        assert!(!app.loops_to_send());
+        assert_eq!(
+            crate::run_loop::next_timeout(&app, &[]),
+            Duration::from_millis(250),
+            "the idle wait"
+        );
+    }
+
+    #[test]
+    fn an_animation_that_leaves_the_screen_deletes_its_one_image() {
+        let mut app = animation_app(40);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let ids = add_loop(&mut app, 0, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+        assert!(terminal.animation(ids[0]).is_some());
+
+        app.gallery.move_to_last();
+        super::render_gallery_images(&mut app).unwrap();
+        let out = app.graphics_out.take_bytes();
+        terminal.feed(&out);
+        let out = text(&out);
+        assert_eq!(
+            out.matches(&format!("\x1b_Ga=d,d=I,i={},", ids[0])).count(),
+            1
+        );
+        assert!(!app.terminal_images.contains(ids[0]));
+        assert!(!terminal.stores(ids[0]));
+        assert!(app.grid_loops.loops.is_empty());
+    }
+
+    #[test]
+    fn a_redraw_places_the_running_animation_again_and_a_delete_all_sends_it_again() {
+        let mut app = animation_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let (_, still) = app.thumb_cache.peek(1).unwrap();
+        let ids = add_loop(&mut app, 1, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+
+        let mut out = Vec::new();
+        place_gallery_images_to(&mut app, &mut out).unwrap();
+        terminal.feed(&out);
+        let out = text(&out);
+        assert!(
+            !out.contains("a=t,") && !out.contains("a=f,") && !out.contains("a=a,"),
+            "{out}"
+        );
+        assert_eq!(placed(&terminal, &ids), ids, "placed by its id");
+        assert!(placed(&terminal, &[still]).is_empty());
+        assert_eq!(
+            terminal.animation(ids[0]).and_then(|a| a.state),
+            Some(3),
+            "it runs on"
+        );
+        assert!(terminal.black_cells.is_empty());
+
+        app.graphics_delete_all().unwrap();
+        terminal.feed(&app.graphics_out.take_bytes());
+        assert!(app.loops_to_send(), "the terminal forgot the animation");
+        place_stills(&mut app, &mut terminal);
+        let (again, started) = play_at(&mut app, FRAME_TICKS);
+        terminal.feed(again.as_bytes());
+        assert!(started);
+        assert_eq!(again.matches("\x1b_Ga=f,q=2,").count(), 2, "{again}");
+        assert_eq!(placed(&terminal, &ids), ids);
+        assert!(terminal.animation(ids[0]).is_some());
+    }
+
+    #[test]
+    fn an_animation_above_the_terminal_budget_keeps_its_still() {
+        let mut app = animation_app(3);
+        let mut terminal = FakeTerminal::new();
+        app.terminal_images.budget = 3 * STILL_BYTES + 2 * FRAME_BYTES;
+        place_stills(&mut app, &mut terminal);
+        add_loop(&mut app, 0, 3);
+
+        let (out, started) = play_at(&mut app, 0);
+        assert!(!started);
+        assert!(!out.contains("a=t,") && !out.contains("a=f,"), "{out}");
+        assert!(!app.loop_plays(0));
+        assert!(
+            app.grid_loops.loops.is_empty(),
+            "the frames leave the memory too"
+        );
+        assert!(!app.loops_to_send(), "no pass waits for the cell");
+
+        let ids = add_loop(&mut app, 1, 2);
+        let (out, started) = play_at(&mut app, 0);
+        terminal.feed(out.as_bytes());
+        assert!(started, "an animation that fits plays");
+        assert_eq!(placed(&terminal, &ids), ids);
+        assert_eq!(terminal.animation(ids[0]).map(|a| a.gaps.len()), Some(2));
+        assert_eq!(
+            app.terminal_images.bytes(),
+            3 * STILL_BYTES + 2 * FRAME_BYTES
+        );
+    }
+
+    #[test]
+    fn the_help_popup_stops_an_animation_and_the_grid_sends_it_again_with_all_frames() {
+        let mut app = animation_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let ids = add_loop(&mut app, 1, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+
+        char_key(&mut app, '?');
+        let out = app.graphics_out.take_bytes();
+        terminal.feed(&out);
+        assert!(text(&out).contains("\x1b_Ga=d,d=A,"));
+        assert!(
+            !terminal.stores(ids[0]),
+            "the terminal forgot the animation"
+        );
+        assert!(!app.loop_plays(1));
+        assert!(!app.loops_to_send());
+        assert!(
+            play_at(&mut app, FRAME_TICKS).0.is_empty(),
+            "nothing above the popup"
+        );
+
+        char_key(&mut app, 'x');
+        place_stills(&mut app, &mut terminal);
+        let (again, started) = play_at(&mut app, 2 * FRAME_TICKS);
+        terminal.feed(again.as_bytes());
+        assert!(started);
+        assert_eq!(again.matches("\x1b_Ga=t,").count(), 1, "{again}");
+        assert_eq!(again.matches("\x1b_Ga=f,q=2,").count(), 2, "{again}");
+        assert!(again.contains(&format!("\x1b_Ga=a,q=2,i={},s=3,v=1", ids[0])));
+        assert_eq!(placed(&terminal, &ids), ids);
+        assert_eq!(terminal.animation(ids[0]).map(|a| a.gaps.len()), Some(3));
+    }
+
+    #[test]
+    fn a_zoom_drops_the_animations_and_the_next_grid_write_deletes_all_images() {
+        let mut app = animation_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let ids = add_loop(&mut app, 1, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+
+        char_key(&mut app, '+');
+        assert!(app.grid_loops.loops.is_empty());
+        let mut out = Vec::new();
+        place_gallery_images_to(&mut app, &mut out).unwrap();
+        terminal.feed(&out);
+        assert!(text(&out).contains("\x1b_Ga=d,d=A,"));
+        assert!(!terminal.stores(ids[0]));
+    }
+
+    #[test]
+    fn a_new_animation_for_the_same_cell_deletes_the_old_one_image() {
+        let mut app = animation_app(3);
+        let mut terminal = FakeTerminal::new();
+        place_stills(&mut app, &mut terminal);
+        let old = add_loop(&mut app, 1, 3);
+        terminal.feed(play_at(&mut app, 0).0.as_bytes());
+
+        let new = add_loop(&mut app, 1, 2);
+        assert_ne!(old, new);
+        assert_eq!(
+            app.grid_loops.stale_ids, old,
+            "one id for the old animation"
+        );
+        let mut out = Vec::new();
+        place_gallery_images_to(&mut app, &mut out).unwrap();
+        terminal.feed(&out);
+        let out = text(&out);
+        assert_eq!(
+            out.matches(&format!("\x1b_Ga=d,d=I,i={},", old[0])).count(),
+            1
+        );
+        assert!(!terminal.stores(old[0]));
+
+        terminal.feed(play_at(&mut app, FRAME_TICKS).0.as_bytes());
+        assert_eq!(placed(&terminal, &new), new);
+        assert_eq!(terminal.animation(new[0]).map(|a| a.gaps.len()), Some(2));
+        assert!(terminal.black_cells.is_empty());
     }
 
     #[test]

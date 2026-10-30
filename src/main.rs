@@ -185,17 +185,24 @@ fn main() -> io::Result<()> {
     let mut asked_cell_size = false;
     // A probe without an answer in time can still get one: it then arrives as key presses.
     let mut probe_unanswered = false;
-    let transfer = encoder::kitty::detect_transfer(
+    let loops = encoder::kitty::chosen_loops(
+        std::env::var(encoder::kitty::LOOPS_OVERRIDE)
+            .ok()
+            .as_deref(),
+        config.loops,
+    );
+    let graphics = encoder::kitty::detect_backend(
         std::env::var(encoder::kitty::TRANSFER_OVERRIDE)
             .ok()
             .as_deref(),
+        loops,
         encoder::kitty::is_ssh(),
-        |sequence| {
-            let answers = query_cell_size_and_probe(sequence);
+        |sequence, answers| {
+            let start = query_cell_size_and_probe(sequence, answers);
             asked_cell_size = true;
-            cell_size_answer = answers.cell_px;
-            probe_unanswered = answers.probe.is_none();
-            answers.probe
+            cell_size_answer = start.cell_px;
+            probe_unanswered = !start.probe_complete;
+            start.probe
         },
     );
     if !asked_cell_size {
@@ -206,7 +213,7 @@ fn main() -> io::Result<()> {
     let cell_px = cell_size_answer.unwrap_or_else(window_cell_pixel_size);
     state.late_answers = keys::LateAnswerFilter::new(probe_unanswered);
     let mut app = App::with_config(cell_px, shared_list, &config);
-    app.graphics = encoder::KittyBackend::new(transfer);
+    app.graphics = graphics;
     let initial_dir = canonicalize_or_self(&initial_dir);
     app.initial_dir = Some(initial_dir.clone());
     app.current_dir = Some(initial_dir.clone());

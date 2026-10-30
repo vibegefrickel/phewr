@@ -1,4 +1,4 @@
-use super::{DisplayOptions, Pixels, Transfer};
+use super::{DisplayOptions, KittyBackend, Loops, Pixels, Transfer};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -12,8 +12,16 @@ const CHUNK_SIZE: usize = 4096;
 const TEMP_FILE_MARKER: &str = "tty-graphics-protocol";
 /// The image id of the probe. The terminal repeats it in its answer.
 const PROBE_ID: u32 = 31;
+/// The image id of the animation probe. The probe deletes it in the same write, before the
+/// grid sends its first picture.
+const ANIMATION_PROBE_ID: u32 = 32;
+/// One transparent RGBA pixel in base64, the pixels of the animation probe.
+const ONE_PIXEL: &str = "AAAAAA==";
 /// The environment variable that skips the probe: `direct`, `png` or `file`.
 pub(crate) const TRANSFER_OVERRIDE: &str = "VIEWR_KITTY_TRANSFER";
+/// The environment variable that fixes the loop path of the grid: `animation` or `ticks`. It
+/// wins over `[gallery] loops`.
+pub(crate) const LOOPS_OVERRIDE: &str = "VIEWR_KITTY_LOOPS";
 
 /// Write `pixels` to `out` with the Kitty transmit-and-display action, through `transfer`.
 ///
@@ -25,36 +33,83 @@ pub(crate) fn transmit_to<W: Write + ?Sized>(
     opts: &DisplayOptions,
     transfer: Transfer,
 ) -> io::Result<()> {
-    let rgb;
-    let pixels = match pixels.opaque_rgb() {
-        Some(converted) => {
-            rgb = converted;
-            Pixels {
-                alpha: false,
-                data: &rgb,
-                ..pixels
-            }
-        }
-        None => pixels,
-    };
-    write_pixels(out, pixels, opts, transfer)
+    with_opaque_as_rgb(pixels, |pixels| {
+        let keys = Keys {
+            first: &|format| header_keys(pixels, opts, format),
+            chunk: "",
+        };
+        write_pixels(out, pixels, &keys, transfer)
+    })
+}
+
+/// Write `pixels` to `out` as a new frame of the animation of the image `id` (`a=f`), through
+/// `transfer`. The frame shows for `gap_ms` milliseconds when the animation runs.
+///
+/// The frame covers the whole image, so it needs no base frame (`c=`), and the keys of the
+/// cell box and of the cursor do not apply: in a frame, `c=` and `r=` name frames.
+pub(crate) fn transmit_frame_to<W: Write + ?Sized>(
+    out: &mut W,
+    pixels: Pixels<'_>,
+    id: u32,
+    gap_ms: u32,
+    transfer: Transfer,
+) -> io::Result<()> {
+    with_opaque_as_rgb(pixels, |pixels| {
+        let (w, h) = pixels.dimensions();
+        let gap = gap_ms.max(1);
+        let keys = Keys {
+            first: &|format| format!("a=f,q=2,f={format},s={w},v={h},i={id},z={gap}"),
+            chunk: "a=f,",
+        };
+        write_pixels(out, pixels, &keys, transfer)
+    })
+}
+
+/// Run the animation of the image `id` in a loop forever (`s=3`, `v=1`). The root frame gets
+/// its gap of `root_gap_ms` here, because its transmit has no gap key.
+pub(crate) fn animate_to<W: Write + ?Sized>(
+    out: &mut W,
+    id: u32,
+    root_gap_ms: u32,
+) -> io::Result<()> {
+    write!(
+        out,
+        "\x1b_Ga=a,q=2,i={id},r=1,z={}\x1b\\\x1b_Ga=a,q=2,i={id},s=3,v=1\x1b\\",
+        root_gap_ms.max(1)
+    )
+}
+
+/// Call `send` with the RGB copy of `pixels` when every pixel is opaque, else with `pixels`.
+fn with_opaque_as_rgb<T>(pixels: Pixels<'_>, send: impl FnOnce(Pixels<'_>) -> T) -> T {
+    match pixels.opaque_rgb() {
+        Some(rgb) => send(Pixels {
+            alpha: false,
+            data: &rgb,
+            ..pixels
+        }),
+        None => send(pixels),
+    }
+}
+
+/// The control keys of one transmission.
+struct Keys<'a> {
+    /// The keys of the first escape code, for the format key that the medium picks.
+    first: &'a dyn Fn(u32) -> String,
+    /// The keys before `m=` in each further chunk. A frame repeats `a=f` there.
+    chunk: &'static str,
 }
 
 /// Write `pixels` as they are, through `transfer`.
 fn write_pixels<W: Write + ?Sized>(
     out: &mut W,
     pixels: Pixels<'_>,
-    opts: &DisplayOptions,
+    keys: &Keys<'_>,
     transfer: Transfer,
 ) -> io::Result<()> {
     match transfer {
-        Transfer::Direct => write_direct(
-            out,
-            pixels,
-            opts,
-            raw_format(pixels),
-            &STANDARD.encode(pixels.data),
-        ),
+        Transfer::Direct => {
+            write_direct(out, keys, raw_format(pixels), &STANDARD.encode(pixels.data))
+        }
         Transfer::Png => {
             let color = if pixels.alpha {
                 ExtendedColorType::Rgba8
@@ -65,13 +120,13 @@ fn write_pixels<W: Write + ?Sized>(
             PngEncoder::new_with_quality(&mut png_buf, CompressionType::Fast, FilterType::Sub)
                 .write_image(pixels.data, pixels.width, pixels.height, color)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            write_direct(out, pixels, opts, 100, &STANDARD.encode(&png_buf))
+            write_direct(out, keys, 100, &STANDARD.encode(&png_buf))
         }
         // A temp dir that takes no file (full, read-only) must not stop the program, so the
         // pixels go through the pty instead.
         Transfer::TempFile => match write_temp_file(pixels.data) {
-            Ok(path) => write_temp_file_reference(out, pixels, opts, &path),
-            Err(_) => write_pixels(out, pixels, opts, Transfer::Direct),
+            Ok(path) => write_temp_file_reference(out, keys, raw_format(pixels), &path),
+            Err(_) => write_pixels(out, pixels, keys, Transfer::Direct),
         },
     }
 }
@@ -100,21 +155,20 @@ fn cell_box_keys(cell_box: Option<(u16, u16)>) -> String {
 /// The base64 payload in chunks of 4096 bytes through the pty.
 fn write_direct<W: Write + ?Sized>(
     out: &mut W,
-    pixels: Pixels<'_>,
-    opts: &DisplayOptions,
+    keys: &Keys<'_>,
     format: u32,
     b64: &str,
 ) -> io::Result<()> {
     let chunks: Vec<&[u8]> = b64.as_bytes().chunks(CHUNK_SIZE).collect();
     let total = chunks.len();
-    let keys = header_keys(pixels, opts, format);
+    let first = (keys.first)(format);
 
     for (i, chunk) in chunks.iter().enumerate() {
         let more = i32::from(i + 1 < total);
         if i == 0 {
-            write!(out, "\x1b_G{keys},m={more};")?;
+            write!(out, "\x1b_G{first},m={more};")?;
         } else {
-            write!(out, "\x1b_Gm={more};")?;
+            write!(out, "\x1b_G{}m={more};", keys.chunk)?;
         }
         out.write_all(chunk)?;
         out.write_all(b"\x1b\\")?;
@@ -127,12 +181,12 @@ fn write_direct<W: Write + ?Sized>(
 /// file and deletes it.
 fn write_temp_file_reference<W: Write + ?Sized>(
     out: &mut W,
-    pixels: Pixels<'_>,
-    opts: &DisplayOptions,
+    keys: &Keys<'_>,
+    format: u32,
     path: &Path,
 ) -> io::Result<()> {
-    let keys = header_keys(pixels, opts, raw_format(pixels));
-    write!(out, "\x1b_G{keys},t=t;{}\x1b\\", encode_path(path))
+    let first = (keys.first)(format);
+    write!(out, "\x1b_G{first},t=t;{}\x1b\\", encode_path(path))
 }
 
 /// Write `pixels` to a new file in the temp dir with the marker in its name. The protocol
@@ -191,49 +245,123 @@ fn probe_sequence(path: &Path) -> Vec<u8> {
     .into_bytes()
 }
 
-/// `Some(true)` when `response` is the `OK` answer to the probe, `Some(false)` for an error
-/// answer, `None` for anything else.
-fn probe_accepted(response: &[u8]) -> Option<bool> {
-    let text = String::from_utf8_lossy(response);
-    let (_, answer) = text.split_once("\x1b_G")?;
-    let (keys, rest) = answer.split_once(';')?;
-    let status = rest.split("\x1b\\").next()?;
-    let id = format!("i={PROBE_ID}");
-    keys.split(',').any(|key| key == id).then(|| status == "OK")
+/// The sequences that ask whether the terminal plays Kitty animations: a silent 1x1 image
+/// (`q=2`), one frame for it that the terminal answers, and the delete of the image.
+///
+/// A query (`a=q`) stores no image, so the frame needs a real one. The frame has no `q` key,
+/// because `q=1` suppresses the `OK` answer.
+fn animation_probe_sequence() -> Vec<u8> {
+    format!(
+        "\x1b_Ga=t,q=2,i={ANIMATION_PROBE_ID},f=32,s=1,v=1;{ONE_PIXEL}\x1b\\\
+         \x1b_Ga=f,i={ANIMATION_PROBE_ID},f=32,s=1,v=1;{ONE_PIXEL}\x1b\\\
+         \x1b_Ga=d,d=I,i={ANIMATION_PROBE_ID},q=2\x1b\\"
+    )
+    .into_bytes()
 }
 
-/// Pick the transfer for this terminal.
-///
-/// `override_value` is `VIEWR_KITTY_TRANSFER`. Without it, SSH takes the PNG path. Otherwise
-/// `query` sends the probe to the terminal and returns its answer. The temp file medium wins
-/// only if the answer is `OK` and the terminal deleted the probe file: a terminal with another
-/// `TMPDIR` than the shell reads the file but leaves it, and each frame would leave 22 MB.
-/// Every other case keeps the direct transfer.
+/// `Some(true)` when `response` holds the `OK` answer for the image `id`, `Some(false)` for
+/// an error answer, `None` without an answer for `id`.
+fn answer_for(response: &[u8], id: u32) -> Option<bool> {
+    let text = String::from_utf8_lossy(response);
+    let id = format!("i={id}");
+    text.split("\x1b_G").skip(1).find_map(|answer| {
+        let (keys, rest) = answer.split_once(';')?;
+        let status = rest.split("\x1b\\").next()?;
+        keys.split(',').any(|key| key == id).then(|| status == "OK")
+    })
+}
+
+/// The loop path that `VIEWR_KITTY_LOOPS` or `[gallery] loops` fixes, the variable first.
+/// `None` lets the probe decide.
+pub(crate) fn chosen_loops(override_value: Option<&str>, config: Option<Loops>) -> Option<Loops> {
+    override_value.and_then(Loops::parse).or(config)
+}
+
+/// The medium that the override or SSH fixes without a probe.
+fn fixed_transfer(override_value: Option<&str>, ssh: bool) -> Option<Transfer> {
+    match override_value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value == "direct" => return Some(Transfer::Direct),
+        Some(value) if value == "png" => return Some(Transfer::Png),
+        Some(value) if value == "file" => return Some(Transfer::TempFile),
+        _ => {}
+    }
+    ssh.then_some(Transfer::Png)
+}
+
+/// Pick the transfer for this terminal, without the animation probe.
+#[cfg(test)]
 pub(crate) fn detect_transfer(
     override_value: Option<&str>,
     ssh: bool,
     query: impl FnOnce(&[u8]) -> Option<Vec<u8>>,
 ) -> Transfer {
-    match override_value.map(|value| value.trim().to_ascii_lowercase()) {
-        Some(value) if value == "direct" => return Transfer::Direct,
-        Some(value) if value == "png" => return Transfer::Png,
-        Some(value) if value == "file" => return Transfer::TempFile,
-        _ => {}
-    }
-    if ssh {
-        return Transfer::Png;
-    }
-    let Ok(path) = write_temp_file(&[0, 0, 0, 0]) else {
-        return Transfer::Direct;
+    detect_backend(override_value, Some(Loops::Ticks), ssh, |sequence, _| {
+        query(sequence)
+    })
+    .transfer()
+}
+
+/// Pick the transfer and the loop path for this terminal, with one round trip at most.
+///
+/// `override_value` is `VIEWR_KITTY_TRANSFER`. Without it, SSH takes the PNG path. Otherwise
+/// the transfer probe goes out. The temp file medium wins only if the answer is `OK` and the
+/// terminal deleted the probe file: a terminal with another `TMPDIR` than the shell reads the
+/// file but leaves it, and each frame would leave 22 MB. Every other case keeps the direct
+/// transfer.
+///
+/// `loops` is the result of [`chosen_loops`]. Without one, the animation probe goes out too,
+/// and only an `OK` for its frame turns the animations on. `query` sends the probes to the
+/// terminal, waits for the count of answers in its second argument and returns the answers.
+/// Without a probe, it does not run.
+pub(crate) fn detect_backend(
+    override_value: Option<&str>,
+    loops: Option<Loops>,
+    ssh: bool,
+    query: impl FnOnce(&[u8], usize) -> Option<Vec<u8>>,
+) -> KittyBackend {
+    let fixed = fixed_transfer(override_value, ssh);
+    let probe_file = if fixed.is_none() {
+        write_temp_file(&[0, 0, 0, 0]).ok()
+    } else {
+        None
     };
-    let answer = query(&probe_sequence(&path));
-    let accepted = answer.as_deref().and_then(probe_accepted) == Some(true);
+    let mut sequence = Vec::new();
+    let mut answers = 0;
+    if let Some(path) = &probe_file {
+        sequence.extend(probe_sequence(path));
+        answers += 1;
+    }
+    if loops.is_none() {
+        sequence.extend(animation_probe_sequence());
+        answers += 1;
+    }
+    let answer = if answers > 0 {
+        query(&sequence, answers)
+    } else {
+        None
+    };
+    let answer = answer.as_deref().unwrap_or_default();
+    let transfer = fixed.unwrap_or_else(|| {
+        probe_file.map_or(Transfer::Direct, |path| transfer_after_probe(answer, &path))
+    });
+    let loops = loops.unwrap_or(if answer_for(answer, ANIMATION_PROBE_ID) == Some(true) {
+        Loops::Animation
+    } else {
+        Loops::Ticks
+    });
+    KittyBackend::new(transfer).with_loops(loops)
+}
+
+/// The temp file medium when the terminal answered `OK` and deleted the probe file at `path`,
+/// else the direct transfer. Removes the file in any case.
+fn transfer_after_probe(answer: &[u8], path: &Path) -> Transfer {
+    let accepted = answer_for(answer, PROBE_ID) == Some(true);
     let deleted = !path.exists();
     #[expect(
         clippy::let_underscore_must_use,
         reason = "a terminal that keeps the probe file leaves only 4 bytes of disk space"
     )]
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path);
     if accepted && deleted {
         Transfer::TempFile
     } else {
@@ -288,11 +416,11 @@ pub(crate) fn place_by_id_to<W: Write + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::{
-        PROBE_ID, TEMP_FILE_MARKER, Transfer, clear_placements_to, delete_all_to,
-        delete_placements_to, detect_transfer, place_by_id_to, probe_accepted, temp_file_paths,
-        transmit_to,
+        ANIMATION_PROBE_ID, PROBE_ID, TEMP_FILE_MARKER, Transfer, animate_to, answer_for,
+        chosen_loops, clear_placements_to, delete_all_to, delete_placements_to, detect_backend,
+        detect_transfer, place_by_id_to, temp_file_paths, transmit_frame_to, transmit_to,
     };
-    use crate::encoder::{DisplayOptions, Pixels};
+    use crate::encoder::{DisplayOptions, KittyBackend, Loops, Pixels};
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
     use image::RgbaImage;
@@ -556,15 +684,15 @@ mod tests {
     #[test]
     fn the_probe_answer_decides_between_ok_and_error() {
         let ok = format!("\x1b_Gi={PROBE_ID};OK\x1b\\");
-        assert_eq!(probe_accepted(ok.as_bytes()), Some(true));
+        assert_eq!(answer_for(ok.as_bytes(), PROBE_ID), Some(true));
         let error = format!("\x1b_Gi={PROBE_ID};EBADF:could not open file\x1b\\");
-        assert_eq!(probe_accepted(error.as_bytes()), Some(false));
+        assert_eq!(answer_for(error.as_bytes(), PROBE_ID), Some(false));
         let other_id = "\x1b_Gi=7;OK\x1b\\";
-        assert_eq!(probe_accepted(other_id.as_bytes()), None);
-        assert_eq!(probe_accepted(b"\x1b[0n"), None);
-        assert_eq!(probe_accepted(b""), None);
+        assert_eq!(answer_for(other_id.as_bytes(), PROBE_ID), None);
+        assert_eq!(answer_for(b"\x1b[0n", PROBE_ID), None);
+        assert_eq!(answer_for(b"", PROBE_ID), None);
         let late_keys = format!("\x1b[I\x1b_Gi={PROBE_ID},I=0;OK\x1b\\");
-        assert_eq!(probe_accepted(late_keys.as_bytes()), Some(true));
+        assert_eq!(answer_for(late_keys.as_bytes(), PROBE_ID), Some(true));
     }
 
     /// The probe as the terminal sees it, and the answer that the fake terminal gives. A real
@@ -684,5 +812,173 @@ mod tests {
         );
         assert_eq!(transfer, Transfer::TempFile, "an unknown value probes");
         assert!(!seen.is_empty());
+    }
+
+    #[test]
+    fn a_frame_names_its_image_and_gap_in_every_chunk() {
+        let image = RgbaImage::from_pixel(64, 64, image::Rgba([1, 2, 3, 4]));
+        let mut out = Vec::new();
+        transmit_frame_to(&mut out, (&image).into(), 9, 83, Transfer::Direct).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.starts_with("\x1b_Ga=f,q=2,f=32,s=64,v=64,i=9,z=83,m=1;"),
+            "{text}"
+        );
+        let chunks = text.matches("\x1b_G").count();
+        assert!(chunks > 1);
+        assert_eq!(
+            text.matches("\x1b_Ga=f,").count(),
+            chunks,
+            "each chunk repeats a=f"
+        );
+        assert!(!text.contains("C=1") && !text.contains(",c=") && !text.contains(",r="));
+
+        let opaque = RgbaImage::from_pixel(2, 1, image::Rgba([1, 2, 3, 255]));
+        let mut out = Vec::new();
+        transmit_frame_to(&mut out, (&opaque).into(), 9, 0, Transfer::TempFile).unwrap();
+        for path in temp_file_paths(&out) {
+            assert_eq!(fs::read(&path).unwrap(), [1, 2, 3, 1, 2, 3]);
+            fs::remove_file(path).unwrap();
+        }
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.starts_with("\x1b_Ga=f,q=2,f=24,s=2,v=1,i=9,z=1,t=t;"),
+            "an opaque frame goes out as RGB, and a gap of 0 ms becomes 1 ms: {text}"
+        );
+    }
+
+    #[test]
+    fn the_animation_gets_the_gap_of_its_root_frame_and_loops_forever() {
+        let mut out = Vec::new();
+        animate_to(&mut out, 9, 333).unwrap();
+        assert_eq!(
+            out,
+            b"\x1b_Ga=a,q=2,i=9,r=1,z=333\x1b\\\x1b_Ga=a,q=2,i=9,s=3,v=1\x1b\\"
+        );
+    }
+
+    #[test]
+    fn the_env_variable_wins_over_the_config_key() {
+        assert_eq!(chosen_loops(None, None), None, "the probe decides");
+        assert_eq!(
+            chosen_loops(Some("ticks"), Some(Loops::Animation)),
+            Some(Loops::Ticks)
+        );
+        assert_eq!(
+            chosen_loops(Some(" Animation "), None),
+            Some(Loops::Animation)
+        );
+        assert_eq!(
+            chosen_loops(Some("auto"), Some(Loops::Ticks)),
+            Some(Loops::Ticks),
+            "an unknown value keeps the config"
+        );
+    }
+
+    /// A terminal that answers the start probes with `answers`, and records the sequence and
+    /// the count of answers that viewr waits for. It deletes the probe file, as a real one does.
+    fn probed(
+        transfer_override: Option<&str>,
+        loops: Option<Loops>,
+        ssh: bool,
+        answers: Option<&str>,
+    ) -> (KittyBackend, String, Option<usize>) {
+        let mut seen = Vec::new();
+        let mut count = None;
+        let backend = detect_backend(transfer_override, loops, ssh, |sequence, owed| {
+            seen.extend_from_slice(sequence);
+            count = Some(owed);
+            for path in temp_file_paths(sequence) {
+                fs::remove_file(path).unwrap();
+            }
+            answers.map(|text| text.as_bytes().to_vec())
+        });
+        (backend, String::from_utf8(seen).unwrap(), count)
+    }
+
+    #[test]
+    fn an_ok_for_the_probe_frame_turns_the_animations_on() {
+        let answers = format!("\x1b_Gi={PROBE_ID};OK\x1b\\\x1b_Gi={ANIMATION_PROBE_ID};OK\x1b\\");
+        let (backend, sequence, count) = probed(None, None, false, Some(&answers));
+        assert_eq!(backend.transfer(), Transfer::TempFile);
+        assert_eq!(backend.loops(), Loops::Animation);
+        assert_eq!(count, Some(2), "one round trip for both probes");
+
+        let id = ANIMATION_PROBE_ID;
+        let root = sequence
+            .find(&format!("\x1b_Ga=t,q=2,i={id},f=32,s=1,v=1;AAAAAA==\x1b\\"))
+            .expect("a silent root image");
+        let frame = sequence
+            .find(&format!("\x1b_Ga=f,i={id},f=32,s=1,v=1;AAAAAA==\x1b\\"))
+            .expect("a frame that the terminal answers");
+        let delete = sequence
+            .find(&format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\"))
+            .unwrap();
+        assert!(
+            sequence.starts_with("\x1b_Ga=q,i=31,") && root < frame && frame < delete,
+            "{sequence}"
+        );
+    }
+
+    #[test]
+    fn an_error_or_no_answer_for_the_probe_frame_keeps_the_ticks() {
+        let error = format!(
+            "\x1b_Gi={PROBE_ID};OK\x1b\\\x1b_Gi={ANIMATION_PROBE_ID};EINVAL:unsupported action\x1b\\"
+        );
+        let only_transfer = format!("\x1b_Gi={PROBE_ID};OK\x1b\\");
+        for answers in [Some(error.as_str()), Some(only_transfer.as_str()), None] {
+            let (backend, _, _) = probed(None, None, false, answers);
+            assert_eq!(backend.loops(), Loops::Ticks, "{answers:?}");
+        }
+        let (backend, _, _) = probed(None, None, false, Some(&only_transfer));
+        assert_eq!(
+            backend.transfer(),
+            Transfer::TempFile,
+            "the transfer answer still counts"
+        );
+    }
+
+    #[test]
+    fn the_animation_probe_goes_out_alone_without_the_transfer_probe() {
+        let answers = format!("\x1b_Gi={ANIMATION_PROBE_ID};OK\x1b\\");
+        for (transfer_override, ssh, expected) in [
+            (None, true, Transfer::Png),
+            (Some("direct"), false, Transfer::Direct),
+        ] {
+            let (backend, sequence, count) = probed(transfer_override, None, ssh, Some(&answers));
+            assert_eq!(backend.transfer(), expected);
+            assert_eq!(backend.loops(), Loops::Animation);
+            assert_eq!(count, Some(1));
+            assert!(!sequence.contains("a=q"), "{sequence}");
+        }
+    }
+
+    #[test]
+    fn a_fixed_loop_path_sends_no_animation_probe() {
+        let answers = format!("\x1b_Gi={PROBE_ID};OK\x1b\\\x1b_Gi={ANIMATION_PROBE_ID};OK\x1b\\");
+        let (backend, sequence, count) = probed(None, Some(Loops::Ticks), false, Some(&answers));
+        assert_eq!(backend.loops(), Loops::Ticks);
+        assert_eq!(count, Some(1));
+        assert!(!sequence.contains("a=f"), "{sequence}");
+
+        let (backend, _, count) = probed(Some("png"), Some(Loops::Animation), false, None);
+        assert_eq!(
+            (backend.transfer(), backend.loops()),
+            (Transfer::Png, Loops::Animation)
+        );
+        assert_eq!(count, None, "no probe at all");
+    }
+
+    #[test]
+    fn the_answer_for_an_id_is_found_among_several() {
+        let answers = format!(
+            "\x1b_Gi={PROBE_ID};OK\x1b\\\x1b[6;43;18t\x1b_Gi={ANIMATION_PROBE_ID};ENOENT:no image\x1b\\"
+        );
+        assert_eq!(answer_for(answers.as_bytes(), PROBE_ID), Some(true));
+        assert_eq!(
+            answer_for(answers.as_bytes(), ANIMATION_PROBE_ID),
+            Some(false)
+        );
+        assert_eq!(answer_for(answers.as_bytes(), 7), None);
     }
 }

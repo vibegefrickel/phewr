@@ -163,6 +163,30 @@ pub(crate) enum Transfer {
     TempFile,
 }
 
+/// How the grid plays the loops of its video and animated cells.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Loops {
+    /// viewr swaps the placement of each frame on the ticks of its loop clock. Every terminal
+    /// with the Kitty graphics protocol can show it.
+    #[default]
+    Ticks,
+    /// The terminal plays each loop as a Kitty animation (`a=f`, `a=a`), and viewr sends
+    /// nothing per tick.
+    Animation,
+}
+
+impl Loops {
+    /// Read `animation` or `ticks`, the values of `VIEWR_KITTY_LOOPS` and `[gallery] loops`.
+    /// Any other value returns `None`, and the probe decides.
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "animation" => Some(Self::Animation),
+            "ticks" => Some(Self::Ticks),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) trait GraphicsBackend {
     /// Send `pixels` and show them. An RGBA image without a transparent pixel goes out as RGB.
     fn transmit(
@@ -181,22 +205,46 @@ pub(crate) trait GraphicsBackend {
     ) -> io::Result<()>;
     fn delete_image_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
     fn delete_placements_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()>;
+    /// Add a frame of `gap_ms` milliseconds to the animation of the image `id`.
+    fn transmit_frame(
+        &self,
+        out: &mut dyn Write,
+        pixels: Pixels<'_>,
+        id: u32,
+        gap_ms: u32,
+    ) -> io::Result<()>;
+    /// Run the animation of the image `id` in a loop forever.
+    fn animate_to(&self, out: &mut dyn Write, id: u32, root_gap_ms: u32) -> io::Result<()>;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct KittyBackend {
     transfer: Transfer,
+    loops: Loops,
 }
 
 impl KittyBackend {
     pub(crate) fn new(transfer: Transfer) -> Self {
-        Self { transfer }
+        Self {
+            transfer,
+            loops: Loops::default(),
+        }
+    }
+
+    /// The same backend with the loop path `loops`.
+    pub(crate) fn with_loops(self, loops: Loops) -> Self {
+        Self { loops, ..self }
     }
 
     /// The medium of the pixels. The terminal player needs [`Transfer::TempFile`], and the
     /// help popup names it.
     pub(crate) fn transfer(self) -> Transfer {
         self.transfer
+    }
+
+    /// The loop path of the grid, from the probe or the override.
+    pub(crate) fn loops(self) -> Loops {
+        self.loops
     }
 }
 
@@ -233,6 +281,20 @@ impl GraphicsBackend for KittyBackend {
 
     fn delete_placements_to(&self, out: &mut dyn Write, id: u32) -> io::Result<()> {
         kitty::delete_placements_to(out, id)
+    }
+
+    fn transmit_frame(
+        &self,
+        out: &mut dyn Write,
+        pixels: Pixels<'_>,
+        id: u32,
+        gap_ms: u32,
+    ) -> io::Result<()> {
+        kitty::transmit_frame_to(out, pixels, id, gap_ms, self.transfer)
+    }
+
+    fn animate_to(&self, out: &mut dyn Write, id: u32, root_gap_ms: u32) -> io::Result<()> {
+        kitty::animate_to(out, id, root_gap_ms)
     }
 }
 
