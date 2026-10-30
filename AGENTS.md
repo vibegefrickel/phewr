@@ -389,7 +389,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   the info panel skip folders. A folder cell has no thumbnail and no Kitty image. An empty
   folder (no file, and no folder besides `..`) shows a note in the status row (`is_empty_folder`
   in `ui/status.rs`). There is no directory picker. A start with several paths lists no
-  folders. A symlink to a folder stays out. One folder argument is one `read_dir`
+  folders. A symlink to a folder stays out, and so do hidden folders and hidden files (`.x.jpg`,
+  the AppleDouble `._x.jpg`). One folder argument is one `read_dir`
   (`scanner::read_folder`): the files come out sorted by `name_key`, so the first batch is in the
   final order and the end of the scan keeps the list. The first batch waits for the read and the
   sort of the whole folder (6.3 ms for 10 000 files). The grid lists a folder that viewr cannot
@@ -414,7 +415,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
   that does not answer cannot hold viewr. Tests pass a closure and never start `ya`.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
-  no status note. The note shows in the status row at the bottom. The next key press clears it.
+  no status note. The note shows in the status row at the bottom. The next key press or mouse
+  button press clears it (`clears_status`), a key release or repeat does not. A read error of the
+  scan lives in `App::scan_error`, not in `App::error`: the status row shows it after the delete
+  question, the delete error and `error`, it never hides the video placeholder, it survives the
+  first decode, and a key press or a folder switch clears it.
 - **Status row:** the row shows no key hints. At the right, it shows the facts of the selected
   file (`file_meta.rs`): the size, the file size, the format, the date and, for a video, the
   length, the frame rate and the HDR curve. A thread reads them (`app/meta.rs`, one read at a
@@ -524,6 +529,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   grid is the largest thumbnail size. The fullscreen view is the larger view. The config key
   and the state file clamp to that range on load. A terminal too small for 2 rows keeps the
   rows that fit.
+  A state file that does not parse stays as it is: `+`, `-` and `0` do not save over it, and each
+  save goes through a temp file and a rename.
   The state file holds a global `visible_rows` fallback, a `zoom_counter` and a `[zoom]` table
   keyed by the canonical folder path. Each `[zoom."/path"]` entry holds `rows` and `order`. The
   plain form `"/path" = 3` also loads. `+` / `-` save the level for the folder and as the
