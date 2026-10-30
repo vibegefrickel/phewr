@@ -154,7 +154,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `App::new` points `app.state_file` and `app.disk_cache_dir` below `/dev/null`. A test that
   needs them sets them to temp paths.
 - A test never sets `HOME` or `XDG_*`. Use the functions that take a path: `config::load_at`,
-  `config::xdg_path`, `config::save_thumb_size(path, ..)`.
+  `Paths::from_vars`, `config::save_visible_rows(path, ..)`.
 - A test waits for background work in a loop with a limit (for example 2 s in 10 ms steps), and
   never depends on the clock within a frame interval.
 - A test calls `trash::delete` only with a missing path, so it never asks Finder.
@@ -164,7 +164,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - `main.rs`: the module list and `main`: the lookup of ffmpeg and ffprobe
   (`video::find_session_tools`), the CLI checks, the terminal
   session and the start of the run loop.
-- `cli.rs`: the clap arguments (`Cli`) and the start directory.
+- `cli.rs`: the clap arguments (`Cli`), the value parsers of `--threads` and `--interval`, and the
+  start directory.
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
   `query_terminal`, `query_cell_size_and_probe` (`CSI 16 t`, the Kitty probes and the DA1 query
   in one write, the DA1 answer ends the read) and the cell pixel size.
@@ -237,9 +238,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   and the pixel size of a terminal cell.
 - `scanner.rs`: the background directory scan and the lists of supported extensions.
   `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `has_extension(path, list)` is the
-  extension test of the scanner and the decoders, without an allocation. `subfolders` lists the subfolders
-  of one folder argument, `..` first. `files_of` lists the files of one folder in the order of
-  the scan, without a thread.
+  extension test of the scanner and the decoders, without an allocation. `name_key` is the sort
+  key of the batches and the folders (the lowercase name, then the path). `subfolders` lists the
+  subfolders of one folder argument, `..` first. `files_of` lists the files of one folder in the
+  order of the scan, without a thread.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
   `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
 - `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. A job sends a
@@ -251,7 +253,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - `file_meta.rs`: the facts of one file for the status row (`FileMeta`, `describe`).
 - `icons.rs`: the large octant icons of the grid cells.
 - `styles.rs`: `STYLES`, one style per role on the screen.
-- `config.rs`: `config.toml` and the state file.
+- `config.rs`: `config.toml` and the state file. `Paths` (`from_env`, `from_vars`) holds the two
+  file paths, `load(&Paths)` reads the config, `load_at` takes the paths for the tests.
 - `video.rs` (feature `video`): `Tools`, the session lookup of ffmpeg and ffprobe, `cube_dirs` (the
   places of the cube files) and `session_decoder` (ffmpeg with a decoder that has ffprobe), the
   first-frame thumbnails and the video extensions.
