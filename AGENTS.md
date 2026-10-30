@@ -248,16 +248,19 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - `scanner.rs`: the background directory scan and the lists of supported extensions.
   `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `has_extension(path, list)` is the
   extension test of the scanner and the decoders, without an allocation. `name_key` is the sort
-  key of the batches and the folders (the lowercase name, then the path). `subfolders` lists the
-  subfolders of one folder argument, `..` first. `files_of` lists the files of one folder in the
-  order of the scan, without a thread.
+  key of the batches and the folders (the lowercase name, then the path). `read_folder` is the one
+  `read_dir` of a folder argument for its folders and its files. `subfolders` lists the
+  subfolders of one folder argument, `..` first, and walks folders only. `files_of` lists the
+  files of one folder in the order of the scan, without a thread.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
   `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
 - `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. A job sends a
   `JobResult` with its generation. `invalidate()` drops the jobs in flight and forgets the failed
   indices. Each result (`Prefetched`) keeps its decode box. `take_resized` fits the image into
   the requested box (`Prefetched::fit_within`). If the decode box is smaller, it returns `None`.
-- `search.rs`: fuzzy filename search (nucleo-matcher).
+- `search.rs`: fuzzy filename search (nucleo-matcher). `FilterWorker` (`App::filter_worker`) is one
+  long-lived filter thread with one `Matcher`. It takes the queries through a channel, holds the
+  names as an `Arc`, and runs only the newest query.
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `file_meta.rs`: the facts of one file for the status row (`FileMeta`, `describe`).
 - `icons.rs`: the large octant icons of the grid cells.
@@ -382,7 +385,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   the info panel skip folders. A folder cell has no thumbnail and no Kitty image. An empty
   folder (no file, and no folder besides `..`) shows a note in the status row (`is_empty_folder`
   in `ui/status.rs`). There is no directory picker. A start with several paths lists no
-  folders. A symlink to a folder stays out. viewr always starts in the grid, also with one
+  folders. A symlink to a folder stays out. One folder argument is one `read_dir`
+  (`scanner::read_folder`): the files come out sorted by `name_key`, so the first batch is in the
+  final order and the end of the scan keeps the list. The first batch waits for the read and the
+  sort of the whole folder (6.3 ms for 10 000 files). The grid lists a folder that viewr cannot
+  read, and `Enter` shows the read error, so a listing of the home folder opens no subfolder and
+  triggers no macOS privacy prompt. viewr always starts in the grid, also with one
   image: it never opens the fullscreen view or a slideshow by itself (only `--slideshow` does).
 - **Video programs:** viewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
   time, and the tests never do, so `session_first_frame` gives `NotFound` in a test. The probe
@@ -553,6 +561,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   next draw leaves it out once the thumbnail is in `thumb_cache`. A HEIC preview counts as a
   thumbnail.
 - **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64) files
+  by name (the sorted first batch, the same files that the folder prefetch samples)
   on a thread, one time per scan (`decode/shape.rs`). JPEG and PNG swap for the EXIF orientation,
   HEIC and AVIF read `ispe` and swap for `irot`. A RAW or PSD file gives the size of its embedded
   JPEG after the orientation. PDF, SVG, the other ImageIO formats and video count as 3:2. The median
