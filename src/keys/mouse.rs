@@ -92,8 +92,8 @@ fn gallery_mouse(app: &mut App, mouse: MouseEvent, at: Position, now: Instant) -
         MouseEventKind::ScrollUp if shift => app.thumb_zoom_in(),
         MouseEventKind::ScrollDown if shift => app.thumb_zoom_out(),
         // macOS can send Shift+wheel as a horizontal wheel without the SHIFT flag. The side
-        // depends on the natural scrolling setting, so the direction needs the Ghostty test.
-        // A sideways trackpad swipe sends the same events and also changes the size.
+        // depends on the natural scrolling setting. A sideways trackpad swipe sends the same
+        // events and also changes the size.
         MouseEventKind::ScrollRight => app.thumb_zoom_in(),
         MouseEventKind::ScrollLeft => app.thumb_zoom_out(),
         MouseEventKind::ScrollUp => scroll_grid(app, -1),

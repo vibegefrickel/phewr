@@ -325,12 +325,9 @@ fn parse_cell_size_report(answer: &[u8]) -> Option<(u32, u32)> {
 
 /// The pixel size of one cell from a window size report, so that the tests need no terminal.
 fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
-    // A terminal that does not report pixel dimensions (common under
-    // terminal multiplexers such as rift/tmux, and some SSH setups)
-    // returns ws.width/ws.height == 0 even though columns/rows are
-    // valid. Treat a zero pixel report as "unknown" and fall back to
-    // conventional cell metrics, otherwise the division below collapses
-    // to 1x1 and thumbnails render only a few pixels tall.
+    // A terminal under a multiplexer (tmux) or SSH can report 0 pixels with valid columns and
+    // rows. A zero report counts as unknown and gets conventional cell metrics. Else the
+    // division collapses to 1x1 and the thumbnails are a few pixels tall.
     let w = if ws.columns > 0 && ws.width > 0 {
         u32::from(ws.width) / u32::from(ws.columns)
     } else {

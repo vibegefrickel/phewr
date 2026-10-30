@@ -12,7 +12,8 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.graphics_delete_all()?;
             app.help_visible = true;
         }
-        // `Esc` stops a running slideshow first. `q` goes back in one press, because `enter_gallery` ends the slideshow.
+        // `Esc` stops a running slideshow first.
+        // `q` goes back in one press, because `enter_gallery` ends the slideshow.
         KeyCode::Esc if app.slideshow_running() => app.stop_slideshow(),
         KeyCode::Char('q') | KeyCode::Esc => {
             app.graphics_delete_all()?;
@@ -22,13 +23,10 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.graphics_delete_all()?;
             app.toggle_info();
         }
-        KeyCode::Enter if app.shows_video_placeholder() => {
-            app.stop_slideshow();
-            app.enter_fullscreen_at(app.current);
-        }
-        #[cfg(feature = "video")]
-        KeyCode::Enter if app.fullscreen_on_animation() => {
-            app.graphics_delete_all()?;
+        KeyCode::Enter if app.shows_video_placeholder() || on_animation(app) => {
+            if !app.shows_video_placeholder() {
+                app.graphics_delete_all()?;
+            }
             app.stop_slideshow();
             app.enter_fullscreen_at(app.current);
         }
@@ -59,6 +57,18 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
         _ => {}
     }
     Ok(false)
+}
+
+/// Tells if the fullscreen view shows an animated image, which needs the `video` feature.
+#[cfg(feature = "video")]
+fn on_animation(app: &App) -> bool {
+    app.fullscreen_on_animation()
+}
+
+/// Without the `video` feature, no animation plays in the fullscreen view.
+#[cfg(not(feature = "video"))]
+fn on_animation(_app: &App) -> bool {
+    false
 }
 
 #[cfg(test)]

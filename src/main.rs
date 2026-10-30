@@ -125,12 +125,6 @@ fn main() -> io::Result<()> {
     };
 
     if let Some(n) = cli.threads {
-        if n == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--threads must be greater than zero",
-            ));
-        }
         rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .build_global()
@@ -144,31 +138,25 @@ fn main() -> io::Result<()> {
         reason = "the CLI reports a bad path before the TUI starts"
     )]
     for p in &paths {
-        if !p.is_dir() && !p.exists() {
+        let Ok(metadata) = std::fs::metadata(p) else {
             eprintln!("{}: file not found", p.display());
             std::process::exit(1);
-        }
-        if p.is_file() && !scanner::is_supported(p) {
+        };
+        if metadata.is_file() && !scanner::is_supported(p) {
             eprintln!("{}: unsupported media format", p.display());
             std::process::exit(1);
         }
     }
 
-    let mut config = config::load();
+    let mut config = config::load(&config::Paths::from_env());
     decode::color::set_target(config.colorspace);
-    let mut state = LoopState::new(&config);
     if let Some(interval) = cli.interval {
-        if !interval.is_finite() || interval <= 0.0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--interval must be a positive number of seconds",
-            ));
-        }
         config.slideshow_interval = interval;
     }
     if cli.info {
         config.info_panel = true;
     }
+    let mut state = LoopState::new(&config);
 
     let (paths, cursor_target) = start_paths(paths);
     let initial_dir = initial_dir_from_paths(&paths);

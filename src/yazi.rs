@@ -60,10 +60,11 @@ pub(crate) fn find_on_path(program: &str, path: Option<&OsStr>) -> Option<PathBu
 
 #[cfg(test)]
 mod tests {
-    use super::{find_on_path, reveal_in_yazi};
+    use super::{find_on_path, reveal_in_yazi, run_briefly};
     use std::ffi::{OsStr, OsString};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
 
     /// A PATH with an executable `ya` in a temp directory.
     fn path_with_ya() -> (tempfile::TempDir, OsString) {
@@ -164,5 +165,21 @@ mod tests {
         assert_eq!(find_on_path("mpv", None), None);
         let only_plain = std::env::join_paths([&plain]).unwrap();
         assert_eq!(find_on_path("mpv", Some(&only_plain)), None);
+    }
+
+    #[test]
+    fn run_briefly_returns_when_the_program_exits() {
+        let start = Instant::now();
+        run_briefly(Path::new("/usr/bin/true"), &[]).unwrap();
+        assert!(start.elapsed() < Duration::from_millis(900));
+    }
+
+    #[test]
+    fn run_briefly_stops_waiting_after_the_timeout() {
+        let start = Instant::now();
+        run_briefly(Path::new("/bin/sleep"), &[OsString::from("2")]).unwrap();
+        let waited = start.elapsed();
+        assert!(waited >= Duration::from_millis(900), "{waited:?}");
+        assert!(waited < Duration::from_millis(1900), "{waited:?}");
     }
 }

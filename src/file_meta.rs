@@ -9,22 +9,22 @@ use std::path::Path;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct FileMeta {
     /// Width and height as the viewer shows them, after the orientation.
-    pub size: Option<(u32, u32)>,
-    pub bytes: Option<u64>,
+    pub(crate) size: Option<(u32, u32)>,
+    pub(crate) bytes: Option<u64>,
     /// The extension in capitals.
-    pub format: String,
+    pub(crate) format: String,
     /// The EXIF date of the shot, else the modified time of the file.
-    pub date: Option<String>,
-    pub video: Option<VideoMeta>,
+    pub(crate) date: Option<String>,
+    pub(crate) video: Option<VideoMeta>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct VideoMeta {
     /// The length in seconds, 0 when the container does not tell it.
-    pub duration: f64,
-    pub fps: f64,
+    pub(crate) duration: f64,
+    pub(crate) fps: f64,
     /// `HLG` or `PQ`, `None` for SDR.
-    pub hdr: Option<&'static str>,
+    pub(crate) hdr: Option<&'static str>,
 }
 
 /// Read the facts of `path`. A missing part stays `None`.
@@ -155,6 +155,21 @@ mod tests {
             "the modified time stands in for the EXIF date"
         );
         assert_eq!(meta.video, None);
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_video_without_the_tools_has_no_video_facts_and_no_size() {
+        // The tests never look up ffprobe, so the session has no tools.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        std::fs::write(&path, b"synthetic").unwrap();
+
+        let meta = read(&path);
+        assert_eq!(meta.video, None);
+        assert_eq!(meta.size, None);
+        assert_eq!(meta.bytes, Some(9));
+        assert_eq!(meta.format, "MP4");
     }
 
     #[test]

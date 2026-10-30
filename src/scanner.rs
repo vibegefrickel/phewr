@@ -34,7 +34,8 @@ pub(crate) const LIBHEIF_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "avif"];
 #[cfg(feature = "video")]
 pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
 
-/// The extension test of the scanner and the decoders: it compares without an allocation and ignores ASCII case.
+/// The extension test of the scanner and the decoders. It ignores ASCII case and allocates
+/// nothing.
 pub(crate) fn has_extension(path: &Path, list: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -65,14 +66,20 @@ pub(crate) fn is_supported(path: &Path) -> bool {
 pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
     thread::spawn(move || {
         let mut batch = Vec::with_capacity(BATCH_SIZE);
+        // The one path of a single argument is stat once. A long list stats lazily, so that
+        // the first batch does not wait for all the paths.
+        let single_is_dir = match paths.as_slice() {
+            [only] => Some(only.is_dir()),
+            _ => None,
+        };
         if let [dir] = paths.as_slice()
-            && dir.is_dir()
+            && single_is_dir == Some(true)
         {
             list.push_folders(subfolders(dir));
         }
 
         for path in paths {
-            if path.is_dir() {
+            if single_is_dir.unwrap_or_else(|| path.is_dir()) {
                 scan_dir(&path, &list, &mut batch);
             } else if is_supported(&path) {
                 batch.push(path);
@@ -93,8 +100,8 @@ pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
 }
 
 /// The supported files of `dir` and their names, in the order that `spawn` pushes them: the
-/// directory order in batches, each batch sorted by name. The folder prefetch lists a folder
-/// as a switch to it would, without a thread and without the errors.
+/// directory order in batches, each batch sorted by lowercase name. The folder prefetch lists a
+/// folder as a switch to it would, without a thread and without the errors.
 pub(crate) fn files_of(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
     let list = SharedImageList::new();
     let mut batch = Vec::with_capacity(BATCH_SIZE);
@@ -129,7 +136,7 @@ pub(crate) fn subfolders(dir: &Path) -> Vec<FolderEntry> {
                 .then_some(FolderEntry { path, name })
         })
         .collect();
-    folders.sort_by_cached_key(|folder| (folder.name.to_lowercase(), folder.name.clone()));
+    folders.sort_by_cached_key(|folder| name_key(&folder.path));
     folders.splice(0..0, parent_entry(&dir));
     folders
 }
@@ -157,11 +164,9 @@ fn scan_dir(dir: &Path, list: &SharedImageList, batch: &mut Vec<PathBuf>) {
                 let path = entry.path();
                 match entry.file_type() {
                     Ok(file_type) => {
-                        // `file_type` comes from the directory entry and does not
-                        // follow symlinks, so a link pointing at a file reports
-                        // neither `is_file()` nor `is_dir()`. Resolve the target
-                        // with `metadata()` (which follows symlinks) so linked
-                        // media is picked up too.
+                        // `file_type` does not follow symlinks, so a link to a file is
+                        // neither `is_file()` nor `is_dir()`. `metadata()` follows the
+                        // link, so that linked media shows up too.
                         let is_regular_file = if file_type.is_symlink() {
                             match std::fs::metadata(&path) {
                                 Ok(target) => target.is_file(),
@@ -189,12 +194,19 @@ fn scan_dir(dir: &Path, list: &SharedImageList, batch: &mut Vec<PathBuf>) {
     }
 }
 
+/// The one sort key of the file lists: the lowercase file name, then the path. The batches of the
+/// scan and the folders use it, and so must the sort at the end of the scan (`sort_by_name` in
+/// `app/scan.rs`), so that the first screen does not reorder when the scan ends.
+pub(crate) fn name_key(path: &Path) -> (String, PathBuf) {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    (name, path.to_path_buf())
+}
+
 fn flush_batch(list: &SharedImageList, batch: &mut Vec<PathBuf>) {
-    batch.sort_by(|left, right| {
-        left.file_name()
-            .cmp(&right.file_name())
-            .then_with(|| left.cmp(right))
-    });
+    batch.sort_by_cached_key(|path| name_key(path));
     list.push_batch(std::mem::take(batch));
     *batch = Vec::with_capacity(BATCH_SIZE);
 }
@@ -302,6 +314,39 @@ mod tests {
         let errors = list.drain_errors();
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("gone.png"), "{errors:?}");
+    }
+
+    #[test]
+    fn scan_dir_lists_hidden_files_and_apple_double_files() {
+        // The current behavior: only the extension decides, so `.x.jpg` and the AppleDouble
+        // file `._x.jpg` of a foreign volume show up as images.
+        let root = tempfile::tempdir().unwrap();
+        for name in [".x.jpg", "._x.jpg", "a.jpg"] {
+            fs::write(root.path().join(name), b"synthetic").unwrap();
+        }
+
+        let list = SharedImageList::new();
+        let mut batch: Vec<PathBuf> = Vec::new();
+        scan_dir(root.path(), &list, &mut batch);
+
+        let mut names: Vec<String> = batch
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["._x.jpg", ".x.jpg", "a.jpg"]);
+    }
+
+    #[test]
+    fn a_batch_sorts_by_the_lowercase_name_like_the_end_of_the_scan() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["b.png", "B2.png", "a.png", "C.png"] {
+            fs::write(root.path().join(name), b"synthetic").unwrap();
+        }
+
+        let (_, names) = files_of(root.path());
+
+        assert_eq!(names, ["a.png", "b.png", "B2.png", "C.png"]);
     }
 
     #[test]

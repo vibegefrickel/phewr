@@ -8,14 +8,14 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "viewr",
     version,
-    about = "Terminal image gallery: thumbnail grid, slideshow, EXIF, HEIC"
+    about = "Terminal gallery for images, videos and animations: thumbnail grid, slideshow, EXIF"
 )]
 pub(crate) struct Cli {
     /// Image file(s) or directory to display [default: .]
     pub(crate) files: Vec<PathBuf>,
 
     /// Number of threads for image decoding [default: all cores]
-    #[arg(short = 'j', long)]
+    #[arg(short = 'j', long, value_parser = parse_threads)]
     pub(crate) threads: Option<usize>,
 
     /// Start a fullscreen slideshow right away
@@ -23,12 +23,30 @@ pub(crate) struct Cli {
     pub(crate) slideshow: bool,
 
     /// Seconds between slides (overrides the configured interval)
-    #[arg(short = 'n', long, value_name = "SECONDS")]
+    #[arg(short = 'n', long, value_name = "SECONDS", value_parser = parse_interval)]
     pub(crate) interval: Option<f64>,
 
     /// Open the info panel on start
     #[arg(short, long)]
     pub(crate) info: bool,
+}
+
+/// A thread count of zero is an error, because the pool needs one thread at least.
+fn parse_threads(value: &str) -> Result<usize, String> {
+    match value.parse::<usize>() {
+        Ok(0) => Err("must be greater than zero".to_owned()),
+        Ok(threads) => Ok(threads),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// A slide interval must be a positive, finite number of seconds.
+fn parse_interval(value: &str) -> Result<f64, String> {
+    match value.parse::<f64>() {
+        Ok(seconds) if seconds.is_finite() && seconds > 0.0 => Ok(seconds),
+        Ok(_) => Err("must be a positive number of seconds".to_owned()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// One file argument opens its folder with the cursor on that file, so a file manager can start
@@ -122,6 +140,16 @@ mod tests {
         assert!(Cli::try_parse_from(["viewr", "--threads", "-1"]).is_err());
         assert!(Cli::try_parse_from(["viewr", "--fullscreen"]).is_err());
         assert!(Cli::try_parse_from(["viewr", "-t", "nord"]).is_err());
+    }
+
+    #[test]
+    fn zero_threads_and_a_zero_interval_are_errors() {
+        assert!(Cli::try_parse_from(["viewr", "-j", "0"]).is_err());
+        assert!(Cli::try_parse_from(["viewr", "-n", "0"]).is_err());
+        assert!(Cli::try_parse_from(["viewr", "-n", "-1"]).is_err());
+        assert!(Cli::try_parse_from(["viewr", "-n", "inf"]).is_err());
+        assert!(Cli::try_parse_from(["viewr", "-n", "NaN"]).is_err());
+        assert!(Cli::try_parse_from(["viewr", "-j", "1", "-n", "0.5"]).is_ok());
     }
 
     #[test]

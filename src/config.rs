@@ -1,8 +1,9 @@
 //! User configuration (`~/.config/viewr/config.toml`) and the small state
 //! file that remembers the grid zoom level.
 //!
-//! The file has the sections `[gallery]`, `[slideshow]`, `[info]` and `[video]`. viewr ignores
-//! unknown keys, so an old file with the removed keys `theme` and `theme_catalog` still loads.
+//! The file has the sections `[gallery]`, `[slideshow]`, `[info]`, `[video]` and `[terminal]`.
+//! viewr ignores unknown keys, so an old file with the removed keys `theme` and `theme_catalog`
+//! still loads.
 
 use crate::decode::color::ColorTarget;
 use crate::encoder::Loops;
@@ -26,28 +27,28 @@ pub(crate) const DEFAULT_SLIDESHOW_INTERVAL: f64 = 3.0;
 pub(crate) struct Config {
     /// The grid zoom level: how many thumbnail rows the terminal shows.
     /// This is the effective level, which the remembered global level can override.
-    pub visible_rows: u16,
+    pub(crate) visible_rows: u16,
     /// The zoom level from `[gallery] visible_rows` alone, used by the `0` reset key.
-    pub configured_visible_rows: u16,
+    pub(crate) configured_visible_rows: u16,
     /// Seconds between slides.
-    pub slideshow_interval: f64,
+    pub(crate) slideshow_interval: f64,
     /// Wrap around to the first image when the slideshow reaches the end.
-    pub slideshow_loop: bool,
+    pub(crate) slideshow_loop: bool,
     /// Open the info panel on start.
-    pub info_panel: bool,
+    pub(crate) info_panel: bool,
     /// The program that plays a video file.
-    pub video_player: VideoPlayer,
+    pub(crate) video_player: VideoPlayer,
     /// Capture the mouse: clicks, drags and the wheel reach viewr. Off, the terminal keeps its
     /// own selection and scrolling.
-    pub mouse: bool,
+    pub(crate) mouse: bool,
     /// Play a short loop in each visible video and animated cell of the grid. Off, the cells
     /// keep their stills and their play markers.
-    pub animate: bool,
+    pub(crate) animate: bool,
     /// `[gallery] loops`: how the terminal plays the loops of the grid. `None` (`auto`) lets
     /// the probe at the start decide. `VIEWR_KITTY_LOOPS` wins over it.
-    pub loops: Option<Loops>,
+    pub(crate) loops: Option<Loops>,
     /// The color space in which the terminal shows the pixels of an image.
-    pub colorspace: ColorTarget,
+    pub(crate) colorspace: ColorTarget,
 }
 
 /// The value of `[video] player`: how viewr plays a video file.
@@ -183,9 +184,38 @@ struct ZoomEntry {
     order: u64,
 }
 
-pub(crate) fn load() -> Config {
-    let home = home_dir();
-    load_at(&config_path(&home), &state_path(&home))
+/// The places of the config file and of the state file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Paths {
+    pub(crate) config: PathBuf,
+    pub(crate) state: PathBuf,
+}
+
+impl Paths {
+    /// Reads `HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` at each call. `main` calls it for `load`.
+    pub(crate) fn from_env() -> Self {
+        Self::from_vars(
+            &home_dir(),
+            std::env::var_os("XDG_CONFIG_HOME"),
+            std::env::var_os("XDG_STATE_HOME"),
+        )
+    }
+
+    /// Takes the values of the variables, so that a test needs no environment.
+    fn from_vars(
+        home: &Path,
+        xdg_config_home: Option<OsString>,
+        xdg_state_home: Option<OsString>,
+    ) -> Self {
+        Self {
+            config: xdg_path(xdg_config_home, home, ".config", "viewr/config.toml"),
+            state: xdg_path(xdg_state_home, home, ".local/state", "viewr/state.toml"),
+        }
+    }
+}
+
+pub(crate) fn load(paths: &Paths) -> Config {
+    load_at(&paths.config, &paths.state)
 }
 
 pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
@@ -252,7 +282,7 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
 
 /// The state file below the user's home, the default target of the grid-zoom functions.
 pub(crate) fn default_state_path() -> PathBuf {
-    state_path(&home_dir())
+    Paths::from_env().state
 }
 
 /// Read the saved zoom level for `folder` from the state file at `path`.
@@ -338,23 +368,6 @@ fn write_state(path: &Path, state: &StateFile) {
     }
 }
 
-pub(crate) fn config_path(home: &Path) -> PathBuf {
-    config_path_for(home, std::env::var_os("XDG_CONFIG_HOME"))
-}
-
-pub(crate) fn config_path_for(home: &Path, xdg_config_home: Option<OsString>) -> PathBuf {
-    xdg_path(xdg_config_home, home, ".config", "viewr/config.toml")
-}
-
-fn state_path(home: &Path) -> PathBuf {
-    xdg_path(
-        std::env::var_os("XDG_STATE_HOME"),
-        home,
-        ".local/state",
-        "viewr/state.toml",
-    )
-}
-
 /// Join `file` to an absolute XDG base, else to `home/fallback`; the caller reads the variable.
 fn xdg_path(base: Option<OsString>, home: &Path, fallback: &str, file: &str) -> PathBuf {
     base.map(PathBuf::from)
@@ -371,6 +384,21 @@ fn home_dir() -> PathBuf {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn the_paths_follow_the_xdg_values_when_they_are_absolute() {
+        let home = Path::new("/home/a");
+        let fallback = Paths::from_vars(home, None, None);
+        assert_eq!(fallback.config, home.join(".config/viewr/config.toml"));
+        assert_eq!(fallback.state, home.join(".local/state/viewr/state.toml"));
+
+        let xdg = Paths::from_vars(home, Some("/x/c".into()), Some("/x/s".into()));
+        assert_eq!(xdg.config, Path::new("/x/c/viewr/config.toml"));
+        assert_eq!(xdg.state, Path::new("/x/s/viewr/state.toml"));
+
+        let relative = Paths::from_vars(home, Some("c".into()), Some("s".into()));
+        assert_eq!(relative, fallback);
+    }
 
     fn test_root() -> TempDir {
         tempfile::tempdir().unwrap()
@@ -694,12 +722,5 @@ mod tests {
             ),
             PathBuf::from("/xdg/state/viewr/state.toml")
         );
-    }
-
-    #[test]
-    fn config_and_state_paths_end_in_the_viewr_files() {
-        let home = Path::new("/home/synthetic");
-        assert!(config_path(home).ends_with("viewr/config.toml"));
-        assert!(state_path(home).ends_with("viewr/state.toml"));
     }
 }

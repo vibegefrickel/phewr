@@ -79,7 +79,7 @@ pub(crate) fn run(
     let mut pending_emits: Vec<usize> = Vec::new();
 
     loop {
-        // 1. Drain all buffered input first so navigation is never blocked
+        // Drain all buffered input first, so that navigation never blocks.
         while event::poll(Duration::ZERO)? {
             let event = event::read()?;
             if state.late_answers.swallows(&event) {
@@ -102,7 +102,7 @@ pub(crate) fn run(
             }
         }
 
-        // 2. Poll background tasks
+        // Take the results of the background work.
         #[cfg(feature = "video")]
         poll_mpv_window(app, state);
         sync_mouse_capture(terminal.backend_mut(), state, window_open(app))?;
@@ -112,17 +112,17 @@ pub(crate) fn run(
         #[cfg(feature = "video")]
         play_videos(app, state, &mut mpv::SystemRunner);
 
-        // 3. Draw UI chrome (always fast — ratatui only)
+        // The chrome is ratatui only, so it is always fast.
         terminal.draw(|frame| draw_ui(frame, app, state))?;
 
-        // 4. Render Kitty images
+        // The Kitty pictures go out after the chrome.
         if render_images(app, &mut pending_emits)? {
             terminal.draw(|frame| draw_ui(frame, app, state))?;
         }
         // After the render, so that the grid jobs of this pass pause the folder prefetch.
         app.tick_folder_prefetch(Instant::now());
 
-        // 5. Wait for next event (shorter timeout when thumbnails are pending)
+        // Wait for the next event. The wait is short while a result is on its way.
         event::poll(next_timeout(app, &pending_emits))?;
     }
 }
@@ -141,7 +141,7 @@ fn window_open(app: &App) -> bool {
 }
 
 /// Whether the terminal must report the mouse: the config allows it and no mpv window plays.
-pub(crate) fn mouse_capture_wanted(enabled: bool, window_open: bool) -> bool {
+fn mouse_capture_wanted(enabled: bool, window_open: bool) -> bool {
     enabled && !window_open
 }
 
@@ -211,7 +211,7 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
         return Ok(false);
     }
     let draws = app.needs_render && !app.images.is_empty();
-    match app.mode {
+    let chrome_again = match app.mode {
         ViewMode::Fullscreen if draws => {
             app.load_if_needed();
             render_fullscreen_image(app)?;
@@ -221,24 +221,28 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
                 app.prefetch_neighbors();
             }
             finish_render(app, pending_emits);
-            return Ok(true);
+            true
         }
         ViewMode::Gallery if draws => {
             render_gallery_images(app)?;
             finish_render(app, pending_emits);
-            return Ok(true);
+            true
         }
         #[cfg(feature = "video")]
         ViewMode::Video if draws => {
             render_video_frame(app)?;
             finish_render(app, pending_emits);
+            false
         }
-        ViewMode::Gallery if !pending_emits.is_empty() => emit_new_thumbnails(app, pending_emits)?,
+        ViewMode::Gallery if !pending_emits.is_empty() => {
+            emit_new_thumbnails(app, pending_emits)?;
+            false
+        }
         // The loops wait for the stills: they write in a pass without new thumbnails.
-        ViewMode::Gallery => return play_grid_loops(app, Instant::now()),
-        _ => {}
-    }
-    Ok(false)
+        ViewMode::Gallery => play_grid_loops(app, Instant::now())?,
+        _ => false,
+    };
+    Ok(chrome_again)
 }
 
 /// The pictures of the view are out: nothing waits for a render or an emit.
@@ -306,14 +310,14 @@ fn waits_for_a_fast_shape(running: Option<Duration>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CACHE_READ_POLL, FIRST_PICTURE_POLL, LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW,
+        CACHE_READ_POLL, FIRST_PICTURE_POLL, IDLE_POLL, LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW,
         mouse_capture_wanted, next_timeout, sync_mouse_capture, waits_for_a_fast_shape,
     };
     use crate::app::ViewMode;
     use crate::config::Config;
-    use crate::test_support::{app, app_with, app_with_files, test_dir, wait_until};
+    use crate::test_support::{app, app_with, app_with_files, gallery_app, test_dir, wait_until};
     use ratatui::layout::Rect;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn the_emits_that_a_pass_left_go_out_without_a_wait() {
@@ -325,6 +329,53 @@ mod tests {
             next_timeout(&app, &[0]) > Duration::ZERO,
             "the fullscreen view writes no grid pictures"
         );
+    }
+
+    #[test]
+    fn a_slideshow_wakes_the_loop_when_the_next_slide_is_due() {
+        let mut app = gallery_app(3);
+        assert_eq!(next_timeout(&app, &[]), IDLE_POLL);
+        app.slideshow_interval = Duration::from_millis(5);
+        app.start_slideshow();
+        assert!(next_timeout(&app, &[]) <= Duration::from_millis(5));
+    }
+
+    #[test]
+    fn the_rest_of_the_cursor_on_a_folder_wakes_the_loop_when_the_prefetch_is_due() {
+        let temp = test_dir();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let folder = root.join("sub");
+        std::fs::create_dir(&folder).unwrap();
+        for name in ["a.png", "b.png"] {
+            image::RgbaImage::new(4, 3).save(folder.join(name)).unwrap();
+        }
+        let mut app = app();
+        app.gallery.update_grid(Rect::new(0, 0, 120, 40));
+        app.switch_to_dir(&root);
+        wait_until(|| {
+            app.refresh_from_scanner();
+            app.poll_cell_shape();
+            app.scan_complete && !app.has_pending_work()
+        });
+        assert_eq!(app.filenames, ["..", "sub"]);
+        app.gallery.cursor = 1;
+        assert_eq!(next_timeout(&app, &[]), IDLE_POLL);
+
+        let rested = Instant::now()
+            .checked_sub(Duration::from_millis(290))
+            .unwrap();
+        app.tick_folder_prefetch(rested);
+        assert!(next_timeout(&app, &[]) < Duration::from_millis(100));
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_playing_mpv_window_wakes_the_loop_every_hundred_milliseconds() {
+        let mut app = gallery_app(2);
+        assert_eq!(next_timeout(&app, &[]), IDLE_POLL);
+        let (_exit, exit_rx) = std::sync::mpsc::channel();
+        app.watch_video_window(exit_rx, false);
+        assert_eq!(next_timeout(&app, &[]), super::WINDOW_POLL);
     }
 
     #[test]

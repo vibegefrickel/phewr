@@ -89,38 +89,6 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
         KeyCode::Char('n') => {
             app.toggle_filenames();
         }
-        KeyCode::Left | KeyCode::Char('h') => {
-            app.gallery.move_left();
-            app.pre_decode_hovered();
-        }
-        KeyCode::Right | KeyCode::Char('l') => {
-            app.gallery.move_right();
-            app.pre_decode_hovered();
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            app.gallery.move_up();
-            app.pre_decode_hovered();
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            app.gallery.move_down();
-            app.pre_decode_hovered();
-        }
-        KeyCode::PageUp | KeyCode::Char('b') if ctrl || matches!(key.code, KeyCode::PageUp) => {
-            app.gallery.move_page_up();
-            app.pre_decode_hovered();
-        }
-        KeyCode::PageDown | KeyCode::Char('f') if ctrl || matches!(key.code, KeyCode::PageDown) => {
-            app.gallery.move_page_down();
-            app.pre_decode_hovered();
-        }
-        KeyCode::Char('g') | KeyCode::Home => {
-            app.gallery.move_to_first();
-            app.pre_decode_hovered();
-        }
-        KeyCode::Char('G') | KeyCode::End => {
-            app.gallery.move_to_last();
-            app.pre_decode_hovered();
-        }
         KeyCode::Char(' ') => {
             app.toggle_selection_at_cursor();
         }
@@ -131,12 +99,34 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             app.clear_selection();
         }
         KeyCode::Char('d' | 'D') => delete_key(app, key.code),
-        _ => {}
+        code => {
+            if move_cursor(app, code, ctrl) {
+                app.pre_decode_hovered();
+            }
+        }
     }
     if app.gallery.scroll_offset != prev_offset {
         app.needs_render = true;
     }
     Ok(false)
+}
+
+/// Moves the grid cursor for a movement key and tells if the key was one.
+fn move_cursor(app: &mut App, code: KeyCode, ctrl: bool) -> bool {
+    match code {
+        KeyCode::Left | KeyCode::Char('h') => app.gallery.move_left(),
+        KeyCode::Right | KeyCode::Char('l') => app.gallery.move_right(),
+        KeyCode::Up | KeyCode::Char('k') => app.gallery.move_up(),
+        KeyCode::Down | KeyCode::Char('j') => app.gallery.move_down(),
+        KeyCode::PageUp => app.gallery.move_page_up(),
+        KeyCode::Char('b') if ctrl => app.gallery.move_page_up(),
+        KeyCode::PageDown => app.gallery.move_page_down(),
+        KeyCode::Char('f') if ctrl => app.gallery.move_page_down(),
+        KeyCode::Char('g') | KeyCode::Home => app.gallery.move_to_first(),
+        KeyCode::Char('G') | KeyCode::End => app.gallery.move_to_last(),
+        _ => return false,
+    }
+    true
 }
 
 #[cfg(test)]

@@ -1,3 +1,5 @@
+//! The list of scanned entries that the scanner fills and the UI reads.
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -12,8 +14,8 @@ pub(crate) enum EntryKind {
 /// A subfolder of the scanned folder, or its parent as `..`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FolderEntry {
-    pub path: PathBuf,
-    pub name: String,
+    pub(crate) path: PathBuf,
+    pub(crate) name: String,
 }
 
 struct Inner {
@@ -116,6 +118,7 @@ impl SharedImageList {
         self.len.load(Ordering::Acquire)
     }
 
+    /// Copies the entries from `known_len` on. The list keeps them.
     pub(crate) fn drain_since(&self, known_len: usize) -> (Vec<PathBuf>, Vec<String>) {
         let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let paths = inner.paths[known_len..].to_vec();

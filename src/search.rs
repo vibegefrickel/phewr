@@ -1,3 +1,5 @@
+//! The fuzzy filename search of the gallery.
+
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
