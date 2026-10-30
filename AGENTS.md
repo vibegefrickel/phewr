@@ -322,7 +322,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   of a new video removes all other placements in the same synchronized update
   (`App::clear_before_video`), so the photo of the view before does not show around the frame.
   The frame box is the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the
-  cell box. The frame size stays until the next ffmpeg start. The reader thread holds 2 frames
+  cell box. The frame size stays until the next ffmpeg start. `encoder::MAX_PAYLOAD_BYTES`
+  (64 MiB) caps one Kitty payload, because Ghostty 1.4.0 refuses 65 MiB: a fullscreen image above
+  it shrinks in the writer with Catmull-Rom and gets `c=` only, so the rows follow its aspect
+  ratio. The reader thread holds 2 frames
   (`FRAME_QUEUE`), so a slow terminal blocks ffmpeg on the pipe. The reader of a run owns
   `FRAME_POOL` (5) frame buffers (`FramePool`), so no run allocates a zeroed 6 MB `Vec` per
   frame. A `PooledFrame` returns its buffer on drop, also a frame that the catch-up rule drops,
@@ -499,7 +502,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   terminal stores, with their bytes (4 bytes per pixel, also for a picture that went out as RGB,
   so the count is an upper bound). The grid deletes evicted and replaced ids with `a=d,d=I`
   and trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB). Ghostty evicts
-  unplaced images at 320 MB, and herdr stores each image twice. A trimmed cell sends its
+  unplaced images at 320 MB, and herdr stores each image twice. When the loops run as Kitty
+  animations (`Loops::Animation`), every video frame and every loop frame carries the usage hint
+  `N=1` (transient), so Ghostty 1.4.0 evicts them before the stills. With `Loops::Ticks` no `N`
+  key goes out, because the protocol does not say that a terminal ignores an unknown key. Stills
+  and the fullscreen image carry no hint. A trimmed cell sends its
   picture again with `a=T`. The in-memory cache holds `max(200, 2 * visible cells)` entries
   and at most `THUMB_CACHE_BYTE_LIMIT` (512 MB) of padded pixels. It never evicts a visible
   cell. The cache also holds the parked sharp thumbnails of the folders that the grid left
