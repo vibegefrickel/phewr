@@ -2,7 +2,6 @@
 name = "viewr"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.99"
 
 # Not on crates.io: releases are Apple Silicon macOS binaries on Codeberg (`just release`).
 publish = false

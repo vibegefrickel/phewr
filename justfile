@@ -36,7 +36,8 @@ fix:
 test *ARGS:
     if command -v cargo-nextest >/dev/null; then cargo nextest run --release {{ARGS}}; else cargo test --release {{ARGS}}; fi
 
-# Also decode real files: VIEWR_TEST_JPEG, _HEIC, _AVIF, _JXL, _RAW and _PSD name one file each.
+# Also decode real files: VIEWR_TEST_JPEG, _HEIC, _AVIF, _JXL, _RAW, _PSD, _HDR_VIDEO and _SDR_VIDEO
+# name one file each, and VIEWR_BENCH_COLORSPACE=srgb measures with the sRGB target.
 # A test without its variable skips with a note. FILTER selects tests, for example `just test-real heic`.
 test-real *FILTER:
     cargo test --release -- --include-ignored --show-output {{FILTER}}

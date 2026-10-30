@@ -146,7 +146,7 @@ viewr plays a video in the terminal with its own player. ffmpeg from Homebrew de
 | `Space` | Pause / resume a running slideshow |
 | `Home` `End` | First / last file |
 | `p` | Continue in the mpv window, with sound |
-| `q` `Esc` | Back to the view that opened the video |
+| `q` `Esc` | Back to the gallery |
 | `?` | Help |
 
 `q` or `Esc` in the player goes back to the gallery in one press, with the cursor on the video, also when a step in the fullscreen view opened the video. After the mpv window, viewr goes back to the view that opened the window. In the fullscreen view, the video then shows "video: Enter plays, p opens the mpv window".

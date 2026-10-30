@@ -64,7 +64,8 @@ pub(crate) enum VideoPlayer {
 impl VideoPlayer {
     /// Read the config value; an unknown value returns `None`, so the rest of the file still counts.
     ///
-    /// `builtin` was the name of the player in the terminal before 0.3, so it still means `terminal`.
+    /// `builtin` was the name of the player in the terminal in older versions, so it still means
+    /// `terminal`.
     fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "terminal" | "builtin" => Some(Self::Terminal),

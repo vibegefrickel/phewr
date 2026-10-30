@@ -7,7 +7,6 @@
 //! has work, and a cursor move, a folder switch, a zoom, a resize or the quit cancel it.
 
 use super::cell_shape::SHAPE_SAMPLE;
-use super::scan::sort_by_name;
 use super::thumbnails::{thumb_target_px, warm_disk_cache};
 use super::{App, ViewMode};
 use crate::decode::shape;
@@ -165,15 +164,13 @@ struct FirstScreen {
 /// gets no prefetch. Its grid holds one picture at most, so the prefetch saves one decode at
 /// most.
 fn first_screen(request: &Request) -> FirstScreen {
-    let (files, names) = scanner::files_of(&request.folder);
+    let (folders, files, names) = scanner::folder_listing(&request.folder);
     if files.len() < 2 {
         return FirstScreen::default();
     }
-    // The scan sample is the first files in the order of the scan, before the sort.
+    // The scan samples the first files by name, and the files come sorted.
     let aspect = shape::folder_aspect(&files[..files.len().min(SHAPE_SAMPLE)]);
-    let mut media: Vec<(PathBuf, String)> = files.into_iter().zip(names).collect();
-    sort_by_name(&mut media);
-    let folders = scanner::subfolders(&request.folder);
+    let media: Vec<(PathBuf, String)> = files.into_iter().zip(names).collect();
     let folder_count = folders.len();
     let entries: Vec<PathBuf> = folders
         .into_iter()

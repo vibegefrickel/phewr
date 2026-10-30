@@ -6,7 +6,7 @@ all-features = true
 
 [advisories]
 # RustSec database. Unmaintained crates we pull in directly are listed with the reason.
-yanked = "warn"
+yanked = "deny"
 unmaintained = "workspace"
 ignore = []
 

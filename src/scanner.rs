@@ -110,13 +110,22 @@ fn scan_paths(paths: Vec<PathBuf>, list: &SharedImageList) {
     }
 }
 
-/// The supported files of `dir` and their names, in the order that `spawn` pushes them for one
-/// folder: sorted by `name_key`. The folder prefetch lists a folder as a switch to it would,
-/// without a thread and without the errors.
+/// The supported files of `dir` and their names, sorted by `name_key`, for the tests.
+#[cfg(test)]
 pub(crate) fn files_of(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
+    let (_, files, names) = folder_listing(dir);
+    (files, names)
+}
+
+/// The subfolders and the supported files of `dir` from one read, as a switch to it lists them:
+/// the folders sorted after `..`, the files and their names sorted by `name_key`. The folder
+/// prefetch reads a folder one time with it, without a thread and without the errors.
+pub(crate) fn folder_listing(dir: &Path) -> (Vec<FolderEntry>, Vec<PathBuf>, Vec<String>) {
     let list = SharedImageList::new();
-    list.push_batch(read_folder(dir, &list, true).files);
-    list.entries_since(0)
+    let listing = read_folder(dir, &list, true);
+    list.push_batch(listing.files);
+    let (files, names) = list.entries_since(0);
+    (folder_entries(dir, listing.folder_names), files, names)
 }
 
 /// The canonical form of `p`, or `p` itself when the file system cannot resolve it.
@@ -124,14 +133,12 @@ pub(crate) fn canonicalize_or_self(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// The entries of the subfolders of `dir`, sorted by name, after `..` for the parent. A hidden
-/// folder and a symlink stay out. A folder that viewr cannot read stays in: `Enter` on it shows
-/// the read error, and the check would cost one `opendir` per subfolder at each switch.
+/// The entries of the subfolders of `dir`, sorted by name, after `..` for the parent, for the
+/// tests. A hidden folder and a symlink stay out. A folder that viewr cannot read stays in:
+/// `Enter` on it shows the read error, and a check would cost one `opendir` per subfolder.
+#[cfg(test)]
 pub(crate) fn subfolders(dir: &Path) -> Vec<FolderEntry> {
-    folder_entries(
-        dir,
-        read_folder(dir, &SharedImageList::new(), false).folder_names,
-    )
+    folder_listing(dir).0
 }
 
 /// The sorted entries for the folder names of `dir`, with `..` first. The paths are canonical, so

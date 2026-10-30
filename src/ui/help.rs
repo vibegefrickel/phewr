@@ -30,6 +30,7 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("+ / -, Shift+wheel", "Larger / smaller grid"),
     ("0", "Reset thumbnail size"),
     ("Wheel", "Scroll the grid"),
+    ("PgDn/PgUp, ^f/^b", "Page down / up"),
     ("n", "Toggle filename labels"),
     ("i / right click", "Toggle info panel"),
     ("s", "Slideshow from cursor"),
@@ -55,6 +56,8 @@ const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
     ("Home / End", "First / last"),
     ("+ / -, wheel", "Zoom in / out"),
     ("0", "Reset zoom to fit"),
+    #[cfg(feature = "video")]
+    ("Enter", "Play a video or an animation"),
     ("h/j/k/l, drag", "Pan when zoomed"),
     ("i / right click", "Toggle info panel"),
     ("s", "Start / stop slideshow"),
@@ -73,6 +76,8 @@ const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
     ("\u{2190}/\u{2192}, h j / k l", "Previous / next file"),
     #[cfg(feature = "video")]
     ("Home / End", "First / last file"),
+    #[cfg(feature = "video")]
+    ("n / N", "Next / previous file"),
     #[cfg(feature = "video")]
     ("p", "Open in mpv, with sound"),
     #[cfg(feature = "video")]

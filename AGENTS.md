@@ -50,7 +50,8 @@ libjpeg-turbo statically and does not build it with cmake.
 
 The repository pins the toolchain, the formatter and the lints:
 
-- `rust-toolchain.toml`: stable, with rustfmt, clippy, rust-analyzer and llvm-tools. Edition 2024.
+- `rust-toolchain.toml`: stable, with rustfmt, clippy, rust-analyzer, rust-src and llvm-tools.
+  Edition 2024.
 - `rustfmt.toml`: 2024 style, stable options only.
 - `Cargo.toml`, the `[lints]` tables: clippy `pedantic` plus restriction lints. In
   `just check`, every warning is an error.
@@ -63,7 +64,7 @@ The repository pins the toolchain, the formatter and the lints:
 Files at run time:
 
 - Config: `~/.config/viewr/config.toml`, or `$XDG_CONFIG_HOME/viewr/config.toml`. The sections
-  are `[gallery]`, `[slideshow]`, `[info]` and `[video]`.
+  are `[gallery]`, `[slideshow]`, `[info]`, `[video]` and `[terminal]`.
 - State (the remembered zoom levels): `~/.local/state/viewr/state.toml`.
 - Thumbnail cache: `~/Library/Caches/viewr/`, QOI files and the `.loop` files of the grid loops,
   pruned at 512 MB.
@@ -250,9 +251,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `has_extension(path, list)` is the
   extension test of the scanner and the decoders, without an allocation. `name_key` is the sort
   key of the batches and the folders (the lowercase name, then the path). `read_folder` is the one
-  `read_dir` of a folder argument for its folders and its files. `subfolders` lists the
-  subfolders of one folder argument, `..` first, and walks folders only. `files_of` lists the
-  files of one folder in the order of the scan, without a thread.
+  `read_dir` of a folder argument for its folders and its files. `folder_listing` gives the
+  subfolders (`..` first) and the sorted files of one folder from one read, without a thread and
+  without the errors, for the folder prefetch. `subfolders` and `files_of` are its test-only
+  halves.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
   `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
 - `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. A job sends a
@@ -273,7 +275,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   first-frame thumbnails and the video extensions.
 - `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
   and the `Runner` trait for the process start.
-- `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
+- `encoder/`: the Kitty graphics protocol (`KittyBackend` in `kitty.rs`, the types in `mod.rs`).
+  `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
   the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
   frame, and `chosen_loops` reads `VIEWR_KITTY_LOOPS` and the config key.
@@ -595,7 +598,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Folder prefetch:** after the cursor rests on a folder cell for `FOLDER_PREFETCH_DELAY`
   (300 ms) and `App::has_pending_work` is false, one thread decodes the first screen of that
   folder into the disk cache (`app/folder_prefetch.rs`). It computes what Enter computes, with
-  the same functions (`scanner::files_of`, the shape sample, `sort_by_name`, `folder_zoom_rows`,
+  the same functions (`scanner::folder_listing`, the shape sample, `folder_zoom_rows`,
   `GalleryState::for_folder`), and takes the union of both cursor orders. It pauses before each
   file while the grid has work, so one running decode can overlap the grid. A cursor move, a
   folder change, a zoom, a resize, a mode change or the quit cancels it, and the next start
