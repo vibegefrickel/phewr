@@ -157,6 +157,8 @@ pub(crate) struct App {
 
     // Async filter
     filter_rx: Option<mpsc::Receiver<Vec<usize>>>,
+    /// The long-lived thread behind `filter_rx`.
+    filter_worker: crate::search::FilterWorker,
     /// The cursor position for the next filter result. A delete sets it, a new query clears it.
     filter_cursor: Option<usize>,
 
@@ -274,6 +276,7 @@ impl App {
             shape_requested: false,
             folder_prefetch: folder_prefetch::FolderPrefetch::default(),
             filter_rx: None,
+            filter_worker: crate::search::FilterWorker::default(),
             filter_cursor: None,
             thumb_jobs: thumbnails::ThumbnailJobs::new(),
             stale_image_ids: Vec::new(),

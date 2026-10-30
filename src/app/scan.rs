@@ -2,10 +2,7 @@
 
 use super::App;
 use super::cell_shape::SHAPE_SAMPLE;
-use crate::search;
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::thread;
 
 /// The order of the files after a scan: `scanner::name_key`, the key of the scanner batches, so
 /// the end of the scan keeps the order of the first screen. The folder prefetch sorts the same way.
@@ -56,9 +53,12 @@ impl App {
         }
     }
 
-    /// Sort the files by name. The folders stay in front, in the order of the scanner.
+    /// Sort the files by name. The folders stay in front, in the order of the scanner. A folder
+    /// scan comes out sorted, so then the list stays as it is: no sort, no copy, no redraw.
     fn finalize_scan_order(&mut self) {
-        if self.file_count() < 2 {
+        if self.file_count() < 2
+            || crate::scanner::is_sorted_by_name(&self.images[self.first_file()..])
+        {
             return;
         }
 
@@ -117,19 +117,10 @@ impl App {
             return;
         }
 
-        let query = self.gallery.search_query.clone();
-        let filenames = self.filenames.clone();
-        let (tx, rx) = mpsc::channel();
-        self.filter_rx = Some(rx);
-
-        thread::spawn(move || {
-            let results = search::filter(&query, &filenames);
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "a closed receiver means that nobody waits for the result"
-            )]
-            let _ = tx.send(results);
-        });
+        self.filter_rx = Some(
+            self.filter_worker
+                .submit(&self.gallery.search_query, &self.filenames),
+        );
     }
 
     pub(crate) fn poll_filter(&mut self) {
@@ -194,6 +185,29 @@ mod tests {
     }
 
     #[test]
+    fn a_scan_that_arrives_sorted_keeps_the_list_and_the_screen() {
+        let list = SharedImageList::new();
+        let mut app = App::new((8, 16), list.clone());
+        list.push_batch(vec![PathBuf::from("/x/a.png"), PathBuf::from("/x/B.png")]);
+        list.push_batch(vec![PathBuf::from("/x/c.png")]);
+        app.refresh_from_scanner();
+        app.gallery.cursor = 1;
+        app.graphics_storage_dirty = false;
+
+        list.mark_complete();
+        app.refresh_from_scanner();
+
+        assert!(!app.is_scanning());
+        assert_eq!(app.filenames, ["a.png", "B.png", "c.png"]);
+        assert_eq!(app.gallery.cursor, 1);
+        assert_eq!(app.gallery.filtered_indices, vec![0, 1, 2]);
+        assert!(
+            !app.graphics_storage_dirty,
+            "the sorted list needs no redraw"
+        );
+    }
+
+    #[test]
     fn a_single_scanned_image_stays_in_the_grid() {
         let list = SharedImageList::new();
         let mut app = App::new((8, 16), list.clone());
@@ -253,5 +267,19 @@ mod tests {
         app.update_filter();
         assert_eq!(app.gallery.filtered_indices, vec![0, 1, 2]);
         assert!(app.filter_rx.is_none());
+    }
+
+    #[test]
+    fn the_result_of_an_old_query_never_wins() {
+        let mut app = app_with(&["apple.png", "berry.png", "cherry.png"]);
+        app.gallery.search_query = "app".to_owned();
+        app.update_filter();
+        app.gallery.search_query = "che".to_owned();
+        app.update_filter();
+        wait_until(|| {
+            app.poll_filter();
+            app.filter_rx.is_none()
+        });
+        assert_eq!(app.gallery.filtered_indices, vec![2]);
     }
 }

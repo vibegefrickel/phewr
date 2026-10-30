@@ -1,6 +1,8 @@
 //! The background directory scan and the lists of supported extensions.
 
 use crate::image_list::{FolderEntry, SharedImageList};
+use std::ffi::OsString;
+use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
 use std::thread;
 
@@ -65,50 +67,55 @@ pub(crate) fn is_supported(path: &Path) -> bool {
 /// walk the tree. A list of several paths has no one parent, so it lists no folders.
 pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
     thread::spawn(move || {
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
-        // The one path of a single argument is stat once. A long list stats lazily, so that
-        // the first batch does not wait for all the paths.
-        let single_is_dir = match paths.as_slice() {
-            [only] => Some(only.is_dir()),
-            _ => None,
-        };
-        if let [dir] = paths.as_slice()
-            && single_is_dir == Some(true)
-        {
-            list.push_folders(subfolders(dir));
+        match paths.as_slice() {
+            [dir] if dir.is_dir() => scan_folder(dir, &list),
+            _ => scan_paths(paths, &list),
         }
-
-        for path in paths {
-            if single_is_dir.unwrap_or_else(|| path.is_dir()) {
-                scan_dir(&path, &list, &mut batch);
-            } else if is_supported(&path) {
-                batch.push(path);
-                if batch.len() >= BATCH_SIZE {
-                    flush_batch(&list, &mut batch);
-                }
-            } else {
-                list.push_error(format!("unsupported media format: {}", path.display()));
-            }
-        }
-
-        if !batch.is_empty() {
-            flush_batch(&list, &mut batch);
-        }
-
         list.mark_complete();
     });
 }
 
-/// The supported files of `dir` and their names, in the order that `spawn` pushes them: the
-/// directory order in batches, each batch sorted by lowercase name. The folder prefetch lists a
-/// folder as a switch to it would, without a thread and without the errors.
+/// Scan one folder argument: one `read_dir`, one sort. The folders must come before the first
+/// file, so the list waits for the end of the read. The files then go out sorted in batches.
+fn scan_folder(dir: &Path, list: &SharedImageList) {
+    let listing = read_folder(dir, list, true);
+    list.push_folders(folder_entries(dir, listing.folder_names));
+    let mut files = listing.files.into_iter();
+    loop {
+        let batch: Vec<PathBuf> = files.by_ref().take(BATCH_SIZE).collect();
+        if batch.is_empty() {
+            break;
+        }
+        list.push_batch(batch);
+    }
+}
+
+/// Scan a list of files and folders: no subfolders, and each batch sorted for the first screen.
+fn scan_paths(paths: Vec<PathBuf>, list: &SharedImageList) {
+    let mut batch = Vec::with_capacity(BATCH_SIZE);
+    for path in paths {
+        if path.is_dir() {
+            scan_dir(&path, list, &mut batch);
+        } else if is_supported(&path) {
+            batch.push(path);
+            if batch.len() >= BATCH_SIZE {
+                flush_batch(list, &mut batch);
+            }
+        } else {
+            list.push_error(format!("unsupported media format: {}", path.display()));
+        }
+    }
+    if !batch.is_empty() {
+        flush_batch(list, &mut batch);
+    }
+}
+
+/// The supported files of `dir` and their names, in the order that `spawn` pushes them for one
+/// folder: sorted by `name_key`. The folder prefetch lists a folder as a switch to it would,
+/// without a thread and without the errors.
 pub(crate) fn files_of(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
     let list = SharedImageList::new();
-    let mut batch = Vec::with_capacity(BATCH_SIZE);
-    scan_dir(dir, &list, &mut batch);
-    if !batch.is_empty() {
-        flush_batch(&list, &mut batch);
-    }
+    list.push_batch(read_folder(dir, &list, true).files);
     list.entries_since(0)
 }
 
@@ -118,22 +125,24 @@ pub(crate) fn canonicalize_or_self(p: &Path) -> PathBuf {
 }
 
 /// The entries of the subfolders of `dir`, sorted by name, after `..` for the parent. A hidden
-/// folder, a symlink and a folder that viewr cannot read stay out. The paths are canonical, so
-/// that the cursor can find the folder that the user came from after a step to the parent.
+/// folder and a symlink stay out. A folder that viewr cannot read stays in: `Enter` on it shows
+/// the read error, and the check would cost one `opendir` per subfolder at each switch.
 pub(crate) fn subfolders(dir: &Path) -> Vec<FolderEntry> {
+    folder_entries(
+        dir,
+        read_folder(dir, &SharedImageList::new(), false).folder_names,
+    )
+}
+
+/// The sorted entries for the folder names of `dir`, with `..` first. The paths are canonical, so
+/// that the cursor can find the folder that the user came from after a step to the parent.
+fn folder_entries(dir: &Path, names: Vec<OsString>) -> Vec<FolderEntry> {
     let dir = canonicalize_or_self(dir);
-    let mut folders: Vec<FolderEntry> = std::fs::read_dir(&dir)
+    let mut folders: Vec<FolderEntry> = names
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
-            // A symlink stays out: its canonical parent is not the folder of the link, so
-            // `..` from inside would not lead back here.
-            let is_dir = entry.file_type().is_ok_and(|file_type| file_type.is_dir());
-            (is_dir && !name.starts_with('.') && std::fs::read_dir(&path).is_ok())
-                .then_some(FolderEntry { path, name })
+        .map(|name| FolderEntry {
+            path: dir.join(&name),
+            name: name.to_string_lossy().into_owned(),
         })
         .collect();
     folders.sort_by_cached_key(|folder| name_key(&folder.path));
@@ -149,8 +158,58 @@ fn parent_entry(dir: &Path) -> Option<FolderEntry> {
     })
 }
 
+/// What one directory entry is for the scan.
+enum Item {
+    Folder(OsString),
+    File(PathBuf),
+}
+
+/// The folders and the supported files of one directory, from one `read_dir`.
+struct Listing {
+    folder_names: Vec<OsString>,
+    /// Sorted by `name_key`.
+    files: Vec<PathBuf>,
+}
+
+/// Read `dir` one time. The read errors go to `list`. Without `want_files`, the files cost no
+/// stat and no sort.
+fn read_folder(dir: &Path, list: &SharedImageList, want_files: bool) -> Listing {
+    let mut listing = Listing {
+        folder_names: Vec::new(),
+        files: Vec::new(),
+    };
+    walk(dir, list, want_files, |item| match item {
+        Item::Folder(name) => listing.folder_names.push(name),
+        Item::File(path) => listing.files.push(path),
+    });
+    listing.files.sort_by_cached_key(|path| name_key(path));
+    listing
+}
+
 fn scan_dir(dir: &Path, list: &SharedImageList, batch: &mut Vec<PathBuf>) {
-    let entries = match std::fs::read_dir(dir) {
+    walk(dir, list, true, |item| {
+        if let Item::File(path) = item {
+            batch.push(path);
+            if batch.len() >= BATCH_SIZE {
+                flush_batch(list, batch);
+            }
+        }
+    });
+}
+
+/// `read_dir`, and the one place that the tests count.
+fn open_dir(dir: &Path) -> std::io::Result<std::fs::ReadDir> {
+    #[cfg(test)]
+    tests::OPENED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(dir.to_path_buf());
+    std::fs::read_dir(dir)
+}
+
+/// Visit the folders (not hidden, no symlink) and the supported files of `dir`.
+fn walk(dir: &Path, list: &SharedImageList, want_files: bool, mut visit: impl FnMut(Item)) {
+    let entries = match open_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
             list.push_error(format!("{}: {error}", dir.display()));
@@ -161,32 +220,8 @@ fn scan_dir(dir: &Path, list: &SharedImageList, batch: &mut Vec<PathBuf>) {
     for entry in entries {
         match entry {
             Ok(entry) => {
-                let path = entry.path();
-                match entry.file_type() {
-                    Ok(file_type) => {
-                        // `file_type` does not follow symlinks, so a link to a file is
-                        // neither `is_file()` nor `is_dir()`. `metadata()` follows the
-                        // link, so that linked media shows up too.
-                        let is_regular_file = if file_type.is_symlink() {
-                            match std::fs::metadata(&path) {
-                                Ok(target) => target.is_file(),
-                                Err(error) => {
-                                    list.push_error(format!("{}: {error}", path.display()));
-                                    false
-                                }
-                            }
-                        } else {
-                            file_type.is_file()
-                        };
-
-                        if is_regular_file && is_supported(&path) {
-                            batch.push(path);
-                            if batch.len() >= BATCH_SIZE {
-                                flush_batch(list, batch);
-                            }
-                        }
-                    }
-                    Err(error) => list.push_error(format!("{}: {error}", path.display())),
+                if let Some(item) = classify(&entry, list, want_files) {
+                    visit(item);
                 }
             }
             Err(error) => list.push_error(format!("{}: {error}", dir.display())),
@@ -194,15 +229,67 @@ fn scan_dir(dir: &Path, list: &SharedImageList, batch: &mut Vec<PathBuf>) {
     }
 }
 
+/// Sort one entry into a folder or a supported file, so that `walk` has one rule for both lists.
+fn classify(entry: &DirEntry, list: &SharedImageList, want_files: bool) -> Option<Item> {
+    let path = entry.path();
+    let file_type = match entry.file_type() {
+        Ok(file_type) => file_type,
+        Err(error) => {
+            list.push_error(format!("{}: {error}", path.display()));
+            return None;
+        }
+    };
+    // A symlink to a folder stays out: its canonical parent is not the folder of the link, so
+    // `..` from inside would not lead back here.
+    if file_type.is_dir() {
+        let name = entry.file_name();
+        return (!name.to_string_lossy().starts_with('.')).then_some(Item::Folder(name));
+    }
+    if !want_files {
+        return None;
+    }
+    // `file_type` does not follow symlinks, so a link to a file is neither `is_file()` nor
+    // `is_dir()`. `metadata()` follows the link, so that linked media shows up too.
+    let is_regular_file = if file_type.is_symlink() {
+        match std::fs::metadata(&path) {
+            Ok(target) => target.is_file(),
+            Err(error) => {
+                list.push_error(format!("{}: {error}", path.display()));
+                false
+            }
+        }
+    } else {
+        file_type.is_file()
+    };
+    (is_regular_file && is_supported(&path)).then_some(Item::File(path))
+}
+
 /// The one sort key of the file lists: the lowercase file name, then the path. The batches of the
 /// scan and the folders use it, and so must the sort at the end of the scan (`sort_by_name` in
 /// `app/scan.rs`), so that the first screen does not reorder when the scan ends.
 pub(crate) fn name_key(path: &Path) -> (String, PathBuf) {
-    let name = path
-        .file_name()
+    (lowercase_name(path), path.to_path_buf())
+}
+
+/// The lowercase file name, the first part of `name_key`.
+fn lowercase_name(path: &Path) -> String {
+    path.file_name()
         .map(|name| name.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    (name, path.to_path_buf())
+        .unwrap_or_default()
+}
+
+/// True when `paths` already follow `name_key`. It builds one key at a time and copies no path,
+/// so the end of the scan can skip the sort and the list copy when the scanner sorted the files.
+pub(crate) fn is_sorted_by_name(paths: &[PathBuf]) -> bool {
+    let mut keys = paths.iter().map(|path| (lowercase_name(path), path));
+    let Some(mut previous) = keys.next() else {
+        return true;
+    };
+    keys.all(|key| {
+        let in_order = previous <= key;
+        previous = key;
+        in_order
+    })
 }
 
 fn flush_batch(list: &SharedImageList, batch: &mut Vec<PathBuf>) {
@@ -213,13 +300,30 @@ fn flush_batch(list: &SharedImageList, batch: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BATCH_SIZE, files_of, is_supported, parent_entry, scan_dir, spawn, subfolders};
+    use super::{
+        BATCH_SIZE, files_of, is_sorted_by_name, is_supported, name_key, parent_entry, scan_dir,
+        spawn, subfolders,
+    };
     use crate::image_list::SharedImageList;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    /// Every directory that `open_dir` opened, so that a test counts the `read_dir` calls.
+    pub(super) static OPENED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    fn opened_count(dir: &Path) -> usize {
+        let opened = OPENED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        opened
+            .iter()
+            .filter(|opened| opened.starts_with(dir))
+            .count()
+    }
 
     /// Wait at most 2 s for the scanner thread, so a hang fails the test.
     fn wait_for_complete(list: &SharedImageList) {
@@ -365,23 +469,103 @@ mod tests {
     }
 
     #[test]
-    fn subfolders_come_sorted_after_the_parent_without_hidden_or_unreadable_ones() {
+    fn subfolders_come_sorted_after_the_parent_without_hidden_ones() {
         let root = tempfile::tempdir().unwrap();
         let dir = fs::canonicalize(root.path()).unwrap();
-        for name in ["zebra", "Apple", ".hidden", "locked", "mango"] {
+        for name in ["zebra", "Apple", ".hidden", "mango"] {
             fs::create_dir(dir.join(name)).unwrap();
         }
         fs::write(dir.join("photo.jpg"), b"synthetic").unwrap();
-        let locked = dir.join("locked");
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
 
         let folders = subfolders(&dir);
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
 
         let names: Vec<&str> = folders.iter().map(|folder| folder.name.as_str()).collect();
         assert_eq!(names, ["..", "Apple", "mango", "zebra"]);
         assert_eq!(folders[0].path, dir.parent().unwrap());
         assert_eq!(folders[1].path, dir.join("Apple"));
+    }
+
+    #[test]
+    fn an_unreadable_subfolder_is_listed_and_fails_on_enter() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = fs::canonicalize(root.path()).unwrap();
+        let locked = dir.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let names: Vec<String> = subfolders(&dir)
+            .into_iter()
+            .map(|folder| folder.name)
+            .collect();
+        // Entering the folder is a scan of that folder: the read error is the note.
+        let list = SharedImageList::new();
+        let mut batch: Vec<PathBuf> = Vec::new();
+        scan_dir(&locked, &list, &mut batch);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(names, ["..", "locked"]);
+        let errors = list.drain_errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("locked"), "{errors:?}");
+    }
+
+    #[test]
+    fn one_folder_argument_reads_each_directory_one_time() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = fs::canonicalize(root.path()).unwrap();
+        for index in 0..20 {
+            fs::create_dir(dir.join(format!("sub{index:02}"))).unwrap();
+        }
+        fs::write(dir.join("photo.jpg"), b"synthetic").unwrap();
+
+        let list = SharedImageList::new();
+        spawn(vec![dir.clone()], list.clone());
+        wait_for_complete(&list);
+
+        assert_eq!(list.folder_count(), 21);
+        assert_eq!(
+            opened_count(&dir),
+            1,
+            "no second read, no opendir per subfolder"
+        );
+    }
+
+    #[test]
+    fn one_folder_comes_out_in_the_final_order_from_the_first_batch() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = fs::canonicalize(root.path()).unwrap();
+        let count = 2 * BATCH_SIZE + 5;
+        for index in (0..count).rev() {
+            let name = if index % 2 == 0 { "img" } else { "IMG" };
+            fs::write(dir.join(format!("{name}{index:03}.png")), b"synthetic").unwrap();
+        }
+
+        let list = SharedImageList::new();
+        spawn(vec![dir], list.clone());
+        wait_for_complete(&list);
+
+        let (paths, _) = list.entries_since(list.folder_count());
+        let mut expected = paths.clone();
+        expected.sort_by_cached_key(|path| name_key(path));
+        assert_eq!(paths.len(), count);
+        assert_eq!(paths, expected);
+        assert!(is_sorted_by_name(&paths));
+    }
+
+    #[test]
+    fn is_sorted_by_name_follows_the_name_key() {
+        let paths = |names: &[&str]| -> Vec<PathBuf> {
+            names
+                .iter()
+                .map(|name| PathBuf::from("/x").join(name))
+                .collect()
+        };
+        assert!(is_sorted_by_name(&[]));
+        assert!(is_sorted_by_name(&paths(&[
+            "a.png", "b.png", "B2.png", "C.png"
+        ])));
+        assert!(!is_sorted_by_name(&paths(&["b.png", "A.png"])));
+        assert!(!is_sorted_by_name(&paths(&["B.png", "a.png"])));
     }
 
     #[test]
@@ -514,5 +698,29 @@ mod tests {
         assert_eq!(files.len(), count, "no folder, no unsupported file");
         assert_eq!(files, scanned);
         assert_eq!(names, scanned_names);
+    }
+
+    /// Time `spawn` on `VIEWR_TEST_DIR`: the first entry and the end of the scan, best of 20.
+    #[test]
+    #[ignore = "timing: needs VIEWR_TEST_DIR"]
+    fn bench_scan_of_a_folder() {
+        let Some(dir) = std::env::var_os("VIEWR_TEST_DIR") else {
+            return;
+        };
+        let (mut first, mut complete) = (Duration::MAX, Duration::MAX);
+        for _ in 0..20 {
+            let list = SharedImageList::new();
+            let start = Instant::now();
+            spawn(vec![PathBuf::from(&dir)], list.clone());
+            while list.len() == 0 {
+                thread::yield_now();
+            }
+            first = first.min(start.elapsed());
+            while !list.is_complete() {
+                thread::yield_now();
+            }
+            complete = complete.min(start.elapsed());
+        }
+        eprintln!("bench scan: first entry {first:?}, complete {complete:?}");
     }
 }
