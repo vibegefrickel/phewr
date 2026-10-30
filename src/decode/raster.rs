@@ -43,12 +43,20 @@ pub(crate) fn decode_jpeg_bytes(
     Ok(Decoded { image, color })
 }
 
+/// The stored size of a file of the `image` route, from the header. `open` takes the format from
+/// the extension first: TGA has no magic bytes.
+pub(crate) fn header_dimensions(path: &Path) -> Option<(u32, u32)> {
+    ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
 pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<Decoded> {
-    // libjpeg-turbo is the fast path, but it rejects some JPEG variants the
-    // pure-Rust decoder accepts (and vice versa), so a turbo failure falls
-    // through to `image` rather than aborting. Remember turbo's error so that if
-    // the fallback also fails we can report *both* reasons instead of only the
-    // fallback's — otherwise a genuine turbo diagnosis is lost.
+    // libjpeg-turbo rejects some JPEG variants that the `image` crate accepts, so a turbo failure
+    // falls back to `image`. If the fallback fails too, the error reports both reasons.
     #[cfg(not(feature = "turbo"))]
     let _ = target;
     #[cfg(feature = "turbo")]

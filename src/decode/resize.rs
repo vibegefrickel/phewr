@@ -21,13 +21,6 @@ pub(crate) fn load_and_resize_px(
     Ok(decode_image(path, hint, embedded)?.fit_within(target_w, target_h))
 }
 
-/// Fit `img` into the box. The decodes fit through `Decoded::fit_within`, which also converts
-/// the colors.
-#[cfg(test)]
-pub(crate) fn resize_decoded_to_dims(img: &DynamicImage, max_w: u32, max_h: u32) -> RgbaImage {
-    fit_rgba_within(img.to_rgba8(), max_w, max_h)
-}
-
 /// Scale `rgba` down into `max_w` x `max_h` with its aspect ratio, and never up. An owned image
 /// needs no second copy.
 pub(crate) fn fit_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
@@ -102,22 +95,21 @@ pub(crate) fn resize_to_exact(img: &DynamicImage, dst_w: u32, dst_h: u32) -> Rgb
 
 #[cfg(test)]
 mod tests {
-    use super::{load_and_resize_px, resize_decoded_to_dims, resize_to_exact};
+    use super::{fit_rgba_within, load_and_resize_px, resize_to_exact};
     use crate::decode::EmbeddedThumbnail;
     use crate::test_support::test_dir;
     use image::{DynamicImage, RgbaImage};
 
+    /// Fit `img` into the box without the color conversion of `Decoded::fit_within`.
+    fn fit_decoded_within(img: &DynamicImage, max_w: u32, max_h: u32) -> RgbaImage {
+        fit_rgba_within(img.to_rgba8(), max_w, max_h)
+    }
+
     #[test]
     fn resize_preserves_aspect_ratio_without_upscaling() {
         let image = DynamicImage::new_rgba8(100, 50);
-        assert_eq!(
-            resize_decoded_to_dims(&image, 20, 20).dimensions(),
-            (20, 10)
-        );
-        assert_eq!(
-            resize_decoded_to_dims(&image, 200, 200).dimensions(),
-            (100, 50)
-        );
+        assert_eq!(fit_decoded_within(&image, 20, 20).dimensions(), (20, 10));
+        assert_eq!(fit_decoded_within(&image, 200, 200).dimensions(), (100, 50));
     }
 
     #[test]
@@ -146,6 +138,6 @@ mod tests {
             .is_err()
         );
         let image = DynamicImage::new_rgba8(10, 0);
-        assert_eq!(resize_decoded_to_dims(&image, 4, 4).dimensions(), (10, 0));
+        assert_eq!(fit_decoded_within(&image, 4, 4).dimensions(), (10, 0));
     }
 }

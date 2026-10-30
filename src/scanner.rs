@@ -1,3 +1,5 @@
+//! The background directory scan and the lists of supported extensions.
+
 use crate::image_list::{FolderEntry, SharedImageList};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -32,23 +34,27 @@ pub(crate) const LIBHEIF_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "avif"];
 #[cfg(feature = "video")]
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
 
+/// The extension test of the scanner and the decoders: it compares without an allocation and ignores ASCII case.
+pub(crate) fn has_extension(path: &Path, list: &[&str]) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| list.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+}
+
 pub(crate) fn is_supported(path: &Path) -> bool {
-    let ext = path.extension().and_then(|e| e.to_str());
-    let Some(ext) = ext else { return false };
-    let ext = ext.to_ascii_lowercase();
-    if IMAGE_EXTENSIONS.contains(&ext.as_str()) || JXL_EXTENSIONS.contains(&ext.as_str()) {
+    if has_extension(path, IMAGE_EXTENSIONS) || has_extension(path, JXL_EXTENSIONS) {
         return true;
     }
     #[cfg(all(feature = "sips", target_os = "macos"))]
-    if SIPS_EXTENSIONS.contains(&ext.as_str()) {
+    if has_extension(path, SIPS_EXTENSIONS) {
         return true;
     }
     #[cfg(feature = "heic")]
-    if LIBHEIF_EXTENSIONS.contains(&ext.as_str()) {
+    if has_extension(path, LIBHEIF_EXTENSIONS) {
         return true;
     }
     #[cfg(feature = "video")]
-    if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+    if has_extension(path, VIDEO_EXTENSIONS) {
         return true;
     }
     false

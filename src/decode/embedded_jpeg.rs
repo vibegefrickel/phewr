@@ -84,10 +84,7 @@ impl EmbeddedJpeg {
 
 /// True for a file of the sips route that can carry an embedded JPEG: camera RAW and PSD.
 pub(crate) fn may_have_embedded_jpeg(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return false;
-    };
-    let listed = |list: &[&str]| list.iter().any(|e| ext.eq_ignore_ascii_case(e));
+    let listed = |list: &[&str]| scanner::has_extension(path, list);
     listed(scanner::SIPS_EXTENSIONS) && !listed(WITHOUT_PREVIEW)
 }
 

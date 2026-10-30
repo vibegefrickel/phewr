@@ -14,9 +14,7 @@ use std::thread;
 
 /// Send HEIC, HEIF and AVIF to libheif, because the `image` crate decodes none of them.
 pub(crate) fn decodes_with_libheif(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| scanner::LIBHEIF_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+    scanner::has_extension(path, scanner::LIBHEIF_EXTENSIONS)
 }
 
 pub(crate) fn libheif_dimensions(path: &Path) -> Option<(u32, u32)> {
@@ -184,7 +182,7 @@ pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result
             "no embedded thumbnail with the transform of the primary image",
         )
     })?;
-    let sharp_size = fit_within((primary.width(), primary.height()), target)
+    let sharp_size = fitted_size((primary.width(), primary.height()), target)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty cell"))?;
     let color = thumbnail_color(&thumbnail, source_color(&primary));
     let image = LibHeif::new()
@@ -202,7 +200,7 @@ pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result
 /// compares these properties with the primary image first (`HeifItems`). The shape check
 /// stays as a second guard.
 fn thumbnail_is_usable(thumbnail: (u32, u32), primary: (u32, u32), target: (u32, u32)) -> bool {
-    let Some(fitted) = fit_within(primary, target) else {
+    let Some(fitted) = fitted_size(primary, target) else {
         return false;
     };
     let covers = thumbnail.0 >= fitted.0 && thumbnail.1 >= fitted.1;
@@ -214,19 +212,13 @@ fn same_shape(thumbnail: (u32, u32), primary: (u32, u32)) -> bool {
     (thumbnail.0 >= thumbnail.1) == (primary.0 >= primary.1)
 }
 
-/// The size of `size` fitted into `target` without upscale, rounded down as
-/// `resize_decoded_to_dims` does. `None` for an empty size or target.
-fn fit_within(size: (u32, u32), target: (u32, u32)) -> Option<(u32, u32)> {
+/// The size of `size` fitted into `target` without upscale, rounded down as `scaled_down_size`
+/// does. `None` for an empty size or target.
+fn fitted_size(size: (u32, u32), target: (u32, u32)) -> Option<(u32, u32)> {
     if size.0 == 0 || size.1 == 0 || target.0 == 0 || target.1 == 0 {
         return None;
     }
-    let scale = f64::min(
-        f64::from(target.0) / f64::from(size.0),
-        f64::from(target.1) / f64::from(size.1),
-    )
-    .min(1.0);
-    let fitted = |side: u32| ((f64::from(side) * scale) as u32).max(1);
-    Some((fitted(size.0), fitted(size.1)))
+    Some(scaled_down_size(size, target).unwrap_or(size))
 }
 
 /// Turn the interleaved RGBA plane of a libheif image into an image that fits `target`.
@@ -279,10 +271,11 @@ fn heif_image_to_rgba(
 #[cfg(test)]
 mod tests {
     use super::{
-        decodes_with_libheif, fit_within, libheif_dimensions, thumbnail_is_usable, usable_thumbnail,
+        decodes_with_libheif, fitted_size, libheif_dimensions, thumbnail_is_usable,
+        usable_thumbnail,
     };
     use crate::decode::heif_boxes::HeifItems;
-    use crate::decode::resize::{resize_decoded_to_dims, resize_to_exact};
+    use crate::decode::resize::{fit_rgba_within, resize_to_exact};
     use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use crate::test_support::{BLUE, RED, assert_close, solid_image, test_dir, write_heif};
     use image::GenericImageView;
@@ -359,11 +352,11 @@ mod tests {
     }
 
     #[test]
-    fn fit_within_does_not_upscale() {
-        assert_eq!(fit_within((4032, 3024), (306, 222)), Some((296, 222)));
-        assert_eq!(fit_within((100, 50), (400, 400)), Some((100, 50)));
-        assert_eq!(fit_within((100, 50), (0, 400)), None);
-        assert_eq!(fit_within((0, 50), (400, 400)), None);
+    fn fitted_size_does_not_upscale() {
+        assert_eq!(fitted_size((4032, 3024), (306, 222)), Some((296, 222)));
+        assert_eq!(fitted_size((100, 50), (400, 400)), Some((100, 50)));
+        assert_eq!(fitted_size((100, 50), (0, 400)), None);
+        assert_eq!(fitted_size((0, 50), (400, 400)), None);
     }
 
     #[test]
@@ -401,17 +394,17 @@ mod tests {
                 decode_image_with_hint(&path, Some(target), EmbeddedThumbnail::Deny).unwrap();
             assert_eq!(
                 Some(decoded.dimensions()),
-                fit_within((256, 128), target),
+                fitted_size((256, 128), target),
                 "{target:?}"
             );
             // load_and_resize resizes again: the fitted decode must stay as it is.
-            let resized = resize_decoded_to_dims(&decoded, target.0, target.1);
+            let resized = fit_rgba_within(decoded.to_rgba8(), target.0, target.1);
             assert_eq!(resized.dimensions(), decoded.dimensions(), "{target:?}");
             assert_close(center(&decoded), RED);
         }
         let sizes: Vec<_> = [(64, 64), (100, 30), (500, 500)]
             .into_iter()
-            .map(|target| fit_within((256, 128), target).unwrap())
+            .map(|target| fitted_size((256, 128), target).unwrap())
             .collect();
         assert_eq!(sizes, [(64, 32), (60, 30), (256, 128)]);
     }
@@ -430,7 +423,7 @@ mod tests {
                 let decoded =
                     decode_image_with_hint(&path, target, EmbeddedThumbnail::Deny).unwrap();
                 let expected = target.map_or(Some((width, height)), |target| {
-                    fit_within((width, height), target)
+                    fitted_size((width, height), target)
                 });
                 assert_eq!(Some(decoded.dimensions()), expected, "{width} {target:?}");
                 assert_close(center(&decoded), RED);

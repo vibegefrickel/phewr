@@ -46,10 +46,7 @@ impl Route {
     /// Pick the decoder from the extension. The check compares without an allocation and tests
     /// the `image` formats first, so the JPEG and PNG paths pay almost nothing.
     pub(crate) fn for_path(path: &Path) -> Self {
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-            return Self::Raster;
-        };
-        let listed = |list: &[&str]| list.iter().any(|e| ext.eq_ignore_ascii_case(e));
+        let listed = |list: &[&str]| scanner::has_extension(path, list);
         if listed(scanner::IMAGE_EXTENSIONS) {
             return Self::Raster;
         }
@@ -366,10 +363,11 @@ mod tests {
     /// QOI, TGA, EXR and HDR: the `image` crate writes a synthetic file of each, and the grid
     /// and the fullscreen decode open it.
     mod formats {
+        use super::red_left_blue_right;
         use crate::decode::resize::load_and_resize_px;
         use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
         use crate::test_support::{BLUE, RED, assert_close, test_dir};
-        use image::{ImageEncoder, Rgb, RgbImage};
+        use image::{ImageEncoder, Rgb};
         use std::fs::File;
         use std::path::Path;
 
@@ -387,10 +385,6 @@ mod tests {
             assert_eq!(grid.dimensions(), (16, 8), "{}", path.display());
             let rgba = full.to_rgba8();
             (rgba.get_pixel(4, 8).0, rgba.get_pixel(28, 8).0)
-        }
-
-        fn red_left_blue_right() -> RgbImage {
-            RgbImage::from_fn(32, 16, |x, _| Rgb(if x < 16 { RED } else { BLUE }))
         }
 
         #[test]

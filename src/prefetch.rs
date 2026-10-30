@@ -1,3 +1,5 @@
+//! The decode of the neighbors of the fullscreen image ahead of time.
+
 use crate::decode::resize::fit_rgba_within;
 use crate::decode::{EmbeddedThumbnail, decode_image};
 use image::RgbaImage;
@@ -16,7 +18,7 @@ const PREFETCH_RADIUS: usize = 3;
 const MAX_PREFETCH_JOBS: usize = 2;
 
 /// The result of one decode job. `image` is `None` when the decode failed.
-struct Decoded {
+struct JobResult {
     generation: u64,
     index: usize,
     image: Option<Prefetched>,
@@ -31,7 +33,7 @@ struct Prefetched {
 impl Prefetched {
     /// The image fitted into `max`, or `None` if the decode used a smaller box. A smaller decode
     /// cannot fill `max` without an upscale, so the caller decodes again.
-    fn fit_into(self, max: (u32, u32)) -> Option<RgbaImage> {
+    fn fit_within(self, max: (u32, u32)) -> Option<RgbaImage> {
         if max.0 == 0 || max.1 == 0 || self.target == Some(max) {
             return Some(self.image);
         }
@@ -44,8 +46,8 @@ impl Prefetched {
 
 pub(crate) struct Prefetcher {
     cache: LruCache<usize, Prefetched>,
-    rx: mpsc::Receiver<Decoded>,
-    tx: mpsc::Sender<Decoded>,
+    rx: mpsc::Receiver<JobResult>,
+    tx: mpsc::Sender<JobResult>,
     /// The indices that decode right now, at most `MAX_PREFETCH_JOBS`.
     pending: HashSet<usize>,
     /// The indices that wait for a free job, nearest first.
@@ -88,8 +90,8 @@ impl Prefetcher {
     }
 
     pub(crate) fn poll(&mut self) {
-        while let Ok(decoded) = self.rx.try_recv() {
-            self.accept(decoded);
+        while let Ok(result) = self.rx.try_recv() {
+            self.accept(result);
         }
         self.start_queued();
     }
@@ -104,17 +106,17 @@ impl Prefetcher {
     }
 
     /// Store one job result, unless an `invalidate()` made its index meaningless.
-    fn accept(&mut self, decoded: Decoded) {
-        if decoded.generation != self.generation {
+    fn accept(&mut self, result: JobResult) {
+        if result.generation != self.generation {
             return;
         }
-        self.pending.remove(&decoded.index);
-        match decoded.image {
+        self.pending.remove(&result.index);
+        match result.image {
             Some(image) => {
-                self.cache.push(decoded.index, image);
+                self.cache.push(result.index, image);
             }
             None => {
-                self.failed.insert(decoded.index);
+                self.failed.insert(result.index);
             }
         }
     }
@@ -132,12 +134,11 @@ impl Prefetcher {
             u32::from(rect.width) * cell_px.0,
             u32::from(rect.height) * cell_px.1,
         );
-        self.cache.pop(&index)?.fit_into(max)
+        self.cache.pop(&index)?.fit_within(max)
     }
 
-    /// Queue the neighbors of `current`. After a step, the neighbors in the direction of the
-    /// step come first, nearest first. The queue of an older position goes.
-    /// Decode the neighbors of `current` within `first..images.len()`. The entries before
+    /// Queue the neighbors of `current` within `first..images.len()`, nearest first, the
+    /// direction of the last step first. The queue of an older position goes. The entries before
     /// `first` are folders, and nothing decodes a folder.
     pub(crate) fn kick(&mut self, current: usize, first: usize, images: &[PathBuf]) {
         self.queue.clear();
@@ -218,7 +219,7 @@ impl Prefetcher {
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
             )]
-            let _ = tx.send(Decoded {
+            let _ = tx.send(JobResult {
                 generation,
                 index,
                 image,
@@ -246,8 +247,8 @@ impl Prefetcher {
     #[cfg(test)]
     fn accept_next(&mut self, timeout: std::time::Duration) -> bool {
         match self.rx.recv_timeout(timeout) {
-            Ok(decoded) => {
-                self.accept(decoded);
+            Ok(result) => {
+                self.accept(result);
                 true
             }
             Err(_) => false,

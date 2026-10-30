@@ -3,15 +3,14 @@
 use crate::decode::Decoded;
 use crate::decode::color::jpeg_color;
 use crate::info;
+use crate::scanner;
 use image::metadata::Orientation;
 use image::{DynamicImage, RgbaImage};
 use std::io;
 use std::path::Path;
 
 pub(super) fn is_jpeg(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "jpg" | "jpeg"))
+    scanner::has_extension(path, &["jpg", "jpeg"])
 }
 
 fn pick_scaling_factor(

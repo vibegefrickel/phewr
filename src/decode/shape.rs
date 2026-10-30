@@ -69,12 +69,7 @@ pub(crate) fn shown_size(path: &Path) -> Option<(u32, u32)> {
     }
     match Route::for_path(path) {
         Route::Raster => {
-            let (width, height) = image::ImageReader::open(path)
-                .ok()?
-                .with_guessed_format()
-                .ok()?
-                .into_dimensions()
-                .ok()?;
+            let (width, height) = crate::decode::raster::header_dimensions(path)?;
             if exif_swaps_axes(path) {
                 Some((height, width))
             } else {

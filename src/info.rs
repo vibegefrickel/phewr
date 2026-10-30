@@ -10,7 +10,7 @@ use std::path::Path;
 /// Rows shown in the info panel. An empty label marks a section heading.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ImageInfo {
-    pub rows: Vec<(String, String)>,
+    pub(crate) rows: Vec<(String, String)>,
 }
 
 pub(crate) fn load(path: &Path) -> ImageInfo {
@@ -86,13 +86,7 @@ pub(crate) fn dimensions(path: &Path) -> Option<(u32, u32)> {
         return decode::libheif::libheif_dimensions(path);
     }
     match Route::for_path(path) {
-        // `open` takes the format from the extension first: TGA has no magic bytes.
-        Route::Raster => image::ImageReader::open(path)
-            .ok()?
-            .with_guessed_format()
-            .ok()?
-            .into_dimensions()
-            .ok(),
+        Route::Raster => decode::raster::header_dimensions(path),
         Route::Jxl => decode::jxl::dimensions(path),
         #[cfg(all(feature = "sips", target_os = "macos"))]
         Route::Sips => decode::sips::dimensions(path),
@@ -172,8 +166,6 @@ fn exif_rows(path: &Path) -> Vec<(String, String)> {
     rows
 }
 
-/// The EXIF block of JPEG, TIFF (also the TIFF-based camera RAW formats), HEIF, PNG, WebP and
-/// JPEG XL.
 /// The EXIF date of the shot as `YYYY-MM-DD HH:MM`: `DateTimeOriginal`, else `DateTime`.
 pub(crate) fn date_taken(path: &Path) -> Option<String> {
     let exif = read_exif(path)?;
@@ -190,6 +182,8 @@ pub(crate) fn date_taken(path: &Path) -> Option<String> {
     ))
 }
 
+/// The EXIF block of JPEG, TIFF (also the TIFF-based camera RAW formats), HEIF, PNG, WebP and
+/// JPEG XL.
 fn read_exif(path: &Path) -> Option<exif::Exif> {
     if Route::for_path(path) == Route::Jxl {
         return exif::Reader::new().read_raw(decode::jxl::exif(path)?).ok();

@@ -481,21 +481,39 @@ pub(crate) fn exif_marks_adobe_rgb(data: &[u8]) -> bool {
     uncalibrated && option_file
 }
 
-/// The TIFF data of the first `Exif` APP1 segment of the JPEG `data`.
-fn jpeg_exif_payload(data: &[u8]) -> Option<&[u8]> {
+/// The marker segments of the JPEG `data` before the entropy-coded data, as `(marker, payload)`.
+/// A segment that the data cuts yields one `None` and ends the walk.
+fn jpeg_segments(data: &[u8]) -> impl Iterator<Item = Option<(u8, &[u8])>> {
     let mut pos = 2;
-    while let Some(&[0xFF, marker, length_high, length_low, ..]) = data.get(pos..) {
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        let &[0xFF, marker, length_high, length_low, ..] = data.get(pos..)? else {
+            return None;
+        };
+        // SOS starts the entropy-coded data, EOI ends the file: no more APP segments.
         if matches!(marker, 0xDA | 0xD9) {
             return None;
         }
         let length = usize::from(u16::from_be_bytes([length_high, length_low]));
-        let segment = data.get(pos + 4..pos + 2 + length)?;
+        let segment = data.get(pos + 4..pos + 2 + length);
+        done = segment.is_none();
+        pos += 2 + length;
+        Some(segment.map(|segment| (marker, segment)))
+    })
+}
+
+/// The TIFF data of the first `Exif` APP1 segment of the JPEG `data`.
+fn jpeg_exif_payload(data: &[u8]) -> Option<&[u8]> {
+    for segment in jpeg_segments(data) {
+        let (marker, segment) = segment?;
         if marker == 0xE1
             && let Some(payload) = segment.strip_prefix(b"Exif\0\0")
         {
             return Some(payload);
         }
-        pos += 2 + length;
     }
     None
 }
@@ -507,21 +525,14 @@ fn jpeg_exif_payload(data: &[u8]) -> Option<&[u8]> {
 pub(crate) fn jpeg_icc_profile(data: &[u8]) -> Option<Vec<u8>> {
     const SIGNATURE: &[u8] = b"ICC_PROFILE\0";
     let mut chunks: Vec<(u8, u8, &[u8])> = Vec::new();
-    let mut pos = 2;
-    while let Some(&[0xFF, marker, length_high, length_low, ..]) = data.get(pos..) {
-        // SOS starts the entropy-coded data, EOI ends the file: no more APP segments.
-        if matches!(marker, 0xDA | 0xD9) {
-            break;
-        }
-        let length = usize::from(u16::from_be_bytes([length_high, length_low]));
-        let segment = data.get(pos + 4..pos + 2 + length)?;
+    for segment in jpeg_segments(data) {
+        let (marker, segment) = segment?;
         if marker == 0xE2
             && let Some(rest) = segment.strip_prefix(SIGNATURE)
             && let [sequence, count, chunk @ ..] = rest
         {
             chunks.push((*sequence, *count, chunk));
         }
-        pos += 2 + length;
     }
     chunks.sort_by_key(|&(sequence, _, _)| sequence);
     let count = chunks.first()?.1;
@@ -542,11 +553,11 @@ pub(crate) fn jpeg_icc_profile(data: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ColorTarget, SourceColor, convert, exif_marks_adobe_rgb, jpeg_color, jpeg_icc_profile,
-        png_color, transform,
+        ColorTarget, SourceColor, convert, exif_marks_adobe_rgb, jpeg_color, jpeg_exif_payload,
+        jpeg_icc_profile, png_color, tiff_icc_profile, transform,
     };
     use crate::decode::{EmbeddedThumbnail, decode_image};
-    use crate::test_support::fixture;
+    use crate::test_support::{fixture, test_dir};
     use image::{Rgba, RgbaImage};
 
     const P3_ICC: &str = "/System/Library/ColorSync/Profiles/Display P3.icc";
@@ -944,5 +955,29 @@ mod tests {
             red.abs_diff(green) <= 1 && green.abs_diff(blue) <= 1,
             "gray stays gray"
         );
+    }
+
+    #[test]
+    fn a_cut_tiff_has_no_icc_profile() {
+        let dir = test_dir();
+        // A little-endian header, one entry for the tag 34675 with 200 bytes at offset 100.
+        let mut tiff = vec![b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0];
+        tiff.extend([0x73, 0x87, 7, 0, 200, 0, 0, 0, 100, 0, 0, 0]);
+        for length in [0, 4, 8, 9, 15, tiff.len()] {
+            let path = dir.path().join(format!("cut-{length}.tif"));
+            std::fs::write(&path, &tiff[..length]).unwrap();
+            assert_eq!(tiff_icc_profile(&path), None, "{length} bytes");
+        }
+    }
+
+    #[test]
+    fn a_cut_jpeg_has_no_exif_payload() {
+        let jpeg = [
+            0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x0A, b'E', b'x', b'i', b'f', 0, 0, 1, 2,
+        ];
+        assert_eq!(jpeg_exif_payload(&jpeg), Some(&[1, 2][..]));
+        for length in 0..jpeg.len() {
+            assert_eq!(jpeg_exif_payload(&jpeg[..length]), None, "{length} bytes");
+        }
     }
 }

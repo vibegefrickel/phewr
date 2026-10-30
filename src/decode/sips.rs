@@ -14,6 +14,7 @@
 use crate::decode::Decoded;
 use crate::decode::raster::{add_file_color, decode_upright};
 use crate::decode::resize::scaled_down_size;
+use crate::scanner;
 use image::{DynamicImage, ImageFormat, ImageReader, Rgba};
 use std::ffi::OsStr;
 use std::io;
@@ -52,7 +53,7 @@ pub(crate) fn decode(path: &Path, target: Option<(u32, u32)>) -> io::Result<Deco
     let mut decoded =
         decode_upright(reader).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     add_file_color(&mut decoded, tiff.path(), Some(ImageFormat::Tiff));
-    if has_extension(path, &["pdf"]) {
+    if scanner::has_extension(path, &["pdf"]) {
         decoded.image = on_white(&decoded.image);
     }
     Ok(decoded)
@@ -70,7 +71,7 @@ fn argument_path(path: &Path) -> PathBuf {
 
 /// The side for `sips -Z`, or `None` for the full image. A raster zoom needs no size query.
 fn requested_side(path: &Path, target: Option<(u32, u32)>) -> io::Result<Option<u32>> {
-    let vector = has_extension(path, VECTOR_EXTENSIONS);
+    let vector = scanner::has_extension(path, VECTOR_EXTENSIONS);
     if target.is_none() && !vector {
         return Ok(None);
     }
@@ -80,12 +81,6 @@ fn requested_side(path: &Path, target: Option<(u32, u32)>) -> io::Result<Option<
         (Some(target), true) => Some(enlarged_side(stored, target)),
         (None, _) => Some(stored.0.max(stored.1).max(VECTOR_ZOOM_SIDE)),
     })
-}
-
-fn has_extension(path: &Path, list: &[&str]) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| list.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
 /// The longest side for `sips -Z` that covers `target` after the EXIF orientation. The route
