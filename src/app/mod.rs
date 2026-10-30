@@ -194,7 +194,12 @@ impl App {
         shared_list: SharedImageList,
         config: &Config,
     ) -> Self {
-        let mut app = Self::with_config(cell_px, shared_list, config);
+        let mut app = Self::with_config(
+            cell_px,
+            shared_list,
+            config,
+            PathBuf::from("/dev/null/viewr-test/state.toml"),
+        );
         app.state_file = PathBuf::from("/dev/null/viewr/state.toml");
         app.disk_cache_dir = PathBuf::from("/dev/null/viewr/cache");
         app.graphics_out = GraphicsOutput::buffer();
@@ -205,6 +210,7 @@ impl App {
         cell_px: (u32, u32),
         shared_list: SharedImageList,
         config: &Config,
+        state_file: PathBuf,
     ) -> Self {
         let mut gallery = GalleryState::with_zoom_rows(0, usize::from(config.visible_rows));
         gallery.default_zoom_rows = usize::from(config.configured_visible_rows).clamp(
@@ -222,7 +228,7 @@ impl App {
             graphics_out: GraphicsOutput::Stdout,
             info_visible: config.info_panel,
             info_cache: LruCache::new(INFO_CACHE_CAPACITY),
-            state_file: config::default_state_path(),
+            state_file,
             disk_cache_dir: default_disk_cache_dir(),
             slideshow: None,
             slideshow_interval: Duration::from_secs_f64(config.slideshow_interval),

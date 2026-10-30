@@ -7,10 +7,10 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
-/// The order of the files after a scan: by the lowercase name, then by the path. The folder
-/// prefetch sorts a folder the same way.
+/// The order of the files after a scan: `scanner::name_key`, the key of the scanner batches, so
+/// the end of the scan keeps the order of the first screen. The folder prefetch sorts the same way.
 pub(super) fn sort_by_name(media: &mut [(PathBuf, String)]) {
-    media.sort_by_cached_key(|(path, filename)| (filename.to_lowercase(), path.clone()));
+    media.sort_by_cached_key(|(path, _)| crate::scanner::name_key(path));
 }
 
 impl App {
@@ -23,7 +23,7 @@ impl App {
 
         let new_len = self.shared_list.len();
         if new_len > self.known_len {
-            let (new_paths, new_filenames) = self.shared_list.drain_since(self.known_len);
+            let (new_paths, new_filenames) = self.shared_list.entries_since(self.known_len);
             let old_len = self.images.len();
             self.images.extend(new_paths);
             self.filenames.extend(new_filenames);
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(app.current, 2);
         assert_eq!(app.current_path(), Path::new("/x/C.png"));
         assert!(app.graphics_storage_dirty);
-        let (paths, _) = list.drain_since(0);
+        let (paths, _) = list.entries_since(0);
         assert_eq!(paths, app.images);
     }
 

@@ -109,7 +109,7 @@ pub(crate) fn files_of(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
     if !batch.is_empty() {
         flush_batch(&list, &mut batch);
     }
-    list.drain_since(0)
+    list.entries_since(0)
 }
 
 /// The canonical form of `p`, or `p` itself when the file system cannot resolve it.
@@ -417,7 +417,7 @@ mod tests {
         spawn(vec![dir.clone()], list.clone());
         wait_for_complete(&list);
         assert_eq!(list.folder_count(), 2);
-        let (paths, filenames) = list.drain_since(0);
+        let (paths, filenames) = list.entries_since(0);
         assert_eq!(filenames, ["..", "sub", "photo.jpg"]);
         assert_eq!(paths[1], dir.join("sub"));
 
@@ -484,7 +484,7 @@ mod tests {
         wait_for_complete(&list);
 
         assert_eq!(list.len(), 2 * count);
-        let (all, _) = list.drain_since(0);
+        let (all, _) = list.entries_since(0);
         let names: Vec<String> = all
             .iter()
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
@@ -509,7 +509,7 @@ mod tests {
         let list = SharedImageList::new();
         spawn(vec![root.path().to_path_buf()], list.clone());
         wait_for_complete(&list);
-        let (scanned, scanned_names) = list.drain_since(list.folder_count());
+        let (scanned, scanned_names) = list.entries_since(list.folder_count());
         let (files, names) = files_of(root.path());
         assert_eq!(files.len(), count, "no folder, no unsupported file");
         assert_eq!(files, scanned);

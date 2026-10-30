@@ -280,11 +280,6 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     config
 }
 
-/// The state file below the user's home, the default target of the grid-zoom functions.
-pub(crate) fn default_state_path() -> PathBuf {
-    Paths::from_env().state
-}
-
 /// Read the saved zoom level for `folder` from the state file at `path`.
 pub(crate) fn load_folder_zoom(path: &Path, folder: &Path) -> Option<u16> {
     let state = read_state(path);

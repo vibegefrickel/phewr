@@ -146,7 +146,8 @@ fn main() -> io::Result<()> {
         }
     }
 
-    let mut config = config::load(&config::Paths::from_env());
+    let config_paths = config::Paths::from_env();
+    let mut config = config::load(&config_paths);
     decode::color::set_target(config.colorspace);
     if let Some(interval) = cli.interval {
         config.slideshow_interval = interval;
@@ -198,7 +199,7 @@ fn main() -> io::Result<()> {
     state.cell_size_from_terminal = cell_size_answer.is_some();
     let cell_px = cell_size_answer.unwrap_or_else(window_cell_pixel_size);
     state.late_answers = keys::LateAnswerFilter::new(late_answers);
-    let mut app = App::with_config(cell_px, shared_list, &config);
+    let mut app = App::with_config(cell_px, shared_list, &config, config_paths.state);
     app.graphics = graphics;
     let initial_dir = canonicalize_or_self(&initial_dir);
     app.initial_dir = Some(initial_dir.clone());
