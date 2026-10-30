@@ -166,8 +166,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   session and the start of the run loop.
 - `cli.rs`: the clap arguments (`Cli`) and the start directory.
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
-  `query_terminal`, `query_cell_size_and_probe` (`CSI 16 t` and the Kitty probe in one write)
-  and the cell pixel size.
+  `query_terminal`, `query_cell_size_and_probe` (`CSI 16 t`, the Kitty probes and the DA1 query
+  in one write, the DA1 answer ends the read) and the cell pixel size.
 - `run_loop.rs`: `LoopState` (the status note and, with the `video` feature, the `VideoState`),
   `run`, the background polls, `render_images` and `next_timeout`. The status note lives here, not
   in `App`.
@@ -248,11 +248,14 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
   and the `Runner` trait for the process start.
 - `encoder/`: the Kitty graphics protocol (`KittyBackend`). `Transfer` picks the medium: direct,
-  PNG (SSH) or a temp file (`t=t`). `detect_transfer` probes the terminal at start with `a=q`.
-  `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe. `Pixels` is a view of RGB or RGBA
-  pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
+  PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
+  the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
+  frame, and `chosen_loops` reads `VIEWR_KITTY_LOOPS` and the config key.
+  `VIEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `Pixels` is a view of RGB or
+  RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
   every medium. The check and the copy go in chunks of 4096 pixels and stop at the first
-  transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost.
+  transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost. `transmit_frame_to`
+  sends one animation frame (`a=f`), and `animate_to` sends the animation control (`a=a`).
 - `test_support.rs` (test only): the app builders, the key press helpers and the synthetic
   file writers that the tests of more than one module share. `test_support::video` holds
   `FakeRunner`, `FakeDecoder` and the app builders of the video tests.
@@ -447,8 +450,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   window padding of Ghostty (2258 px / 52 rows = 43.42 px). If the terminal answered at
   start, the run loop asks again after each resize. The read takes every byte of the tty, so
   a key typed in that millisecond is lost. At the start, the query goes out together with the
-  Kitty probe, in one round trip. A terminal that does not answer one of them costs
-  `PROBE_TIMEOUT` (300 ms) one time.
+  Kitty probes and the DA1 query, in one round trip. A terminal that answers neither the probes
+  nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time. `VIEWR_KITTY_LOOPS` or `[gallery] loops` skips
+  the animation probe. SSH and `VIEWR_KITTY_TRANSFER` skip only the transfer probe.
 - **Mouse:** viewr enables only the mouse modes 1000, 1002 and 1006 (`terminal::enable_mouse`),
   never 1003, so a pointer move without a button does not wake the run loop. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. `[gallery] mouse = false` turns
@@ -459,8 +463,13 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `test_support::draw_frame` first. The double-click (400 ms) uses `handle_event_at` with a
   clock, so tests add a `Duration` to an `Instant` and never sleep. macOS can send Shift+wheel
   as a horizontal wheel, so `ScrollLeft` and `ScrollRight` change the grid size too.
-- **Late probe answer:** `LateAnswerFilter` in `keys/mod.rs` drops the key events of a Kitty
-  probe answer that comes after `PROBE_TIMEOUT`, from Alt+`_` to Alt+`\`.
+- **Late probe answer:** the start write holds the cell size query, the `a=q` transfer probe,
+  the animation probe and the DA1 query `ESC [ c`. The animation probe is a silent 1x1 image
+  (`a=t,q=2,i=32`), one frame `a=f,i=32` that the terminal answers, and `a=d,d=I,i=32`. The read
+  ends at the DA1 answer, or when every owed answer came. After either, no Kitty answer can come
+  late. `LateAnswerFilter` in `keys/mod.rs` is armed only after a timeout of the whole round
+  trip. It drops the key events of the first late Kitty answer, from Alt+`_` to Alt+`\`. A late
+  DA1 answer is no key press: crossterm keeps it as an internal event.
 - **Grid zoom:** the grid shows 2 to 12 rows (`MIN_VISIBLE_ROWS`, `MAX_VISIBLE_ROWS`). A 2x2
   grid is the largest thumbnail size. The fullscreen view is the larger view. The config key
   and the state file clamp to that range on load. A terminal too small for 2 rows keeps the
@@ -475,12 +484,21 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   fewer than 12 keyframes decodes 12 frames at a constant rate, and a clip above 60 s seeks to 12
   points. An animation keeps its frames and delays, at most 48 frames and 12 fps, at least one frame
   per minute. The frames are half the size of the grid picture, padded to the cells of the still
-  (`pad_loop_frame`), and the terminal scales them. Each frame goes out one time with `a=t` and an
-  id from 2^31 (`LOOP_ID_BASE`). A tick sends `a=d,d=i` for the old frame and `a=p` for the new one
-  (`play_grid_loops` in `kitty_output.rs`), about 75 bytes per cell, in one synchronized update. The
-  loop clock has 12 ticks per second, and each loop starts on a multiple of 4 ticks. Only visible
-  cells loop. A loop above `TERMINAL_IMAGE_BUDGET` keeps its still until the visible cells change. A
-  cell that leaves the screen deletes its frames with `d=I`. Loop jobs start after all stills of the
+  (`pad_loop_frame`), and the terminal scales them. The loops take one of two paths (`Loops` in
+  `KittyBackend`). Animation (Ghostty 1.4.0 and later): the first frame is the root image (`a=t`,
+  one id from 2^31, `LOOP_ID_BASE`), the further frames go out with `a=f,z=<ms>`, then `a=a,r=1,z=`
+  sets the gap of the root frame and `a=a,s=3,v=1` loops forever. Then `a=p` places the animation
+  over the still and `d=i` removes the placement of the still, in one synchronized update
+  (`transmit_animation_to` in `kitty_output.rs`). No tick and no wakeup: `loop_frames_due` and
+  `grid_loop_timeout` skip an animation. A hidden or replaced cell sends one `d=I`. A grid redraw
+  places the running animation again by its id. A `d=A` (the help popup, the info panel, the
+  fullscreen view, the zoom) makes the grid send it again with all frames. Ticks (the fallback for
+  herdr 0.9.5 and older terminals): each frame goes out one time with `a=t` and an id from 2^31. A
+  tick sends `a=d,d=i` for the old frame and `a=p` for the new one (`play_grid_loops`), about
+  75 bytes per cell, in one synchronized update. The loop clock has 12 ticks per second, and each
+  loop starts on a multiple of 4 ticks. Only visible cells loop. A loop above
+  `TERMINAL_IMAGE_BUDGET` keeps its still until the visible cells change. A cell that leaves the
+  screen deletes its frames with `d=I`. Loop jobs start after all stills of the
   screen are out, at most 4, each on its own thread, and each ffmpeg run takes at most 2 decode
   threads (`-threads 2 -filter_threads 1`). New stills or another view cancel the running loop runs
   (the flag ends ffmpeg within 20 ms), and the cells get new jobs later. A `ResultGuard` sends
@@ -489,8 +507,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   frames as `<hash>.loop` files (QOI frames with their times, key version `viewr-loop-v1`,
   `LOOP_CACHE_VERSION` in `app/disk_cache.rs`): change the version when the loop output changes. The
   prune removes the loop files before the stills, each oldest first. The bench `grid_loops` reads
-  `07-video` and `06-animation` beside `VIEWR_TEST_DIR` and needs ffmpeg on PATH. `FakeTerminal`
-  reads `a=t` and `d=i`.
+  `07-video` and `06-animation` beside `VIEWR_TEST_DIR`, needs ffmpeg on PATH and measures both
+  paths. `FakeTerminal` reads `a=t`, `a=f`, `a=a` and `d=i`.
 - **Cell icons:** a grid cell without a thumbnail shows a large dim picture (image) or play
   triangle (video), a folder cell a folder, and `..` two dots without a name (`icons.rs`,
   `draw_cell_icon` in `ui.rs`). The icons are octant blocks (2x4 dots per cell, drawn by Ghostty

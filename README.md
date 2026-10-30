@@ -187,6 +187,7 @@ viewr reads `~/.config/viewr/config.toml`. If `XDG_CONFIG_HOME` is set, viewr re
 [gallery]
 mouse = true         # read the mouse; false keeps the terminal's own mouse
 animate = true       # video and animated cells play a short loop in the grid; false keeps the still with its play triangle
+loops = "auto"       # how the loops play: "auto" (the terminal decides), "animation" (Kitty animation frames, Ghostty 1.4.0 and later), "ticks" (viewr swaps the frames)
 visible_rows = 4     # thumbnail rows in the grid (the zoom level, 2 to 12), the columns fill the width
 
 [slideshow]
@@ -221,6 +222,8 @@ viewr uses the default foreground and background of the terminal and the 16 ANSI
 ### Kitty transfer
 
 At start, viewr asks the terminal whether it reads image data from a temp file. If the terminal answers yes, viewr writes each picture to a file in `$TMPDIR` and sends only the path. Otherwise the pixels go through the terminal as text. The last row of the help popup (`?`) shows the result, for example `Kitty transfer: temp file (t=t)`. The environment variable `VIEWR_KITTY_TRANSFER=direct|png|file` skips the question and forces one medium. Over SSH, viewr sends PNG.
+
+In the same round trip, viewr asks the terminal whether it plays Kitty animations. If the terminal answers yes (Ghostty 1.4.0 and later), each grid loop goes to the terminal one time as one animation, and the terminal plays it. Otherwise viewr swaps the frames itself. `[gallery] loops` in the config, or the environment variable `VIEWR_KITTY_LOOPS=animation|ticks`, which wins over the config, fixes the path.
 
 ## Formats
 

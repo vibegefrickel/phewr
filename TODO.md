@@ -19,7 +19,7 @@ State of the main goal:
 
 ## Now
 
-Maintainer tests in Ghostty and in herdr: run the 13 steps in `~/Pictures/viewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders and placeholders). Steps 9 and 10 now include the grid loops: every video and animated cell must loop after its still, and the CPU of viewr and Ghostty with 30 looping cells is the open measurement. In herdr, the frames must swap (herdr must relay `d=i`).
+Maintainer tests in Ghostty and in herdr: run the 13 steps in `~/Pictures/viewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders and placeholders). Steps 9 and 10 now include the grid loops: every video and animated cell must loop after its still. Measured on 2026-10-30: 30 looping cells cost about 3 % of one core in total (viewr 0.2 %, Ghostty 1.7 %, herdr 1.3 %). Open since the native animations (merged 2026-10-30): plain Ghostty 1.4.0 must pick the animation path (`?` shows it), and herdr 0.9.5 must pick the ticks. If herdr relays the `OK` of the host but does not play the animation, `VIEWR_KITTY_LOOPS=ticks` is the way out. Also make sure that `a=f` frames go through `t=t` in Ghostty, and that the start in herdr is not slower (the DA1 answer must end the read).
 
 Test run of 2026-10-24 (plain Ghostty): steps 1 and 2 passed. The run stopped at step 3a, and the fixes from it are in (see Done). Continue at step 3 with the current build.
 
@@ -61,7 +61,7 @@ Order: speed first, then formats, then the delete removal, then the first releas
 3. Delete removal, after the terminal tests in "Now"
    - viewr is a viewer only. Remove trash, permanent delete, the delete question, the `d` / `D` keys, their tests and docs, and the `trash` crate if nothing else needs it.
    - Keep the marks (`Space`, `a`, `A`) for a later use, for example a slideshow of the marked images.
-4. Grid loops: done (merged 2026-10-27, see Done). Open: the terminal test of the loops in Ghostty and in herdr ("Now").
+4. Grid loops: done (merged 2026-10-27, see Done). Native Kitty animations for the loops: done (merged 2026-10-30, `REVIEW-2026-10-28.md` K2). Open: the terminal test of both paths in Ghostty and in herdr ("Now"), and four small follow-ups of the K2 report: the count of owed answers in `LateAnswerFilter` after a start timeout, an explicit drop of the app before the yazi reveal so the loop jobs see the cancel, the loop path in the help popup, and a test filter argument for `just bench`.
 5. First release: create the Codeberg repository `viewr`, then `just render` and `just release`. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 
 ## Later
