@@ -468,7 +468,7 @@ fn cube_file_in(dir: &Path, cube: Cube) -> Option<PathBuf> {
         {
             #[expect(
                 clippy::let_underscore_must_use,
-                reason = "the prune does not remove a partial file, but a missing one is no problem"
+                reason = "the prune removes a stale partial file, and a missing one is no problem"
             )]
             let _ = std::fs::remove_file(&partial);
             return None;

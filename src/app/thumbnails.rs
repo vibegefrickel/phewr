@@ -1,5 +1,27 @@
 //! The thumbnail jobs of the grid: the queue, the embedded previews (HEIC, camera RAW, PSD),
 //! the padding to whole cells, the parked thumbnails of the folders before, the generations.
+//!
+//! # From the AGENTS.md gotcha "Decodes share the cores"
+//!
+//! `LibheifSlot` counts the running libheif decodes and gives each context a share of the tile
+//! threads. The fullscreen and zoom decodes run inside `foreground` and take all cores. At most 4
+//! thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes (`MAX_PREFETCH_JOBS`) run at once.
+//! The other cells wait in a queue in grid order, but `next_sharp_job` starts the cells that show
+//! nothing before the HEIC sharp jobs. A failed thumbnail decode sends `None` and frees its slot.
+//! The thumbnail and preview queues are `JobSlots` with an image index per job. A job whose index
+//! left the list starts nothing. `decode::spawn_foreground` runs a foreground decode on the thread
+//! pool and returns its receiver. A cell whose sharp job waits reads the disk cache at once
+//! (`ThumbPhase::CacheRead`, at most `MAX_CACHE_READS` = 64) on its own pool of at most 8 threads
+//! (`cache_read_pool`), so a hit never waits behind a cold decode. `LibheifSlot` and
+//! `MAX_THUMB_JOBS` do not count these threads, and a miss holds one only for a `stat`. A hit
+//! drops the waiting jobs of its cell. A miss leaves the cell in the queue and in
+//! `ThumbnailJobs::cache_misses` (`App::thumb_jobs`), and the later jobs of that cell skip their
+//! own cache lookup. Each job computes its cache key (`CacheEntry`: one `stat` and one `realpath`)
+//! at most one time, at its first use (`LazyEntry`), and reads and writes through it. A HEIC
+//! preview after a missed cache read computes no key. The job reads the animation header only when
+//! `App::animated` holds no flag for the same file stamp (`ThumbnailJobs::flag_stamps`), so a warm
+//! cell after a zoom reads none and a changed file reads it again. A waiting sharp decode does not
+//! start while the cache read of its cell runs.
 
 use super::App;
 use super::disk_cache::{CacheEntry, FileStamp, LazyEntry};

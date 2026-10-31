@@ -5,6 +5,23 @@
 //! PNG or a WebP, the `ftyp` box of an AVIF, and the block list of a GIF up to its second
 //! image descriptor. The thumbnail job runs the check off the UI thread, and the grid reads
 //! the stored answer (`App::animated`), so the draw reads no file.
+//!
+//! # From the AGENTS.md gotcha "Animated images"
+//!
+//! an animated GIF, WebP, APNG or AVIS plays in the terminal player like a video. The thumbnail
+//! job reads the animation flag into `App::animated`, so the draw reads no file. The job stamps
+//! the large play triangle into the still of a video or an animated image (`icons::stamp_play`,
+//! white with a dark edge, 30 % of the height), after the disk cache read, so the cache keeps the
+//! still without the stamp. The loop frames replace the stamped still, so the stamp means "not
+//! playing yet". There is no small `▶` marker in the label or in the gap. The route
+//! (`App::opens_in_player`) reads the header of the one file after a key press. `App::is_video`
+//! still drives the placeholder and the loading icon. The probe reads at most 16 packets: the rate
+//! is the GCD of the frame delays, or the mean rate above 50 fps, and the length comes from the
+//! container. An AVIS file holds two video streams, and the probe maps the one with the most
+//! frames. ffmpeg gets no `-hwaccel` for an animation, because the AV1 decoder stops with it. Esc
+//! from an animation returns to its still frame in the fullscreen view. In a running slideshow,
+//! the terminal player holds an animation for at least the slideshow interval
+//! (`Player::play_at_least`). The mpv window has no such hold.
 
 use super::tone_map::Primaries;
 use crate::decode::color::SourceColor;

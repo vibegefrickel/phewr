@@ -11,6 +11,31 @@
 //! PNG. An image without them is sRGB. The conversion runs after the resize, on the small
 //! image, as one `moxcms` transform in parallel rows. A source in the target space converts
 //! nothing.
+//!
+//! # From the AGENTS.md gotcha "Image colors"
+//!
+//! Ghostty on macOS draws into a Display P3 surface, and its image shader copies the pixels of a
+//! Kitty image without a conversion, also with `window-colorspace = srgb` (that setting converts
+//! only the text colors). So viewr converts each image into Display P3 (`[terminal] colorspace`,
+//! default `display-p3`, or `srgb`). Each decoder reports the color of its pixels: ICC from JPEG
+//! APP2 (also over several segments), PNG iCCP, WebP ICCP, TIFF tag 34675 and HEIF `prof`/`rICC`,
+//! CICP from HEIF `nclx` and PNG `cICP`, PNG `gAMA`/`cHRM`, and the Adobe RGB mark of a camera
+//! JPEG without a profile (EXIF `ColorSpace` 0xFFFF with the interoperability index `R03`,
+//! `color::jpeg_color`). The conversion runs after the resize, in the layout of the image (RGB
+//! through `color::convert_rgb`, or RGBA), as one cached `moxcms` transform with the rows in
+//! parallel. A source in the target space converts nothing, so iPhone photos (Display P3) cost
+//! nothing. A source that cannot convert (an unreadable or non-RGB ICC profile, unknown CICP
+//! codes) converts as sRGB. PQ and HLG sources keep their values. `main` sets the target, and
+//! tests keep sRGB. The terminal player converts with a `lut3d` cube (`player/tone_map.rs`): an
+//! SDR video or animation gets a 17-point cube from its `color_primaries` (`Primaries::of_name`:
+//! BT.709, SMPTE 170M, BT.470 BG, Display P3, DCI-P3 with a Bradford adaptation, BT.2020) into the
+//! target. An untagged stream and GIF count as BT.709 with the sRGB curve. ffprobe reports no
+//! profile for WebP and APNG, so the probe reads their ICC profile or cICP chunk
+//! (`animation::embedded_primaries`) and maps a profile with the colorants of sRGB, Display P3 or
+//! BT.2020 to its primaries (`color::icc_known_space`). Any other profile counts as BT.709. A
+//! source in the target space gets no cube. The SDR cube runs in 8 bit (`rgb24`, `rgba`), and its
+//! values hold half a level, because `lut3d` truncates to 8 bit. A real ffmpeg test fails if
+//! `lut3d` starts to round. At 1080p, the SDR cube costs 1.4 ms to 2 ms per frame.
 
 use image::{RgbImage, RgbaImage};
 use moxcms::{

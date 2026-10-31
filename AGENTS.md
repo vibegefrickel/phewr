@@ -296,40 +296,16 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `FakeRunner`, `FakeDecoder` and the app builders of the video tests.
 - `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
   terminal and read `VIEWR_TEST_DIR`. `start_to_the_first_grid_picture` measures the process start
-  and the steps of `main`, `disk_cache_formats` the cache formats. `measure_grid` stops the clock at
+  and the steps of `main`, `disk_cache_formats` the cache formats, `layout_bench` the pixel layouts of the
+  fullscreen path (the A/B table of the RGB and RGBA resizes). `measure_grid` stops the clock at
   the end of the pass. Each bench lets its background work end before the next one starts (the
   `Drop` of `Bench`, `settle`), so the numbers of the full `just bench` match a run of one bench.
 
 ## Gotchas
 
-- **Terminal player:** ffmpeg runs as a subprocess (`player/decoder.rs`, behind the `Decoder`
-  trait), with `-hwaccel videotoolbox`, `-noautorotate`, `scale_vt` and `transpose_vt` on the
-  GPU, `hflip,vflip` for 180 degrees, `hwdownload` as `p010le` (10 bit) or `nv12`, and
-  `format=rgb48le,lut3d=...:interp=tetrahedral` for HLG and PQ. A GPU run without a frame runs
-  again in software (`Pipeline::Software`). A video with a variable frame rate gets
-  `-fps_mode cfr -r` too: the probe calls it VFR when `r_frame_rate` and `avg_frame_rate` differ
-  by more than 1 %. The output rate is `r_frame_rate`, but a base rate above 1.5 times the
-  average is a burst, and then the output rate is the average, at least 24 fps and never above
-  `r_frame_rate`. Every rate stays at or below 60 fps (`pacing_fps`, `variable_fps` in
-  `player/probe.rs`). `VideoInfo.rate` is `Rate::Constant`, `Rate::Variable` or
-  `Rate::Animation`. Without `-r`,
-  ffmpeg writes raw frames at `r_frame_rate`, so the pacing uses the same rate. iPhone clips
-  (30 and 29.99) stay constant-rate. ffmpeg writes `-pix_fmt rgb24` for a video and `rgba` for an
-  animation, and `pixel_format` in `player/decoder.rs` is the one source for the frame layout
-  (`player::Frame`). One frame per temp file, image id `u32::MAX - 1`
-  (the grid ids count up from 1, the loop frames from 2^31), `c=` / `r=` to the cell box, no
-  `X=` / `Y=`. The first frame
-  of a new video removes all other placements in the same synchronized update
-  (`App::clear_before_video`), so the photo of the view before does not show around the frame.
-  The frame box is the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the
-  cell box. The frame size stays until the next ffmpeg start. `encoder::MAX_PAYLOAD_BYTES`
-  (64 MiB) caps one Kitty payload, because Ghostty 1.4.0 refuses 65 MiB: a fullscreen image above
-  it shrinks in the writer with Catmull-Rom and gets `c=` only, so the rows follow its aspect
-  ratio. The reader thread holds 2 frames
-  (`FRAME_QUEUE`), so a slow terminal blocks ffmpeg on the pipe. The reader of a run owns
-  `FRAME_POOL` (5) frame buffers (`FramePool`), so no run allocates a zeroed 6 MB `Vec` per
-  frame. A `PooledFrame` returns its buffer on drop, also a frame that the catch-up rule drops,
-  and a frame of an old run returns to the pool of its own run.
+- **Terminal player:** ffmpeg runs as a subprocess with VideoToolbox and writes raw frames to a
+  pipe, one frame per temp file under the image id `u32::MAX - 1`. The command line, the rates,
+  the frame pool and the payload cap are in the module doc of `player/mod.rs`.
 - **Player real time (rule):** the terminal player never plays in slow motion. A 6 s clip
   plays for 6 s, and a slow decode or a slow terminal drops frames. The clock of a run never
   moves to a late frame. A frame more than one interval late drops when a newer frame waits,
@@ -352,19 +328,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because the image decode cannot read
   a video. `p` on the placeholder opens the mpv window.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
-  video. The thumbnail job reads the animation flag into `App::animated`, so the draw reads no file.
-  The job stamps the large play triangle into the still of a video or an animated image
-  (`icons::stamp_play`, white with a dark edge, 30 % of the height), after the disk cache read, so
-  the cache keeps the still without the stamp. The loop frames replace the stamped still, so the
-  stamp means "not playing yet". There is no small `▶` marker in the label or in the gap. The route
-  (`App::opens_in_player`) reads the header of the one file after a key press. `App::is_video` still
-  drives the placeholder and the loading icon. The probe reads at most 16 packets: the rate is the
-  GCD of the frame delays, or the mean rate above 50 fps, and the length comes from the container.
-  An AVIS file holds two video streams, and the probe maps the one with the most frames. ffmpeg gets
-  no `-hwaccel` for an animation, because the AV1 decoder stops with it. Esc from an animation
-  returns to its still frame in the fullscreen view. In a running slideshow, the terminal player
-  holds an animation for at least the slideshow interval (`Player::play_at_least`). The mpv window
-  has no such hold.
+  video, and its still carries a play triangle until its loop starts. The probe, the routes and
+  the stamp are in the module doc of `player/animation.rs`.
 - **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
   terminal player stops playing (`playing()` is false), and the slideshow moves on. Outside a slideshow, the clip
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
@@ -446,25 +411,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   waits for the idle look, so the first loop frame of a cold grid can come 250 ms later.
   `has_pending_work` still counts the loop jobs, so the folder prefetch can start up to 250 ms
   after the last loop job. Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
-- **Decodes share the cores.** `LibheifSlot` counts the running libheif decodes and gives each
-  context a share of the tile threads. The fullscreen and zoom decodes run inside `foreground`
-  and take all cores. At most 4 thumbnail decodes (`MAX_THUMB_JOBS`) and 2 prefetch decodes
-  (`MAX_PREFETCH_JOBS`) run at once. The other cells wait in a queue in grid order, but
-  `next_sharp_job` starts the cells that show nothing before the HEIC sharp jobs. A failed
-  thumbnail decode sends `None` and frees its slot. The thumbnail and preview queues are
-  `JobSlots` with an image index per job. A job whose index left the list starts nothing.
-  `decode::spawn_foreground` runs a foreground decode on the thread pool and returns its
-  receiver. A cell whose sharp job waits reads the disk cache at once (`ThumbPhase::CacheRead`, at
-  most `MAX_CACHE_READS` = 64) on its own pool of at most 8 threads (`cache_read_pool`), so a hit
-  never waits behind a cold decode. `LibheifSlot` and `MAX_THUMB_JOBS` do not count these threads,
-  and a miss holds one only for a `stat`. A hit drops the waiting jobs of its cell. A miss leaves
-  the cell in the queue and in `ThumbnailJobs::cache_misses` (`App::thumb_jobs`), and the later jobs of that cell skip their own
-  cache lookup. Each job computes its cache key (`CacheEntry`: one `stat` and one `realpath`) at
-  most one time, at its first use (`LazyEntry`), and reads and writes through it. A HEIC preview
-  after a missed cache read computes no key. The job reads the animation header only when
-  `App::animated` holds no flag for the same file stamp (`ThumbnailJobs::flag_stamps`), so a
-  warm cell after a zoom reads none and a changed file reads it again. A waiting sharp decode
-  does not start while the cache read of its cell runs.
+- **Decodes share the cores.** `LibheifSlot` shares the tile threads, at most 4 thumbnail and 2
+  prefetch decodes run at once, and a cache read never waits behind a cold decode. The queues,
+  the slots, the cache key and the header read are in the module doc of `app/thumbnails.rs`.
 - **Kitty emits:** a pass writes the new thumbnails in grid order, in one synchronized update, up
   to `EMIT_PASS_BYTES` (4 MB of the RGBA bytes of the cache, not the bytes on the wire). The rest
   goes out in the next pass. One write of 36 cells takes about 11 ms.
@@ -484,20 +433,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   A key handler deletes the pictures only before an overlay. A zoom or a resize calls
   `mark_dirty`, and the grid write deletes the old pictures itself. A delete without a later
   draw leaves black cells.
-- **Grid gaps and borders:** the cells of the grid have 1-cell gaps (`GAP` in `gallery.rs`). A
-  line of n cells takes n + 1 gaps: one between two neighbors and one at each edge.
-  `update_grid` subtracts the gaps first and gives the remainder to the first columns and rows.
-  The decode job pads every grid picture with transparent pixels to whole cells, at most the
-  base cell box (`pad_for_grid` in `app/thumbnails.rs` gives a `GridPicture` with its cell
-  count). The grid places it centered in its cell in whole cells, with `c=` and `r=` of that
-  count and no `X=` / `Y=`, so the content is centered to within half a cell. herdr relays a
-  pixel offset as a stretched picture, and a rounded cell size cannot push a padded picture
-  into the gap. The selected cell gets a thick border
-  (`BorderType::Thick`, `STYLES.cursor_cell`) in the gaps around the cell and its label
-  (`GalleryState::border_rect`). Each marked cell gets a plain yellow border (`STYLES.marked`).
-  Neighbors share the gap line. The selected border is drawn last, so it wins. A border that the
-  grid edge cuts stays open at that edge. No cell has a background fill. Every thumbnail is
-  decoded for the base cell size, so a wider column only has a larger margin.
+- **Grid gaps and borders:** the cells have 1-cell gaps, every picture is padded to whole cells
+  and placed centered with `c=` and `r=`, and the borders live in the gaps. The geometry is in
+  the module doc of `gallery.rs`.
 - **Terminal storage:** `TerminalImages` in `kitty_output/terminal_images.rs` tracks the images that the
   terminal stores, with their bytes (4 bytes per pixel, also for a picture that went out as RGB,
   so the count is an upper bound). The grid deletes evicted and replaced ids with `a=d,d=I`
@@ -548,36 +486,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   plain form `"/path" = 3` also loads. `+` / `-` save the level for the folder and as the
   global fallback. `0` resets the folder and removes its entry. The table keeps the 200 most
   recent folders.
-- **Grid loops:** every visible video and animated cell loops, and the loop replaces the stamped
-  still. A video takes 12 keyframes (`-skip_frame nokey`), 333 ms each. A clip of at most 20 s with
-  fewer than 12 keyframes decodes 12 frames at a constant rate, and a clip above 60 s seeks to 12
-  points. An animation keeps its frames and delays, at most 48 frames and 12 fps, at least one frame
-  per minute. The frames are half the size of the grid picture, padded to the cells of the still
-  (`pad_loop_frame`), and the terminal scales them. The loops take one of two paths (`Loops` in
-  `KittyBackend`). Animation (Ghostty 1.4.0 and later): the first frame is the root image (`a=t`,
-  one id from 2^31, `LOOP_ID_BASE`), the further frames go out with `a=f,z=<ms>`, then `a=a,r=1,z=`
-  sets the gap of the root frame and `a=a,s=3,v=1` loops forever. Then `a=p` places the animation
-  over the still and `d=i` removes the placement of the still, in one synchronized update
-  (`transmit_animation_to` in `kitty_output/loops.rs`). No tick and no wakeup: `loop_frames_due` and
-  `grid_loop_timeout` skip an animation. A hidden or replaced cell sends one `d=I`. A grid redraw
-  places the running animation again by its id. A `d=A` (the help popup, the info panel, the
-  fullscreen view, the zoom) makes the grid send it again with all frames. Ticks (the fallback for
-  herdr 0.9.5 and older terminals): each frame goes out one time with `a=t` and an id from 2^31. A
-  tick sends `a=d,d=i` for the old frame and `a=p` for the new one (`play_grid_loops`), about
-  75 bytes per cell, in one synchronized update. The loop clock has 12 ticks per second, and each
-  loop starts on a multiple of 4 ticks. Only visible cells loop. A loop above
-  `TERMINAL_IMAGE_BUDGET` keeps its still until the visible cells change. A cell that leaves the
-  screen deletes its frames with `d=I`. Loop jobs start after all stills of the
-  screen are out, at most 4, each on its own thread, and each ffmpeg run takes at most 2 decode
-  threads (`-threads 2 -filter_threads 1`). New stills or another view cancel the running loop runs
-  (the flag ends ffmpeg within 20 ms), and the cells get new jobs later. A `ResultGuard` sends
-  `Failed` for a job that panics. The help popup, the info panel and the other views stop the loops,
-  the delete question does not. `[gallery] animate = false` turns them off. The disk cache keeps the
-  frames as `<hash>.loop` files (QOI frames with their times, key version `viewr-loop-v1`,
-  `LOOP_CACHE_VERSION` in `app/disk_cache.rs`): change the version when the loop output changes. The
-  prune removes the loop files before the stills, each oldest first. The bench `grid_loops` reads
-  `07-video` and `06-animation` beside `VIEWR_TEST_DIR`, needs ffmpeg on PATH and measures both
-  paths. `FakeTerminal` reads `a=t`, `a=f`, `a=a` and `d=i`.
+- **Grid loops:** every visible video and animated cell loops after its still, as a Kitty
+  animation or through ticks (`Loops`), and `[gallery] animate = false` turns them off. The
+  frames, the ids, the jobs and the loop cache are in the module doc of `app/grid_loops.rs`.
 - **Cell icons:** a grid cell without a thumbnail shows a large dim picture (image) or play
   triangle (video), a folder cell a folder, and `..` two dots without a name (`icons.rs`,
   `draw_cell_icon` in `ui/grid.rs`). The icons are octant blocks (2x4 dots per cell, drawn by Ghostty
@@ -634,29 +545,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   waits for the old thread. `..` takes part only after a real cursor move. A folder that this
   session prefetched, or one with fewer than 2 files, does not start. Only the folder switch
   bench ticks the prefetch.
-- **Image colors:** Ghostty on macOS draws into a Display P3 surface, and its image shader copies
-  the pixels of a Kitty image without a conversion, also with `window-colorspace = srgb` (that
-  setting converts only the text colors). So viewr converts each image into Display P3
-  (`[terminal] colorspace`, default `display-p3`, or `srgb`). Each decoder reports the color of
-  its pixels: ICC from JPEG APP2 (also over several segments), PNG iCCP, WebP ICCP, TIFF tag
-  34675 and HEIF `prof`/`rICC`, CICP from HEIF `nclx` and PNG `cICP`, PNG `gAMA`/`cHRM`, and
-  the Adobe RGB mark of a camera JPEG without a profile (EXIF `ColorSpace` 0xFFFF with the
-  interoperability index `R03`, `color::jpeg_color`).
-  The conversion runs after the resize, in the layout of the image (RGB through
-  `color::convert_rgb`, or RGBA), as one cached `moxcms` transform with the rows in
-  parallel. A source in the target space converts nothing, so iPhone photos (Display P3) cost
-  nothing. A source that cannot convert (an unreadable or non-RGB ICC profile, unknown CICP
-  codes) converts as sRGB. PQ and HLG sources keep their values. `main` sets the target, and
-  tests keep sRGB. The terminal player converts with a `lut3d` cube (`player/tone_map.rs`): an
-  SDR video or animation gets a 17-point cube from its `color_primaries` (`Primaries::of_name`:
-  BT.709, SMPTE 170M, BT.470 BG, Display P3, DCI-P3 with a Bradford adaptation, BT.2020) into
-  the target. An untagged stream and GIF count as BT.709 with the sRGB curve. ffprobe reports
-  no profile for WebP and APNG, so the probe reads their ICC profile or cICP chunk
-  (`animation::embedded_primaries`) and maps a profile with the colorants of sRGB, Display P3
-  or BT.2020 to its primaries (`color::icc_known_space`). Any other profile counts as BT.709. A
-  source in the target space gets no cube. The SDR cube runs in 8 bit (`rgb24`, `rgba`), and
-  its values hold half a level, because `lut3d` truncates to 8 bit. A real ffmpeg test fails if
-  `lut3d` starts to round. At 1080p, the SDR cube costs 1.4 ms to 2 ms per frame.
+- **Image colors:** viewr converts every image into Display P3 (`[terminal] colorspace`), because
+  Ghostty copies the pixels of a Kitty image without a conversion. The sources, the transform
+  cache and the cubes of the player are in the module doc of `decode/color.rs`.
 - **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
   profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
   of 64 rows). A transform error, XYB, the enum encodings and a PQ or HLG ICC profile stay with

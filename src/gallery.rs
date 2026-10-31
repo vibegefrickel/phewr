@@ -1,3 +1,20 @@
+//! The grid geometry, the cursor and the in-memory thumbnail cache.
+//!
+//! # From the AGENTS.md gotcha "Grid gaps and borders"
+//!
+//! the cells of the grid have 1-cell gaps (`GAP` in `gallery.rs`). A line of n cells takes n + 1
+//! gaps: one between two neighbors and one at each edge. `update_grid` subtracts the gaps first
+//! and gives the remainder to the first columns and rows. The decode job pads every grid picture
+//! with transparent pixels to whole cells, at most the base cell box (`pad_for_grid` in
+//! `app/thumbnails.rs` gives a `GridPicture` with its cell count). The grid places it centered in
+//! its cell in whole cells, with `c=` and `r=` of that count and no `X=` / `Y=`, so the content is
+//! centered to within half a cell. herdr relays a pixel offset as a stretched picture, and a
+//! rounded cell size cannot push a padded picture into the gap. The selected cell gets a thick
+//! border (`BorderType::Thick`, `STYLES.cursor_cell`) in the gaps around the cell and its label
+//! (`GalleryState::border_rect`). Each marked cell gets a plain yellow border (`STYLES.marked`).
+//! Neighbors share the gap line. The selected border is drawn last, so it wins. A border that the
+//! grid edge cuts stays open at that edge. No cell has a background fill. Every thumbnail is
+//! decoded for the base cell size, so a wider column only has a larger margin.
 use crate::config::{MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
 use image::RgbaImage;
 use lru::LruCache;

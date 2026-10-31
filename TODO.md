@@ -33,15 +33,7 @@ After the tests:
 Order: speed first, then formats, then the delete removal, then the first release.
 
 1. Speed
-   - herdr is much slower than plain Ghostty (maintainer, 2026-10-24). In plain Ghostty, the grid scrolls without lag at the normal zoom. In herdr, scrolling lags, and the terminal player played almost in slow motion (the player now keeps real time and drops frames instead).
-     - Source research of herdr 0.9.5 (2026-10-25, `github.com/herdrdev/herdr`, tag v0.9.5). libghostty-vt in herdr parses each Kitty write and reads the temp file. herdr then copies the pixels to a `Vec`, hashes each new frame in full (SipHash), sends it over its server-to-client socket (bincode, at most 32 MiB) and writes it again for the host. All of this runs in the render path, at most every 16 ms (`MIN_RENDER_INTERVAL`).
-     - The fast path to the host (`t=f` from a decoded file, `server/headless/native_graphics.rs`, `eligible`) takes RGBA (`f=32`) only. viewr sends opaque frames as RGB (`f=24`), so every video frame and every opaque picture takes the slower inline path: the client writes a new temp file per image (`client/frame_output.rs`), or base64 in 3072-byte chunks if its gates fail (`TERM_PROGRAM=ghostty`, no SSH or tmux, a probe).
-     - The fast path waits for the host's `OK` before the next transfer. A geometry change (scroll, resize, overlay) while a transfer waits calls `retire_native_graphics_for_client`, which turns the fast path off for the rest of the client connection and empties the delivery cache, so everything uploads again inline.
-     - herdr replays every placement on every client frame (`request_placement_replay` in `kitty_graphics/surface.rs`). A grid with many pictures costs placement work on each redraw.
-     - herdr never re-encodes to PNG and never scales. The only switch is `terminal.kitty_graphics = false`.
-     - Candidate fixes in viewr, each to measure in herdr against plain Ghostty: inside herdr (`HERDR_ENV=1`), cap the player frame at about 960x540 and about 15 fps (the maintainer accepts 10 fps), send RGBA instead of RGB so the fast path applies, send fewer `a=d` deletes between frames, and send no new image for an unchanged picture.
-     - The herdr issue draft is `~/Projects/dev/herdr-issue-kitty-graphics-performance.md` (2026-10-25): the fast path for RGB, the permanent fallback after one scroll, and the placement replay on every frame. Fill in the numbers of its frame script in plain Ghostty and in herdr, then post it.
-     - Decided 2026-10-25: measure first, build the viewr fixes later.
+   - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The issue draft `~/Projects/dev/herdr-issue-kitty-graphics-performance.md` holds the three findings with these numbers. Post it. The RGBA fast path idea for viewr waits for the answer.
    - Player start: the first frame comes 170 ms to 305 ms after the open (measured 2026-10-27): the ffmpeg start, the VideoToolbox setup and, for HDR, the cube parse (33 points, about 42 ms). Candidates: start ffmpeg while the cursor rests on a video, or a smaller HDR cube.
    - Process start: libheif costs about 20 ms of dylib load before `main`. The delete removal takes `trash` and Foundation out (about 3.5 ms).
    - Keep the fullscreen image as RGB from the decode on and build the zoom crop as RGB. That removes the `to_rgba8` copy and the RGB step of each fullscreen write and each pan step (a type change of `App::loaded`, the prefetch and the zoom).
@@ -61,7 +53,7 @@ Order: speed first, then formats, then the delete removal, then the first releas
 3. Delete removal, after the terminal tests in "Now"
    - viewr is a viewer only. Remove trash, permanent delete, the delete question, the `d` / `D` keys, their tests and docs, and the `trash` crate if nothing else needs it.
    - Keep the marks (`Space`, `a`, `A`) for a later use, for example a slideshow of the marked images.
-4. Grid loops: done (merged 2026-10-27, see Done). Native Kitty animations for the loops: done (merged 2026-10-30, `REVIEW-2026-10-28.md` K2). Open: the terminal test of both paths in Ghostty and in herdr ("Now"), and four small follow-ups of the K2 report: the count of owed answers in `LateAnswerFilter` after a start timeout, an explicit drop of the app before the yazi reveal so the loop jobs see the cancel, the loop path in the help popup, and a test filter argument for `just bench`.
+4. Grid loops: done (merged 2026-10-27). Native Kitty animations for the loops: done (merged 2026-10-30, `9d84897`, the follow-ups in `e0a9e62`). Open: the terminal test of both paths in Ghostty 1.4.0 and herdr 0.9.5 ("Now"). Stop the loops, the player and the slideshow while the tab is hidden (mode 2033): stopped on 2026-10-30, crossterm 0.27 to 0.29 never end the report sequence and lose all input after it, the issue draft is `~/Projects/dev/crossterm-issue-visibility-report.md` (`REVIEW-2026-10-28.md` K3).
 5. First release: create the Codeberg repository `viewr`, then `just render` and `just release`. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 
 ## Later
@@ -77,53 +69,54 @@ Order: speed first, then formats, then the delete removal, then the first releas
 
 ## Done
 
-- No small `▶` marker anymore. The still of a video or an animated image carries the large play triangle (white with a dark edge, stamped into the pixels) until its loop starts, because the loop frames take a moment.
-- Grid loops (2026-10-27): every visible video and animated cell plays a loop of its frames, in place of the `▶` marker. A video shows 12 keyframes at 3 fps, an animation its own frames (at most 48 and 12 fps). The frames are half the size of the grid picture (the budget), go out one time, and a frame swap costs 75 bytes per cell. Warm folder: the first loop frame after 11 ms, all 30 loops after 65 ms. 30 loops: 12 wakeups and 4 ms CPU per second. The still grid is unchanged over 16 alternating runs. Decisions: a short clip with fewer than 12 keyframes decodes 12 frames at a constant rate, 2 decode threads per loop run, new stills cancel the loop runs, the prune removes loop files before stills, `[gallery] animate = false` turns the loops off.
-- One `q` leaves the player for the grid, also after a step from the fullscreen view onto a video (before, the first `q` showed the fullscreen placeholder). The first frame of a new video removes the pictures of the view before, so no photo shows around the video.
-- Player measured without a terminal (2026-10-27, `just bench` per clip of `07-video`): every clip decodes at 160 fps to 500 fps at 1080p and plays in real time with 0 drops. The first frame comes 170 ms to 305 ms after the open (ffmpeg start, VideoToolbox, the HDR cube). In plain Ghostty, the player has no bottleneck.
-- VFR bursts: a base rate above 1.5 times the average plays at the average, at least 24 fps. A phone clip at 60 with an average of 30 plays at 30 fps instead of 60 duplicated frames. A screen recording at 25 with an average of 7.7 plays at 24 fps.
-- An animated WebP or APNG with an ICC profile or a cICP chunk plays in its own colors: the probe reads the profile and maps sRGB, Display P3 and BT.2020 colorants to the cube primaries. Other profiles still play as sRGB.
-- Camera JPEGs in Adobe RGB without an ICC profile (EXIF `ColorSpace` 0xFFFF with the interoperability index `R03`) convert as Adobe RGB, in the turbojpeg and the `image` path. Thumbnail cache key v13.
-- No sRGB bench folder needed: `color_conversion_cost` already measures both directions. A grid cell converts in 0.14 ms to 0.21 ms, a fullscreen image in 0.65 ms to 1.69 ms, a 24 MP sRGB frame into Display P3 in 7 ms (2026-10-25). That is under 1 % of a cold grid decode.
+- Review of 2026-10-28 (worked 2026-10-30, `REVIEW-2026-10-28.md` holds the plan and the state): 26 commits through 12 workers.
+- No small `▶` marker anymore.
+- Grid loops (2026-10-27): every visible video and animated cell plays a loop of its frames, in place of the `▶` marker. Decisions: a short clip with fewer than 12 keyframes decodes 12 frames at a constant rate, 2 decode threads per loop run, new stills cancel the loop runs, the prune removes loop files before stills, `[gallery] animate = false` turns the loops off.
+- One `q` leaves the player for the grid, also after a step from the fullscreen view onto a video (before, the first `q` showed the fullscreen placeholder).
+- Player measured without a terminal (2026-10-27, `just bench` per clip of `07-video`): every clip decodes at 160 fps to 500 fps at 1080p and plays in real time with 0 drops.
+- VFR bursts: a base rate above 1.5 times the average plays at the average, at least 24 fps.
+- An animated WebP or APNG with an ICC profile or a cICP chunk plays in its own colors: the probe reads the profile and maps sRGB, Display P3 and BT.2020 colorants to the cube primaries.
+- Camera JPEGs in Adobe RGB without an ICC profile (EXIF `ColorSpace` 0xFFFF with the interoperability index `R03`) convert as Adobe RGB, in the turbojpeg and the `image` path.
+- No sRGB bench folder needed: `color_conversion_cost` already measures both directions.
 - The run loop polls every 2 ms until the first picture of the grid shows (`FIRST_PICTURE_POLL`): the cold first picture after 14 ms to 17 ms instead of 16 ms to 18 ms.
-- Each bench waits for its background work to end. In the full `just bench`, the cold grid shows all cells after 126 ms instead of 431 ms, the same as the grid bench alone (118 ms to 129 ms).
-- In the fullscreen view and the player, `h` and `j` step to the previous file, `k` and `l` to the next. Zoomed in, `hjkl` still pan.
-- viewr always starts in the grid, also in a folder with one image (`~/Pictures`). It never opens the fullscreen view by itself. Only `--slideshow` starts a slideshow.
-- The terminal player keeps real time (rule of 2026-10-24): the clock never moves to a late frame, a lag over 300 ms starts ffmpeg again ahead of the clock, and a slow terminal drops frames. A clip of 6 s with a terminal that needs 3 intervals per frame ends after at most 6.6 s instead of 18 s. The real clips play at their length with 0 drops.
+- Each bench waits for its background work to end.
+- In the fullscreen view and the player, `h` and `j` step to the previous file, `k` and `l` to the next.
+- viewr always starts in the grid, also in a folder with one image (`~/Pictures`).
+- The terminal player keeps real time (rule of 2026-10-24): the clock never moves to a late frame, a lag over 300 ms starts ffmpeg again ahead of the clock, and a slow terminal drops frames.
 - The player has no pause and no seek: `h` / `l`, the arrows and `n` / `N` step to the previous and next file, Space pauses a running slideshow, the wheel and a click on the video do nothing, `p` opens the mpv window.
-- Grid icons at 30 % of the cell height, a picture for images, two dots without a name for `..`. The help popup hides the icons and the play markers too.
-- The start note is gone. The last row of the help popup names the Kitty medium.
-- Large octant icons in the grid (loading image, video, folder, `..`). The status row shows the facts of the selected file at the right (size, megapixels, file size, format, date of the shot, and length, frame rate and HDR curve of a video) and no key hints.
+- Grid icons at 30 % of the cell height, a picture for images, two dots without a name for `..`.
+- The start note is gone.
+- Large octant icons in the grid (loading image, video, folder, `..`).
 - One file argument opens its folder with the cursor on the file. yazi `g v` runs `viewr %h`, so it opens the hovered folder or the folder at the hovered file.
-- Warm grid: disk cache reads beside the decode slots and batched Kitty emits. All 36 cells show after 17 ms instead of 127 ms, the cold grid is not slower.
+- Warm grid: disk cache reads beside the decode slots and batched Kitty emits.
 - Videos, video thumbnails and animations convert into the terminal color space: a 17-point SDR cube by primaries (BT.709, BT.601, P3, DCI-P3, BT.2020), the HDR cube writes P3, SDR thumbnails convert in Rust. Real time stays at 30 and 60 fps without drops.
 - Disk cache in QOI (a hit 2.2 times faster), the cell size query and the Kitty probe in one round trip, the first warm picture after about 20 ms instead of about 28 ms. The `dist` profile gives no gain, so `just install` stays on `--release`.
 - `ffmpeg-next` dropped: viewr starts `ffmpeg` / `ffprobe` from PATH when installed, the binary links no FFmpeg library, video thumbnails take about 250 ms instead of 0.8 to 2.4 s and get the rotation and the HDR tone mapping, start 30 ms to 21 ms.
-- Image colors: every image converts into Display P3, because Ghostty shows image pixels as P3. sRGB images were too saturated before. `[terminal] colorspace` switches to sRGB.
-- Opaque images and video frames go out as RGB (`f=24`): 25 % fewer bytes per frame, the player decode 30 to 50 % faster. PNG decoders measured: `zune-png` and `png` are not faster than the `image` route, so the PNG item is closed.
-- The directory picker is gone: subfolders, `Backspace`, the mouse and a path argument cover navigation. An empty folder shows a note.
+- Image colors: every image converts into Display P3, because Ghostty shows image pixels as P3. sRGB images were too saturated before.
+- Opaque images and video frames go out as RGB (`f=24`): 25 % fewer bytes per frame, the player decode 30 to 50 % faster.
+- The directory picker is gone: subfolders, `Backspace`, the mouse and a path argument cover navigation.
 - Folder prefetch: after 300 ms on a folder, Enter shows every cell sharp after about 140 ms instead of about 2 s.
 - JPEG XL colors: ICC v2 profiles convert through `moxcms` (Adobe RGB was wrong), 18 color chart fixtures, all within ΔE00 0.36 of djxl.
 - Videos with a variable frame rate play at the right speed (a screen recording played 3.2 times too slow).
 - Two-column help popup (36 rows from 100 columns on), the play marker for videos too.
-- Animated GIF, WebP, APNG and AVIS play in the terminal player, with a `▶` marker in the grid. The animation flag comes from the thumbnail job, so the draw reads no file.
+- Animated GIF, WebP, APNG and AVIS play in the terminal player, with a `▶` marker in the grid.
 - Full mouse support in every view and overlay: modes 1000, 1002 and 1006 only (no 1003), `[gallery] mouse`, the capture is released while an mpv window plays.
 - Speed batch: embedded JPEG previews for camera RAW (TIFF-based, CR3, RAF) and PSD, padding to whole cells only (a cold grid sends 44.1 MB instead of 57.3 MB), parked thumbnails for the way back (all cells sharp after about 25 ms), thumbnail cache key v7.
-- Terminal video player (route 3) as the default video path: ffmpeg with videotoolbox, `scale_vt` and the HDR cube, frames through the temp file medium with `c=` / `r=`, 1080p at 30 fps without drops. `p` opens the mpv window with sound. The mpv `--vo=kitty` mode and the old 10 fps player are gone.
+- Terminal video player (route 3) as the default video path: ffmpeg with videotoolbox, `scale_vt` and the HDR cube, frames through the temp file medium with `c=` / `r=`, 1080p at 30 fps without drops.
 - Subfolders as grid entries: `..`, `Enter` into a folder, `Backspace` to the parent.
 - Zoom level per folder: the state file keeps up to 200 folders, a folder without an entry uses the last level.
-- `q` goes back one step in every view and quits only in the grid. In a running slideshow, `q` leaves in one press. In the built-in player during a slideshow, `q` goes to the fullscreen placeholder, like `Esc`.
+- `q` goes back one step in every view and quits only in the grid.
 - Zoom fix: a `+`, `-` or `0` at a limit no longer deletes all pictures (black cells), `q` in the fullscreen view goes back to the grid.
 - Kitty output fixes (batch 10): thumbnails padded to whole cells, no `X=` / `Y=` (fixes the herdr overlap and the squeezed landscapes), `d=I` for evicted images and a 128 MB terminal budget (fixes the black cells), a 512 MB in-memory cache limit, `CSI 16 t` for the cell size, the filename toggle decodes again, late probe answers are dropped, empty cells decode first, the HEIC preview goes out at native size, grid zoom 2 to 12 rows.
 - Refactor (batch 9): `main.rs` and `app.rs` split into 30 modules, then the repeating patterns removed.
 - Video in a fullscreen mpv window by default, grid gaps with line borders, loading icons, no frames and no search bar (batch 8b).
 - Grid fill (batch 8): no border reserve, a 4 px padding with the Kitty keys `X=` / `Y=`, a background fill for the selected and the marked cells, the remainder columns and rows reach the edges, the cell shape from the median aspect of the first 64 file headers (7 buckets), Catmull-Rom for every resize (24 MP resize 54 ms to 36 ms), thumbnail cache key v5.
 - mpv round (batch 7): `--hwdec=auto-copy-safe` and a scale filter in the terminal (4K HDR clip 34 fps to 97 fps), a tone mapping LUT for HLG and PQ in the terminal (8.4 dB to 30.5 dB against the macOS SDR export), `n` / `N` step to the next and previous file from inside mpv, the mpv window shows its exit code, quiet FFmpeg log, the yazi reveal on quit.
-- Two-phase HEIC grid thumbnails (batch 7): the embedded thumbnail shows at once, the sharp decode replaces it. libheif reads through a buffered stream. Cold grid of 40 HEIC files: first image 250 ms to 13 ms, all 24 cells shown after 125 ms, all cells sharp 1882 ms to 1461 ms.
-- Speed round (batch 6): the run loop polls every 10 ms while a decode, a prefetch, a filter or the scan runs. The gallery pre-decode gets the fullscreen box as size hint (resize on the UI thread 52 ms to 72 ms, now 0 ms). libheif decodes share the cores, the fullscreen decode takes all of them. At most 4 thumbnail and 2 prefetch decodes run at once, the prefetch follows the step direction and keeps the shown image. On the test folder: HEIC open 525 ms to about 210 ms, cold grid first thumbnail 1013 ms to about 100 ms, warm grid 565 ms to 90 ms.
-- Kitty transfer medium: a temp file (`t=t`) when the terminal answers the probe with `OK` and deletes the probe file, PNG over SSH, direct otherwise. `VIEWR_KITTY_TRANSFER=direct|png|file` skips the probe. One fullscreen frame: 29 MB of text, now 199 bytes and a 21.7 MB file.
+- Two-phase HEIC grid thumbnails (batch 7): the embedded thumbnail shows at once, the sharp decode replaces it. libheif reads through a buffered stream.
+- Speed round (batch 6): the run loop polls every 10 ms while a decode, a prefetch, a filter or the scan runs.
+- Kitty transfer medium: a temp file (`t=t`) when the terminal answers the probe with `OK` and deletes the probe file, PNG over SSH, direct otherwise.
 - Benchmarks: `src/bench.rs` holds ignored benchmarks on `VIEWR_TEST_DIR`, `just bench [DIR]` runs them.
-- Theme system removed: `src/theme.rs`, the theme catalog, the `t` picker and the `-t` flag are gone. viewr uses the terminal default colors and the 16 ANSI colors (`src/styles.rs`). The config keys `theme` and `theme_catalog` have no effect, an old config still loads.
+- Theme system removed: `src/theme.rs`, the theme catalog, the `t` picker and the `-t` flag are gone. viewr uses the terminal default colors and the 16 ANSI colors (`src/styles.rs`).
 - Grid look: a border only around the selected and the marked cells, no spacer line, centered thumbnails, filenames hidden by default (`n` toggles them)
 - Grid zoom: `+`/`-` change the visible rows (default 4), the columns follow the terminal width (minimum 2), the state file saves the zoom level as `[gallery] visible_rows`
 - Fullscreen fix: a gallery pre-decode without a hint showed HEIC, JPEG and PNG at full size

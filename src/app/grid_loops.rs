@@ -11,6 +11,39 @@
 //!   placement of one frame for the next one, about 75 bytes per cell. All loops share one
 //!   clock of [`TICKS_PER_SECOND`], and each loop starts at a multiple of [`START_ALIGN`]
 //!   ticks, so the frames of all cells change in the same pass of the run loop.
+//!
+//! # From the AGENTS.md gotcha "Grid loops"
+//!
+//! every visible video and animated cell loops, and the loop replaces the stamped still. A video
+//! takes 12 keyframes (`-skip_frame nokey`), 333 ms each. A clip of at most 20 s with fewer than
+//! 12 keyframes decodes 12 frames at a constant rate, and a clip above 60 s seeks to 12 points. An
+//! animation keeps its frames and delays, at most 48 frames and 12 fps, at least one frame per
+//! minute. The frames are half the size of the grid picture, padded to the cells of the still
+//! (`pad_loop_frame`), and the terminal scales them. The loops take one of two paths (`Loops` in
+//! `KittyBackend`). Animation (Ghostty 1.4.0 and later): the first frame is the root image (`a=t`,
+//! one id from 2^31, `LOOP_ID_BASE`), the further frames go out with `a=f,z=<ms>`, then
+//! `a=a,r=1,z=` sets the gap of the root frame and `a=a,s=3,v=1` loops forever. Then `a=p` places
+//! the animation over the still and `d=i` removes the placement of the still, in one synchronized
+//! update (`transmit_animation_to` in `kitty_output/loops.rs`). No tick and no wakeup:
+//! `loop_frames_due` and `grid_loop_timeout` skip an animation. A hidden or replaced cell sends
+//! one `d=I`. A grid redraw places the running animation again by its id. A `d=A` (the help popup,
+//! the info panel, the fullscreen view, the zoom) makes the grid send it again with all frames.
+//! Ticks (the fallback for herdr 0.9.5 and older terminals): each frame goes out one time with
+//! `a=t` and an id from 2^31. A tick sends `a=d,d=i` for the old frame and `a=p` for the new one
+//! (`play_grid_loops`), about 75 bytes per cell, in one synchronized update. The loop clock has 12
+//! ticks per second, and each loop starts on a multiple of 4 ticks. Only visible cells loop. A
+//! loop above `TERMINAL_IMAGE_BUDGET` keeps its still until the visible cells change. A cell that
+//! leaves the screen deletes its frames with `d=I`. Loop jobs start after all stills of the screen
+//! are out, at most 4, each on its own thread, and each ffmpeg run takes at most 2 decode threads
+//! (`-threads 2 -filter_threads 1`). New stills or another view cancel the running loop runs (the
+//! flag ends ffmpeg within 20 ms), and the cells get new jobs later. A `ResultGuard` sends
+//! `Failed` for a job that panics. The help popup, the info panel and the other views stop the
+//! loops, the delete question does not. `[gallery] animate = false` turns them off. The disk cache
+//! keeps the frames as `<hash>.loop` files (QOI frames with their times, key version
+//! `viewr-loop-v1`, `LOOP_CACHE_VERSION` in `app/disk_cache.rs`): change the version when the loop
+//! output changes. The prune removes the loop files before the stills, each oldest first. The
+//! bench `grid_loops` reads `07-video` and `06-animation` beside `VIEWR_TEST_DIR`, needs ffmpeg on
+//! PATH and measures both paths. `FakeTerminal` reads `a=t`, `a=f`, `a=a` and `d=i`.
 
 use super::disk_cache::{try_load_loop, try_save_loop};
 use super::thumbnails::{pad_loop_frame, thumb_target_px};

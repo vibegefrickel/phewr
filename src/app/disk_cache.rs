@@ -457,12 +457,16 @@ fn prunes_after_write(sequence: u64) -> bool {
 /// milliseconds, so an older temp file belongs to a viewr that ended during its write.
 const STALE_TEMP_AGE: Duration = Duration::from_secs(3600);
 
-/// Remove a temp file of `try_save_to_disk_cache` that is older than `STALE_TEMP_AGE`. A quit
+/// Remove a temp file of the cache or a partial cube file that is older than `STALE_TEMP_AGE`. A quit
 /// during a cache write leaves one, and the size prune only counts the cache files.
 fn remove_stale_temp_file(entry: &std::fs::DirEntry) {
     let path = entry.path();
-    let is_temp = path.extension().and_then(|ext| ext.to_str()) == Some("tmp")
-        && entry.file_name().to_string_lossy().starts_with('.');
+    let extension = path.extension().and_then(|ext| ext.to_str());
+    // The thumbnail temp files start with a dot, the partial cube files of the tone map end in
+    // `.partial` (`player/tone_map.rs`).
+    let is_temp = (extension == Some("tmp")
+        && entry.file_name().to_string_lossy().starts_with('.'))
+        || extension == Some("partial");
     let is_stale = entry
         .metadata()
         .and_then(|metadata| metadata.modified())
@@ -792,11 +796,13 @@ mod tests {
         let left = cache.join(".abc.png.1.0.tmp");
         let writing = cache.join(".def.png.2.0.tmp");
         let other = cache.join("other.tmp");
-        for path in [&left, &writing, &other] {
+        let cube = cache.join("tonemap-hlg-p3-v3.cube.3.0.partial");
+        let cube_writing = cache.join("tonemap-pq-p3-v3.cube.4.0.partial");
+        for path in [&left, &writing, &other, &cube, &cube_writing] {
             fs::write(path, [0_u8; 10]).unwrap();
         }
         let two_hours_ago = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&left, &other] {
+        for path in [&left, &other, &cube] {
             let file = fs::File::options().write(true).open(path).unwrap();
             file.set_modified(two_hours_ago).unwrap();
         }
@@ -808,5 +814,7 @@ mod tests {
         );
         assert!(writing.exists(), "a write in progress stays");
         assert!(other.exists(), "only the temp files of the cache go");
+        assert!(!cube.exists(), "an old partial cube file goes");
+        assert!(cube_writing.exists(), "a cube write in progress stays");
     }
 }

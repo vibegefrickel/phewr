@@ -6,6 +6,36 @@
 //! and `r=`. The player keeps real time: a slow decode or a slow terminal drops frames, and a
 //! clip never plays in slow motion. It has no pause, no seek and no sound: `p` opens the video
 //! in the mpv window.
+//!
+//! # From the AGENTS.md gotcha "Terminal player"
+//!
+//! ffmpeg runs as a subprocess (`player/decoder.rs`, behind the `Decoder` trait), with `-hwaccel
+//! videotoolbox`, `-noautorotate`, `scale_vt` and `transpose_vt` on the GPU, `hflip,vflip` for 180
+//! degrees, `hwdownload` as `p010le` (10 bit) or `nv12`, and
+//! `format=rgb48le,lut3d=...:interp=tetrahedral` for HLG and PQ. A GPU run without a frame runs
+//! again in software (`Pipeline::Software`). A video with a variable frame rate gets `-fps_mode
+//! cfr -r` too: the probe calls it VFR when `r_frame_rate` and `avg_frame_rate` differ by more
+//! than 1 %. The output rate is `r_frame_rate`, but a base rate above 1.5 times the average is a
+//! burst, and then the output rate is the average, at least 24 fps and never above `r_frame_rate`.
+//! Every rate stays at or below 60 fps (`pacing_fps`, `variable_fps` in `player/probe.rs`).
+//! `VideoInfo.rate` is `Rate::Constant`, `Rate::Variable` or `Rate::Animation`. Without `-r`,
+//! ffmpeg writes raw frames at `r_frame_rate`, so the pacing uses the same rate. iPhone clips (30
+//! and 29.99) stay constant-rate. ffmpeg writes `-pix_fmt rgb24` for a video and `rgba` for an
+//! animation, and `pixel_format` in `player/decoder.rs` is the one source for the frame layout
+//! (`player::Frame`). One frame per temp file, image id `u32::MAX - 1` (the grid ids count up from
+//! 1, the loop frames from 2^31), `c=` / `r=` to the cell box, no `X=` / `Y=`. The first frame of
+//! a new video removes all other placements in the same synchronized update
+//! (`App::clear_before_video`), so the photo of the view before does not show around the frame.
+//! The frame box is the window in pixels, capped at 1920x1080 (`MAX_FRAME`). A resize moves the
+//! cell box. The frame size stays until the next ffmpeg start. `encoder::MAX_PAYLOAD_BYTES` (64
+//! MiB) caps one Kitty payload, because Ghostty 1.4.0 refuses 65 MiB. The fullscreen and prefetch
+//! decode boxes shrink below it before the decode (`capped_box`, 3 bytes per pixel), so no opaque
+//! decode runs the writer fallback. A transparent image above the cap and a zoom crop still
+//! shrink in the writer with Catmull-Rom and get `c=` only, so the rows follow the aspect ratio.
+//! The reader thread holds 2 frames (`FRAME_QUEUE`), so a slow terminal blocks ffmpeg on the pipe.
+//! The reader of a run owns `FRAME_POOL` (5) frame buffers (`FramePool`), so no run allocates a
+//! zeroed 6 MB `Vec` per frame. A `PooledFrame` returns its buffer on drop, also a frame that the
+//! catch-up rule drops, and a frame of an old run returns to the pool of its own run.
 
 pub(crate) mod animation;
 mod decoder;
