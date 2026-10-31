@@ -146,6 +146,9 @@ pub(crate) struct App {
     /// the view before does not show around the frame.
     #[cfg(feature = "video")]
     pub(crate) clear_before_video: bool,
+    /// The terminal player that starts while the gallery cursor rests on a video.
+    #[cfg(feature = "video")]
+    pub(crate) video_prestart: crate::video_handoff::VideoPrestart,
 
     // Scanner state
     shared_list: SharedImageList,
@@ -273,6 +276,8 @@ impl App {
             video_window: None,
             #[cfg(feature = "video")]
             clear_before_video: false,
+            #[cfg(feature = "video")]
+            video_prestart: crate::video_handoff::VideoPrestart::default(),
             shared_list,
             known_len: 0,
             scan_complete: false,

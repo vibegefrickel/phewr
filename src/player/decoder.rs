@@ -466,6 +466,8 @@ impl Drop for PooledFrame {
 }
 
 impl Drop for FrameStream {
+    /// Kill ffmpeg, and reap it on a thread: the exit of a killed ffmpeg takes about 6 ms, and
+    /// a cursor move or a restart of the player does not wait for it.
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
             #[expect(
@@ -473,13 +475,39 @@ impl Drop for FrameStream {
                 reason = "a process that already ended cannot be killed, and that is fine"
             )]
             let _ = child.kill();
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "the wait only reaps the process; its exit code does not matter"
-            )]
-            let _ = child.wait();
+            reap(child);
         }
     }
+}
+
+/// Wait for the exit of `child` on a thread. Without a thread, the wait blocks here, so no
+/// process stays as a zombie.
+fn reap(child: Child) {
+    let (send, receive) = mpsc::channel::<Child>();
+    let reaper = thread::Builder::new()
+        .name("viewr-reap".to_owned())
+        .spawn(move || {
+            if let Ok(mut child) = receive.recv() {
+                wait_for_exit(&mut child);
+            }
+        });
+    // A failed spawn drops the receiver, and the send gives the child back.
+    let unsent = match reaper {
+        Ok(_) => send.send(child).err().map(|error| error.0),
+        Err(_) => Some(child),
+    };
+    if let Some(mut child) = unsent {
+        wait_for_exit(&mut child);
+    }
+}
+
+/// Reap `child`. Its exit code does not matter.
+fn wait_for_exit(child: &mut Child) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the wait only reaps the process; its exit code does not matter"
+    )]
+    let _ = child.wait();
 }
 
 /// Starts ffmpeg and reads the header of a video with ffprobe. The tests swap in a fake that
@@ -1298,15 +1326,25 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_stream_kills_its_process() {
+    fn a_dropped_stream_kills_its_process_and_a_thread_reaps_it() {
         let shell = Path::new("/bin/sh");
-        let args = [OsString::from("-c"), OsString::from("sleep 30")];
+        let args = [OsString::from("-c"), OsString::from("exec sleep 30")];
         let stream = SystemDecoder::new(None).start(shell, &args, 4).unwrap();
+        let pid = stream.child.as_ref().unwrap().id().to_string();
         let started = std::time::Instant::now();
         drop(stream);
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the drop waits for the kill, not for the sleep"
+            started.elapsed() < Duration::from_millis(100),
+            "the drop waits neither for the sleep nor for the exit"
         );
+        // `kill -0` finds a process until its parent reaps it, also a zombie.
+        crate::test_support::wait_until(|| {
+            !std::process::Command::new("/bin/kill")
+                .args(["-0", &pid])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        });
     }
 }

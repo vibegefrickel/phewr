@@ -1588,6 +1588,278 @@ fn report_video_frame_write(app: &App, frames: usize, file_bytes: u64) {
     ));
 }
 
+/// The time from Enter on the first video of the folder to its first frame write, after
+/// rests of the gallery cursor of 0 ms to 1 s. During a rest, the player starts ahead of Enter
+/// after `PRESTART_DELAY` (`video_handoff::prestart`), at the first pass of the run loop after
+/// it. The probe is in the cache, as after the thumbnail job. After the first frame, the clip
+/// plays for 3 s, for the frame rate and the dropped frames. Then the time of the pass that
+/// starts the player, and of the pass that drops it on a cursor move.
+#[cfg(feature = "video")]
+#[test]
+#[ignore = "reads the folder VIEWR_TEST_DIR"]
+fn terminal_player_first_frame_after_enter() {
+    use crate::config::VideoPlayer;
+    use crate::player::Decoder;
+    use crate::run_loop::LoopState;
+    use std::rc::Rc;
+
+    let Some(dir) = test_dir() else {
+        return;
+    };
+    let Some((ffmpeg, decoder)) = video_programs("terminal player enter") else {
+        return;
+    };
+    let decoder: Rc<dyn Decoder> = Rc::new(decoder);
+    let mut state = LoopState::new(&crate::config::Config::default());
+    state.video.player = VideoPlayer::Terminal;
+    state.video.ffmpeg = Some(ffmpeg);
+    state.video.decoder = Rc::clone(&decoder);
+    let cases = [
+        (0, Passes::RunLoop),
+        (300, Passes::RunLoop),
+        (500, Passes::RunLoop),
+        (1000, Passes::RunLoop),
+        (300, Passes::Every10Ms),
+    ];
+    for (rest, passes) in cases {
+        if report_enter(&dir, &mut state, Duration::from_millis(rest), passes).is_none() {
+            report("terminal player enter: no video in the folder");
+            return;
+        }
+    }
+    report_start_and_drop(&dir, &mut state);
+}
+
+/// The rounds of each case of [`terminal_player_first_frame_after_enter`].
+#[cfg(feature = "video")]
+const ENTER_ROUNDS: usize = 3;
+
+/// How the bench passes during the rest of the cursor.
+#[cfg(feature = "video")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Passes {
+    /// As the run loop of an idle grid: the background polls (the status-row read of the file
+    /// under the cursor) and the wait of `next_timeout`, 250 ms when nothing runs.
+    RunLoop,
+    /// A pass every 10 ms, as a wake-up of the run loop at the end of the delay would give.
+    Every10Ms,
+}
+
+/// Measure [`ENTER_ROUNDS`] Enters after `rest` and report them.
+#[cfg(feature = "video")]
+fn report_enter(
+    dir: &Path,
+    state: &mut crate::run_loop::LoopState,
+    rest: Duration,
+    passes: Passes,
+) -> Option<()> {
+    let mut firsts = Vec::new();
+    let mut starts = Vec::new();
+    let mut plays = Vec::new();
+    for _ in 0..ENTER_ROUNDS {
+        let run = enter_and_play(dir, state, rest, passes)?;
+        firsts.push(run.first);
+        starts.extend(run.started);
+        plays.push(format!("{:.1} fps {} dropped", run.fps, run.dropped));
+    }
+    let started = if starts.is_empty() {
+        "no player start".to_owned()
+    } else {
+        format!("player start {} into the rest", millis(median(&mut starts)))
+    };
+    let passes = match passes {
+        Passes::RunLoop => "run loop waits",
+        Passes::Every10Ms => "a pass every 10 ms",
+    };
+    report(&format!(
+        "terminal player enter after a rest of {} ({passes}): {started}, first frame after {} \
+         (median of {ENTER_ROUNDS}), then {}",
+        millis(rest),
+        millis(median(&mut firsts)),
+        plays.join(", ")
+    ));
+    Some(())
+}
+
+/// Report the pass that starts the player, with the HDR cube on disk and with a new cache
+/// directory where the pass writes the cube, and the pass that drops the player.
+#[cfg(feature = "video")]
+fn report_start_and_drop(dir: &Path, state: &mut crate::run_loop::LoopState) {
+    let mut warm = Vec::new();
+    let mut cold = Vec::new();
+    let mut drops = Vec::new();
+    for _ in 0..ENTER_ROUNDS {
+        let cache = tempfile::tempdir().unwrap();
+        for (times, cache) in [(&mut warm, None), (&mut cold, Some(cache.path()))] {
+            let rested = rest_on_the_first_video(dir, state, REST, Passes::Every10Ms, cache);
+            times.extend(rested.and_then(|rested| rested.start_pass));
+        }
+        drops.extend(drop_after_a_rest(dir, state));
+    }
+    report(&format!(
+        "terminal player enter: the pass that starts the player takes {} with the cube on \
+         disk, {} with the write of the cube; a cursor move drops the player in {} (median of \
+         {ENTER_ROUNDS})",
+        fine_millis(median(&mut warm)),
+        fine_millis(median(&mut cold)),
+        fine_millis(median(&mut drops))
+    ));
+}
+
+/// The rest of the measures of the pass that starts the player and of its drop.
+#[cfg(feature = "video")]
+const REST: Duration = Duration::from_secs(1);
+
+/// One Enter of [`terminal_player_first_frame_after_enter`].
+#[cfg(feature = "video")]
+struct EnterRun {
+    /// From the begin of the rest to the start of the player, if it started.
+    started: Option<Duration>,
+    /// From Enter to the first frame write.
+    first: Duration,
+    /// The frames on the screen per second after the first one.
+    fps: f64,
+    dropped: u32,
+}
+
+/// Scan `dir`, rest the gallery cursor on its first video for `rest`, press Enter, wait for
+/// the first frame write and play on for 3 s.
+#[cfg(feature = "video")]
+fn enter_and_play(
+    dir: &Path,
+    state: &mut crate::run_loop::LoopState,
+    rest: Duration,
+    passes: Passes,
+) -> Option<EnterRun> {
+    const PLAY: Duration = Duration::from_secs(3);
+
+    let rested = rest_on_the_first_video(dir, state, rest, passes, None)?;
+    let mut app = rested.app;
+    let mut pending = Vec::new();
+    let start = Instant::now();
+    app.enter_fullscreen_selected();
+    app.image_rect = fullscreen_rect();
+    let mut first = None;
+    let mut frames = 0;
+    while first.is_none_or(|first: Instant| first.elapsed() < PLAY) {
+        assert!(start.elapsed() < LIMIT + PLAY, "no frame");
+        crate::video_handoff::play_videos(&mut app, state, &mut crate::mpv::SystemRunner);
+        run_pass(&mut app, &mut pending);
+        let out = app.graphics_out.take_bytes();
+        remove_temp_files(&out);
+        let written = count_transmissions(&out);
+        if written > 0 {
+            first.get_or_insert_with(Instant::now);
+            frames += written;
+        }
+        // Until the first frame, a look every millisecond, for the measure.
+        let wait = next_timeout(&app, &pending);
+        thread::sleep(if first.is_some() {
+            wait
+        } else {
+            wait.min(Duration::from_millis(1))
+        });
+    }
+    let first = first?;
+    let shown = first.elapsed();
+    Some(EnterRun {
+        started: rested.started,
+        first: first - start,
+        fps: (frames.saturating_sub(1)) as f64 / shown.as_secs_f64(),
+        dropped: app.video.as_ref().map_or(0, |player| player.dropped),
+    })
+}
+
+/// An app after the rest of its cursor on a video.
+#[cfg(feature = "video")]
+struct Rested {
+    app: App,
+    /// From the begin of the rest to the pass that started the player, if one did.
+    started: Option<Duration>,
+    /// The time of the pass that started the player.
+    start_pass: Option<Duration>,
+}
+
+/// Scan `dir` into an idle grid and rest the cursor on its first video for `rest`, with the
+/// passes of `passes`. `cache` replaces the cache directory, so the start writes its cube. The
+/// probe is in the cache, as after the thumbnail job. The grid draws nothing, so no thumbnail
+/// job and no loop job runs: the measure is the case of a warm grid.
+#[cfg(feature = "video")]
+fn rest_on_the_first_video(
+    dir: &Path,
+    state: &mut crate::run_loop::LoopState,
+    rest: Duration,
+    passes: Passes,
+    cache: Option<&Path>,
+) -> Option<Rested> {
+    let list = SharedImageList::new();
+    scanner::spawn(vec![dir.to_path_buf()], list.clone());
+    let mut app = App::new(CELL_PX, list);
+    app.graphics = KittyBackend::new(Transfer::TempFile);
+    if let Some(cache) = cache {
+        app.disk_cache_dir = cache.to_path_buf();
+    }
+    let deadline = Instant::now() + LIMIT;
+    let mut pending = Vec::new();
+    while !app.scan_complete || app.has_pending_work() {
+        assert!(Instant::now() < deadline, "the scan did not finish");
+        poll_background(&mut app, &mut pending);
+        thread::sleep(Duration::from_millis(5));
+    }
+    let index = app.images.iter().position(|path| is_video(path))?;
+    state.video.decoder.probe(&app.images[index]).unwrap();
+    app.gallery.cursor = app
+        .gallery
+        .filtered_indices
+        .iter()
+        .position(|&entry| entry == index)?;
+    app.fullscreen_box = fullscreen_rect();
+    let mut rested = None;
+    let rest_start = Instant::now();
+    loop {
+        if passes == Passes::RunLoop {
+            poll_background(&mut app, &mut pending);
+        }
+        let pass = Instant::now();
+        crate::video_handoff::play_videos(&mut app, state, &mut crate::mpv::SystemRunner);
+        if rested.is_none() && app.video_prestart.running() {
+            rested = Some((pass - rest_start, pass.elapsed()));
+        }
+        let Some(left) = rest.checked_sub(rest_start.elapsed()) else {
+            break;
+        };
+        let wait = match passes {
+            Passes::RunLoop => next_timeout(&app, &pending),
+            Passes::Every10Ms => Duration::from_millis(10),
+        };
+        // The key press of Enter wakes the run loop at the end of the rest.
+        thread::sleep(wait.min(left));
+    }
+    Some(Rested {
+        app,
+        started: rested.map(|(started, _)| started),
+        start_pass: rested.map(|(_, pass)| pass),
+    })
+}
+
+/// The time of the pass after a cursor move away from a video whose player started during
+/// the rest: the drop of the player and the end of its ffmpeg.
+#[cfg(feature = "video")]
+fn drop_after_a_rest(dir: &Path, state: &mut crate::run_loop::LoopState) -> Option<Duration> {
+    let mut app = rest_on_the_first_video(dir, state, REST, Passes::Every10Ms, None)?.app;
+    assert!(app.video_prestart.running(), "the player started");
+    let entries = app.gallery.filtered_indices.len();
+    if entries < 2 {
+        return None;
+    }
+    app.gallery.cursor = (app.gallery.cursor + 1) % entries;
+    let start = Instant::now();
+    crate::video_handoff::play_videos(&mut app, state, &mut crate::mpv::SystemRunner);
+    let elapsed = start.elapsed();
+    assert!(!app.video_prestart.running(), "the move drops the player");
+    Some(elapsed)
+}
+
 /// The cost of an animated file before its first frame: the header check of the route and the
 /// probe of `Player::open`, both on the UI thread, for each animated file in the folder.
 #[test]

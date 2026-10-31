@@ -1,5 +1,6 @@
 //! The start of a video: the terminal player, or the mpv window, and the way back.
 
+mod prestart;
 mod window;
 
 use crate::app::{App, ViewMode};
@@ -10,8 +11,10 @@ use crate::player::{Decoder, Player, SystemDecoder, frame_limit};
 use crate::run_loop::LoopState;
 use crate::video::cube_dirs;
 use crate::yazi::find_on_path;
+pub(crate) use prestart::VideoPrestart;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Instant;
 pub(crate) use window::poll_mpv_window;
 
 /// The status note when a video needs mpv and PATH has none.
@@ -45,8 +48,15 @@ impl VideoState {
 ///
 /// The video view without a player asks for a start. `p` asks for the mpv window. The terminal
 /// player needs the temp file medium, ffmpeg and ffprobe. Without them, the video goes to the mpv
-/// window with a note. Without mpv, the note stays and the view goes back.
+/// window with a note. Without mpv, the note stays and the view goes back. In the gallery, a
+/// rest of the cursor on a video starts its player ahead of Enter, see [`prestart`].
 pub(crate) fn play_videos(app: &mut App, state: &mut LoopState, runner: &mut impl mpv::Runner) {
+    start_video_view(app, state, runner);
+    prestart::tick_prestart(app, state, Instant::now());
+}
+
+/// Start the player or the mpv window for the video view that waits for one.
+fn start_video_view(app: &mut App, state: &mut LoopState, runner: &mut impl mpv::Runner) {
     if app.mode != ViewMode::Video || app.video.is_some() {
         return;
     }
@@ -86,20 +96,25 @@ fn terminal_player_program<'a>(app: &App, state: &'a LoopState) -> Result<&'a Pa
     Ok(program)
 }
 
-/// Open the current video in the terminal player. A failed open shows its error in the
-/// fullscreen view, where Enter does not retry it.
+/// Open the current video in the terminal player, or take the player that started during the
+/// rest of the cursor. A failed open shows its error in the fullscreen view, where Enter does
+/// not retry it.
 fn open_terminal_player(app: &mut App, state: &LoopState, program: &Path) {
     let path = app.current_path().to_path_buf();
     let repeat = !app.slideshow_advancing();
     let limit = frame_limit(app.fullscreen_box, app.cell_px);
-    match Player::open(
-        Rc::clone(&state.video.decoder),
-        program,
-        &path,
-        limit,
-        &cube_dirs(&app.disk_cache_dir).paths(),
-        repeat,
-    ) {
+    let started = match prestart::take_prestart(app, &path, limit, Instant::now()) {
+        Some(player) if repeat => Ok(player),
+        _ => Player::open(
+            Rc::clone(&state.video.decoder),
+            program,
+            &path,
+            limit,
+            &cube_dirs(&app.disk_cache_dir).paths(),
+            repeat,
+        ),
+    };
+    match started {
         Ok(mut player) => {
             // A slideshow holds an animation for its interval, so a short loop does not flash.
             if let Some(interval) = app.slideshow_interval_running()

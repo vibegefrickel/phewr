@@ -36,6 +36,22 @@
 //! The reader of a run owns `FRAME_POOL` (5) frame buffers (`FramePool`), so no run allocates a
 //! zeroed 6 MB `Vec` per frame. A `PooledFrame` returns its buffer on drop, also a frame that the
 //! catch-up rule drops, and a frame of an old run returns to the pool of its own run.
+//!
+//! # The start ahead of Enter
+//!
+//! The first frame comes about 180 ms to 260 ms after the start of ffmpeg (the process start,
+//! the `VideoToolbox` setup and, for HDR, the parse of the 33-point cube). When the gallery cursor
+//! rests on a video for 200 ms and the grid has no work, `video_handoff/prestart.rs` opens the
+//! player of that cell in the next pass of the run loop, about 270 ms into the rest on an idle
+//! grid. ffmpeg decodes the first frames into the queue and then blocks on the pipe. Enter takes
+//! the player ([`Player::begin_at`]). After a rest of about 450 ms or more, its first frame shows
+//! 1 ms after Enter. A shorter rest gains less, and a rest below 270 ms gains nothing. The clock
+//! of a run starts at its first frame, so the clip plays in real time from Enter and drops no
+//! frame. A cursor move, a new frame box, the help popup, a slideshow and an mpv window drop the
+//! player, and so does a wait of 60 s for Enter. The drop of a `FrameStream` kills ffmpeg and
+//! reaps it on a thread, so the UI thread does not wait about 6 ms for the exit. A 17-point HDR
+//! cube saves about 20 ms per start, but its colors differ by up to 39 levels from the 33-point
+//! cube, so HDR keeps 33.
 
 pub(crate) mod animation;
 mod decoder;
@@ -233,6 +249,14 @@ impl Player {
         };
         player.start_run(0.0, opened)?;
         Ok(player)
+    }
+
+    /// Count the open and the deadline of the first frame from `now`, so that a run that
+    /// started ahead of Enter plays as if it started at Enter. The clock of the run starts at
+    /// its first frame anyway, so a frame decoded ahead shows at once and nothing drops.
+    pub(crate) fn begin_at(&mut self, now: Instant) {
+        self.opened = now;
+        self.run.started = now;
     }
 
     /// Start ffmpeg at `position` seconds with the current pipeline. `now` starts the deadline
