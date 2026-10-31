@@ -1666,7 +1666,6 @@ mod embedded_jpeg_tests {
     use ratatui::layout::Rect;
     use std::fs;
     use std::path::Path;
-    use std::time::{Duration, Instant};
 
     /// An app with the one file `path` in a grid cell `rect` of 8x16 px cells and a disk cache
     /// in `cache`. The thumbnail job of the cell starts at once.
@@ -1681,16 +1680,15 @@ mod embedded_jpeg_tests {
         app
     }
 
-    /// Poll until the cell 0 gets a new image, for at most 5 s (sips is slow). Returns it.
+    /// Poll until the cell 0 gets a new image, for at most 5 s: a cold sips start can take more
+    /// than the 2 s of `wait_until`. Returns it.
     fn wait_for_new_image(app: &mut App) -> RgbaImage {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if app.poll_thumbnails() == vec![0] {
-                return app.thumb_cache.peek(0).unwrap().0.image.clone();
-            }
-            assert!(Instant::now() < deadline, "no thumbnail arrived");
-            std::thread::sleep(Duration::from_millis(5));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.poll_thumbnails() != vec![0] {
+            assert!(std::time::Instant::now() < deadline, "no thumbnail arrived");
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        app.thumb_cache.peek(0).unwrap().0.image.clone()
     }
 
     fn left_right(image: &RgbaImage) -> ([u8; 4], [u8; 4]) {

@@ -355,6 +355,28 @@ mod tests {
     }
 
     #[test]
+    fn a_video_whose_decoder_start_fails_shows_its_error_and_goes_back() {
+        let decoder = fake_decoder(clip_info());
+        decoder.fail_start.set(true);
+        let mut app = fullscreen_video_app();
+        let mut state = state_with(VideoPlayer::Terminal, decoder);
+        let (log, mut runner) = fake_runner();
+
+        play_videos(&mut app, &mut state, &mut runner);
+
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+        assert!(
+            app.error
+                .as_ref()
+                .is_some_and(|error| error.contains("not found")),
+            "{:?}",
+            app.error
+        );
+        assert!(!app.shows_video_placeholder());
+        assert!(log.borrow().is_empty(), "no mpv start");
+    }
+
+    #[test]
     fn the_window_player_spawns_mpv_and_returns_to_the_fullscreen_placeholder() {
         let mut app = fullscreen_video_app();
         let mut state = window_state();

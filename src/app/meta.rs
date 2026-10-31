@@ -134,4 +134,34 @@ mod tests {
             "the cursor of the grid does not count"
         );
     }
+
+    #[test]
+    fn a_disconnected_meta_read_leaves_the_facts_empty_and_starts_again() {
+        use std::sync::mpsc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with_files(dir.path(), &["a.png"]);
+        let path = app.view_file().unwrap();
+
+        // A thread that ended without sending leaves the receiver disconnected.
+        let receiver = mpsc::channel::<crate::file_meta::FileMeta>().1;
+        app.meta.in_flight = Some((path.clone(), receiver));
+        app.poll_meta();
+        assert!(
+            app.meta.in_flight.is_none(),
+            "the failed read is cleared without caching"
+        );
+        assert!(app.meta_line().is_none(), "no facts were stored");
+
+        app.request_meta();
+        assert!(
+            app.meta.in_flight.as_ref().is_some_and(|(p, _)| *p == path),
+            "a new read starts for the same file"
+        );
+        wait_until(|| {
+            app.poll_meta();
+            !app.meta_pending()
+        });
+        assert!(app.meta_line().is_some());
+    }
 }

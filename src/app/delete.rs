@@ -226,6 +226,7 @@ mod tests {
     use super::{DeleteMode, PendingDelete};
     use crate::app::ViewMode;
     use crate::test_support::{app_with, app_with_files, test_dir, wait_until};
+    use std::fs;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -452,7 +453,7 @@ mod tests {
             .map(|name| dir.path().join(name))
             .collect();
         for path in &extra {
-            std::fs::write(path, b"synthetic").unwrap();
+            fs::write(path, b"synthetic").unwrap();
         }
         app.pending_delete = Some(PendingDelete {
             paths: extra,
@@ -506,5 +507,68 @@ mod tests {
             app.filter_rx.is_none()
         });
         assert_eq!(app.gallery.cursor, 0);
+    }
+
+    #[test]
+    #[cfg(feature = "video")]
+    fn confirm_delete_in_the_player_keeps_the_player_on_the_next_file() {
+        let dir = test_dir();
+        let first = dir.path().join("clip1.mp4");
+        let second = dir.path().join("clip2.mp4");
+        fs::write(&first, b"").unwrap();
+        fs::write(&second, b"").unwrap();
+
+        let mut app = crate::app::App::new((8, 16), crate::image_list::SharedImageList::new());
+        app.images = vec![first.clone(), second.clone()];
+        app.filenames = vec!["clip1.mp4".to_owned(), "clip2.mp4".to_owned()];
+        app.gallery.filtered_indices = vec![0, 1];
+        app.scan_complete = true;
+        app.mode = ViewMode::Video;
+        app.current = 0;
+
+        app.pending_delete = Some(PendingDelete {
+            paths: vec![first.clone()],
+            from_fullscreen: true,
+            mode: DeleteMode::Permanent,
+        });
+        app.confirm_delete();
+
+        assert_eq!(
+            app.mode,
+            ViewMode::Video,
+            "the player stays, on the next clip"
+        );
+        assert_eq!(app.current, 0, "the next file moved into place 0");
+        assert_eq!(app.images, vec![second]);
+        assert!(!first.exists());
+    }
+
+    #[test]
+    fn confirm_delete_while_scanning_keeps_the_files_of_later_batches() {
+        let dir = test_dir();
+        let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+        let later = dir.path().join("c.png");
+        image::RgbaImage::new(8, 8).save(&later).unwrap();
+
+        // Simulate a scanner that has delivered two files and will deliver one more.
+        app.scan_complete = false;
+        app.shared_list.push_batch(vec![app.images[0].clone()]);
+        app.shared_list.push_batch(vec![app.images[1].clone()]);
+        app.known_len = 2;
+
+        app.pending_delete = Some(PendingDelete {
+            paths: vec![app.images[0].clone()],
+            from_fullscreen: false,
+            mode: DeleteMode::Permanent,
+        });
+        let kept = dir.path().join("b.png");
+        app.confirm_delete();
+        assert_eq!(app.images, vec![kept.clone()]);
+        assert_eq!(app.known_len, 1);
+
+        app.shared_list.push_batch(vec![later.clone()]);
+        app.refresh_from_scanner();
+        assert_eq!(app.images, vec![kept, later]);
+        assert_eq!(app.known_len, 2);
     }
 }

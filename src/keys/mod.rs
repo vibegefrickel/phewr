@@ -380,4 +380,35 @@ mod tests {
         assert!(!paths[1].exists());
         assert!(app.images.is_empty());
     }
+
+    #[test]
+    fn y_in_the_trash_question_calls_the_trash_path_for_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("kept.jpg");
+        fs::write(&real, b"not an image").unwrap();
+        let missing = dir.path().join("gone.jpg");
+
+        let mut app = gallery_app(0);
+        app.images = vec![real.clone(), missing.clone()];
+        app.filenames = vec!["kept.jpg".to_owned(), "gone.jpg".to_owned()];
+        app.gallery.filtered_indices = vec![0, 1];
+        app.gallery.cursor = 1;
+
+        char_key(&mut app, 'd');
+        assert_eq!(
+            app.pending_delete.as_ref().map(|pending| pending.mode),
+            Some(DeleteMode::Trash)
+        );
+        assert!(!char_key(&mut app, 'y'));
+        assert!(real.exists(), "the file that was not asked for stays");
+        assert!(
+            app.delete_error
+                .as_ref()
+                .is_some_and(|error| error.contains("gone.jpg")),
+            "{:?}",
+            app.delete_error
+        );
+        assert_eq!(app.images, vec![real, missing]);
+        assert!(app.pending_delete.is_none());
+    }
 }
