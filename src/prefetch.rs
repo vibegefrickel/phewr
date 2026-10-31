@@ -1,6 +1,7 @@
 //! The decode of the neighbors of the fullscreen image ahead of time.
 
 use crate::decode::{EmbeddedThumbnail, ScreenImage, decode_image};
+use crate::encoder::capped_box;
 use crate::gallery::box_px;
 use lru::LruCache;
 use ratatui::layout::Rect;
@@ -82,7 +83,7 @@ impl Prefetcher {
     }
 
     pub(crate) fn set_target_hint(&mut self, rect: Rect, cell_px: (u32, u32)) {
-        let (w, h) = box_px(rect, cell_px);
+        let (w, h) = capped_box(box_px(rect, cell_px));
         if w > 0 && h > 0 {
             self.target_hint = Some((w, h));
         }
@@ -129,7 +130,9 @@ impl Prefetcher {
         rect: Rect,
         cell_px: (u32, u32),
     ) -> Option<ScreenImage> {
-        self.cache.pop(&index)?.fit_within(box_px(rect, cell_px))
+        self.cache
+            .pop(&index)?
+            .fit_within(capped_box(box_px(rect, cell_px)))
     }
 
     /// Queue the neighbors of `current` within `first..images.len()`, nearest first, the
@@ -154,7 +157,7 @@ impl Prefetcher {
         rect: Rect,
         cell_px: (u32, u32),
     ) {
-        let target = box_px(rect, cell_px);
+        let target = capped_box(box_px(rect, cell_px));
         self.cache.push(
             index,
             Prefetched {
@@ -270,7 +273,7 @@ fn neighbor_order(current: usize, files: Range<usize>, direction: Option<bool>) 
 
 #[cfg(test)]
 mod tests {
-    use super::Prefetcher;
+    use super::{Prefetcher, capped_box};
     use image::RgbaImage;
     use ratatui::layout::Rect;
     use std::fs;
@@ -300,6 +303,17 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("prefetch jobs did not finish in time");
+    }
+
+    #[test]
+    fn the_target_hint_stays_below_the_payload_cap() {
+        let mut prefetcher = Prefetcher::new();
+        // 480x270 cells of 16 px: a box of 7680x4320 px.
+        prefetcher.set_target_hint(Rect::new(0, 0, 480, 270), (16, 16));
+        assert_eq!(prefetcher.target_hint, Some(capped_box((7680, 4320))));
+        assert!(prefetcher.target_hint.is_some_and(|(w, _)| w < 7680));
+        prefetcher.set_target_hint(Rect::new(0, 0, 240, 135), (16, 16));
+        assert_eq!(prefetcher.target_hint, Some((3840, 2160)));
     }
 
     #[test]

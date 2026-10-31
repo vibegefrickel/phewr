@@ -11,6 +11,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The grid shows this many thumbnail rows until the user zooms.
 pub(crate) const DEFAULT_VISIBLE_ROWS: u16 = 4;
@@ -362,6 +363,9 @@ fn read_state(path: &Path) -> StateFile {
         .unwrap_or_default()
 }
 
+/// The age from which a temp file of a save counts as the leftover of a crash.
+const STALE_TEMP_AGE: Duration = Duration::from_hours(1);
+
 fn write_state(path: &Path, state: &StateFile) {
     let Some(parent) = path.parent() else {
         return;
@@ -369,6 +373,7 @@ fn write_state(path: &Path, state: &StateFile) {
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
+    prune_stale_temp_files(path);
     if let Ok(contents) = toml::to_string(state) {
         // Write beside the file and rename, so a crash never leaves half a state file.
         let mut temp = path.as_os_str().to_owned();
@@ -380,6 +385,38 @@ fn write_state(path: &Path, state: &StateFile) {
                 reason = "the state file is a convenience; a leftover temp file is harmless"
             )]
             let _ = std::fs::remove_file(&temp);
+        }
+    }
+}
+
+/// Remove the temp files of a save that a crash cut off: the siblings `<name>.*.tmp` of the state
+/// file that are older than [`STALE_TEMP_AGE`]. A fresh one can belong to a running viewr.
+fn prune_stale_temp_files(path: &Path) {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.", name.to_string_lossy());
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let stale = file_name.starts_with(&prefix)
+            && Path::new(&file_name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"))
+            && entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > STALE_TEMP_AGE);
+        if stale {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a leftover temp file is harmless; the next save tries again"
+            )]
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }
@@ -695,6 +732,34 @@ mod tests {
                 .contains_key(&PathBuf::from(format!("/photos/{}", MAX_ZOOM_FOLDERS + 9))),
             "the newest folders stay"
         );
+    }
+
+    #[test]
+    fn a_stale_temp_file_goes_at_the_next_save_and_a_fresh_one_stays() {
+        let root = test_root();
+        let state_path = root.path().join("state.toml");
+        let stale = root.path().join("state.toml.111.tmp");
+        let fresh = root.path().join("state.toml.222.tmp");
+        let other = root.path().join("other.toml.333.tmp");
+        for path in [&stale, &fresh, &other] {
+            std::fs::write(path, "x").unwrap();
+        }
+        let two_hours_ago = std::time::SystemTime::now() - Duration::from_hours(2);
+        for path in [&stale, &other] {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(two_hours_ago)
+                .unwrap();
+        }
+
+        save_visible_rows(&state_path, None, 6);
+
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+        assert!(other.exists(), "only the temp files of the state file go");
+        assert!(state_path.exists());
     }
 
     #[test]

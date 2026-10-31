@@ -86,6 +86,20 @@ pub(crate) struct DisplayOptions {
 /// above 65 MiB, so this cap keeps 1 MiB of room.
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 64 << 20;
 
+/// `size` as it is, or the largest box of the same aspect ratio whose RGB payload fits
+/// [`MAX_PAYLOAD_BYTES`], so that a decode never needs the shrink of the writer on the UI thread.
+pub(crate) fn capped_box(size: (u32, u32)) -> (u32, u32) {
+    let (width, height) = size;
+    let bytes = u64::from(width) * u64::from(height) * 3;
+    if bytes <= MAX_PAYLOAD_BYTES as u64 {
+        return size;
+    }
+    // The area scales with the square of the side, so the side scales with the square root.
+    let scale = (MAX_PAYLOAD_BYTES as f64 / bytes as f64).sqrt();
+    let side = |value: u32| ((f64::from(value) * scale) as u32).max(1);
+    (side(width), side(height))
+}
+
 /// The pixels per step of [`Pixels::opaque_rgb`]: 16 KB of RGBA, which stays in the L1 cache
 /// between the check and the copy.
 const OPACITY_CHUNK: usize = 4096;
@@ -277,10 +291,21 @@ impl KittyBackend {
 #[cfg(test)]
 mod tests {
     use super::{
-        DisplayOptions, GraphicsOutput, KittyBackend, OPACITY_CHUNK, Pixels, Transfer, kitty,
+        DisplayOptions, GraphicsOutput, KittyBackend, MAX_PAYLOAD_BYTES, OPACITY_CHUNK, Pixels,
+        Transfer, capped_box, kitty,
     };
     use image::{Rgba, RgbaImage};
     use std::io::Write;
+
+    #[test]
+    fn a_4k_box_stays_and_an_8k_box_shrinks_below_the_payload_cap() {
+        assert_eq!(capped_box((3840, 2160)), (3840, 2160));
+        assert_eq!(capped_box((6016, 3384)), (6016, 3384));
+        let (width, height) = capped_box((7680, 4320));
+        assert!(u64::from(width) * u64::from(height) * 3 <= MAX_PAYLOAD_BYTES as u64);
+        assert!(width > 6000 && width < 7680, "{width}");
+        assert!(width.abs_diff(height * 16 / 9) <= 2, "{width}x{height}");
+    }
 
     #[test]
     fn the_usage_hint_goes_out_only_for_a_terminal_that_plays_animations() {

@@ -5,6 +5,7 @@ use super::VideoReturn;
 use super::{App, ViewMode};
 use crate::decode::screen::load_for_screen;
 use crate::decode::{ScreenImage, spawn_foreground};
+use crate::encoder::capped_box;
 use crate::gallery::box_px;
 use ratatui::layout::Rect;
 use std::io;
@@ -16,6 +17,11 @@ pub(super) struct FullscreenDecode {
     pub(super) index: usize,
     pub(super) rect: Rect,
     rx: mpsc::Receiver<io::Result<ScreenImage>>,
+}
+
+/// The box that the fullscreen decode fills: the pixel box of `rect`, below the payload cap.
+fn decode_box(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
+    capped_box(box_px(rect, cell_px))
 }
 
 impl App {
@@ -46,7 +52,7 @@ impl App {
 
     fn start_fullscreen_decode(&mut self, index: usize, rect: Rect) {
         let path = self.images[index].clone();
-        let target = box_px(rect, self.cell_px);
+        let target = decode_box(rect, self.cell_px);
         let rx = spawn_foreground(move || load_for_screen(&path, target));
         self.fullscreen_decode = Some(FullscreenDecode { index, rect, rx });
     }
@@ -239,7 +245,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-
+    use super::decode_box;
     use crate::app::ViewMode;
     use crate::test_support::{app, app_with, app_with_files, test_dir, wait_until};
 
@@ -372,6 +378,16 @@ mod tests {
     /// Regression: a gallery pre-decode before the first fullscreen view has no size hint.
     /// A large photo (an iPhone HEIC, and also a JPEG or PNG) then showed at its full size,
     /// larger than the screen.
+    #[test]
+    fn the_decode_box_stays_below_the_payload_cap() {
+        assert_eq!(
+            decode_box(Rect::new(0, 0, 240, 135), (16, 16)),
+            (3840, 2160)
+        );
+        let (width, _) = decode_box(Rect::new(0, 0, 480, 270), (16, 16));
+        assert!(width < 7680, "{width}");
+    }
+
     #[test]
     fn a_pre_decode_without_a_hint_fits_the_fullscreen_box() {
         let dir = test_dir();
