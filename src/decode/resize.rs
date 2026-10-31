@@ -2,7 +2,7 @@
 
 use super::{EmbeddedThumbnail, decode_image};
 use fast_image_resize as fir;
-use image::RgbaImage;
+use image::{DynamicImage, EncodableLayout, ImageBuffer, RgbaImage};
 use std::io;
 use std::path::Path;
 
@@ -42,6 +42,41 @@ fn fit_within_as(rgba: RgbaImage, max_w: u32, max_h: u32, layout: Layout) -> Rgb
         .unwrap_or(rgba)
 }
 
+/// Scale a 16-bit RGB or RGBA image down into `max_w` x `max_h` as `fit_rgba_within` does, for
+/// an HDR image before its tone map. Each other image comes back unchanged.
+pub(super) fn fit_deep_within(image: DynamicImage, max_w: u32, max_h: u32) -> DynamicImage {
+    let size = (image.width(), image.height());
+    let Some(dst) = scaled_down_size(size, (max_w, max_h)) else {
+        return image;
+    };
+    let whole = (0, 0, size.0, size.1);
+    let resized = match &image {
+        DynamicImage::ImageRgb16(rgb) => {
+            resize_region(rgb.as_raw().as_bytes(), size, whole, dst, Layout::Rgb16)
+                .and_then(|pixels| {
+                    ImageBuffer::from_raw(dst.0, dst.1, native_samples(&pixels.data))
+                })
+                .map(DynamicImage::ImageRgb16)
+        }
+        DynamicImage::ImageRgba16(rgba) => {
+            resize_region(rgba.as_raw().as_bytes(), size, whole, dst, Layout::Rgba16)
+                .and_then(|pixels| {
+                    ImageBuffer::from_raw(dst.0, dst.1, native_samples(&pixels.data))
+                })
+                .map(DynamicImage::ImageRgba16)
+        }
+        _ => None,
+    };
+    resized.unwrap_or(image)
+}
+
+/// The 16-bit samples of the bytes of a resize, in the byte order of the machine, as
+/// `fast_image_resize` writes them.
+fn native_samples(bytes: &[u8]) -> Vec<u16> {
+    let (pairs, _) = bytes.as_chunks::<2>();
+    pairs.iter().map(|&pair| u16::from_ne_bytes(pair)).collect()
+}
+
 /// The size of `size` scaled down into `max` with its aspect ratio, rounded down. `None` when
 /// no scale is necessary: an empty size or box, or an image that fits already.
 pub(crate) fn scaled_down_size(size: (u32, u32), max: (u32, u32)) -> Option<(u32, u32)> {
@@ -78,6 +113,11 @@ pub(crate) enum Layout {
     /// 4 bytes per pixel with the alpha at 255 in every pixel. The multiply changes no value,
     /// so the resize skips it.
     OpaqueRgba,
+    /// 3 samples of 16 bits per pixel, in the byte order of the machine: an HDR image before
+    /// its tone map.
+    Rgb16,
+    /// 4 samples of 16 bits per pixel with the alpha multiply: an HDR image with alpha.
+    Rgba16,
 }
 
 impl Layout {
@@ -86,6 +126,8 @@ impl Layout {
         match self {
             Self::Rgb => fir::PixelType::U8x3,
             Self::Rgba | Self::OpaqueRgba => fir::PixelType::U8x4,
+            Self::Rgb16 => fir::PixelType::U16x3,
+            Self::Rgba16 => fir::PixelType::U16x4,
         }
     }
 }
@@ -123,7 +165,7 @@ pub(super) fn resize_region(
     let pixel_type = layout.pixel_type();
     let source = fir::images::ImageRef::new(size.0, size.1, pixels, pixel_type).ok()?;
     let mut target = fir::images::Image::new(dst.0, dst.1, pixel_type);
-    let options = resize_options().use_alpha(layout == Layout::Rgba);
+    let options = resize_options().use_alpha(matches!(layout, Layout::Rgba | Layout::Rgba16));
     let mut resizer = fir::Resizer::new();
     let (x, y, width, height) = crop;
     if (x, y, width, height) == (0, 0, size.0, size.1) {

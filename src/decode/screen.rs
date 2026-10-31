@@ -312,16 +312,22 @@ mod tests {
     use image::{DynamicImage, Rgb, RgbImage, Rgba, RgbaImage};
     use std::path::PathBuf;
 
-    /// Every checked-in still: the color charts, the PNG layouts, the JPEG XL charts and the
-    /// still images of the animation fixtures.
+    /// Every checked-in SDR still that decodes with the features of the build: the color
+    /// charts, the PNG layouts, the JPEG XL charts and the still images of the animation
+    /// fixtures. The HDR files resize in 16 bit before the tone map, so the 8-bit path before
+    /// the change is no reference for them (`decode::hdr` tests them).
     fn still_fixtures() -> Vec<PathBuf> {
         let mut paths: Vec<PathBuf> = ["color", "png", "jxl"]
             .iter()
             .flat_map(|dir| std::fs::read_dir(fixture(dir)).unwrap())
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.is_file() && path.extension().is_none_or(|e| e != "sh"))
+            .chain(["still.png", "still.gif", "still.webp", "still.avif"].map(fixture))
+            .filter(|path| {
+                decode_image(path, None, EmbeddedThumbnail::Deny)
+                    .is_ok_and(|decoded| !crate::decode::hdr::is_hdr(&decoded.color))
+            })
             .collect();
-        paths.extend(["still.png", "still.gif", "still.webp", "still.avif"].map(fixture));
         paths.sort();
         paths
     }
@@ -403,7 +409,9 @@ mod tests {
                 checked += 1;
             }
         }
-        assert!(checked >= 150, "{checked} fixtures and boxes");
+        // Without libheif, the AVIF and HEIC fixtures do not decode.
+        let least = if cfg!(feature = "heic") { 150 } else { 140 };
+        assert!(checked >= least, "{checked} fixtures and boxes");
     }
 
     #[test]

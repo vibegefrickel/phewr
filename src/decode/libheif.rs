@@ -4,8 +4,10 @@ use super::resize::{Layout, resize_region, rgb_resize_is_fastest, scaled_down_si
 use super::{Decoded, EmbeddedThumbnail, FOREGROUND};
 use crate::decode;
 use crate::decode::color::{self, SourceColor};
+use crate::decode::hdr;
 use crate::scanner;
-use image::{DynamicImage, RgbImage, RgbaImage};
+use image::{DynamicImage, ImageBuffer, RgbImage, RgbaImage};
+use rayon::prelude::*;
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -56,6 +58,9 @@ pub(super) fn decode_with_libheif(
         .and_then(|target| usable_thumbnail(path, &primary, target))
         .unwrap_or(primary);
     let color = thumbnail_color(&handle, primary_color);
+    if hdr::is_hdr(&color) && handle.luma_bits_per_pixel() > 8 {
+        return decode_deep(&handle, target, color);
+    }
     let layout = decode_layout(&handle, target);
     let chroma = if layout == Layout::Rgb {
         RgbChroma::Rgb
@@ -75,6 +80,59 @@ pub(super) fn decode_with_libheif(
         color,
         opaque: layout != Layout::Rgba,
     })
+}
+
+/// Decode an HDR image with more than 8 bits as 16-bit RGB fitted into `target`, so that its
+/// tone map in `Decoded` sees the full depth. The samples scale from the bit depth of the file
+/// to the full 16-bit range.
+fn decode_deep(
+    handle: &libheif_rs::ImageHandle,
+    target: Option<(u32, u32)>,
+    color: SourceColor,
+) -> io::Result<Decoded> {
+    use libheif_rs::{ColorSpace, LibHeif, RgbChroma};
+
+    let alpha = handle.has_alpha_channel();
+    let (chroma, layout) = if alpha {
+        (RgbChroma::HdrRgbaLe, Layout::Rgba16)
+    } else {
+        (RgbChroma::HdrRgbLe, Layout::Rgb16)
+    };
+    let image = LibHeif::new()
+        .decode(handle, ColorSpace::Rgb(chroma), None)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let bits = image
+        .planes()
+        .interleaved
+        .map_or(16, |plane| plane.bits_per_pixel);
+    let ((w, h), bytes) = heif_plane_pixels(&image, target, layout)?;
+    // libheif writes little-endian samples, and `fast_image_resize` keeps the byte order of
+    // the machine: little-endian on each target of viewr.
+    let samples: Vec<u16> = bytes
+        .par_chunks_exact(2)
+        .map(|pair| widen(u16::from_le_bytes([pair[0], pair[1]]), bits))
+        .collect();
+    let image = if alpha {
+        ImageBuffer::from_raw(w, h, samples).map(DynamicImage::ImageRgba16)
+    } else {
+        ImageBuffer::from_raw(w, h, samples).map(DynamicImage::ImageRgb16)
+    };
+    Ok(Decoded {
+        image: image.ok_or_else(invalid_dimensions)?,
+        color,
+        opaque: !alpha,
+    })
+}
+
+/// Scale samples of `bits` bits (9 to 16) to the full 16-bit range, rounded. A value above the
+/// range, the overshoot of a resize, clamps to white.
+fn widen(sample: u16, bits: u8) -> u16 {
+    if !(9..16).contains(&bits) {
+        return sample;
+    }
+    let max = (1u32 << bits) - 1;
+    let wide = (u32::from(sample).min(max) * 65_535 + max / 2) / max;
+    u16::try_from(wide).unwrap_or(u16::MAX)
 }
 
 /// The layout of the decode of `handle` for `target`. libheif writes the same values in RGB
@@ -333,7 +391,7 @@ fn heif_plane_pixels(
 mod tests {
     use super::{
         decodes_with_libheif, fitted_size, libheif_dimensions, thumbnail_is_usable,
-        usable_thumbnail,
+        usable_thumbnail, widen,
     };
     use crate::decode::ScreenImage;
     use crate::decode::heif_boxes::HeifItems;
@@ -375,6 +433,16 @@ mod tests {
             .to_rgba8()
             .get_pixel(image.width() / 2, image.height() / 2)
             .0
+    }
+
+    #[test]
+    fn the_samples_of_a_ten_bit_file_reach_the_full_range() {
+        assert_eq!(widen(0, 10), 0);
+        assert_eq!(widen(1023, 10), 65_535);
+        assert_eq!(widen(1100, 10), 65_535, "the overshoot of a resize");
+        assert_eq!(widen(512, 10), 32_800);
+        assert_eq!(widen(4095, 12), 65_535);
+        assert_eq!(widen(40_000, 16), 40_000);
     }
 
     #[test]

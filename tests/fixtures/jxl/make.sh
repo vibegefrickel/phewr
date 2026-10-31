@@ -13,9 +13,9 @@
 # sRGB chart, converted by libjxl into a PQ or HLG signal.
 #
 # The reference of each fixture is `ref/<name>.png`: djxl renders it into 8-bit sRGB with the
-# relative intent. For pq, djxl tone-maps to a 255 nit display. hlg has no reference, because
-# libjxl renders HLG differently in its lossless and lossy paths. pq-icc and hlg-icc have no
-# reference, because neither libjxl nor jxl-oxide tone-maps an HDR ICC profile.
+# relative intent. pq, hlg, pq-icc and hlg-icc have no reference: viewr tone-maps them like the
+# HDR cube of its terminal player (src/decode/hdr.rs), and tests/fixtures/hdr/ holds the
+# references of that map.
 set -eu
 
 cd "$(dirname "$0")"
@@ -105,10 +105,8 @@ mkdir ref
 for file in *.jxl; do
   name=${file%.jxl}
   case $name in
-    hlg | pq-icc | hlg-icc) continue ;;
-    pq) nits=255 ;;
-    *) nits=0 ;;
+    pq | hlg | pq-icc | hlg-icc) continue ;;
   esac
   djxl "$file" "ref/$name.png" --color_space=RGB_D65_SRG_Rel_SRG --bits_per_sample=8 \
-    --display_nits=$nits --quiet
+    --display_nits=0 --quiet
 done

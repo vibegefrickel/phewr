@@ -10,7 +10,8 @@
 //! code points of a HEIF `nclx` box or a PNG `cICP` chunk, or the `gAMA` and `cHRM` chunks of a
 //! PNG. An image without them is sRGB. The conversion runs after the resize, on the small
 //! image, as one `moxcms` transform in parallel rows. A source in the target space converts
-//! nothing.
+//! nothing. A PQ or HLG source (CICP transfer 16 or 18, also from the `cicp` tag of an ICC
+//! profile) gets the tone map of `decode::hdr` instead, because `moxcms` does not tone-map.
 //!
 //! # From the AGENTS.md gotcha "Image colors"
 //!
@@ -25,7 +26,8 @@
 //! through `color::convert_rgb`, or RGBA), as one cached `moxcms` transform with the rows in
 //! parallel. A source in the target space converts nothing, so iPhone photos (Display P3) cost
 //! nothing. A source that cannot convert (an unreadable or non-RGB ICC profile, unknown CICP
-//! codes) converts as sRGB. PQ and HLG sources keep their values. `main` sets the target, and
+//! codes) converts as sRGB. PQ and HLG sources map like the HDR cube of the player
+//! (`decode::hdr`). `main` sets the target, and
 //! tests keep sRGB. The terminal player converts with a `lut3d` cube (`player/tone_map.rs`): an
 //! SDR video or animation gets a 17-point cube from its `color_primaries` (`Primaries::of_name`:
 //! BT.709, SMPTE 170M, BT.470 BG, Display P3, DCI-P3 with a Bradford adaptation, BT.2020) into the
@@ -37,6 +39,7 @@
 //! values hold half a level, because `lut3d` truncates to 8 bit. A real ffmpeg test fails if
 //! `lut3d` starts to round. At 1080p, the SDR cube costs 1.4 ms to 2 ms per frame.
 
+use super::hdr;
 use image::{RgbImage, RgbaImage};
 use moxcms::{
     Chromaticity, CicpColorPrimaries, CicpProfile, ColorPrimaries, ColorProfile, DataColorSpace,
@@ -138,18 +141,26 @@ impl SourceColor {
         }
     }
 
-    /// An ICC profile. An empty profile is no profile.
+    /// An ICC profile. An empty profile is no profile. A profile whose `cicp` tag holds PQ or
+    /// HLG is its CICP code points, so that the HDR tone map sees it (`decode::hdr`).
     pub(crate) fn icc(data: Vec<u8>) -> Self {
         if data.is_empty() {
-            Self::Srgb
-        } else {
-            Self::Icc(data.into())
+            return Self::Srgb;
+        }
+        match icc_cicp(&data) {
+            Some((primaries, transfer)) if hdr::Curve::of_transfer(transfer).is_some() => {
+                Self::Cicp {
+                    primaries,
+                    transfer,
+                }
+            }
+            _ => Self::Icc(data.into()),
         }
     }
 }
 
 /// Convert `image` from `source` into `target`. A source in the target space, and a source that
-/// `moxcms` cannot read, keep their values.
+/// `moxcms` cannot read, keep their values. A PQ or HLG source maps to SDR (`decode::hdr`).
 pub(crate) fn convert(
     mut image: RgbaImage,
     source: &SourceColor,
@@ -180,6 +191,10 @@ fn convert_pixels(
     source: &SourceColor,
     target: ColorTarget,
 ) {
+    if let Some(map) = hdr::ToneMap::of_source(source, target) {
+        map.map_in_place(pixels, channels.count());
+        return;
+    }
     let Some(transform) = transform_for(source, target, channels) else {
         return;
     };
@@ -198,10 +213,11 @@ fn convert_pixels(
     let _ = result;
 }
 
-/// True when `source` needs a conversion into `target`, for the tests and the bench.
+/// True when `source` needs a conversion into `target`: a `moxcms` transform or the HDR tone
+/// map. For the tests and the bench.
 #[cfg(test)]
 pub(crate) fn converts(source: &SourceColor, target: ColorTarget) -> bool {
-    transform(source, target).is_some()
+    hdr::is_hdr(source) || transform(source, target).is_some()
 }
 
 /// The pixel layout of a transform: 3 or 4 bytes per pixel.
@@ -329,7 +345,7 @@ fn is_identity(transform: &Transform8BitExecutor) -> bool {
 }
 
 /// The `moxcms` profile of a source. A profile that `moxcms` cannot read is sRGB. `None` only
-/// for HDR: `moxcms` does not tone-map PQ and HLG, so these values stay as they are.
+/// for HDR: `moxcms` does not tone-map PQ and HLG, so `decode::hdr` maps them.
 fn source_profile(source: &SourceColor) -> Option<ColorProfile> {
     let profile = match source {
         SourceColor::Srgb => ColorProfile::new_srgb(),
@@ -548,6 +564,25 @@ pub(crate) fn icc_known_space(data: &[u8]) -> Option<SourceColor> {
     }
 }
 
+/// The color primaries and the transfer code of the `cicp` tag of the ICC profile `data`
+/// (ICC.1:2022), without a parse of the whole profile. `None` when the profile has no such
+/// tag.
+fn icc_cicp(data: &[u8]) -> Option<(u8, u8)> {
+    let be32 = |at: usize| {
+        let bytes = data.get(at..at + 4)?;
+        Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize)
+    };
+    let count = be32(128)?;
+    (0..count.min(256)).find_map(|index| {
+        let entry = 132 + index * 12;
+        if data.get(entry..entry + 4)? != b"cicp" {
+            return None;
+        }
+        let tag = data.get(be32(entry + 4)?..)?;
+        (tag.get(..4)? == b"cicp").then_some((*tag.get(8)?, *tag.get(9)?))
+    })
+}
+
 /// The color of the JPEG `data`: its ICC profile, else Adobe RGB when the EXIF block marks it,
 /// else sRGB. Cameras in the Adobe RGB mode often write no profile, only the EXIF mark.
 #[cfg(any(feature = "turbo", test))]
@@ -656,8 +691,8 @@ pub(crate) fn jpeg_icc_profile(data: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ColorTarget, SourceColor, convert, exif_marks_adobe_rgb, jpeg_color, jpeg_exif_payload,
-        jpeg_icc_profile, png_color, tiff_icc_profile, transform,
+        ColorTarget, SourceColor, convert, exif_marks_adobe_rgb, icc_cicp, jpeg_color,
+        jpeg_exif_payload, jpeg_icc_profile, png_color, tiff_icc_profile, transform,
     };
     use crate::decode::{EmbeddedThumbnail, decode_image};
     use crate::test_support::{fixture, test_dir};
@@ -742,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn hdr_cicp_codes_keep_their_values() {
+    fn hdr_cicp_codes_get_the_tone_map_and_no_moxcms_transform() {
         let pq = SourceColor::Cicp {
             primaries: 9,
             transfer: 16,
@@ -753,6 +788,40 @@ mod tests {
             transfer: 18,
         };
         assert!(transform(&hlg, ColorTarget::Srgb).is_none());
+        // PQ 148 of 255 is about 200 nits: below SDR white (500 nits), neutral, mapped.
+        let mapped = pixel([148, 148, 148, 77], &pq, ColorTarget::Srgb);
+        assert_eq!(mapped, [158, 158, 158, 77]);
+    }
+
+    /// A minimal ICC profile with one `cicp` tag of `primaries` and `transfer`.
+    fn icc_with_cicp(primaries: u8, transfer: u8) -> Vec<u8> {
+        let mut data = vec![0; 128];
+        data.extend(1u32.to_be_bytes());
+        data.extend(b"cicp");
+        data.extend(144u32.to_be_bytes());
+        data.extend(12u32.to_be_bytes());
+        data.extend(b"cicp\0\0\0\0");
+        data.extend([primaries, transfer, 0, 1]);
+        data
+    }
+
+    #[test]
+    fn an_icc_profile_with_a_pq_or_hlg_cicp_tag_is_its_cicp_code_points() {
+        assert_eq!(
+            SourceColor::icc(icc_with_cicp(9, 16)),
+            SourceColor::Cicp {
+                primaries: 9,
+                transfer: 16
+            }
+        );
+        assert_eq!(icc_cicp(&icc_with_cicp(12, 13)), Some((12, 13)));
+        assert!(matches!(
+            SourceColor::icc(icc_with_cicp(12, 13)),
+            SourceColor::Icc(_)
+        ));
+        let cut = icc_with_cicp(9, 18)[..150].to_vec();
+        assert_eq!(icc_cicp(&cut), None);
+        assert!(matches!(SourceColor::icc(cut), SourceColor::Icc(_)));
     }
 
     #[test]

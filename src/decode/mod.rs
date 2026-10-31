@@ -1,11 +1,12 @@
 //! The decoders and the decode routes: `image` with libjpeg-turbo, libheif, JPEG XL,
-//! macOS `sips`, the tone map of float images, the HEIF box reader, the resize, the color
-//! conversion, the fullscreen image in the pixel layout of its decode and the folder shape
+//! macOS `sips`, the tone map of float images and of PQ and HLG stills, the HEIF box reader, the
+//! resize, the color conversion, the fullscreen image in the pixel layout of its decode and the folder shape
 //! from the file headers.
 
 pub(crate) mod color;
 #[cfg(all(feature = "sips", target_os = "macos"))]
 pub(crate) mod embedded_jpeg;
+pub(crate) mod hdr;
 #[cfg(feature = "heic")]
 pub(crate) mod heif_boxes;
 pub(crate) mod jxl;
@@ -22,7 +23,7 @@ pub(crate) mod tonemap;
 pub(crate) mod turbo;
 
 use crate::scanner;
-use color::SourceColor;
+use color::{ColorTarget, SourceColor};
 use image::{DynamicImage, RgbaImage};
 #[cfg(feature = "heic")]
 use libheif::{decode_with_libheif, decodes_with_libheif};
@@ -102,43 +103,76 @@ impl Decoded {
     #[cfg(test)]
     pub(crate) fn into_display(self) -> DynamicImage {
         let target = color::target();
-        if !color::converts(&self.color, target) {
-            return self.image;
+        let this = self.tone_mapped(None, target);
+        if !color::converts(&this.color, target) {
+            return this.image;
         }
-        DynamicImage::ImageRgba8(color::convert(self.image.into_rgba8(), &self.color, target))
+        DynamicImage::ImageRgba8(color::convert(this.image.into_rgba8(), &this.color, target))
+    }
+
+    /// An HDR image with more than 8 bits, resized in 16 bit into `box_px` and tone-mapped into
+    /// `target`, so that the steps after it see an SDR image in the target. Each other image
+    /// comes back unchanged: an 8-bit HDR image maps in `color::convert`.
+    fn tone_mapped(self, box_px: Option<(u32, u32)>, target: ColorTarget) -> Self {
+        let Some(map) = hdr::ToneMap::of_source(&self.color, target) else {
+            return self;
+        };
+        let deep = match self.image {
+            DynamicImage::ImageRgb8(_)
+            | DynamicImage::ImageRgba8(_)
+            | DynamicImage::ImageLuma8(_)
+            | DynamicImage::ImageLumaA8(_) => return self,
+            image if image.color().has_alpha() => DynamicImage::ImageRgba16(image.into_rgba16()),
+            image => DynamicImage::ImageRgb16(image.into_rgb16()),
+        };
+        let fitted = match box_px {
+            Some((max_w, max_h)) => resize::fit_deep_within(deep, max_w, max_h),
+            None => deep,
+        };
+        Self {
+            image: map.map_image(fitted),
+            color: SourceColor::of_target(target),
+            opaque: self.opaque,
+        }
     }
 
     /// The grid picture fitted into `max_w` x `max_h`, in the color space of the terminal. An
     /// opaque image resizes without the alpha multiply, and an RGB decode that resizes fastest
     /// as RGB turns into RGBA after the resize, on the small image.
     pub(crate) fn fit_within(self, max_w: u32, max_h: u32) -> RgbaImage {
-        let size = (self.image.width(), self.image.height());
+        let target = color::target();
+        let this = self.tone_mapped(Some((max_w, max_h)), target);
+        let size = (this.image.width(), this.image.height());
         let rgb_is_fastest = rgb_resize_is_fastest(size, scaled_down_size(size, (max_w, max_h)));
-        let opaque = self.opaque || !self.image.color().has_alpha();
-        let fitted = match self.image {
+        let opaque = this.opaque || !this.image.color().has_alpha();
+        let fitted = match this.image {
             DynamicImage::ImageRgb8(rgb) if rgb_is_fastest => {
                 ScreenImage::Rgb(rgb).fit_within(max_w, max_h).into_rgba()
             }
             image if opaque => resize::fit_opaque_rgba_within(image.into_rgba8(), max_w, max_h),
             image => resize::fit_rgba_within(image.into_rgba8(), max_w, max_h),
         };
-        color::convert(fitted, &self.color, color::target())
+        color::convert(fitted, &this.color, target)
     }
 
     /// The fullscreen image fitted into `max_w` x `max_h`, in the color space of the terminal,
     /// with RGB pixels when every pixel is opaque.
     pub(crate) fn fit_for_screen(self, max_w: u32, max_h: u32) -> ScreenImage {
-        ScreenImage::of_decode(self.image, self.opaque)
+        let target = color::target();
+        let this = self.tone_mapped(Some((max_w, max_h)), target);
+        ScreenImage::of_decode(this.image, this.opaque)
             .fit_within(max_w, max_h)
-            .convert(&self.color, color::target())
+            .convert(&this.color, target)
             .opaque_as_rgb()
     }
 
     /// The zoom source and the prefetch without a box: the image at its decoded size, in the
     /// color space of the terminal, in the layout of the fastest crop (`ScreenImage::for_crops`).
     pub(crate) fn into_screen(self) -> ScreenImage {
-        ScreenImage::of_decode(self.image, self.opaque)
-            .convert(&self.color, color::target())
+        let target = color::target();
+        let this = self.tone_mapped(None, target);
+        ScreenImage::of_decode(this.image, this.opaque)
+            .convert(&this.color, target)
             .for_crops()
     }
 }
@@ -171,14 +205,7 @@ pub(crate) fn decode_image(
 
     match Route::for_path(path) {
         Route::Raster => decode_raster(path, target),
-        Route::Jxl => {
-            let color = color::target();
-            jxl::decode(path, color).map(|image| Decoded {
-                image,
-                color: SourceColor::of_target(color),
-                opaque: false,
-            })
-        }
+        Route::Jxl => jxl::decode(path, color::target()),
         // The grid and the fullscreen view take the embedded JPEG of a RAW or PSD file when
         // it covers their box, else sips writes a copy at the size of the box. The zoom
         // decodes without a target, so it gets the full image with all detail.
