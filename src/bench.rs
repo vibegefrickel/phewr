@@ -888,6 +888,42 @@ fn folder_switch_with_and_without_the_prefetch() {
 }
 
 #[test]
+#[ignore = "reads the folders VIEWR_TEST_DIR and VIEWR_TEST_PREFETCH_DIR"]
+fn grid_during_a_folder_prefetch() {
+    let (Some(dir), Some(other)) = (
+        test_dir(),
+        std::env::var_os("VIEWR_TEST_PREFETCH_DIR").map(PathBuf::from),
+    ) else {
+        report("skipped: VIEWR_TEST_DIR or VIEWR_TEST_PREFETCH_DIR is not set");
+        return;
+    };
+    // The app of the other folder: the cursor rests on the folder `sub` and its prefetch starts.
+    let (_tree, root) = tree_with_subfolder(&other);
+    let sub = root.join("sub");
+    let other_cache = tempfile::tempdir().unwrap();
+    let mut other_app = App::new(CELL_PX, SharedImageList::new());
+    other_app.disk_cache_dir = other_cache.path().to_path_buf();
+    other_app.gallery.update_grid(grid_rect());
+    other_app.switch_to_dir(&root);
+    run_until(&mut other_app, |app| app.scan_complete);
+    other_app.gallery.cursor = 1;
+    let mut bench = scanned_app(&dir);
+
+    // 400 ms is more than `FOLDER_PREFETCH_DELAY`.
+    let now = Instant::now();
+    other_app.tick_folder_prefetch(now);
+    other_app.tick_folder_prefetch(now + Duration::from_millis(400));
+    assert!(other_app.folder_prefetch_running().is_some());
+    measure_grid(&mut bench.app).report("cold during a folder prefetch");
+    let rest = rest_until_prefetched(&mut other_app, &sub);
+    report(&format!(
+        "grid during a folder prefetch: the prefetch needed {} more after the grid",
+        millis(rest)
+    ));
+    settle(&mut other_app);
+}
+
+#[test]
 #[ignore = "reads the folder VIEWR_TEST_DIR"]
 fn fullscreen_open_from_the_grid() {
     let Some(dir) = test_dir() else {
