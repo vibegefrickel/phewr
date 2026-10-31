@@ -297,7 +297,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
   terminal and read `VIEWR_TEST_DIR`. `start_to_the_first_grid_picture` measures the process start
   and the steps of `main`, `disk_cache_formats` the cache formats, `layout_bench` the pixel layouts of the
-  fullscreen path (the A/B table of the RGB and RGBA resizes). `measure_grid` stops the clock at
+  fullscreen path (the A/B table of the RGB and RGBA resizes). `grid_during_a_folder_prefetch` runs the cold grid
+  while a folder prefetch of `VIEWR_TEST_PREFETCH_DIR` runs. `measure_grid` stops the clock at
   the end of the pass. Each bench lets its background work end before the next one starts (the
   `Drop` of `Bench`, `settle`), so the numbers of the full `just bench` match a run of one bench.
 
