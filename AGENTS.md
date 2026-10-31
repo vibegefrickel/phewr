@@ -137,7 +137,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `test_support::fixture(name)` finds them. `avifenc` makes a new AVIS fixture. The real ffmpeg
   test skips WebP without FFmpeg 9 (`webp_anim` decoder). `tests/fixtures/jxl/` holds 18 JPEG XL
   color charts and gradients, `ref/` their djxl renderings, and `make.sh` rebuilds both with
-  cjxl, djxl, magick, exiftool and sips.
+  cjxl, djxl, magick, exiftool and sips. `jxl/ref/` holds no `pq.png`: djxl maps PQ to a 255-nit
+  display, and viewr maps like the player. `tests/fixtures/hdr/` holds a PQ and an HLG chart with
+  BT.2020 primaries as 10-bit AVIF and HEIC (nclx), JPEG XL (lossless and lossy, and `pq-icc.jxl`)
+  and 16-bit PNG (`cICP`), `ref/` their renderings through the HDR cube of the player (ffmpeg
+  `lut3d`), and `make.sh` rebuilds them. `cargo nextest run --no-default-features` passes too.
 - A real ffmpeg playback test uses a virtual clock that jumps to each due frame. The wall-time
   twin is `#[ignore]` and runs in `just test-real`.
   `just test-real` runs them. A test without its variable skips with a note.
@@ -187,7 +191,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   grid loops (`play_grid_loops`, `transmit_animation_to`, `swap_loop_frames_to`).
 - `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
   and the way back. `mod.rs` holds `VideoState` and `play_videos`. The ffprobe path lives in the
-  decoder only (`Decoder::has_ffprobe`). `window.rs` holds `poll_mpv_window`.
+  decoder only (`Decoder::has_ffprobe`). `prestart.rs` holds the start of the player during a
+  rest of the cursor (`VideoPrestart` in `App::video_prestart`, `tick_prestart`, `take_prestart`,
+  `prestart_timeout`). `window.rs` holds `poll_mpv_window`.
 - `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` with its `Run` and
   `Repeat`, the pacing, `catch_up` (the restart ahead of the clock) and `end_of_run` (the repeat,
   the software fallback, the failure). `decoder.rs` holds the ffmpeg command line (one `build`
@@ -228,7 +234,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `screen.rs` (`ScreenImage` with `Rgb`, `Rgba` and `Opaque`, and `load_for_screen`, the
   fullscreen decode), `jxl.rs` (JPEG XL, ICC profiles
   through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
-  (EXR and HDR to 8 bit), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and `ispe`),
+  (EXR and HDR to 8 bit), `hdr.rs` (the tone map of PQ and HLG stills: the math of the HDR cube of
+  the player, the map after the resize), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and `ispe`),
   `shape.rs` (the image dimensions from the file headers, for the cell shape), `embedded_jpeg.rs`
   (the safe reader for the JPEG inside camera RAW and PSD files), `color.rs` (the conversion into
   the color space of the terminal: `ColorTarget`, `SourceColor`, the transform cache, the JPEG
@@ -353,8 +360,15 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `tonemap-hlg-{p3,srgb}-v3.cube`, `tonemap-pq-{p3,srgb}-v3.cube` and, for SDR,
   `color-<primaries>-<target>-v3.cube`. `CUBE_VERSION` is the one version for all cube names: change
   it when the cube output changes. The tone mapping writes the target primaries. ffmpeg parses a
-  cube at each start: 33 points take about 42 ms, 17 points about 16 ms. `SDR_WHITE_NITS = 500`
-  matches the macOS SDR export on three iPhone clips. The PQ cube has no test on a real PQ file.
+  cube at each start: 33 points take about 42 ms, 17 points about 16 ms. A 17-point HDR cube
+  saves about 20 ms per start but moves colors by up to 39 levels (mean error 0.84 to 1.09 levels
+  against 0.51 to 0.56), so HDR keeps 33 points. `SDR_WHITE_NITS = 500` matches the macOS SDR
+  export on three iPhone clips. The PQ cube has no test on a real PQ file. A PQ or HLG still
+  (AVIF, HEIC, JPEG XL, 16-bit PNG with `cICP`) maps with a copy of the same math in
+  `decode/hdr.rs`, per pixel and without a cube, after the resize: the primaries are BT.2020,
+  Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a file in
+  16 bit. A test compares the still map with each point of the player cubes, so a change of one
+  copy fails it.
 - **Entry kinds:** the first `App::folder_count` entries of `images` are folders, `..` first.
   The scanner pushes them before the first file batch, and the sort at the end of the scan sorts
   the files only. Every step of the fullscreen view starts at `App::first_file()`, the prefetch
@@ -380,7 +394,16 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   converts after the decode with `color::convert` (`convert_first_frame` in `video.rs`), so it
   pays no cube parse. The player maps the probed stream with
   `-map 0:N` for every video. Without the programs, a video cell keeps its large play icon, and
-  `Enter` opens the mpv window with a note.
+  `Enter` opens the mpv window with a note. When the gallery cursor rests on a video or an
+  animated image for 200 ms (`PRESTART_DELAY`) and `App::has_pending_work` is false,
+  `video_handoff/prestart.rs` opens its terminal player ahead of Enter. The run loop wakes at the
+  end of the delay (`prestart_timeout` in `next_timeout`). ffmpeg decodes the first frames and
+  blocks on the pipe. Enter takes the player (`Player::begin_at`), and its clock starts at the
+  first frame, so the clip plays in real time from Enter: after a rest of 500 ms or more the first
+  frame comes 1 ms to 2 ms after Enter, against about 240 ms without a rest. A cursor move, a new
+  frame box, an overlay, a slideshow, the mpv window and a wait of 60 s (`PRESTART_LIFETIME`)
+  drop the player. A waiting ffmpeg on a 4K HLG clip holds about 450 MB, so the limit matters.
+  The drop of a `FrameStream` reaps the killed ffmpeg on a thread, so a cursor move costs 0.1 ms.
 - **One file argument:** `cli::start_paths` turns one file argument into its canonical folder
   and a cursor target (`App::place_cursor_after_scan`, the `return_to` of `Backspace`). Several
   arguments stay a plain file list. yazi starts viewr with the hovered path (`viewr %h`).
@@ -527,7 +550,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v13` (`THUMBNAIL_CACHE_VERSION`), the
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v14` (`THUMBNAIL_CACHE_VERSION`, v14 since the HDR stills), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
@@ -551,9 +574,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   cache and the cubes of the player are in the module doc of `decode/color.rs`.
 - **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
   profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
-  of 64 rows). A transform error, XYB, the enum encodings and a PQ or HLG ICC profile stay with
-  jxl-oxide. Nobody tone-maps a PQ or HLG ICC profile yet. The codestream orientation applies,
-  the EXIF orientation does not.
+  of 64 rows). A transform error, XYB and the SDR enum encodings stay with jxl-oxide. A PQ or HLG
+  file (an enum encoding, or an ICC profile with a PQ or HLG `cicp` tag) keeps its 16-bit signal
+  for the tone map of `decode/hdr.rs`. jxl-oxide 0.12 clips XYB samples outside the sRGB gamut
+  before the BT.2020 conversion, so a lossy HDR JPEG XL loses saturation there, and a test marks
+  the limit. The codestream orientation applies, the EXIF orientation does not.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature
   too. The `image` feature `avif` is the encoder, not a decoder.
