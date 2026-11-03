@@ -44,14 +44,13 @@ Order: speed first, then formats, then the first release.
    - JPEG XL with a PQ or HLG ICC profile: done with the HDR stills.
    - Real files for the new formats. `~/Pictures/viewr-test/08-raw` holds camera RAW files. JPEG XL has only converted and synthetic files.
      - Make sure that JPEG XL decodes correctly: sRGB, Display P3, PQ and an ICC profile (`VIEWR_TEST_JXL`).
-     - Make sure that camera RAW decodes correctly, with a portrait photo (`VIEWR_TEST_RAW`).
-     - Measure whether `sips -Z` on a RAW uses the embedded preview, and measure the `sips` times with a real RAW.
+     - Camera RAW on real files: measured 2026-11-03 (`df7ba6d`). 20 of the 22 files of `08-raw` pass, and `IMG_1361.DNG` is a real portrait. `sips -Z` develops the RAW and reads no preview. Open: `portrait-DSCF0120.RAF` and `portrait-apsc_compressed_lossless.ARW` show sideways in the fullscreen view (sips ignores their changed tag), and sips develops `P1000475.RW2` all black.
    - The PQ cube has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
    - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.
 3. Delete removal: done 2026-11-03 (`5da64fa`). The keys `d` and `D`, the delete question and the `trash` crate are gone. The marks (`Space`, `a`, `A`) stay in `app/marks.rs` for a later use, for example a slideshow of the marked images.
 4. Grid loops: done (merged 2026-10-27). Native Kitty animations for the loops: done (merged 2026-10-30, `9d84897`, the follow-ups in `e0a9e62`). Open: the terminal test of both paths in Ghostty 1.4.0 and herdr 0.9.5 ("Now"). Stop the loops, the player and the slideshow while the tab is hidden (mode 2033): stopped on 2026-10-30, crossterm 0.27 to 0.29 never end the report sequence and lose all input after it, the issue draft is `~/Projects/dev/crossterm-issue-visibility-report.md` (`REVIEW-2026-10-28.md` K3).
 5. First release: create the Codeberg repository `viewr`, then `just render` and `just release`. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
-6. Small leftovers of the cleanup review (2026-11-03): the scanner callers of `entries_since` can move to `batch_since`. `GridLoops::next_id` wraps to `LOOP_ID_BASE` after 2^31 ids, which is theoretical in one session. The success path of `video::first_frame_of` has no test, because the tests start no fake ffprobe or ffmpeg program. `write_direct` writes nothing for an empty image, and no caller sends one.
+6. Small leftovers of the cleanup review: done 2026-11-03 (`df7ba6d`). `batch_since` replaces `entries_since`, the loop ids skip the live ids after a wrap, an empty image writes nothing, and `video::tests::real_clip_first_frame` tests the first frame on a real clip.
 
 ## Later
 

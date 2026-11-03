@@ -128,7 +128,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module.
 - Tests that need a real file are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
   `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW`, `VIEWR_TEST_PSD`,
-  `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`.
+  `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`. `VIEWR_TEST_SDR_VIDEO` also feeds the first
+  frame test `video::tests::real_clip_first_frame`. The bench `previews::raw_files` reads every
+  RAW file of `VIEWR_TEST_RAW_DIR`.
 - `tests/fixtures/color/` holds a Display P3 chart as JPEG, PNG, WebP, TIFF and HEIC with an ICC
   profile, as HEIC and AVIF with nclx, and as PNG with cICP and with gAMA and cHRM, plus an
   Adobe RGB JPEG and untagged sRGB files. `VIEWR_BENCH_COLORSPACE=srgb just bench` measures with
@@ -623,7 +625,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   header or PSD resource 1036. It is the grid preview. A JPEG that covers the box is the sharp
   thumbnail and goes into the disk cache, so sips does not run for the cell. The fullscreen view
   and the prefetch also take a JPEG that covers their box. The zoom keeps sips. ORF has no
-  reachable preview.
+  reachable preview. `sips -Z` reads no preview: it develops the RAW and then scales (0.5 s to
+  1.1 s per file). The real-file numbers are in `docs/images-and-colors.md` ("sips").
 - **Embedded JPEG orientation:** the container orientation (IFD0 of a TIFF RAW, `CMT1` of a
   CR3) wins over the EXIF of the embedded JPEG. Without a container orientation, the EXIF of
   the JPEG applies (RAF). The turbo path, the `image` fallback and the cell shape use this one

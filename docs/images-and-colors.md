@@ -74,6 +74,26 @@ AGENTS.md holds the rules and the layout of the files.
   fill the box.
 - The zoom gets a large copy of a vector file (`VECTOR_ZOOM_SIDE`, 4096).
 - A PDF page has a transparent background.
+- `sips -Z` reads no embedded preview. A pixel compare on 2026-11-03 put the `-Z 512` output
+  closer to a scaled full develop than to the embedded JPEG for Canon CR3, Nikon NEF and Fujifilm
+  RAF. CR3 develops 40 % faster with `-Z` (527 ms against 904 ms). NEF and RAF take the time of
+  the full develop.
+- The embedded JPEG route is 15 to 300 times faster than sips for a grid cell. The real files of
+  `08-raw` (`previews::raw_files`, release build):
+
+| Make | Embedded JPEG | Grid decode | Fullscreen decode | sips grid decode |
+| --- | --- | --- | --- | --- |
+| CR2 | 6720x4480 | 20 ms to 22 ms | 38 ms to 43 ms | 484 ms to 659 ms |
+| RAF | 4416x2944 | 35 ms to 45 ms | 43 ms to 56 ms | 1153 ms to 1249 ms |
+| NEF | 5568x3712 | 28 ms to 43 ms | 40 ms to 58 ms | 779 ms to 954 ms |
+| DNG | 4032x3024 | 51 ms | 83 ms | 590 ms |
+| CR3 | 1620x1080 | 4 ms to 9 ms | 4 ms to 6 ms | 669 ms to 1106 ms |
+| RW2 | 1920x1440 | 5 ms | 6 ms | 1786 ms |
+| ARW | 4608x3072 | 19 ms | 27 ms | 521 ms |
+
+- Two open bugs of the sips route (2026-11-03): sips ignores a changed Orientation tag of RAF and
+  ARW, and it develops `P1000475.RW2` all black. The fullscreen view and the zoom take sips for
+  these files.
 
 ## Float images (EXR and Radiance HDR)
 

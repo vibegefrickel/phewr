@@ -37,6 +37,8 @@ filter `bench::` finds all 23 benches.
   in a CR3. The folder adds its first file of each RAW or PSD extension.
 - The bench measures the find, the decode for a grid cell and the decode for the fullscreen box.
   It compares each with sips.
+- `raw_files` measures every RAW file of `VIEWR_TEST_RAW_DIR` with the real thumb box. It skips
+  hidden files and the files that the scanner does not list.
 
 ## Decoders (`bench/decoders.rs`)
 
