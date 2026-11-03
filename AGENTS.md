@@ -628,7 +628,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v18` (`THUMBNAIL_CACHE_VERSION`, v18 since the flip compare of RAF and ARW), the
+- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v19` (`THUMBNAIL_CACHE_VERSION`, v19 since the rounding target curve for moxcms 0.9.1), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
@@ -652,6 +652,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - **Image colors:** phewr converts every image into Display P3 (`[terminal] colorspace`), because
   Ghostty copies the pixels of a Kitty image without a conversion. The sources, the transform
   cache and the cubes of the player are in `docs/images-and-colors.md` ("Color conversion").
+  moxcms 0.9.1 truncates the output table of a known curve (sRGB, BT.709, CICP), so 200 gives
+  199. `ColorTarget::profile` writes the target curve with 7 parameters and without CICP, and
+  that table rounds (`rounding_output_curve`). When the canary test
+  `moxcms_still_truncates_known_curves` fails, remove the workaround and the test.
 - **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
   profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
   of 64 rows). A transform error, XYB and the SDR enum encodings stay with jxl-oxide. A PQ or HLG
