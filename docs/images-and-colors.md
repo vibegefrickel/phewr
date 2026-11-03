@@ -195,3 +195,16 @@ The code is in `decode/hdr/`.
 
 - The facts of the ICC handling and of the XYB limit are in AGENTS.md (gotcha "JPEG XL colors").
 - A PQ or HLG file keeps its 16-bit signal for the tone map of `decode/hdr/`.
+- On 2026-11-03, 40 public files (27 of the libjxl conformance set, 13 from jpegxl.info,
+  convertico.com and libjxl/testdata) went through `real_jxl_matches_reference`. 34 match their
+  reference within 4 levels. The six others:
+  - `cmyk_layers`: viewr refuses CMYK on purpose.
+  - `grayscale_jpeg`: djxl writes the gray ICC profile into an RGB PNG. Against the lcms
+    conversion of the restored JPEG, viewr is within 4 levels.
+  - `spot`: `moxcms` clips red at the sRGB gamut edge of a ProPhoto-like profile, where lcms keeps
+    it (up to 32 levels on 144 of 240 000 pixels).
+  - `test_pattern-PQ`: 6 levels against the player cube.
+  - `sunrise-PQ` and `sunset-hdr-pq` (lossy XYB PQ): the XYB clip of jxl-oxide, up to 120 levels.
+- jxl-oxide has no scaled decode, so the grid and the fullscreen box take the time of the full
+  decode: 199 ms for 11 MP (ICC, lossy), 129 ms for 8.3 MP, 88 ms for 5.2 MP.
+- Not tested: a camera or app file (Apple ProRAW, Samsung), a real HLG photo, a P3 PQ file.

@@ -45,7 +45,7 @@ Order: speed first, then formats, then the first release.
    - HDR stills: done 2026-10-31 (`263e48d`). PQ and HLG in AVIF, HEIC, JPEG XL and 16-bit PNG map like the player cube, with fixtures in `tests/fixtures/hdr/`. Thumbnail cache v14. jxl-oxide 0.12 clips lossy HDR JPEG XL outside the sRGB gamut (a test marks it).
    - JPEG XL with a PQ or HLG ICC profile: done with the HDR stills.
    - Real files for the new formats. `~/Pictures/viewr-test/08-raw` holds camera RAW files. JPEG XL has only converted and synthetic files.
-     - Make sure that JPEG XL decodes correctly: sRGB, Display P3, PQ and an ICC profile (`VIEWR_TEST_JXL`).
+     - JPEG XL on real files: done 2026-11-03. 34 of 40 public files match their reference within 4 levels, and gray PQ now takes the HDR path. Open: a camera or app file (Apple ProRAW, Samsung), a real HLG photo, the saklistudio.com HDR samples (the server blocks scripts), the `moxcms` gamut edge and the XYB clip of jxl-oxide.
      - Camera RAW on real files: done 2026-11-03 (`df7ba6d`, `3c8027b`). All 22 files of `08-raw` and four real portrait RAF and ARW files pass. `sips -Z` develops the RAW and reads no preview. viewr turns a RAF or ARW develop that sips left unturned, and a black develop gives way to the embedded JPEG. Open: an orientation of 2, 3 or 4 on RAF and ARW stays unturned (a pixel compare with the embedded JPEG can find it).
    - The PQ cube has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
    - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.

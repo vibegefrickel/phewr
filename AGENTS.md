@@ -130,7 +130,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW`, `VIEWR_TEST_PSD`,
   `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`. `VIEWR_TEST_SDR_VIDEO` also feeds the first
   frame test `video::tests::real_clip_first_frame`. The bench `previews::raw_files` reads every
-  RAW file of `VIEWR_TEST_RAW_DIR`.
+  RAW file of `VIEWR_TEST_RAW_DIR`. `real_jxl_matches_reference` compares `VIEWR_TEST_JXL` with
+  `VIEWR_TEST_JXL_REF` (a djxl rendering, or the player cube for PQ and HLG) and fails above 4
+  levels. `VIEWR_TEST_JXL_MAX` sets another limit, and `VIEWR_TEST_JXL_OUT` writes the decode.
 - `tests/fixtures/color/` holds a Display P3 chart as JPEG, PNG, WebP, TIFF and HEIC with an ICC
   profile, as HEIC and AVIF with nclx, and as PNG with cICP and with gAMA and cHRM, plus an
   Adobe RGB JPEG and untagged sRGB files. `VIEWR_BENCH_COLORSPACE=srgb just bench` measures with
@@ -139,7 +141,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   RGBA, interlaced, EXIF orientation 6), and `make.sh` rebuilds them with magick and exiftool.
 - `tests/fixtures/` holds 8 small animated and still files (GIF, WebP, APNG, AVIF), and
   `test_support::fixture(name)` finds them. `avifenc` makes a new AVIS fixture. The real ffmpeg
-  test skips WebP without FFmpeg 9 (`webp_anim` decoder). `tests/fixtures/jxl/` holds 18 JPEG XL
+  test skips WebP without FFmpeg 9 (`webp_anim` decoder). `tests/fixtures/jxl/` holds 19 JPEG XL
   color charts and gradients, `ref/` their djxl renderings, and `make.sh` rebuilds both with
   cjxl, djxl, magick, exiftool and sips. `jxl/ref/` holds no `pq.png`: djxl maps PQ to a 255-nit
   display, and viewr maps like the player. `tests/fixtures/hdr/` holds a PQ and an HLG chart with
@@ -603,7 +605,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   file (an enum encoding, or an ICC profile with a PQ or HLG `cicp` tag) keeps its 16-bit signal
   for the tone map of `decode/hdr/`. jxl-oxide 0.12 clips XYB samples outside the sRGB gamut
   before the BT.2020 conversion, so a lossy HDR JPEG XL loses saturation there, and a test marks
-  the limit. The codestream orientation applies, the EXIF orientation does not.
+  the limit. The codestream orientation applies, the EXIF orientation does not. A gray file with
+  a PQ or HLG enum encoding renders its 16-bit signal and takes the tone map of `decode/hdr/`
+  like an RGB file (`Cicp` BT.2100). A gray file with a PQ or HLG ICC profile stays with
+  jxl-oxide. 34 of 40 public JPEG XL files match their reference within 4 levels
+  (`docs/images-and-colors.md`, "JPEG XL").
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature
   too. The `image` feature `avif` is the encoder, not a decoder.
