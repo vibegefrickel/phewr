@@ -38,7 +38,7 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
     let prev_offset = app.gallery.scroll_offset;
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
+        KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('?') => {
             app.graphics_delete_all()?;
             app.help_visible = true;
@@ -325,8 +325,8 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.mode, ViewMode::Gallery);
 
+        assert!(!press(&mut app, KeyCode::Esc), "Esc does not quit the grid");
         assert!(char_key(&mut app, 'q'));
-        assert!(press(&mut app, KeyCode::Esc));
     }
 
     #[test]

@@ -41,7 +41,7 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("d / D", "Trash / delete for good"),
     ("/", "Search"),
     ("?", "Toggle help"),
-    ("q / Esc", "Quit"),
+    ("q", "Quit"),
     ("", ""),
     ("", "Search"),
     ("<type>, Backspace", "Filter by filename"),

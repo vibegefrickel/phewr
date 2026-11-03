@@ -108,7 +108,7 @@ run  = 'shell -- open -na Ghostty.app --args -e sh -c "YAZI_ID=$YAZI_ID exec $HO
 | `Space` | Toggle selection |
 | `a` `A` | Select all / clear selection |
 | `d` `D` | Trash / permanently delete, with confirm |
-| `q` `Esc` | Quit |
+| `q` | Quit |
 | `?` | Full help |
 
 The grid lists the subfolders of the folder first, with `..` for the parent. A folder cell shows a large folder icon and its name, and `..` shows two dots. Hidden folders and symlinks to folders stay out. Folders take no mark and no delete, and the fullscreen view and the slideshow skip them. The search matches folder names. viewr always starts in the grid, also in a folder with one image. When the cursor rests on a folder, viewr prepares the thumbnails of that folder in the background, so `Enter` shows them at once.

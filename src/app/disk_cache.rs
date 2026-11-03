@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// The version in the disk cache key. Change it when the thumbnail output changes.
-const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v13";
+const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v14";
 
 /// The version in the key of a loop file. Change it when the loop output changes.
 const LOOP_CACHE_VERSION: &str = "viewr-loop-v1";

@@ -11,7 +11,7 @@ use crate::player::{Decoder, Player, SystemDecoder, frame_limit};
 use crate::run_loop::LoopState;
 use crate::video::cube_dirs;
 use crate::yazi::find_on_path;
-pub(crate) use prestart::VideoPrestart;
+pub(crate) use prestart::{VideoPrestart, prestart_timeout};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;

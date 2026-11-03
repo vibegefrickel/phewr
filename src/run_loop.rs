@@ -313,6 +313,10 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     if app.watches_video_window() {
         timeout = timeout.min(WINDOW_POLL);
     }
+    #[cfg(feature = "video")]
+    if let Some(remaining) = crate::video_handoff::prestart_timeout(app, Instant::now()) {
+        timeout = timeout.min(remaining);
+    }
     timeout
 }
 

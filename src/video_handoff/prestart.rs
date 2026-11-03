@@ -41,7 +41,7 @@ use std::time::{Duration, Instant};
 const PRESTART_DELAY: Duration = Duration::from_millis(200);
 /// A started player that waits longer than this for Enter ends. An idle viewr on a video cell
 /// then holds no ffmpeg, no `VideoToolbox` session and no frame buffers.
-const PRESTART_LIFETIME: Duration = Duration::from_secs(60);
+const PRESTART_LIFETIME: Duration = Duration::from_secs(10);
 
 /// The player that starts ahead of Enter, and the rest of the cursor that it belongs to.
 #[derive(Default)]
@@ -74,6 +74,26 @@ impl VideoPrestart {
             self.player = None;
         }
     }
+}
+
+/// The floor of the wait for a rest whose start is due but held: the grid has work, and the run
+/// loop already looks every 10 ms for it.
+const HELD_POLL: Duration = Duration::from_millis(10);
+
+/// How long the run loop can wait before the player of the rest can start, so that the start
+/// comes at the end of `PRESTART_DELAY` and not at the next idle look. `None` without a rest on
+/// a video or an animation, and after the start of the rest ran.
+pub(crate) fn prestart_timeout(app: &App, now: Instant) -> Option<Duration> {
+    let prestart = &app.video_prestart;
+    let (path, since) = prestart.rest.as_ref()?;
+    if prestart.tried.is_some()
+        || !(crate::video::is_video(path)
+            || crate::player::animation::has_animation_extension(path))
+    {
+        return None;
+    }
+    let due = *since + PRESTART_DELAY;
+    Some(due.saturating_duration_since(now).max(HELD_POLL))
 }
 
 /// The file whose player can start ahead of Enter: the entry under the gallery cursor, while
@@ -171,7 +191,9 @@ pub(crate) fn take_prestart(
 
 #[cfg(test)]
 mod tests {
-    use super::{PRESTART_DELAY, PRESTART_LIFETIME, take_prestart, tick_prestart};
+    use super::{
+        PRESTART_DELAY, PRESTART_LIFETIME, prestart_timeout, take_prestart, tick_prestart,
+    };
     use crate::app::{App, ViewMode};
     use crate::config::VideoPlayer;
     use crate::test_support::video::{
@@ -204,6 +226,37 @@ mod tests {
         tick_prestart(app, &state, due);
         assert!(app.video_prestart.running());
         due
+    }
+
+    /// The run loop wakes at the end of the delay of a rest on a video, and not for a photo or
+    /// after the start.
+    #[test]
+    fn the_run_loop_wakes_at_the_end_of_the_rest_delay() {
+        let decoder = fake_decoder(clip_info());
+        let state = state_with(VideoPlayer::Terminal, Rc::clone(&decoder));
+        let mut app = gallery_on_video();
+        let start = Instant::now();
+        assert_eq!(prestart_timeout(&app, start), None, "no rest yet");
+        tick_prestart(&mut app, &state, start);
+        assert_eq!(
+            prestart_timeout(&app, start + PRESTART_DELAY / 2),
+            Some(PRESTART_DELAY / 2)
+        );
+        assert_eq!(
+            prestart_timeout(&app, start + PRESTART_DELAY * 3),
+            Some(Duration::from_millis(10)),
+            "a held start waits with the busy poll"
+        );
+        tick_prestart(&mut app, &state, start + PRESTART_DELAY);
+        assert_eq!(
+            prestart_timeout(&app, start + PRESTART_DELAY),
+            None,
+            "the start ran"
+        );
+
+        app.gallery.cursor = 0;
+        tick_prestart(&mut app, &state, start);
+        assert_eq!(prestart_timeout(&app, start), None, "a photo needs no wake");
     }
 
     #[test]
@@ -460,9 +513,10 @@ mod tests {
         let path = app.images[1].clone();
         let limit = crate::player::frame_limit(app.fullscreen_box, app.cell_px);
         let mut player =
-            take_prestart(&mut app, &path, limit, rest + Duration::from_secs(60)).unwrap();
-        // 60 s after the start of ffmpeg, but 1 s after Enter: the run still waits.
-        assert!(!player.poll_at(rest + Duration::from_secs(61)));
+            take_prestart(&mut app, &path, limit, rest + Duration::from_secs(9)).unwrap();
+        // 9 s after the start of ffmpeg, past the first-frame deadline, but 1 s after Enter: the
+        // run still waits.
+        assert!(!player.poll_at(rest + Duration::from_secs(10)));
         assert!(player.playing());
         assert_eq!(decoder.starts().len(), 1, "no software fallback yet");
     }

@@ -48,7 +48,7 @@
 //! 1 ms after Enter. A shorter rest gains less, and a rest below 270 ms gains nothing. The clock
 //! of a run starts at its first frame, so the clip plays in real time from Enter and drops no
 //! frame. A cursor move, a new frame box, the help popup, a slideshow and an mpv window drop the
-//! player, and so does a wait of 60 s for Enter. The drop of a `FrameStream` kills ffmpeg and
+//! player, and so does a wait of 10 s for Enter. The drop of a `FrameStream` kills ffmpeg and
 //! reaps it on a thread, so the UI thread does not wait about 6 ms for the exit. A 17-point HDR
 //! cube saves about 20 ms per start, but its colors differ by up to 39 levels from the 33-point
 //! cube, so HDR keeps 33.

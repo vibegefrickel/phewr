@@ -401,8 +401,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   blocks on the pipe. Enter takes the player (`Player::begin_at`), and its clock starts at the
   first frame, so the clip plays in real time from Enter: after a rest of 500 ms or more the first
   frame comes 1 ms to 2 ms after Enter, against about 240 ms without a rest. A cursor move, a new
-  frame box, an overlay, a slideshow, the mpv window and a wait of 60 s (`PRESTART_LIFETIME`)
-  drop the player. A waiting ffmpeg on a 4K HLG clip holds about 450 MB, so the limit matters.
+  frame box, an overlay, a slideshow, the mpv window and a wait of 10 s (`PRESTART_LIFETIME`)
+  drop the player. A waiting ffmpeg on a 4K HLG clip holds about 450 MB, so the limit is short.
   The drop of a `FrameStream` reaps the killed ffmpeg on a thread, so a cursor move costs 0.1 ms.
 - **One file argument:** `cli::start_paths` turns one file argument into its canonical folder
   and a cursor target (`App::place_cursor_after_scan`, the `return_to` of `Backspace`). Several
