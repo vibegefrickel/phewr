@@ -293,6 +293,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   halves.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
   `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
+  `batch_since` gives the new entries and the list length from one lock, so the scan poll loses
+  no batch.
 - `prefetch/`: decodes the neighbors of the fullscreen image ahead of time (`mod.rs`, the tests in
   `tests.rs`). A job sends a
   `JobResult` with its generation. `invalidate()` drops the jobs in flight and forgets the failed
@@ -420,7 +422,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   time, and the tests never do, so `session_first_frame` gives `NotFound` in a test. The probe
   (`player/probe/`) is one `ffprobe -of json` process of about 32 ms with a 2 s timeout
   (`output_within`). A probe cache keys each `VideoInfo` by path, mtime and length, so
-  `Player::open` after a cold thumbnail starts no ffprobe. An animation reads 17 packets, an
+  `Player::open` after a cold thumbnail starts no ffprobe. A second caller for the same path
+  waits for the running ffprobe and starts none. An animation reads 17 packets, an
   `.avif` file 34. The first frame runs the player GPU chain with `-frames:v 1`, with the
   rotation and, for HLG and PQ, the tone mapping cube, and waits at most 5 s. An SDR first frame
   converts after the decode with `color::convert` (`convert_first_frame` in `video/mod.rs`), so it

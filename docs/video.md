@@ -79,6 +79,8 @@ rules. This page holds the reasons and the numbers.
   zeroed 6 MB `Vec` per frame.
 - A `PooledFrame` returns its buffer on drop. This holds for a frame that the catch-up rule
   drops. A frame of an old run returns to the pool of its own run.
+- A short frame from ffmpeg counts as dropped. The screen keeps the last frame, and `poll_at`
+  returns `false`.
 
 ### Real time
 
@@ -142,6 +144,8 @@ rules. This page holds the reasons and the numbers.
 - These events drop the player: a cursor move, a view change, the help popup, a slideshow and an
   mpv window.
 - A new frame box (a resize, the info panel) drops the player and starts it again for the new box.
+- A run that plays once (a running slideshow) drops the prestarted player before its own ffmpeg
+  starts. Two ffmpeg runs never overlap.
 - A player that waits `PRESTART_LIFETIME` (10 s) for Enter ends. It holds an ffmpeg process with
   its `VideoToolbox` session (452 MB resident for a 4K HLG clip, at 0 % CPU) and 3 frame
   buffers (19 MB at 1920x1080, 6.2 MB each as `rgb24`). The 3 buffers are the 2 frames of the

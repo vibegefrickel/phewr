@@ -55,6 +55,7 @@ Order: speed first, then formats, then the delete removal, then the first releas
    - Keep the marks (`Space`, `a`, `A`) for a later use, for example a slideshow of the marked images.
 4. Grid loops: done (merged 2026-10-27). Native Kitty animations for the loops: done (merged 2026-10-30, `9d84897`, the follow-ups in `e0a9e62`). Open: the terminal test of both paths in Ghostty 1.4.0 and herdr 0.9.5 ("Now"). Stop the loops, the player and the slideshow while the tab is hidden (mode 2033): stopped on 2026-10-30, crossterm 0.27 to 0.29 never end the report sequence and lose all input after it, the issue draft is `~/Projects/dev/crossterm-issue-visibility-report.md` (`REVIEW-2026-10-28.md` K3).
 5. First release: create the Codeberg repository `viewr`, then `just render` and `just release`. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
+6. Small leftovers of the cleanup review (2026-11-03): the scanner callers of `entries_since` can move to `batch_since`. `GridLoops::next_id` wraps to `LOOP_ID_BASE` after 2^31 ids, which is theoretical in one session. The success path of `video::first_frame_of` has no test, because the tests start no fake ffprobe or ffmpeg program. `write_direct` writes nothing for an empty image, and no caller sends one.
 
 ## Later
 

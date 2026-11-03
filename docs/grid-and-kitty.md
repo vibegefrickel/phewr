@@ -42,6 +42,8 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 - JPEG and PNG swap for the EXIF orientation. HEIC and AVIF read `ispe` and swap for `irot`.
 - A RAW or PSD file gives the size of its embedded JPEG after the orientation.
 - PDF, SVG, the other ImageIO formats and video count as 3:2.
+- A header thread that ends without a result, or that does not start, gives the default shape
+  3:2.
 - The median snaps to one of 7 buckets: 9:16, 2:3, 3:4, 1:1, 4:3, 3:2 and 16:9.
 - The column count includes 1 gap per column plus the edge gap.
 - The first screen waits for the shape (2 ms to 4 ms).
@@ -116,6 +118,7 @@ polls"). This is the order of the decisions:
 1. In the gallery, the wait is zero while emits are pending or `App::loops_to_send` is true.
 2. The base wait depends on the state:
    - While a video player runs, it is the time to the next frame (`time_until_next_frame`).
+     Background results then wait for the next frame.
    - Else it is 10 ms (`BUSY_POLL`) when `App::has_pending_work_but_loops` is true or emits are
      pending. A running loop job alone gives no 10 ms poll.
    - Else it is 250 ms (`IDLE_POLL`).
