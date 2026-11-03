@@ -44,7 +44,7 @@ Order: speed first, then formats, then the first release.
    - JPEG XL with a PQ or HLG ICC profile: done with the HDR stills.
    - Real files for the new formats. `~/Pictures/viewr-test/08-raw` holds camera RAW files. JPEG XL has only converted and synthetic files.
      - Make sure that JPEG XL decodes correctly: sRGB, Display P3, PQ and an ICC profile (`VIEWR_TEST_JXL`).
-     - Camera RAW on real files: measured 2026-11-03 (`df7ba6d`). 20 of the 22 files of `08-raw` pass, and `IMG_1361.DNG` is a real portrait. `sips -Z` develops the RAW and reads no preview. Open: `portrait-DSCF0120.RAF` and `portrait-apsc_compressed_lossless.ARW` show sideways in the fullscreen view (sips ignores their changed tag), and sips develops `P1000475.RW2` all black.
+     - Camera RAW on real files: done 2026-11-03 (`df7ba6d`, `3c8027b`). All 22 files of `08-raw` and four real portrait RAF and ARW files pass. `sips -Z` develops the RAW and reads no preview. viewr turns a RAF or ARW develop that sips left unturned, and a black develop gives way to the embedded JPEG. Open: an orientation of 2, 3 or 4 on RAF and ARW stays unturned (a pixel compare with the embedded JPEG can find it).
    - The PQ cube has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
    - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.
 3. Delete removal: done 2026-11-03 (`5da64fa`). The keys `d` and `D`, the delete question and the `trash` crate are gone. The marks (`Space`, `a`, `A`) stay in `app/marks.rs` for a later use, for example a slideshow of the marked images.

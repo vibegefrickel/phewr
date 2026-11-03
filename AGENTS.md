@@ -570,7 +570,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v14` (`THUMBNAIL_CACHE_VERSION`, v14 since the HDR stills), the
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v15` (`THUMBNAIL_CACHE_VERSION`, v15 since the RAW turn and the black RAW fallback), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
@@ -627,6 +627,13 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   and the prefetch also take a JPEG that covers their box. The zoom keeps sips. ORF has no
   reachable preview. `sips -Z` reads no preview: it develops the RAW and then scales (0.5 s to
   1.1 s per file). The real-file numbers are in `docs/images-and-colors.md` ("sips").
+  `sips::decode_with_preview` reads the embedded JPEG once and corrects each RAW develop with it.
+  sips ignores the orientation of RAF and ARW, also of real portrait shots. If the known
+  orientation turns by 90 or 270 degrees and the develop keeps the unturned aspect, viewr turns
+  it. An orientation of 2, 3 or 4 on RAF and ARW stays unturned, because the aspect cannot show
+  it. If a RAW develop has only zero color samples, the embedded JPEG takes its place (sips
+  develops `P1000475.RW2` black). A PSD never takes this fallback. The info panel shows the
+  oriented size (`sips::shown_dimensions`).
 - **Embedded JPEG orientation:** the container orientation (IFD0 of a TIFF RAW, `CMT1` of a
   CR3) wins over the EXIF of the embedded JPEG. Without a container orientation, the EXIF of
   the JPEG applies (RAF). The turbo path, the `image` fallback and the cell shape use this one

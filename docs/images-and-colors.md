@@ -91,9 +91,15 @@ AGENTS.md holds the rules and the layout of the files.
 | RW2 | 1920x1440 | 5 ms | 6 ms | 1786 ms |
 | ARW | 4608x3072 | 19 ms | 27 ms | 521 ms |
 
-- Two open bugs of the sips route (2026-11-03): sips ignores a changed Orientation tag of RAF and
-  ARW, and it develops `P1000475.RW2` all black. The fullscreen view and the zoom take sips for
-  these files.
+- sips ignores the orientation of RAF and ARW files. Four real portrait files of raw.pixls.us
+  (Fujifilm X-A3 and X-H2, Sony DSLR-A450 and SLT-A58) showed it on macOS 26.7.2. viewr turns a
+  develop that keeps the unturned aspect (`sips::corrected`). The turn costs about 30 ms for a
+  fullscreen develop and 196 ms for a 7728x5152 zoom develop.
+- sips develops `P1000475.RW2` (Panasonic) all black. A RAW develop with only zero color samples
+  gives way to the embedded JPEG at the box. The check stops at the first sample that is not 0
+  (28 µs on a 7728x5152 develop).
+- Limit: an orientation of 2, 3 or 4 on RAF and ARW stays unturned in the fullscreen view and the
+  zoom, because the aspect cannot show a 180 degree turn or a mirror.
 
 ## Float images (EXR and Radiance HDR)
 
