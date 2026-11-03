@@ -134,7 +134,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module.
 - Tests that need a real file are `#[ignore = "..."]` and read `PHEWR_TEST_JPEG`,
   `PHEWR_TEST_HEIC`, `PHEWR_TEST_AVIF`, `PHEWR_TEST_JXL`, `PHEWR_TEST_RAW`, `PHEWR_TEST_PSD`,
-  `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. `PHEWR_TEST_SDR_VIDEO` also feeds the first
+  `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. `real_flipped_copy_shows_upright` copies `PHEWR_TEST_RAW`
+  (a RAF or ARW) into a temp dir and writes the orientations 2, 3 and 4 with exiftool.
+  `PHEWR_TEST_SDR_VIDEO` also feeds the first
   frame test `video::tests::real_clip_first_frame`. The bench `previews::raw_files` reads every
   RAW file of `PHEWR_TEST_RAW_DIR`. `real_jxl_matches_reference` compares `PHEWR_TEST_JXL` with
   `PHEWR_TEST_JXL_REF` (a djxl rendering, or the player cube for PQ and HLG) and fails above 4
@@ -276,7 +278,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   stills: `mod.rs` the math of the HDR cube of the player, `primaries.rs` the primaries and the
   matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir`, `ispe`, `clli` and `mdcv`), `shape.rs`
   (the image dimensions from the file headers, for the cell shape), `embedded_jpeg/` (the safe
-  reader for the JPEG inside camera RAW and PSD files: `mod.rs` with RAF, `tiff.rs`, `cr3.rs`,
+  reader for the JPEG inside camera RAW and PSD files: `mod.rs` with RAF and `decode_reference`,
+  `tiff.rs`, `cr3.rs`,
   `psd.rs`), `color/` (the conversion into the color space of the terminal: `mod.rs` with
   `ColorTarget`, `SourceColor` and `convert`, `transform.rs` the transform cache, `jpeg.rs` the
   JPEG segment walk `jpeg_segments`, the APP2 ICC profile and the Adobe RGB mark, `tags.rs` the
@@ -608,7 +611,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v17` (`THUMBNAIL_CACHE_VERSION`, v17 since the PNG and JPEG XL peak), the
+- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v18` (`THUMBNAIL_CACHE_VERSION`, v18 since the flip compare of RAF and ARW), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
@@ -676,8 +679,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `sips::decode_with_preview` reads the embedded JPEG once and corrects each RAW develop with it.
   sips ignores the orientation of RAF and ARW, also of real portrait shots. If the known
   orientation turns by 90 or 270 degrees and the develop keeps the unturned aspect, phewr turns
-  it. An orientation of 2, 3 or 4 on RAF and ARW stays unturned, because the aspect cannot show
-  it. If a RAW develop has only zero color samples, the embedded JPEG takes its place (sips
+  it. For RAF and ARW, an orientation of 2, 3 or 4 (and 5 to 8 with a square size) comes from
+  a pixel compare: `sips::flip_gap` scales the develop and a small reference to 32x32 gray
+  pictures. The develop turns when the oriented candidate is closer by more than `FLIP_MARGIN`
+  (2.0 gray levels). The reference is the smallest JPEG of an ARW (IFD1) or the EXIF thumbnail of
+  the RAF preview (`embedded_jpeg::decode_reference`), because the large preview takes 31 ms to
+  63 ms to decode. A tie, or a file without a reference, keeps the develop. If a RAW develop has only zero color samples, the embedded JPEG takes its place (sips
   develops `P1000475.RW2` black). A PSD never takes this fallback. The info panel shows the
   oriented size (`sips::shown_dimensions`).
 - **Embedded JPEG orientation:** the container orientation (IFD0 of a TIFF RAW, `CMT1` of a

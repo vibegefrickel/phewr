@@ -98,8 +98,14 @@ AGENTS.md holds the rules and the layout of the files.
 - sips develops `P1000475.RW2` (Panasonic) all black. A RAW develop with only zero color samples
   gives way to the embedded JPEG at the box. The check stops at the first sample that is not 0
   (28 µs on a 7728x5152 develop).
-- Limit: an orientation of 2, 3 or 4 on RAF and ARW stays unturned in the fullscreen view and the
-  zoom, because the aspect cannot show a 180 degree turn or a mirror.
+- The aspect cannot show an orientation of 2, 3 or 4 (a 180 degree turn or a mirror). For RAF and
+  ARW, `sips::flip_gap` compares 32x32 gray pictures of the develop, as it is and oriented, with a
+  small reference: the IFD1 JPEG of an ARW or the EXIF thumbnail of the RAF preview
+  (`embedded_jpeg::decode_reference`). The large preview takes 31 ms to 63 ms to decode, the
+  reference 0.5 ms to 1.5 ms with the compare. The oriented develop wins when it is closer by more
+  than `FLIP_MARGIN` (2.0 gray levels). The smallest real gap of the copies of `DSCF0118.RAF`,
+  `DSCF0119.RAF`, `DSCF0120.RAF` and `apsc_compressed_lossless.ARW` with the orientations 2, 3 and
+  4 is 10.52 levels. A tie or a file without a reference keeps the develop. Thumbnail cache v18.
 
 ## Float images (EXR and Radiance HDR)
 

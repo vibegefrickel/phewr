@@ -7,3 +7,4 @@ These pages hold the design facts that the module docs no longer hold. Read AGEN
 - [Grid and Kitty output](grid-and-kitty.md): the grid geometry, the cell shape, the Kitty writes, the terminal storage, the emit passes and the run loop waits.
 - [Benchmarks](benchmarks.md): what the benches of `src/bench/` measure and what they leave out.
 - [App state](app-state.md): the thumbnail jobs, the disk cache, the folder prefetch, the grid loop jobs and the fullscreen view.
+- [Live Photos](live-photos.md): the pairing of an iPhone still and its `.mov`, the identifiers, the scan cost, the choices and the open questions.

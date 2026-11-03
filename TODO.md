@@ -46,7 +46,7 @@ Order: speed first, then formats, then the first release. The first release is p
    - JPEG XL with a PQ or HLG ICC profile: done with the HDR stills.
    - Real files for the new formats. `~/Pictures/phewr-test/08-raw` holds camera RAW files. JPEG XL has only converted and synthetic files.
      - JPEG XL on real files: done 2026-11-03. 34 of 40 public files match their reference within 4 levels, and gray PQ now takes the HDR path. Open: a camera or app file (Apple ProRAW, Samsung), a real HLG photo, the saklistudio.com HDR samples (the server blocks scripts), the `moxcms` gamut edge and the XYB clip of jxl-oxide.
-     - Camera RAW on real files: done 2026-11-03 (`df7ba6d`, `3c8027b`). All 22 files of `08-raw` and four real portrait RAF and ARW files pass. `sips -Z` develops the RAW and reads no preview. phewr turns a RAF or ARW develop that sips left unturned, and a black develop gives way to the embedded JPEG. Open: an orientation of 2, 3 or 4 on RAF and ARW stays unturned (a pixel compare with the embedded JPEG can find it).
+     - Camera RAW on real files: done 2026-11-03 (`df7ba6d`, `3c8027b`). All 22 files of `08-raw` and four real portrait RAF and ARW files pass. `sips -Z` develops the RAW and reads no preview. phewr turns a RAF or ARW develop that sips left unturned, and a black develop gives way to the embedded JPEG. An orientation of 2, 3 or 4 on RAF and ARW comes from a pixel compare with a small embedded JPEG (`ace8d40`, cache v18).
    - HDR10 peak: done 2026-11-03. A PQ video, HEIF, PNG or JPEG XL maps with the peak of its HDR metadata, tested on the Apple HDR10 example clip, two libavif stills and 4000-nit fixtures. One `color::convert` takes the peak for all callers (`18cc453`). The probe reads the peak from the container (`af61a4b`), tested on two small MP4 fixtures. The embedded HEIC preview maps with the peak of the primary image (`b34d7e6`).
    - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.
 3. Delete removal: done 2026-11-03 (`5da64fa`). The keys `d` and `D`, the delete question and the `trash` crate are gone. The marks (`Space`, `a`, `A`) stay in `app/marks.rs` for a later use, for example a slideshow of the marked images.
@@ -59,7 +59,7 @@ Order: speed first, then formats, then the first release. The first release is p
 
 ## Later
 
-- Live Photo pairing: an iPhone still (HEIC or JPEG) and a `.mov` with the same base name share an Apple content identifier. The identifier lives in the EXIF MakerNote of the still and in the QuickTime metadata of the movie.
+- Live Photo pairing: the design facts are in `docs/live-photos.md` (provisional). The 9 iPhone folders hold no Live Photo pair. Answer the 8 open questions there first, and add one real HEIC pair and one JPEG pair to `~/Pictures/phewr-test/`.
 
 
 ## Done
