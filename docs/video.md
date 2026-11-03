@@ -173,13 +173,19 @@ rules. This page holds the reasons and the numbers.
 - ffmpeg decodes the first frames into the queue and then blocks on the pipe. A long rest costs
   no decode work.
 - Enter takes the player (`Player::begin_at`, `take_prestart`).
+- In the fullscreen view of a Live Photo still, the same rest opens the player of its motion
+  `.mov` with `Repeat::Never`. `take_prestart` takes a player only for the same file, the same
+  repeat and the same frame limit. After a motion played, its still starts no second player
+  until a step to another file or to the grid.
+- On 4 motions of `12-live-photos`, the first frame comes 122 ms to 127 ms after Enter without a
+  rest, and 0.1 ms to 0.2 ms after a rest of 500 ms (`real_rest_starts_motion_ahead`).
 - After a rest of 500 ms or more, the first frame comes 1 ms to 2 ms after Enter. Without a rest,
   it comes about 240 ms after Enter.
 - The clock of a run starts at its first frame. The clip plays in real time from Enter, and
   nothing drops.
 - At most one such player exists. It belongs to the file under the cursor and to the frame box.
-- These events drop the player: a cursor move, a view change, the help popup, a slideshow and an
-  mpv window.
+- These events drop the player: a cursor move, a step to another file, a view change, the help
+  popup, a slideshow and an mpv window.
 - A new frame box (a resize, the info panel) drops the player and starts it again for the new box.
 - A run that plays once (a running slideshow) drops the prestarted player before its own ffmpeg
   starts. Two ffmpeg runs never overlap.
@@ -193,6 +199,12 @@ rules. This page holds the reasons and the numbers.
 - A file whose probe or start fails gets no second try until the cursor leaves.
 - The pass that starts the player takes about 1 ms on the UI thread. This time holds the probe
   from the cache, the cube lookup and the spawn of ffmpeg.
+- The UI thread runs no ffprobe. Without an entry in the probe cache, a thread runs the probe and
+  writes the cube (`Decoder::prepare_on_thread`), the start waits for it, and the run loop polls
+  every 10 ms. A cold probe on the UI thread took 25 ms to 40 ms. With the thread, the slowest
+  pass takes less than 1 ms, and a cold rest starts 240 ms to 290 ms after its begin. A failed
+  probe gets no second try during the rest. This also covers a gallery video whose thumbnail
+  came from the disk cache without a probe.
 - If the HDR cube is not on disk yet, the pass writes it and takes about 23 ms. The first-frame
   thumbnail of an HDR video writes the same cube. So this happens only for the first HDR video of
   a new cache directory.

@@ -287,8 +287,9 @@ Choice B, provisional until open question 2 has an answer. These facts support i
 - The Live mark sits in the gap above the cell (`◎ Live`), not in the label row.
 - The status row shows the motion length (`Live 2.8 s`, `7a62965`). The meta thread takes it
   from the probe cache, else a second thread runs one ffprobe. A failed probe gets no retry.
-- Not built: the prestart of the motion in the fullscreen view, choice D, the motion in the
-  slideshow, and a key of its own for the roll.
+- A rest of 200 ms in the fullscreen view starts the motion ahead of Enter (`b82f164`). The first
+  frame comes about 0.1 ms after Enter instead of about 123 ms.
+- Not built: choice D, the motion in the slideshow, and a key of its own for the roll.
 
 ## Open questions
 

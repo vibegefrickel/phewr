@@ -140,7 +140,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   (`~/Pictures/phewr-test/12-live-photos/`, its `README.md` lists the cases).
   `real_identifiers_match_exiftool`, `real_folder_cases`, `real_mismatch_note`,
   `real_motion_plays_once`, `real_live_still_loops_its_motion` and
-  `real_motion_length_rounds_to_2_8` read it, the last three with the real ffmpeg or ffprobe. `test_support::live` writes a JPEG still with the identifier in an Apple MakerNote
+  `real_motion_length_rounds_to_2_8` read it, the last three with the real ffmpeg or ffprobe.
+  `real_rest_starts_motion_ahead` copies the pairs into a temp folder, so its probe is cold.
+  `FakeDecoder::cold` empties its probe cache, and `finish_prepare` ends its probe on a thread. `test_support::live` writes a JPEG still with the identifier in an Apple MakerNote
   and a movie with the identifier in `moov/meta`.
   `real_orf_preview_turns_like_develop` copies `PHEWR_TEST_ORF`, writes the IFD0 orientation 1
   and 6 with exiftool, and compares the preview with the sips develop.
@@ -241,7 +243,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
   and the way back. `mod.rs` holds `VideoState` and `play_videos`. The ffprobe path lives in the
   decoder only (`Decoder::has_ffprobe`). `prestart/` holds the start of the player during a
-  rest of the cursor (`VideoPrestart` in `App::video_prestart`, `tick_prestart`, `take_prestart`,
+  rest of the gallery cursor or of the fullscreen view on a Live still (`VideoPrestart` in `App::video_prestart`, `tick_prestart`, `take_prestart`,
   `prestart_timeout`). `window.rs` holds `poll_mpv_window`. `tests.rs` holds the start tests, and
   `tests/live.rs` the tests of the Live Photo motion.
 - `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` with its `Run` and
@@ -251,7 +253,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `Pipeline::next`, `with_fallback`: an animation decodes in software only, also its first frame
   and its loops), `command/` the command line (one `build` with `Extras` and `Output`), and
   `process.rs` `SystemDecoder`, `FrameStream`, the frame pool and the reap. `probe/` holds
-  `VideoInfo` (with `Samples` and `hardware`), the ffprobe run, the probe cache and `output_within`. `probe/parse/` holds the JSON
+  `VideoInfo` (with `Samples` and `hardware`), the ffprobe run, the probe cache (`probe_peek` reads it without ffprobe) and `output_within`. `probe/parse/` holds the JSON
   and the pacing rates. `layout.rs` holds the frame box and the cell box. `tone_map/` holds the
   color cubes (the HDR tone mapping, the SDR primaries conversion and the cube files), and
   `tone_map/math.rs` holds the matrices, the curves and the tone map. `animation.rs` holds the
@@ -530,9 +532,15 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `Enter` opens the mpv window with a note. When the gallery cursor rests on a video or an
   animated image for 200 ms (`PRESTART_DELAY`) and `App::has_pending_work` is false,
   `video_handoff/prestart/` opens its terminal player ahead of Enter. Enter takes it
-  (`Player::begin_at`), and the clip plays in real time from Enter. A cursor move, a new frame
-  box, an overlay, a slideshow, the mpv window and a wait of 10 s (`PRESTART_LIFETIME`) drop the
-  player. The timings and the reasons are in `docs/video.md` ("Start ahead of Enter").
+  (`Player::begin_at`), and the clip plays in real time from Enter. In the fullscreen view of a Live
+  Photo still, the same rest opens the player of its motion as a run that plays once, and Enter
+  or the click on the middle takes it. The UI thread runs no ffprobe for a prestart: without an
+  entry in the probe cache, a thread probes the file and writes its cube
+  (`Decoder::prepare_on_thread`), and the start waits for it. After a motion played, its still
+  starts no second player until a step to another file. A cursor move, a step to another file, a
+  new frame box, an overlay, a slideshow, the mpv window and a wait of 10 s
+  (`PRESTART_LIFETIME`) drop the player. The timings and the reasons are in `docs/video.md`
+  ("Start ahead of Enter").
 - **One file argument:** `cli::start_paths` turns one file argument into its canonical folder
   and a cursor target (`App::place_cursor_after_scan`, the `return_to` of `Backspace`). Several
   arguments stay a plain file list. yazi starts phewr with the hovered path (`phewr %h`).
