@@ -382,8 +382,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
   `--loop-playlist=no` and `--input-commands` that bind `q`, `Q` and `CLOSE_WIN` to `quit 4`.
   Exit code 0 is the end of the file. Each other exit stops the slideshow on the placeholder.
-  `--input-commands` needs mpv 0.38 or later. On macOS, the app quit (Cmd+Q) of a window mpv
-  exits with 0, so a window slideshow continues.
+  `--input-commands` needs mpv 0.38 or later. mpv exits with 0 also on the app quit (Cmd+Q). For
+  this reason, a slideshow window starts mpv with `--input-ipc-server` and a socket of its own,
+  and a thread reads the `end-file` reason. Exit code 0 with the reason `quit` or `stop` stops the
+  slideshow (`mpv::exit_with_reason`). The reason `eof`, any other reason, no reason and no socket
+  continue it. The real Cmd+Q is not tested yet.
 - **mpv steps:** each mpv start gets `--input-commands` with `keybind n "quit 10"` and
   `keybind N "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the

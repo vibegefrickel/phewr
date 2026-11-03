@@ -206,6 +206,15 @@ rules. This page holds the reasons and the numbers.
 
 - The rules are in AGENTS.md. The code is in `mpv.rs`, `video_handoff/window.rs` and
   `app/video.rs`.
+- A slideshow window (`Playback::Once`) gets the IPC socket `mpv-<pid>-<n>.sock` in the
+  thumbnail cache directory, else in `$TMPDIR/viewr`. Each window has its own socket, and the
+  path stays below 100 bytes. The runner removes a stale socket before the start and the socket
+  after the exit.
+- The reader thread tries to connect for 2 s, because mpv creates the socket after its start. A
+  clip that ends before the connect, or a quit in the first 20 ms, gives no reason and continues.
+- mpv 0.41 sends `{"event":"end-file","reason":"eof"}` at the natural end and
+  `{"event":"end-file","reason":"quit"}` on the `quit` command. Both exit with code 0. A SIGTERM
+  sends no `end-file` line and exits with -15.
 - Each mpv start gets `--input-commands` with `keybind n "quit 10"` and `keybind N "quit 11"`
   (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`).
 - `App::step_from_video` keeps `video_return`. A run of videos from the gallery ends in the
