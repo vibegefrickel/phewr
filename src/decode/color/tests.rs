@@ -2,7 +2,7 @@
 //! references.
 
 use super::transform::transform;
-use super::{ColorTarget, SourceColor, convert};
+use super::{ColorTarget, SourceColor, convert, convert_rgb};
 use crate::decode::hdr::Peak;
 use crate::decode::{EmbeddedThumbnail, decode_image};
 use crate::test_support::fixture;
@@ -288,4 +288,81 @@ fn heic_p3_profile_converts_nothing() {
         assert!(transform(&decoded.color, ColorTarget::DisplayP3).is_none());
         assert!(transform(&decoded.color, ColorTarget::Srgb).is_some());
     }
+}
+
+/// All 256 gray levels in one row, as RGBA.
+fn gray_ramp() -> RgbaImage {
+    RgbaImage::from_fn(256, 1, |x, _| {
+        let level = u8::try_from(x).unwrap();
+        Rgba([level, level, level, 255])
+    })
+}
+
+#[test]
+fn gray_levels_keep_their_value() {
+    // sRGB and Display P3 share the white point and the curve, so a gray keeps its level.
+    // moxcms 0.9.1 truncates the output table of a known curve, and 200 came out as 199.
+    for (source, target) in [
+        (SourceColor::Srgb, ColorTarget::DisplayP3),
+        (SourceColor::DisplayP3, ColorTarget::Srgb),
+    ] {
+        let rgba = convert(gray_ramp(), &source, target, Peak::DEFAULT);
+        assert_eq!(rgba, gray_ramp(), "RGBA into {target:?}");
+        let rgb = convert_rgb(
+            image::DynamicImage::ImageRgba8(gray_ramp()).to_rgb8(),
+            &source,
+            target,
+            Peak::DEFAULT,
+        );
+        let expected = image::DynamicImage::ImageRgba8(gray_ramp()).to_rgb8();
+        assert_eq!(rgb, expected, "RGB into {target:?}");
+    }
+}
+
+#[test]
+fn sixteen_bit_target_keeps_every_level() {
+    // The 16-bit transforms of `decode::jxl` use the same target profile and options. The missing
+    // round of moxcms 0.9.1 costs less than 1 of 65535 there.
+    use moxcms::{ColorProfile, Layout, RenderingIntent, TransformOptions};
+    let options = TransformOptions {
+        rendering_intent: RenderingIntent::RelativeColorimetric,
+        ..TransformOptions::default()
+    };
+    let levels: Vec<u16> = (0..=u16::MAX).flat_map(|level| [level; 3]).collect();
+    for (source, target) in [
+        (ColorProfile::new_srgb(), ColorTarget::Srgb),
+        (ColorProfile::new_display_p3(), ColorTarget::DisplayP3),
+    ] {
+        let executor = source
+            .create_transform_16bit(Layout::Rgb, &target.profile(), Layout::Rgb, options)
+            .unwrap();
+        let mut out = vec![0; levels.len()];
+        executor.transform(&levels, &mut out).unwrap();
+        // The linear tables of moxcms are not exact in 16 bit: 0.8.1 and 0.9.1 move a level by up
+        // to 10 of 65535 (0.04 of an 8-bit level), but never darken or lighten on average.
+        let moves: Vec<i32> = out
+            .iter()
+            .zip(&levels)
+            .map(|(&a, &b)| i32::from(a) - i32::from(b))
+            .collect();
+        let largest = moves.iter().map(|level| level.abs()).max();
+        let mean =
+            f64::from(moves.iter().sum::<i32>()) / f64::from(u32::try_from(moves.len()).unwrap());
+        assert!(largest <= Some(16), "{target:?}: largest move {largest:?}");
+        assert!(mean.abs() <= 2.0, "{target:?}: mean move {mean}");
+    }
+}
+
+#[test]
+fn moxcms_still_truncates_known_curves() {
+    // When this test fails, moxcms rounds its sRGB output table again: remove
+    // `rounding_output_curve` in `color/mod.rs` and this test.
+    use moxcms::{ColorProfile, Layout, TransformOptions};
+    let srgb = ColorProfile::new_srgb();
+    let executor = srgb
+        .create_transform_8bit(Layout::Rgb, &srgb, Layout::Rgb, TransformOptions::default())
+        .unwrap();
+    let mut out = [0; 3];
+    executor.transform(&[200; 3], &mut out).unwrap();
+    assert_eq!(out, [199; 3]);
 }

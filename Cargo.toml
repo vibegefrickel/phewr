@@ -128,14 +128,14 @@ fast_image_resize = "6.1"
 # Only the decoders for the formats that the scanner lists. AVIF goes through libheif.
 image = { version = "0.25.10", default-features = false, features = ["bmp", "exr", "gif", "hdr", "ico", "jpeg", "png", "qoi", "tga", "tiff", "webp"] }
 # JPEG XL in pure Rust. The default feature `rayon` decodes on the shared rayon pool. `moxcms`
-# converts an ICC profile to sRGB. `image` uses the same moxcms version.
+# converts an ICC profile to sRGB. `image` still uses moxcms 0.8.
 jxl-oxide = { version = "0.12.6", features = ["moxcms"] }
 kamadak-exif = "0.6"
 libheif-rs = { version = "3", optional = true }
-lru = "0.18"
-# The ICC profile of a JPEG XL file to sRGB (`decode/jxl.rs`). `image` and `jxl-oxide` use the
-# same version.
-moxcms = "0.8.1"
+lru = "0.19"
+# The ICC profile of a JPEG XL file to sRGB (`decode/jxl.rs`). `image` and `jxl-oxide` still use
+# moxcms 0.8.
+moxcms = "0.9.1"
 nucleo-matcher = "0.3"
 ratatui = "0.30"
 rayon = "1.12"
