@@ -37,7 +37,7 @@ just coverage-html   # line coverage as HTML in target/llvm-cov/html
 just bench [DIR] [FILTER]  # the speed measurements of src/bench.rs on VIEWR_TEST_DIR (default ~/Pictures/viewr-test/01-mixed-big), FILTER selects a bench (default bench::)
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
-just fmt | lint | doc | deny | audit | outdated   # the single steps
+just fmt | lint | doc | deny | outdated   # the single steps
 just dist            # arm64 binary in dist/ (dist profile, ad-hoc codesign, sha256)
 just render          # dist + the filled formula and install.sh in dist/, publishes nothing
 just release         # check + tag + Codeberg release + tap (maintainer only, see below)

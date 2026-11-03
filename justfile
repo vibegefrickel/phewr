@@ -63,10 +63,6 @@ doc:
 deny:
     cargo deny check
 
-# Known vulnerabilities in the lock file (RustSec).
-audit:
-    cargo audit
-
 # What `cargo update` would change.
 outdated:
     cargo update --dry-run --verbose 2>&1 | grep -E '^\s*(Updating|Unchanged)' || true
