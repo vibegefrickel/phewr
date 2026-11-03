@@ -75,7 +75,8 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 
 - The rule for the choice of the medium is in AGENTS.md (gotcha "Kitty temp file medium").
 - A terminal with another `TMPDIR` reads the file but keeps it. Then viewr leaves a file per
-  frame. A fullscreen frame is about 17 MB as RGB and about 22 MB as RGBA.
+  frame. The file holds raw pixels: about 17 MB for an RGB Retina still, and about 22 MB for an
+  RGBA frame of the player or of a grid loop.
 - The file name contains `tty-graphics-protocol`, as the protocol requires.
 - A terminal that answers the probe later than 300 ms sends the answer as key presses
   (`LateAnswerFilter` in `keys/mod.rs`).
@@ -89,7 +90,8 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
   stores, with their bytes. It counts 4 bytes per pixel, also for a picture that went out as RGB.
   So the count is an upper bound.
 - The grid deletes evicted and replaced ids with `a=d,d=I`.
-- The grid trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB). A trimmed
+- The grid trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB). The trim
+  skips the ids that the visible cells show and goes on with the next older image. A trimmed
   cell sends its picture again with `a=T`.
 - Ghostty evicts unplaced images at 320 MB. herdr stores each image twice.
 - When the loops run as Kitty animations (`Loops::Animation`), every video frame and every loop

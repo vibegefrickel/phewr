@@ -29,7 +29,7 @@ the macOS tool `/usr/bin/sips`. All four features are on by default.
 ## Build, test, run
 
 ```sh
-just                 # = just check: fmt --check, clippy -D warnings (2 feature sets), nextest, rustdoc, cargo deny
+just                 # = just check: fmt --check, clippy -D warnings (2 feature sets), check per feature, nextest, rustdoc, cargo deny
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
 just test-real [FILTER]  # also the ignored tests that decode real files (VIEWR_TEST_*)
@@ -115,7 +115,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   Only the CLI checks before the TUI starts print, behind an `#[expect(clippy::print_stderr)]`.
 - **No `unsafe`.** The crate denies `unsafe_code`.
 - **Each feature set builds.** `just lint` runs clippy with the default features and with
-  `--no-default-features`. Code behind `#[cfg(feature = "...")]` must compile in both.
+  `--no-default-features`. Then it runs `cargo check --all-targets` with `-D warnings` for each of
+  `turbo`, `heic`, `video` and `sips` alone. Code behind `#[cfg(feature = "...")]` must compile in
+  all of them.
 - **Terminal colors only.** The TUI uses the terminal default colors and the 16 ANSI colors from
   `styles.rs`. Do not add RGB values or 256-color indexes.
 - **One formatter, one style.** Use rustfmt with `rustfmt.toml`. The hook runs
@@ -296,6 +298,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `JobResult` with its generation. `invalidate()` drops the jobs in flight and forgets the failed
   indices. Each result (`Prefetched`) keeps its decode box. `take_resized` fits the image into
   the requested box (`Prefetched::fit_within`). If the decode box is smaller, it returns `None`.
+  `Prefetcher::running` counts the jobs on the rayon pool, also the jobs of an old generation, and
+  `MAX_PREFETCH_JOBS` limits that count. The decode is a field (`DecodeFn`), so a test can block it.
 - `search.rs`: fuzzy filename search (nucleo-matcher). `FilterWorker` (`App::filter_worker`) is one
   long-lived filter thread with one `Matcher`. It takes the queries through a channel, holds the
   names as an `Arc`, and runs only the newest query.
@@ -482,7 +486,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   module doc of `gallery/mod.rs`.
 - **Terminal storage:** `TerminalImages` in `kitty_output/terminal_images.rs` tracks the images that the
   terminal stores. The grid deletes evicted and replaced ids and trims the oldest unshown images
-  above `TERMINAL_IMAGE_BUDGET` (128 MB). The in-memory cache never evicts a visible cell. The
+  above `TERMINAL_IMAGE_BUDGET` (128 MB). The trim skips the shown ids and goes on with the next
+  older image. The in-memory cache never evicts a visible cell. The
   hints, the limits and the parked pictures are in `docs/grid-and-kitty.md` ("Terminal storage").
 - **Cell size:** `query_cell_pixel_size` asks with `CSI 16 t`, because TIOCGWINSZ includes the
   window padding of Ghostty (2258 px / 52 rows = 43.42 px). If the terminal answered at
