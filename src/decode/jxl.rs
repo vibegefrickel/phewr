@@ -33,7 +33,7 @@ pub(crate) fn decode(path: &Path, target: ColorTarget) -> io::Result<Decoded> {
     let image = open_for_render(path)?;
     let format = image.pixel_format();
     if let Some(signal) = HdrSignal::for_image(&image, format) {
-        reserve(&image, format.channels() * 2)?;
+        reserve(&image, hdr_bytes_per_pixel(format))?;
         return signal.decode(image);
     }
     let in_target = |image| Decoded {
@@ -49,6 +49,16 @@ pub(crate) fn decode(path: &Path, target: ColorTarget) -> io::Result<Decoded> {
     decode_enum(image, target).map(in_target)
 }
 
+/// The rendered 16-bit samples, plus the RGB16 or RGBA16 copy that a gray file needs.
+fn hdr_bytes_per_pixel(format: PixelFormat) -> usize {
+    let rendered = format.channels() * 2;
+    if format.is_grayscale() {
+        rendered + (format.channels() + 2) * 2
+    } else {
+        rendered
+    }
+}
+
 /// The 16-bit signal of a PQ or HLG file and its CICP code points.
 struct HdrSignal {
     color: SourceColor,
@@ -59,10 +69,11 @@ struct HdrSignal {
 }
 
 impl HdrSignal {
-    /// The signal of an RGB file with a PQ or HLG curve. Gray, custom primaries, other white points
-    /// and XYB with an ICC profile stay with `jxl-oxide`.
+    /// The signal of a file with a PQ or HLG curve. A gray file counts only with an enum encoding.
+    /// Custom primaries, other white points and XYB with an ICC profile stay with `jxl-oxide`.
     fn for_image(image: &JxlImage, format: PixelFormat) -> Option<Self> {
-        if !matches!(format, PixelFormat::Rgb | PixelFormat::Rgba) {
+        let gray = format.is_grayscale();
+        if !gray && !matches!(format, PixelFormat::Rgb | PixelFormat::Rgba) {
             return None;
         }
         let metadata = &image.image_header().metadata;
@@ -73,7 +84,10 @@ impl HdrSignal {
                     TransferFunction::Hlg => 18,
                     _ => return None,
                 };
+                // A gray ramp stays neutral in each D65 space. BT.2100 is the code point that
+                // `decode/hdr/` knows.
                 let primaries = match (&encoding.primaries, &encoding.white_point) {
+                    _ if gray && matches!(encoding.white_point, WhitePoint::D65) => 9,
                     (Primaries::Srgb, WhitePoint::D65) => 1,
                     (Primaries::Bt2100, WhitePoint::D65) => 9,
                     (Primaries::P3, WhitePoint::Dci) => 11,
@@ -91,7 +105,7 @@ impl HdrSignal {
                     }),
                 })
             }
-            ColourEncoding::IccProfile(_) if !metadata.xyb_encoded => {
+            ColourEncoding::IccProfile(_) if !metadata.xyb_encoded && !gray => {
                 let color = SourceColor::icc(image.original_icc()?.to_vec());
                 hdr::is_hdr(&color).then_some(Self {
                     color,
@@ -113,9 +127,19 @@ impl HdrSignal {
         let channels = stream.channels() as usize;
         let mut samples = vec![0u16; width as usize * height as usize * channels];
         stream.write_to_buffer(&mut samples);
+        let samples = match channels {
+            1 => samples.iter().flat_map(|&value| [value; 3]).collect(),
+            2 => samples
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .flat_map(|&[gray, alpha]| [gray, gray, gray, alpha])
+                .collect(),
+            _ => samples,
+        };
         let decoded = match channels {
-            3 => ImageBuffer::from_raw(width, height, samples).map(DynamicImage::ImageRgb16),
-            4 => ImageBuffer::from_raw(width, height, samples).map(DynamicImage::ImageRgba16),
+            1 | 3 => ImageBuffer::from_raw(width, height, samples).map(DynamicImage::ImageRgb16),
+            2 | 4 => ImageBuffer::from_raw(width, height, samples).map(DynamicImage::ImageRgba16),
             _ => None,
         };
         Ok(Decoded {
@@ -347,12 +371,13 @@ fn invalid(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Er
 mod tests {
     use super::{
         HdrSignal, IccToTarget, decode, decode_enum, decode_icc_or_enum, dimensions,
-        open_for_render,
+        hdr_bytes_per_pixel, open_for_render,
     };
     use crate::decode::color::{ColorTarget, SourceColor};
     use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use crate::test_support::{assert_close, fixture};
     use image::{DynamicImage, RgbaImage};
+    use jxl_oxide::PixelFormat;
 
     /// The largest difference in 8-bit levels from a djxl patch.
     const REFERENCE_TOLERANCE: f32 = 4.0;
@@ -502,9 +527,61 @@ mod tests {
         }
     }
 
-    /// The lossy files have noise near black, where the output curve is steep.
+    #[test]
+    fn gray_pq_matches_cube() {
+        let path = fixture("jxl/gray-pq.jxl");
+        let decoded = decode(&path, ColorTarget::Srgb).unwrap();
+        assert!(matches!(decoded.image, DynamicImage::ImageRgb16(_)));
+        assert_eq!(
+            decoded.color,
+            SourceColor::Cicp {
+                primaries: 9,
+                transfer: 16
+            }
+        );
+        // The file holds row 0 of the HDR chart, a ramp of eight 16 px patches.
+        let ours = decode_fixture("gray-pq").to_rgba8();
+        let cube = image::open(fixture("hdr/ref/pq-srgb.png"))
+            .unwrap()
+            .to_rgba8();
+        for patch in 0..8 {
+            let (ours, theirs) = (
+                ours.get_pixel(patch * 16 + 8, 8),
+                cube.get_pixel(patch * 16 + 8, 8),
+            );
+            for (a, b) in ours.0.iter().zip(theirs.0) {
+                assert!(
+                    a.abs_diff(b) <= 2,
+                    "patch {patch}: {ours:?} against {theirs:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hdr_reserve_is_the_real_need() {
+        assert_eq!(hdr_bytes_per_pixel(PixelFormat::Rgb), 6);
+        assert_eq!(hdr_bytes_per_pixel(PixelFormat::Rgba), 8);
+        assert_eq!(hdr_bytes_per_pixel(PixelFormat::Gray), 8);
+        assert_eq!(hdr_bytes_per_pixel(PixelFormat::Graya), 12);
+        // 80 MP in RGB passes the limit of the `image` route, as before the gray path.
+        let bytes = 80_000_000 * hdr_bytes_per_pixel(PixelFormat::Rgb) as u64;
+        assert!(image::Limits::default().reserve(bytes).is_ok());
+    }
+
+    /// A ramp and a red patch, for the RGB files.
     fn assert_gray_ramp(name: &str) {
         let means = patch_means(&decode_fixture(name).to_rgba8());
+        assert_gray_ramp_only(&means, name);
+        let red = means[0];
+        assert!(
+            red[0] > red[1] + 60.0 && red[0] > red[2] + 60.0,
+            "{name}: red {red:?}"
+        );
+    }
+
+    /// The lossy files have noise near black, where the output curve is steep.
+    fn assert_gray_ramp_only(means: &[[f32; 4]], name: &str) {
         let ramp = &means[8..16];
         for gray in ramp {
             let spread = gray[..3]
@@ -520,11 +597,6 @@ mod tests {
             "{name}: {ramp:?}"
         );
         assert!(ramp[0][0] <= 4.0 && ramp[7][0] >= 160.0, "{name}: {ramp:?}");
-        let red = means[0];
-        assert!(
-            red[0] > red[1] + 60.0 && red[0] > red[2] + 60.0,
-            "{name}: red {red:?}"
-        );
     }
 
     #[test]
@@ -574,8 +646,17 @@ mod tests {
             return;
         };
         let path = path.as_path();
+        let start = std::time::Instant::now();
         let full =
             decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
+        // clippy.toml allows output in tests.
+        eprintln!("TIMING full decode {:?}", start.elapsed());
+        for (name, box_px) in [("grid", (480, 270)), ("fullscreen", (2880, 1800))] {
+            let start = std::time::Instant::now();
+            crate::decode::resize::load_and_resize_px(path, box_px, EmbeddedThumbnail::Deny)
+                .expect("box decode");
+            eprintln!("TIMING {name} box {box_px:?} {:?}", start.elapsed());
+        }
         assert_eq!(dimensions(path), Some((full.width(), full.height())));
         let thumb =
             crate::decode::resize::load_and_resize_px(path, (200, 200), EmbeddedThumbnail::Allow)
@@ -587,5 +668,51 @@ mod tests {
             "rows: {:?}",
             info.rows
         );
+    }
+
+    /// Compare a real file with a djxl rendering into 8-bit sRGB:
+    /// `VIEWR_TEST_JXL=a.jxl VIEWR_TEST_JXL_REF=a.png`. The test prints the differences in levels
+    /// and fails above 4 levels. `VIEWR_TEST_JXL_MAX` sets another limit, `VIEWR_TEST_JXL_OUT` writes the decode.
+    #[test]
+    #[ignore = "needs VIEWR_TEST_JXL and VIEWR_TEST_JXL_REF, a real file and its rendering"]
+    fn real_jxl_matches_reference() {
+        let (Some(path), Some(reference)) = (
+            crate::decode::real_test_file("VIEWR_TEST_JXL"),
+            crate::decode::real_test_file("VIEWR_TEST_JXL_REF"),
+        ) else {
+            return;
+        };
+        let decoded = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny)
+            .expect("full decode")
+            .to_rgba8();
+        let reference = image::open(&reference).expect("reference").to_rgba8();
+        if let Some(out) = std::env::var_os("VIEWR_TEST_JXL_OUT") {
+            decoded.save(out).expect("write the decode");
+        }
+        assert_eq!(decoded.dimensions(), reference.dimensions(), "size");
+        let (mut largest, mut sum, mut count) = (0u8, 0u64, 0u64);
+        for (ours, theirs) in decoded.pixels().zip(reference.pixels()) {
+            // The RGB of a fully transparent pixel is free, only its alpha counts.
+            let skip = if theirs.0[3] == 0 && ours.0[3] == 0 {
+                3
+            } else {
+                0
+            };
+            for (a, b) in ours.0.iter().zip(theirs.0).skip(skip) {
+                let difference = a.abs_diff(b);
+                largest = largest.max(difference);
+                sum += u64::from(difference);
+                count += 1;
+            }
+        }
+        #[expect(clippy::cast_precision_loss, reason = "a mean of a report")]
+        let mean = sum as f64 / count.max(1) as f64;
+        // clippy.toml allows output in tests.
+        eprintln!("REFERENCE largest={largest} mean={mean:.4}");
+        let limit = std::env::var("VIEWR_TEST_JXL_MAX")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(4);
+        assert!(largest <= limit, "largest difference {largest} levels");
     }
 }

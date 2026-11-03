@@ -13,8 +13,8 @@
 # sRGB chart, converted by libjxl into a PQ or HLG signal.
 #
 # The reference of each fixture is `ref/<name>.png`: djxl renders it into 8-bit sRGB with the
-# relative intent. pq, hlg, pq-icc and hlg-icc have no reference: viewr tone-maps them like the
-# HDR cube of its terminal player (src/decode/hdr.rs), and tests/fixtures/hdr/ holds the
+# relative intent. pq, hlg, pq-icc, hlg-icc and gray-pq have no reference: viewr tone-maps them
+# like the HDR cube of its terminal player (src/decode/hdr/), and tests/fixtures/hdr/ holds the
 # references of that map.
 set -eu
 
@@ -91,6 +91,12 @@ magick "$work/pq.png" -depth 16 "$work/pq.ppm"
 magick "$work/hlg.png" -depth 16 "$work/hlg.ppm"
 encode pq "$work/pq.ppm" -x color_space=Rec2100PQ --intensity_target=1000 -d 1
 encode hlg "$work/hlg.ppm" -x color_space=Rec2100HLG --intensity_target=1000 -d 1
+# The gray ramp of the HDR chart (row 0 of ../hdr/pq.png) as a PQ signal in a Grayscale color
+# space. The red channel holds the code values. Lossless, so the file takes the enum path without
+# XYB.
+magick ../hdr/pq.png -crop 128x16+0+0 +repage -channel R -separate -depth 16 \
+  -define png:exclude-chunk=all "$work/gray-pq.pgm"
+encode gray-pq "$work/gray-pq.pgm" -x color_space=Gra_D65_Rel_PeQ --intensity_target=1000 -d 0
 # The same signals with the BT.2100 PQ and HLG ICC profiles of macOS (with a cicp tag), which
 # sips writes into a PNG. A lossless file keeps the profile.
 for tf in pq hlg; do
@@ -105,7 +111,7 @@ mkdir ref
 for file in *.jxl; do
   name=${file%.jxl}
   case $name in
-    pq | hlg | pq-icc | hlg-icc) continue ;;
+    pq | hlg | pq-icc | hlg-icc | gray-pq) continue ;;
   esac
   djxl "$file" "ref/$name.png" --color_space=RGB_D65_SRG_Rel_SRG --bits_per_sample=8 \
     --display_nits=0 --quiet
