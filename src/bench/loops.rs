@@ -65,7 +65,7 @@ fn loop_app(files: &[PathBuf], cache: &Path) -> App {
 }
 
 /// The backend of a terminal like Ghostty 1.4: a fake terminal answers `OK` to both probes.
-fn animation_backend() -> KittyBackend {
+pub(super) fn animation_backend() -> KittyBackend {
     let backend = crate::encoder::kitty::detect_backend(None, None, false, |sequence, _| {
         remove_temp_files(sequence);
         Some(b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\".to_vec())
@@ -76,7 +76,7 @@ fn animation_backend() -> KittyBackend {
 }
 
 /// One run loop pass with the screen draw. Returns the wire bytes, the temp file bytes and the placements.
-fn loop_pass(
+pub(super) fn loop_pass(
     app: &mut App,
     screen: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
     pending: &mut Vec<usize>,

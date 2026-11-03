@@ -50,6 +50,11 @@ test-real *FILTER:
 bench DIR=(env("HOME") / "Pictures/phewr-test/01-mixed-big") FILTER="bench::":
     PHEWR_TEST_DIR={{DIR}} cargo test --release {{FILTER}} -- --ignored --nocapture --test-threads=1 2>&1 | grep -E 'bench [a-z]|^error|panicked|test result' | sed -E 's/^test [^ ]+ \.\.\. //'
 
+# The Live Photo benches only (src/bench/live.rs). They read PHEWR_TEST_LIVE_DIR, default
+# ~/Pictures/phewr-test/12-live-photos, and print the load average of their minute.
+bench-live:
+    cargo test --release bench::live -- --ignored --nocapture --test-threads=1 2>&1 | grep -E 'bench [a-z]|^error|panicked|test result' | sed -E 's/^test [^ ]+ \.\.\. //'
+
 # Line coverage summary per file (needs cargo-llvm-cov: `brew install cargo-llvm-cov`).
 coverage:
     cargo llvm-cov --release --all-targets --summary-only

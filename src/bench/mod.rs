@@ -43,13 +43,17 @@ fn settle(app: &mut App) {
     }
 }
 
-fn test_dir() -> Option<PathBuf> {
-    // The color target of `main`. One test thread, so the global target cannot change.
+/// Set the color target of `main`. One test thread, so the global target cannot change.
+fn set_color_target() {
     let target = std::env::var("PHEWR_BENCH_COLORSPACE")
         .ok()
         .and_then(|value| ColorTarget::parse(&value))
         .unwrap_or_default();
     color::set_target(target);
+}
+
+fn test_dir() -> Option<PathBuf> {
+    set_color_target();
     // Canonical, as `main` passes the start folder: `/tmp` is a link to `/private/tmp`.
     std::env::var_os("PHEWR_TEST_DIR")
         .map(PathBuf::from)
@@ -254,6 +258,8 @@ mod grid;
 mod heic;
 #[cfg(feature = "turbo")]
 mod layout_bench;
+#[cfg(feature = "video")]
+mod live;
 #[cfg(feature = "video")]
 mod loops;
 #[cfg(all(feature = "sips", target_os = "macos"))]
