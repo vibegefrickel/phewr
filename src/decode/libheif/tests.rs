@@ -1,10 +1,12 @@
 //! The tests of the libheif route, on synthetic HEIC and AVIF files from the libheif encoders.
 
-use super::thumbnails::{fitted_size, thumbnail_is_usable};
+use super::thumbnails::{fitted_size, preview_pixels, thumbnail_is_usable};
 use super::{
     decode_heif_preview, decodes_with_libheif, libheif_dimensions, usable_thumbnail, widen,
 };
 use crate::decode::ScreenImage;
+use crate::decode::color;
+use crate::decode::hdr::Peak;
 use crate::decode::heif_boxes::HeifItems;
 use crate::decode::resize::fit_rgba_within;
 use crate::decode::{EmbeddedThumbnail, decode_image, decode_image_with_hint};
@@ -378,4 +380,34 @@ fn alpha_survives_decode_and_preview() {
         "{:?}",
         preview.get_pixel(56, 16)
     );
+}
+
+/// The mean absolute channel difference at the centers of the 4x4 pixel patches of the 32x16
+/// chart, where the thumbnail scaling blends no neighbor patch.
+fn patch_difference(a: &image::RgbaImage, b: &image::RgbaImage) -> f64 {
+    assert_eq!(a.dimensions(), b.dimensions());
+    let (mut total, mut count) = (0_u64, 0_u64);
+    for (x, y) in (0..8).flat_map(|x| (0..4).map(move |y| (x * 4 + 2, y * 4 + 2))) {
+        for i in 0..3 {
+            total += u64::from(a.get_pixel(x, y).0[i].abs_diff(b.get_pixel(x, y).0[i]));
+            count += 1;
+        }
+    }
+    total as f64 / count as f64
+}
+
+#[test]
+fn pq_preview_maps_with_the_primary_peak() {
+    let thumb = crate::test_support::fixture("hdr/pq-4000-thumb.heic");
+    let (pixels, color, peak) = preview_pixels(&thumb, (128, 64)).unwrap();
+    assert_eq!(peak, Peak::bucket(Some(4000.0)));
+    let map = |peak| color::convert(pixels.clone(), &color, color::target(), peak);
+    let preview = decode_heif_preview(&thumb, (128, 64)).unwrap();
+    assert_eq!(preview.dimensions(), (32, 16));
+    // The same pixels map to the same output, so the preview must equal the 4000-nit map exactly.
+    assert_eq!(preview, map(peak));
+    // The 4000-nit and 1000-nit maps of the chart differ by about 3 levels on average (measured
+    // 3.4 at the patch centers). The bound 2.0 keeps the test from passing for two equal maps.
+    let to_default = patch_difference(&preview, &map(Peak::DEFAULT));
+    assert!(to_default > 2.0, "{to_default}");
 }

@@ -21,6 +21,7 @@
 #   pq-4000.avif, pq-4000.heic: as pq.avif and pq.heic, with a clli box of MaxCLL 4000 nits.
 #     avifenc and heif-enc write no mdcv box, so the unit tests of heif_boxes.rs cover mdcv.
 #   pq-4000-8bit.heic: pq-4000.heic in 8 bit, which takes the 8-bit route of the decoder
+#   pq-4000-thumb.heic: pq-4000.heic with an embedded thumbnail of 32x16 pixels (heif-enc -t 32)
 #   pq-icc-4000.png: the PQ ICC profile of pq-icc.jxl in an iCCP chunk, no cICP, with a cLLI chunk
 #     of 4000 nits
 #   pq-4000.png: pq.png with a cLLI chunk of MaxCLL 4000 nits (40000000 in units of 0.0001 cd/m2)
@@ -85,6 +86,9 @@ magick "$work/signal.png" -depth 8 "$work/signal8.png"
 heif-enc -p chroma=444 -q 100 --matrix_coefficients 9 --colour_primaries 9 \
   --transfer_characteristic 16 --full_range_flag 1 --clli 4000,400 "$work/signal8.png" \
   -o pq-4000-8bit.heic > /dev/null
+heif-enc -b 10 -p chroma=444 -q 100 --matrix_coefficients 9 --colour_primaries 9 \
+  --transfer_characteristic 16 --full_range_flag 1 --clli 4000,400 -t 32 "$work/signal.png" \
+  -o pq-4000-thumb.heic > /dev/null
 
 # sips writes the BT.2100 PQ ICC profile of macOS into a PNG. A lossless JPEG XL file keeps the
 # profile and gets no enum encoding.
