@@ -1,6 +1,6 @@
 //! The resize filters and the color conversion.
 
-use super::{millis, report, test_dir};
+use super::{fine_millis, millis, report, test_dir};
 use crate::decode::color;
 use crate::decode::color::ColorTarget;
 use crate::decode::hdr::Peak;
@@ -128,5 +128,41 @@ fn color_conversion() {
     report(&format!(
         "color 24 MP sRGB frame into Display P3 (zoom source): {:.1} ms",
         full.as_secs_f64() * 1000.0
+    ));
+}
+
+/// The JPEG XL decode of `PHEWR_TEST_JXL` into Display P3, and its sample copy through the
+/// one-thread `ImageStream` and through `render_samples` (median of 7). A file with patches or
+/// layers copies through the stream in both columns.
+#[test]
+#[ignore = "needs PHEWR_TEST_JXL, a real JPEG XL file"]
+fn jpeg_xl() {
+    use crate::decode::jxl;
+    let Some(path) = crate::decode::real_test_file("PHEWR_TEST_JXL") else {
+        return;
+    };
+    let mut decode: Vec<Duration> = (0..7)
+        .map(|_| {
+            let start = Instant::now();
+            let decoded = jxl::decode(&path, ColorTarget::DisplayP3).unwrap();
+            let elapsed = start.elapsed();
+            assert!(decoded.image.width() > 0);
+            elapsed
+        })
+        .collect();
+    let mut copy = jxl::copy_times(&path, ColorTarget::DisplayP3, 7);
+    report(&format!(
+        "jpeg xl {} ({} route, {}): decode {}, render {}, stream copy {}, copy {}",
+        path.display(),
+        copy.route,
+        if copy.on_all_cores {
+            "on all cores"
+        } else {
+            "through the stream"
+        },
+        fine_millis(super::median(&mut decode)),
+        fine_millis(super::median(&mut copy.render)),
+        fine_millis(super::median(&mut copy.stream)),
+        fine_millis(super::median(&mut copy.parallel)),
     ));
 }

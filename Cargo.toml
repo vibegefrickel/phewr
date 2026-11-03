@@ -129,7 +129,14 @@ fast_image_resize = "6.1"
 image = { version = "0.25.10", default-features = false, features = ["bmp", "exr", "gif", "hdr", "ico", "jpeg", "png", "qoi", "tga", "tiff", "webp"] }
 # JPEG XL in pure Rust. The default feature `rayon` decodes on the shared rayon pool. `moxcms`
 # converts an ICC profile to sRGB. `image` still uses moxcms 0.8.
-jxl-oxide = { version = "0.12.6", features = ["moxcms"] }
+# Both JPEG XL pins are exact on purpose. The sample copy on all cores in `decode/jxl.rs` reads
+# the rendered grids of `jxl-render` (`ImageBuffer`) and depends on their private layout in these
+# versions: each grid starts at the image origin, where `ImageStream` of `jxl-oxide` starts too.
+# An update is a deliberate step: change `jxl-oxide` and set `jxl-render` to the version that
+# this `jxl-oxide` uses. Then run `parallel_copy_matches_stream` and the byte comparison of the
+# decode on the real files.
+jxl-oxide = { version = "=0.12.6", features = ["moxcms"] }
+jxl-render = "=0.12.4"
 kamadak-exif = "0.6"
 libheif-rs = { version = "3", optional = true }
 lru = "0.19"

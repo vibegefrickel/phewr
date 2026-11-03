@@ -3,16 +3,20 @@
 //! `jxl-oxide` has no scaled decode: the grid decodes the full image, and the disk cache keeps
 //! the result. An animated file shows its first frame. `jxl-oxide` renders XYB and the enum
 //! encodings into the target itself. ICC samples go through `moxcms` (`IccToTarget`). A PQ or
-//! HLG file keeps its 16-bit signal for the tone map of `Decoded` (`HdrSignal`).
+//! HLG file keeps its 16-bit signal for the tone map of `Decoded` (`HdrSignal`). Every route
+//! copies the rendered grids on all cores (`render_samples`).
 
 use crate::decode::Decoded;
 use crate::decode::color::{ColorTarget, SourceColor};
 use crate::decode::hdr;
 use image::{DynamicImage, GrayAlphaImage, GrayImage, ImageBuffer, RgbImage, RgbaImage};
 use jxl_oxide::color::{ColourEncoding, Primaries, TransferFunction, WhitePoint};
+use jxl_oxide::image::BitDepth;
 use jxl_oxide::{
-    AllocTracker, AuxBoxData, EnumColourEncoding, JxlImage, Moxcms, PixelFormat, RenderingIntent,
+    AlignedGrid, AllocTracker, AuxBoxData, EnumColourEncoding, ExtraChannel, FrameBufferSample,
+    JxlImage, Moxcms, PixelFormat, Render, RenderingIntent,
 };
+use jxl_render::ImageBuffer as Grid;
 use moxcms::{
     CmsError, ColorProfile, Layout, TransferCharacteristics, Transform8BitExecutor,
     Transform16BitExecutor, TransformOptions,
@@ -139,11 +143,12 @@ impl HdrSignal {
             image.request_color_encoding(encoding);
         }
         let render = image.render_frame(0).map_err(invalid)?;
-        let mut stream = render.stream();
-        let (width, height) = (stream.width(), stream.height());
-        let channels = stream.channels() as usize;
-        let mut samples = vec![0u16; width as usize * height as usize * channels];
-        stream.write_to_buffer(&mut samples);
+        let Samples {
+            width,
+            height,
+            channels,
+            data: samples,
+        } = render_samples::<u16>(&image, &render);
         let samples = match channels {
             1 => samples.iter().flat_map(|&value| [value; 3]).collect(),
             2 => samples
@@ -190,23 +195,28 @@ fn reserve(image: &JxlImage, bytes_per_pixel: usize) -> io::Result<()> {
     image::Limits::default().reserve(bytes).map_err(invalid)
 }
 
-/// Gray keeps the white point and the curve of sRGB in both targets.
 fn decode_enum(mut image: JxlImage, target: ColorTarget) -> io::Result<DynamicImage> {
-    let format = image.pixel_format();
+    request_target(&mut image, target);
+    let render = image.render_frame(0).map_err(invalid)?;
+    let samples = render_samples::<u8>(&image, &render);
+    into_image(
+        samples.width,
+        samples.height,
+        samples.channels,
+        samples.data,
+    )
+}
+
+/// Gray keeps the white point and the curve of sRGB in both targets.
+fn request_target(image: &mut JxlImage, target: ColorTarget) {
     let intent = RenderingIntent::Relative;
-    image.set_cms(Moxcms);
-    image.request_color_encoding(match target {
-        _ if format.is_grayscale() => EnumColourEncoding::gray_srgb(intent),
+    let encoding = match target {
+        _ if image.pixel_format().is_grayscale() => EnumColourEncoding::gray_srgb(intent),
         ColorTarget::Srgb => EnumColourEncoding::srgb(intent),
         ColorTarget::DisplayP3 => EnumColourEncoding::display_p3(intent),
-    });
-    let render = image.render_frame(0).map_err(invalid)?;
-    let mut stream = render.stream();
-    let (width, height) = (stream.width(), stream.height());
-    let channels = stream.channels() as usize;
-    let mut pixels = vec![0u8; width as usize * height as usize * channels];
-    stream.write_to_buffer(&mut pixels);
-    into_image(width, height, channels, pixels)
+    };
+    image.set_cms(Moxcms);
+    image.request_color_encoding(encoding);
 }
 
 /// A transform error falls back to `jxl-oxide` with a new decoder. The first decoder has
@@ -320,45 +330,377 @@ impl IccToTarget {
     /// Render the first frame in the profile space and convert it to 8 bits in the target.
     fn decode(&self, image: &JxlImage) -> io::Result<DynamicImage> {
         let render = image.render_frame(0).map_err(invalid)?;
-        let mut stream = render.stream();
-        if stream.channels() as usize != self.input_channels {
+        if render.stream().channels() as usize != self.input_channels {
             return Err(invalid("JPEG XL channels do not match the ICC transform"));
         }
-        let (width, height) = (stream.width(), stream.height());
-        let row = width as usize;
-        let samples = row * height as usize * self.input_channels;
-        let mut pixels = vec![0u8; row * height as usize * self.channels];
-        let input_chunk = row * self.input_channels * ROWS_PER_TASK;
-        let output_chunk = row * self.channels * ROWS_PER_TASK;
         match &self.transform {
-            IccTransform::Eight(transform) => {
-                let mut source = vec![0u8; samples];
-                stream.write_to_buffer(&mut source);
-                source
-                    .par_chunks(input_chunk)
-                    .zip(pixels.par_chunks_mut(output_chunk))
-                    .try_for_each(|(input, output)| transform.transform(input, output))
-                    .map_err(invalid)?;
-            }
+            IccTransform::Eight(transform) => self
+                .convert(&render_samples::<u8>(image, &render), |input, output| {
+                    transform.transform(input, output)
+                }),
             IccTransform::Sixteen(transform) => {
-                let mut source = vec![0u16; samples];
-                stream.write_to_buffer(&mut source);
-                source
-                    .par_chunks(input_chunk)
-                    .zip(pixels.par_chunks_mut(output_chunk))
-                    .try_for_each(|(input, output)| {
-                        let mut deep = vec![0u16; output.len()];
-                        transform.transform(input, &mut deep)?;
-                        for (value, sample) in output.iter_mut().zip(deep) {
-                            *value = hdr::to_8bit(sample);
-                        }
-                        Ok::<(), CmsError>(())
-                    })
-                    .map_err(invalid)?;
+                self.convert(&render_samples::<u16>(image, &render), |input, output| {
+                    let mut deep = vec![0u16; output.len()];
+                    transform.transform(input, &mut deep)?;
+                    for (value, sample) in output.iter_mut().zip(deep) {
+                        *value = hdr::to_8bit(sample);
+                    }
+                    Ok(())
+                })
             }
         }
-        into_image(width, height, self.channels, pixels)
     }
+
+    /// Run `transform` on the rendered samples in tasks of rows.
+    fn convert<S: Sync>(
+        &self,
+        source: &Samples<S>,
+        transform: impl Fn(&[S], &mut [u8]) -> Result<(), CmsError> + Sync,
+    ) -> io::Result<DynamicImage> {
+        let row = source.width as usize;
+        let mut pixels = vec![0u8; row * source.height as usize * self.channels];
+        source
+            .data
+            .par_chunks(row * self.input_channels * ROWS_PER_TASK)
+            .zip(pixels.par_chunks_mut(row * self.channels * ROWS_PER_TASK))
+            .try_for_each(|(input, output)| transform(input, output))
+            .map_err(invalid)?;
+        into_image(source.width, source.height, self.channels, pixels)
+    }
+}
+
+/// The samples of a render as `ImageStream` writes them: upright and interleaved, the color
+/// channels and then the alpha channel.
+struct Samples<S> {
+    width: u32,
+    height: u32,
+    channels: usize,
+    data: Vec<S>,
+}
+
+/// Copy the samples of `render` in tasks of rows on all cores. `ImageStream::write_to_buffer`
+/// copies on one thread with an orientation and a region lookup per sample (166 ms for 12 MP).
+/// The stream stays for a layout that only it knows.
+fn render_samples<S: Sample>(image: &JxlImage, render: &Render) -> Samples<S> {
+    let mut stream = render.stream();
+    let (width, height) = (stream.width(), stream.height());
+    let channels = stream.channels() as usize;
+    let mut data = vec![S::default(); width as usize * height as usize * channels];
+    match planes(image, render) {
+        Some(planes) if planes.len() == channels => {
+            copy_planes(
+                &planes,
+                render.orientation(),
+                (width as usize, height as usize),
+                &mut data,
+            );
+        }
+        _ => {
+            stream.write_to_buffer(&mut data);
+        }
+    }
+    Samples {
+        width,
+        height,
+        channels,
+        data,
+    }
+}
+
+/// An output sample, with the clamp and the rounding of `ImageStream`.
+trait Sample: FrameBufferSample + Copy + Default + Send + Sync {
+    /// The integer samples of this bit depth copy without a scale.
+    const BITS: u32;
+    /// An integer sample of the bit depth `BITS`, clamped.
+    fn from_integer(value: i32) -> Self;
+    /// A float sample with the nominal range 0 to 1, scaled, rounded and clamped.
+    fn from_float(value: f32) -> Self;
+}
+
+impl Sample for u8 {
+    const BITS: u32 = 8;
+
+    fn from_integer(value: i32) -> Self {
+        Self::try_from(value.clamp(0, 255)).unwrap_or(Self::MAX)
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the cast of jxl-oxide, NaN gives 0"
+    )]
+    fn from_float(value: f32) -> Self {
+        (value * 255.0 + 0.5).clamp(0.0, 255.0) as Self
+    }
+}
+
+impl Sample for u16 {
+    const BITS: u32 = 16;
+
+    fn from_integer(value: i32) -> Self {
+        Self::try_from(value.clamp(0, 65535)).unwrap_or(Self::MAX)
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the cast of jxl-oxide, NaN gives 0"
+    )]
+    fn from_float(value: f32) -> Self {
+        (value * 65535.0 + 0.5).clamp(0.0, 65535.0) as Self
+    }
+}
+
+/// One rendered grid and the bit depth of its integer samples.
+struct Plane<'r> {
+    buffer: &'r Grid,
+    depth: BitDepth,
+}
+
+/// The color grids and the first alpha grid, in the channel order of the stream.
+///
+/// `None` unless each grid starts at the image origin. The region of a grid is private in
+/// `jxl-oxide` 0.12. `jxl-render` 0.12.4 starts each grid at the origin when the keyframe is the
+/// first frame, the frame has no offset and the render is not cropped
+/// (`parallel_copy_matches_stream` holds it). Patches put a reference frame before the keyframe,
+/// so they take the stream, and so do layers. Spot colors mix into the color channels and take
+/// the stream.
+fn planes<'r>(image: &JxlImage, render: &'r Render) -> Option<Vec<Plane<'r>>> {
+    let frame = image.frame_by_keyframe(render.keyframe_index())?;
+    let header = frame.header();
+    let region = image.current_image_region();
+    let (extra, extra_buffers) = render.extra_channels();
+    if frame.index() != 0
+        || header.x0 != 0
+        || header.y0 != 0
+        || region.left != 0
+        || region.top != 0
+        || extra.iter().any(ExtraChannel::is_spot_colour)
+    {
+        return None;
+    }
+    let metadata = &image.image_header().metadata;
+    let color = render.color_channels().iter().map(|buffer| Plane {
+        buffer,
+        depth: metadata.bit_depth,
+    });
+    let alpha = extra
+        .iter()
+        .zip(extra_buffers)
+        .zip(&metadata.ec_info)
+        .find(|((channel, _), _)| channel.is_alpha())
+        .map(|((_, buffer), info)| Plane {
+            buffer,
+            depth: info.bit_depth,
+        });
+    Some(color.chain(alpha).collect())
+}
+
+/// Fill `data` in tasks of `ROWS_PER_TASK` output rows. `size` is the upright size.
+fn copy_planes<S: Sample>(
+    planes: &[Plane<'_>],
+    orientation: u32,
+    size: (usize, usize),
+    data: &mut [S],
+) {
+    let row = (size.0 * planes.len()).max(1);
+    data.par_chunks_mut(row * ROWS_PER_TASK)
+        .enumerate()
+        .for_each(|(task, rows)| {
+            let first = task * ROWS_PER_TASK;
+            if orientation >= 5 {
+                copy_columns(planes, orientation, size, first, rows);
+            } else {
+                copy_rows(planes, orientation, size, first, rows);
+            }
+        });
+}
+
+/// Orientations 1 to 4: each output row is one grid row, read forward or backward.
+fn copy_rows<S: Sample>(
+    planes: &[Plane<'_>],
+    orientation: u32,
+    (width, height): (usize, usize),
+    first: usize,
+    rows: &mut [S],
+) {
+    let channels = planes.len();
+    let reversed = matches!(orientation, 2 | 3);
+    for (index, output) in rows.chunks_mut(width * channels).enumerate() {
+        let y = first + index;
+        let walk = Walk {
+            x: if reversed { width - 1 } else { 0 },
+            y: if matches!(orientation, 3 | 4) {
+                height - 1 - y
+            } else {
+                y
+            },
+            reversed,
+        };
+        for (channel, plane) in planes.iter().enumerate() {
+            plane.copy(walk, output.iter_mut().skip(channel).step_by(channels));
+        }
+    }
+}
+
+/// Orientations 5 to 8: each output column of the task is a part of one grid row. The task reads
+/// the grid rows in order, so the reads stay in the cache.
+fn copy_columns<S: Sample>(
+    planes: &[Plane<'_>],
+    orientation: u32,
+    (width, height): (usize, usize),
+    first: usize,
+    rows: &mut [S],
+) {
+    let channels = planes.len();
+    let row = width * channels;
+    let reversed = matches!(orientation, 7 | 8);
+    for x in 0..width {
+        let walk = Walk {
+            x: if reversed { height - 1 - first } else { first },
+            y: if matches!(orientation, 5 | 8) {
+                x
+            } else {
+                width - 1 - x
+            },
+            reversed,
+        };
+        for (channel, plane) in planes.iter().enumerate() {
+            let column = x * channels + channel;
+            plane.copy(walk, rows.chunks_mut(row).map(|output| &mut output[column]));
+        }
+    }
+}
+
+impl Plane<'_> {
+    /// Convert the samples of one walk as `FrameBufferSample` converts a sample.
+    fn copy<'s, S: Sample + 's>(&self, walk: Walk, samples: impl Iterator<Item = &'s mut S>) {
+        let depth = self.depth;
+        let native = depth
+            == BitDepth::IntegerSample {
+                bits_per_sample: S::BITS,
+            };
+        match self.buffer {
+            Grid::F32(grid) => walk.copy(grid, samples, S::from_float),
+            Grid::I32(grid) if native => walk.copy(grid, samples, S::from_integer),
+            Grid::I32(grid) => walk.copy(grid, samples, |value| {
+                S::from_float(depth.parse_integer_sample(value))
+            }),
+            Grid::I16(grid) if native => {
+                walk.copy(grid, samples, |value| S::from_integer(i32::from(value)));
+            }
+            Grid::I16(grid) => walk.copy(grid, samples, |value| {
+                S::from_float(depth.parse_integer_sample(i32::from(value)))
+            }),
+        }
+    }
+}
+
+/// A walk along one grid row from `x`, forward or backward. The inverse of the codestream
+/// orientation, as `ImageStream` maps an output sample.
+#[derive(Clone, Copy)]
+struct Walk {
+    x: usize,
+    y: usize,
+    reversed: bool,
+}
+
+impl Walk {
+    /// A sample outside the grid stays 0, as in the stream.
+    fn copy<'s, T: Copy, S: 's>(
+        self,
+        grid: &AlignedGrid<T>,
+        samples: impl Iterator<Item = &'s mut S>,
+        convert: impl Fn(T) -> S,
+    ) {
+        let Some(row) = grid.try_get_row(self.y) else {
+            return;
+        };
+        if self.reversed {
+            let start = row.len().min(self.x + 1);
+            let outside = self.x + 1 - start;
+            for (sample, &value) in samples.skip(outside).zip(row[..start].iter().rev()) {
+                *sample = convert(value);
+            }
+        } else {
+            for (sample, &value) in samples.zip(row.get(self.x..).unwrap_or_default()) {
+                *sample = convert(value);
+            }
+        }
+    }
+}
+
+/// The times of one route: the render, the stream copy and the copy on all cores.
+#[cfg(test)]
+pub(crate) struct CopyTimes {
+    pub(crate) route: &'static str,
+    /// False when the file takes the stream, for example with patches.
+    pub(crate) on_all_cores: bool,
+    pub(crate) render: Vec<std::time::Duration>,
+    pub(crate) stream: Vec<std::time::Duration>,
+    pub(crate) parallel: Vec<std::time::Duration>,
+}
+
+/// Render `path` as `decode` does, then time both copies, `runs` times with a new decoder each.
+/// Panics if `render_samples` gives other samples than the stream.
+#[cfg(test)]
+pub(crate) fn copy_times(path: &Path, target: ColorTarget, runs: usize) -> CopyTimes {
+    let mut times = CopyTimes {
+        route: "",
+        on_all_cores: true,
+        render: Vec::new(),
+        stream: Vec::new(),
+        parallel: Vec::new(),
+    };
+    for _ in 0..runs {
+        let (route, deep, image) = prepare_like_decode(path, target);
+        times.route = route;
+        if deep {
+            time_copy::<u16>(&image, &mut times);
+        } else {
+            time_copy::<u8>(&image, &mut times);
+        }
+    }
+    times
+}
+
+/// The decoder of the route of `decode`, the route name and whether the copy writes 16 bits.
+#[cfg(test)]
+fn prepare_like_decode(path: &Path, target: ColorTarget) -> (&'static str, bool, JxlImage) {
+    let mut image = open_for_render(path).unwrap();
+    let format = image.pixel_format();
+    if let Some(signal) = HdrSignal::for_image(&image, format) {
+        if let Some(encoding) = signal.encoding {
+            image.set_cms(Moxcms);
+            image.request_color_encoding(encoding);
+        }
+        return ("HDR", true, image);
+    }
+    if let Some(icc) = IccToTarget::for_image(&image, format, target) {
+        let deep = matches!(icc.transform, IccTransform::Sixteen(_));
+        return (if deep { "ICC 16 bit" } else { "ICC 8 bit" }, deep, image);
+    }
+    request_target(&mut image, target);
+    ("enum", false, image)
+}
+
+#[cfg(test)]
+fn time_copy<S: Sample + PartialEq>(image: &JxlImage, times: &mut CopyTimes) {
+    use std::time::Instant;
+    let start = Instant::now();
+    let render = image.render_frame(0).unwrap();
+    times.render.push(start.elapsed());
+    let start = Instant::now();
+    let mut stream = render.stream();
+    let length = stream.width() as usize * stream.height() as usize * stream.channels() as usize;
+    let mut streamed = vec![S::default(); length];
+    stream.write_to_buffer(&mut streamed);
+    times.stream.push(start.elapsed());
+    let start = Instant::now();
+    let copied = render_samples::<S>(image, &render);
+    times.parallel.push(start.elapsed());
+    times.on_all_cores &= planes(image, &render).is_some();
+    assert!(copied.data == streamed, "the samples differ");
 }
 
 /// The upright size from the header.
@@ -388,14 +730,15 @@ fn invalid(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Er
 #[cfg(test)]
 mod tests {
     use super::{
-        HdrSignal, IccToTarget, decode, decode_enum, decode_icc_or_enum, dimensions,
-        hdr_bytes_per_pixel, open_for_render,
+        Grid, HdrSignal, IccToTarget, Plane, Sample, copy_planes, copy_times, decode, decode_enum,
+        decode_icc_or_enum, dimensions, hdr_bytes_per_pixel, open_for_render,
     };
     use crate::decode::color::{ColorTarget, SourceColor};
     use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use crate::test_support::{assert_close, fixture};
     use image::{DynamicImage, RgbaImage};
-    use jxl_oxide::PixelFormat;
+    use jxl_oxide::image::BitDepth;
+    use jxl_oxide::{AlignedGrid, PixelFormat};
 
     /// The largest difference in 8-bit levels from a djxl patch.
     const REFERENCE_TOLERANCE: f32 = 4.0;
@@ -534,6 +877,127 @@ mod tests {
             assert_close(decoded.get_pixel(28, 60).0, [0, 0, 0]);
             assert_close(decoded.get_pixel(4, 4).0, [193, 90, 99]);
         }
+    }
+
+    #[test]
+    fn parallel_copy_matches_stream() {
+        // `copy_times` panics if a sample differs.
+        for folder in ["jxl", "hdr"] {
+            let mut paths: Vec<_> = std::fs::read_dir(fixture(folder))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|e| e == "jxl"))
+                .collect();
+            paths.sort();
+            assert!(paths.len() > 4, "{folder}");
+            for path in paths {
+                for target in [ColorTarget::Srgb, ColorTarget::DisplayP3] {
+                    let times = copy_times(&path, target, 1);
+                    assert!(times.on_all_cores, "{}: the stream copied", path.display());
+                }
+            }
+        }
+    }
+
+    /// A grid of `width` x `height` with a distinct value per position.
+    fn ramp<T>(width: usize, height: usize, value: impl Fn(usize, usize) -> T) -> AlignedGrid<T>
+    where
+        T: Copy + Default,
+    {
+        let mut grid = AlignedGrid::with_alloc_tracker(width, height, None).unwrap();
+        for y in 0..height {
+            for (x, sample) in grid.get_row_mut(y).iter_mut().enumerate() {
+                *sample = value(x, y);
+            }
+        }
+        grid
+    }
+
+    /// The grid position of an upright sample, as `ImageStream::to_original_coord` maps it.
+    fn original(
+        orientation: u32,
+        (width, height): (usize, usize),
+        x: usize,
+        y: usize,
+    ) -> (usize, usize) {
+        match orientation {
+            1 => (x, y),
+            2 => (width - x - 1, y),
+            3 => (width - x - 1, height - y - 1),
+            4 => (x, height - y - 1),
+            5 => (y, x),
+            6 => (y, width - x - 1),
+            7 => (height - y - 1, width - x - 1),
+            _ => (height - y - 1, x),
+        }
+    }
+
+    #[test]
+    fn copy_follows_each_orientation() {
+        // More than one task in both directions. The alpha grid is smaller than the frame, and
+        // the stream reads 0 outside a grid.
+        let (width, height) = (67, 131);
+        let depth = BitDepth::IntegerSample { bits_per_sample: 8 };
+        let ten_bits = BitDepth::IntegerSample {
+            bits_per_sample: 10,
+        };
+        let level = |x: usize, y: usize| (x * 7 + y * 13) % 300;
+        let color = Grid::F32(ramp(width, height, |x, y| level(x, y) as f32 / 255.0 - 0.1));
+        let deep = Grid::I32(ramp(width, height, |x, y| level(x, y) as i32 * 4 - 40));
+        let alpha = Grid::I16(ramp(width - 3, height - 5, |x, y| level(x, y) as i16 - 20));
+        let planes = [
+            Plane {
+                buffer: &color,
+                depth,
+            },
+            Plane {
+                buffer: &deep,
+                depth: ten_bits,
+            },
+            Plane {
+                buffer: &alpha,
+                depth,
+            },
+        ];
+        let expected = |plane: usize, x: usize, y: usize| match plane {
+            0 => u8::from_float(level(x, y) as f32 / 255.0 - 0.1),
+            1 => u8::from_float(ten_bits.parse_integer_sample(level(x, y) as i32 * 4 - 40)),
+            _ if x < width - 3 && y < height - 5 => u8::from_integer(level(x, y) as i32 - 20),
+            _ => 0,
+        };
+        for orientation in 1..=8 {
+            let size = if orientation >= 5 {
+                (height, width)
+            } else {
+                (width, height)
+            };
+            let mut data = vec![0u8; size.0 * size.1 * planes.len()];
+            copy_planes(&planes, orientation, size, &mut data);
+            for (index, &sample) in data.iter().enumerate() {
+                let (pixel, plane) = (index / planes.len(), index % planes.len());
+                let (x, y) = original(orientation, size, pixel % size.0, pixel / size.0);
+                assert_eq!(
+                    sample,
+                    expected(plane, x, y),
+                    "orientation {orientation} at {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn samples_clamp_and_round_like_jxl_oxide() {
+        assert_eq!(u8::from_float(f32::NAN), 0);
+        assert_eq!(u8::from_float(-0.5), 0);
+        assert_eq!(u8::from_float(0.5), 128);
+        assert_eq!(u8::from_float(2.0), 255);
+        assert_eq!(u16::from_float(f32::NAN), 0);
+        assert_eq!(u16::from_float(0.5), 32768);
+        assert_eq!(u16::from_float(1.5), 65535);
+        assert_eq!(u8::from_integer(-3), 0);
+        assert_eq!(u8::from_integer(300), 255);
+        assert_eq!(u16::from_integer(-3), 0);
+        assert_eq!(u16::from_integer(70_000), 65535);
     }
 
     #[test]
