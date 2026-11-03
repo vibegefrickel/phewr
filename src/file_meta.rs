@@ -15,6 +15,8 @@ pub(crate) struct FileMeta {
     /// The EXIF date of the shot, else the modified time.
     pub(crate) date: Option<String>,
     pub(crate) video: Option<VideoMeta>,
+    /// The length of the motion of a Live Photo still, in seconds. `describe` leaves it out.
+    pub(crate) motion_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -47,6 +49,7 @@ pub(crate) fn read(path: &Path) -> FileMeta {
         format,
         date: None,
         video: None,
+        motion_seconds: None,
     };
     if read_video(path, &mut meta) {
         meta.date = modified;
@@ -85,6 +88,42 @@ fn read_video(path: &Path, meta: &mut FileMeta) -> bool {
 #[cfg(not(feature = "video"))]
 fn read_video(_path: &Path, _meta: &mut FileMeta) -> bool {
     false
+}
+
+/// The probe gives 0 when the container does not tell the length.
+#[cfg(feature = "video")]
+fn known_length(seconds: f64) -> Option<f64> {
+    (seconds > 0.0).then_some(seconds)
+}
+
+/// The length of a motion from the probe cache, without a probe.
+#[cfg(feature = "video")]
+pub(crate) fn motion_length_cached(motion: &Path) -> Option<f64> {
+    crate::player::probe_peek(motion).and_then(|probe| known_length(probe.duration))
+}
+
+#[cfg(not(feature = "video"))]
+pub(crate) fn motion_length_cached(_motion: &Path) -> Option<f64> {
+    None
+}
+
+/// The length of a motion through one `ffprobe` of about 31 ms. Call it on a thread only.
+#[cfg(feature = "video")]
+pub(crate) fn motion_length_probed(motion: &Path) -> Option<f64> {
+    let ffprobe = crate::video::session_tools().ffprobe.as_deref()?;
+    crate::player::probe_cached(ffprobe, motion)
+        .ok()
+        .and_then(|probe| known_length(probe.duration))
+}
+
+#[cfg(not(feature = "video"))]
+pub(crate) fn motion_length_probed(_motion: &Path) -> Option<f64> {
+    None
+}
+
+/// `2.8 s`, the length of a Live Photo motion.
+pub(crate) fn format_motion(seconds: f64) -> String {
+    format!("{:.1} s", seconds.max(0.0))
 }
 
 impl FileMeta {
@@ -135,7 +174,7 @@ pub(crate) fn format_time(seconds: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileMeta, VideoMeta, format_time, read};
+    use super::{FileMeta, VideoMeta, format_motion, format_time, read};
     use image::RgbImage;
 
     #[test]
@@ -186,6 +225,7 @@ mod tests {
             format: "HEIC".to_owned(),
             date: Some("2026-04-25 14:32".to_owned()),
             video: None,
+            motion_seconds: None,
         };
         assert_eq!(
             image.describe(),
@@ -201,6 +241,7 @@ mod tests {
                 fps: 29.97,
                 hdr: Some("HLG"),
             }),
+            motion_seconds: None,
         };
         assert_eq!(
             video.describe(),
@@ -220,6 +261,37 @@ mod tests {
         let exif_date = crate::info::date_taken(&path);
         assert!(exif_date.is_some(), "the EXIF date of {}", path.display());
         assert_eq!(meta.date, exif_date);
+    }
+
+    #[test]
+    #[cfg(feature = "video")]
+    fn unknown_motion_length_is_none() {
+        assert_eq!(super::known_length(0.0), None);
+        assert_eq!(super::known_length(-1.0), None);
+        assert_eq!(super::known_length(2.8), Some(2.8));
+    }
+
+    /// `PHEWR_TEST_LIVE_DIR` with `IMG_2928.MOV` (2.83 s) and the real ffprobe.
+    #[test]
+    #[cfg(feature = "video")]
+    #[ignore = "needs PHEWR_TEST_LIVE_DIR and ffprobe"]
+    fn real_motion_length_rounds_to_2_8() {
+        let Some(dir) = crate::decode::real_test_file("PHEWR_TEST_LIVE_DIR") else {
+            return;
+        };
+        crate::video::find_session_tools();
+        if crate::video::session_tools().ffprobe.is_none() {
+            println!("note: skipped, because ffprobe is not on PATH");
+            return;
+        }
+        let seconds = super::motion_length_probed(&dir.join("IMG_2928.MOV")).unwrap();
+        assert_eq!(format_motion(seconds), "2.8 s");
+    }
+
+    #[test]
+    fn motion_has_one_decimal() {
+        assert_eq!(format_motion(2.83), "2.8 s");
+        assert_eq!(format_motion(-1.0), "0.0 s");
     }
 
     #[test]

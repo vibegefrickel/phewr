@@ -26,7 +26,9 @@ pub(crate) use probe::Rate;
 pub(crate) use probe::Samples;
 #[cfg(test)]
 pub(crate) use probe::probe as probe_file;
-pub(crate) use probe::{VideoInfo, probe_cached};
+#[cfg(test)]
+pub(crate) use probe::seed_probe;
+pub(crate) use probe::{VideoInfo, probe_cached, probe_peek};
 
 use crate::encoder::Pixels;
 use std::path::{Path, PathBuf};

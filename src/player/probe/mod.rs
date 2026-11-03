@@ -218,6 +218,17 @@ pub(crate) fn probe_cached(program: &Path, path: &Path) -> io::Result<VideoInfo>
     PROBES.get_or_probe(path, || probe(program, path))
 }
 
+/// The cached probe of `path`, or `None`. It starts no `ffprobe`.
+pub(crate) fn probe_peek(path: &Path) -> Option<VideoInfo> {
+    PROBES.peek(path)
+}
+
+/// Put a probe into the session cache, for the tests of other modules.
+#[cfg(test)]
+pub(crate) fn seed_probe(path: &Path, info: VideoInfo) {
+    PROBES.get_or_probe(path, || Ok(info)).unwrap();
+}
+
 /// The GPU run of `path` failed and the software run gave a frame: later probes of the file
 /// answer `hardware: false`, so every start skips the GPU. A changed file drops the entry.
 pub(crate) fn remember_software(path: &Path) {
@@ -287,6 +298,15 @@ impl ProbeCache {
             .entries
             .put(path.to_path_buf(), (stamp, info.clone()));
         Ok(info)
+    }
+
+    /// The entry of `path` if the file still has its stamp. The cache keeps its order.
+    fn peek(&self, path: &Path) -> Option<VideoInfo> {
+        let metadata = std::fs::metadata(path).ok()?;
+        let stamp = (metadata.modified().ok(), metadata.len());
+        let state = self.lock();
+        let (cached_stamp, info) = state.entries.peek(path)?;
+        (*cached_stamp == stamp).then(|| info.clone())
     }
 
     /// Clears `hardware` of the entry, only if the file still has the stamp of the entry.
@@ -473,6 +493,20 @@ mod tests {
         assert!(cache.get_or_probe(other.path(), error).is_err());
         cache.get_or_probe(other.path(), run).unwrap();
         assert_eq!(runs.get(), 3, "an error does not go into the cache");
+    }
+
+    #[test]
+    fn peek_starts_no_probe_and_follows_the_stamp() {
+        let cache = ProbeCache::new(8);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "clip").unwrap();
+        assert!(cache.peek(file.path()).is_none(), "nothing probed yet");
+        cache
+            .get_or_probe(file.path(), || Ok(crate::test_support::video::clip_info()))
+            .unwrap();
+        assert!(cache.peek(file.path()).is_some());
+        std::fs::write(file.path(), "a longer clip").unwrap();
+        assert!(cache.peek(file.path()).is_none(), "a changed file drops it");
     }
 
     #[test]
