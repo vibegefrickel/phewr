@@ -313,8 +313,8 @@ mod tests {
         let left = cache.join(".abc.png.1.0.tmp");
         let writing = cache.join(".def.png.2.0.tmp");
         let other = cache.join("other.tmp");
-        let cube = cache.join("tonemap-hlg-p3-v3.cube.3.0.partial");
-        let cube_writing = cache.join("tonemap-pq-p3-v3.cube.4.0.partial");
+        let cube = cache.join("tonemap-hlg-p3-v4.cube.3.0.partial");
+        let cube_writing = cache.join("tonemap-pq1000-p3-v4.cube.4.0.partial");
         for path in [&left, &writing, &other, &cube, &cube_writing] {
             fs::write(path, [0_u8; 10]).unwrap();
         }

@@ -2,8 +2,8 @@
 //!
 //! libheif applies `irot` and `imir` itself, but libheif-rs does not show them. A thumbnail
 //! without the half turn or the mirror of the primary image has the right shape and the wrong
-//! picture. The grid compares the transforms before it takes a thumbnail. The reader reads only
-//! the `meta` box.
+//! picture. The grid compares the transforms before it takes a thumbnail. The tone map of a PQ
+//! still reads the HDR10 boxes `clli` and `mdcv`. The reader reads only the `meta` box.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -59,6 +59,17 @@ pub(crate) struct HeifItems {
     transforms: HashMap<u32, Transform>,
     /// The `ispe` size of each item, before its transform.
     sizes: HashMap<u32, (u32, u32)>,
+    /// The HDR10 metadata of each item that has it.
+    light: HashMap<u32, LightLevels>,
+}
+
+/// The HDR10 metadata of one item, in the units of its boxes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct LightLevels {
+    /// `MaxCLL` of `clli`, in nits.
+    max_content: Option<u16>,
+    /// The maximum luminance of `mdcv`, in units of 0.0001 nits.
+    mastering_max: Option<u32>,
 }
 
 impl HeifItems {
@@ -84,6 +95,15 @@ impl HeifItems {
         } else {
             Some((width, height))
         }
+    }
+
+    /// The HDR10 peak in nits of the primary item (`hdr::hdr10_peak`).
+    pub(crate) fn primary_peak(&self) -> Option<f64> {
+        let light = self.light.get(&self.primary)?;
+        crate::decode::hdr::hdr10_peak(
+            light.max_content.map(f64::from),
+            light.mastering_max.map(|units| f64::from(units) / 10_000.0),
+        )
     }
 
     fn transform(&self, item: u32) -> Transform {
@@ -137,6 +157,20 @@ impl HeifItems {
                 .find_map(|(kind, body)| (kind == b"ispe").then(|| parse_ispe(body)).flatten())
             {
                 items.sizes.insert(item, size);
+            }
+            let mut light = LightLevels::default();
+            for (kind, body) in &item_properties {
+                match kind {
+                    b"clli" => light.max_content = Bytes(body).u16(),
+                    // Three primaries and the white point come before the maximum.
+                    b"mdcv" => {
+                        light.mastering_max = body.get(16..).and_then(|rest| Bytes(rest).u32());
+                    }
+                    _ => {}
+                }
+            }
+            if light != LightLevels::default() {
+                items.light.insert(item, light);
             }
         }
         Some(items)
@@ -411,6 +445,39 @@ mod tests {
         assert_eq!(no_size.primary_size(), None);
         let zero_size = HeifItems::parse_meta(&meta(0, &[], &[])).unwrap();
         assert_eq!(zero_size.primary_size(), None, "an empty ispe is no size");
+    }
+
+    #[test]
+    fn hdr10_boxes_give_primary_peak() {
+        // 3 primaries and the white point, then 4000 and 0.005 nits in units of 0.0001 nits.
+        let mut mdcv = vec![0; 16];
+        mdcv.extend_from_slice(&40_000_000u32.to_be_bytes());
+        mdcv.extend_from_slice(&50u32.to_be_bytes());
+        let clli = |max_content: u16| {
+            bx(
+                *b"clli",
+                &[&max_content.to_be_bytes()[..], &[0, 200]].concat(),
+            )
+        };
+        let ipco = [bx(*b"mdcv", &mdcv), clli(1375), clli(0)];
+
+        let both = HeifItems::parse_meta(&meta_items(&ipco, &[1, 2], &[])).unwrap();
+        assert_eq!(both.primary_peak(), Some(1375.0));
+        let unknown_content = HeifItems::parse_meta(&meta_items(&ipco, &[1, 3], &[])).unwrap();
+        assert_eq!(unknown_content.primary_peak(), Some(4000.0));
+        let thumbnail_only = HeifItems::parse_meta(&meta_items(&ipco, &[], &[1, 2])).unwrap();
+        assert_eq!(thumbnail_only.primary_peak(), None);
+        let short = [
+            bx(*b"mdcv", &[0; 10]),
+            full(*b"ispe", &[0, 0, 0, 8, 0, 0, 0, 4]),
+        ];
+        let broken = HeifItems::parse_meta(&meta_items(&short, &[1, 2], &[])).unwrap();
+        assert_eq!(broken.primary_peak(), None);
+        assert_eq!(
+            broken.primary_size(),
+            Some((8, 4)),
+            "a short mdcv keeps the other boxes"
+        );
     }
 
     #[test]

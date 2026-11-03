@@ -136,7 +136,7 @@ fn only_hdr_first_frame_gets_cube() {
     };
     assert_eq!(
         first_frame_cube(&hlg, target, &[dir.path()]),
-        Some(dir.path().join("tonemap-hlg-p3-v3.cube"))
+        Some(dir.path().join("tonemap-hlg-p3-v4.cube"))
     );
     let red = || image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]));
     // sRGB red is (234, 51, 35) in Display P3, as for a still image.
@@ -176,7 +176,7 @@ fn first_frame_matches_player_chain() {
         args.contains("scale_vt=w=32:h=18,transpose_vt=dir=clock"),
         "{args}"
     );
-    assert!(args.contains("tonemap-hlg-srgb-v3.cube"), "{args}");
+    assert!(args.contains("tonemap-hlg-srgb-v4.cube"), "{args}");
     assert!(
         args.ends_with("-f rawvideo -pix_fmt rgba -frames:v 1 pipe:1"),
         "{args}"

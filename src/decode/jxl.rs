@@ -40,6 +40,7 @@ pub(crate) fn decode(path: &Path, target: ColorTarget) -> io::Result<Decoded> {
         image,
         color: SourceColor::of_target(target),
         opaque: false,
+        peak: None,
     };
     if let Some(icc) = IccToTarget::for_image(&image, format, target) {
         reserve(&image, icc.bytes_per_pixel())?;
@@ -147,6 +148,7 @@ impl HdrSignal {
                 .ok_or_else(|| invalid(format!("HDR JPEG XL image with {channels} channels")))?,
             color: self.color,
             opaque: false,
+            peak: None,
         })
     }
 }

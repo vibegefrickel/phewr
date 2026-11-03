@@ -1,6 +1,8 @@
 //! The tests of the HDR tone map: the curves, the tables and the renderings of the player cube.
 
-use super::{Curve, ENCODE_STEPS, Primaries, ToneMap, encode_table, is_hdr, rgb_to_xyz};
+use super::{
+    Curve, ENCODE_STEPS, Peak, Primaries, ToneMap, encode_table, hdr10_peak, is_hdr, rgb_to_xyz,
+};
 use crate::decode::color::{ColorTarget, SourceColor, convert};
 use crate::decode::resize::load_and_resize_px;
 use crate::decode::screen::load_for_screen;
@@ -97,6 +99,7 @@ fn display_image_maps_8_bit_hdr() {
         image: DynamicImage::ImageRgb8(RgbImage::from_pixel(2, 2, Rgb([148, 148, 148]))),
         color: cicp(9, 16),
         opaque: true,
+        peak: None,
     };
     let pixel = decoded.into_display().to_rgba8().get_pixel(0, 0).0;
     assert_eq!(pixel, [158, 158, 158, 255]);
@@ -116,18 +119,70 @@ fn eight_and_sixteen_bit_maps_agree() {
     assert_eq!((eight[11], mapped[11]), (0, 0));
 }
 
+#[test]
+fn peak_picks_bucket_above() {
+    let bucket = |nits| Peak::bucket(nits).nits();
+    assert_eq!(bucket(None), 1000);
+    assert_eq!(bucket(Some(470.0)), 500);
+    assert_eq!(bucket(Some(703.0)), 1000);
+    assert_eq!(bucket(Some(1000.0)), 1000);
+    assert_eq!(bucket(Some(1375.0)), 2000);
+    assert_eq!(bucket(Some(4000.0)), 4000);
+    assert_eq!(bucket(Some(10_000.0)), 10_000);
+    assert_eq!(bucket(Some(20_000.0)), 10_000);
+}
+
+#[test]
+fn max_content_wins_when_plausible() {
+    assert_eq!(hdr10_peak(Some(1375.0), Some(1000.0)), Some(1375.0));
+    assert_eq!(hdr10_peak(Some(0.0), Some(4000.0)), Some(4000.0));
+    assert_eq!(hdr10_peak(Some(65_535.0), None), None);
+    assert_eq!(hdr10_peak(None, Some(0.005)), None);
+    assert_eq!(hdr10_peak(None, None), None);
+}
+
+#[test]
+fn pq_4000_still_rolls_off_later() {
+    let map = ToneMap::of_source(&cicp(9, 16), ColorTarget::Srgb).unwrap();
+    let wide = map.with_peak(Peak::bucket(Some(4000.0)));
+    let gray = |map: &ToneMap, signal| exact(map, [signal; 3])[0];
+    // The PQ signals of 1000 and 4000 nits.
+    assert!(gray(&map, 0.751_827_5) > 0.99);
+    assert!(gray(&wide, 0.751_827_5) < 0.95);
+    assert!(gray(&wide, 0.902_5) > 0.99);
+    let hlg = ToneMap::of_source(&cicp(9, 18), ColorTarget::Srgb).unwrap();
+    assert_eq!(
+        gray(&hlg.with_peak(Peak::bucket(Some(4000.0))), 0.75),
+        gray(&hlg, 0.75),
+        "HLG keeps its reference display"
+    );
+}
+
 /// AVIF and HEIC need libheif.
 fn fixtures() -> Vec<&'static str> {
     let mut names = vec!["pq.jxl", "hlg.jxl", "pq-icc.jxl", "pq.png", "hlg.png"];
     if cfg!(feature = "heic") {
-        names.extend(["pq.avif", "hlg.avif", "pq.heic", "hlg.heic"]);
+        names.extend([
+            "pq.avif",
+            "hlg.avif",
+            "pq.heic",
+            "hlg.heic",
+            "pq-4000.avif",
+            "pq-4000.heic",
+        ]);
     }
     names
 }
 
 /// The signal of `name` rendered through the player's HDR cube.
 fn reference(name: &str, target: ColorTarget) -> RgbaImage {
-    let curve = if name.starts_with("pq") { "pq" } else { "hlg" };
+    let curve = if name.starts_with("pq-4000") {
+        "pq4000"
+    } else if name.starts_with("pq") {
+        "pq"
+    } else {
+        "hlg"
+    };
     let suffix = match target {
         ColorTarget::DisplayP3 => "p3",
         ColorTarget::Srgb => "srgb",
@@ -210,6 +265,28 @@ fn fixtures_match_video_cube() {
             }
         }
     }
+}
+
+/// `MaxCLL` 4000 moves the roll-off: the 1000 nit reference no longer fits.
+#[cfg(feature = "heic")]
+#[test]
+fn clli_fixtures_use_own_peak() {
+    for name in ["pq-4000.avif", "pq-4000.heic"] {
+        let image = decode_image(
+            &fixture(&format!("hdr/{name}")),
+            None,
+            EmbeddedThumbnail::Deny,
+        )
+        .unwrap();
+        assert_eq!(image.peak, Some(4000.0), "{name}");
+        let mapped = image.tone_mapped(None, ColorTarget::Srgb).image.to_rgba8();
+        let default = patch_means(&reference("pq.avif", ColorTarget::Srgb));
+        let own = patch_means(&mapped);
+        // The gray patch at the signal 0.75 holds about 1000 nits.
+        assert!(own[6][1] + 10.0 < default[6][1], "{name}: {own:?}");
+    }
+    let plain = decode_image(&fixture("hdr/pq.avif"), None, EmbeddedThumbnail::Deny).unwrap();
+    assert_eq!(plain.peak, None);
 }
 
 #[test]
@@ -377,14 +454,17 @@ fn sdr_fixtures_pass_unchanged() {
 #[cfg(feature = "video")]
 #[test]
 fn map_matches_player_cube() {
-    use crate::player::tone_map::{Cube, CubeSource, Hdr};
+    use crate::player::tone_map::{Cube, CubeSource};
+    let sources = Peak::BUCKETS
+        .map(|peak| (CubeSource::Pq(peak), 16, peak))
+        .into_iter()
+        .chain([(CubeSource::Hlg, 18, Peak::DEFAULT)]);
     for target in TARGETS {
-        for (hdr, transfer) in [(Hdr::Pq, 16), (Hdr::Hlg, 18)] {
-            let map = ToneMap::of_source(&cicp(9, transfer), target).unwrap();
-            let cube = Cube {
-                source: CubeSource::Hdr(hdr),
-                target,
-            };
+        for (source, transfer, peak) in sources.clone() {
+            let map = ToneMap::of_source(&cicp(9, transfer), target)
+                .unwrap()
+                .with_peak(peak);
+            let cube = Cube { source, target };
             let text = cube.text();
             let mut lines = text.lines();
             let size: u32 = lines
@@ -405,30 +485,33 @@ fn map_matches_player_cube() {
                 }
             }
             // Single precision near black: 1e-3 is a quarter of a level.
-            assert!(worst < 1e-3, "{hdr:?} {target:?}: {worst}");
+            assert!(worst < 1e-3, "{source:?} {target:?}: {worst}");
         }
     }
 }
 
-/// Write the player's HDR cubes into `VIEWR_HDR_CUBE_DIR` for `tests/fixtures/hdr/make.sh`.
+/// Write the player's HDR cubes into `VIEWR_HDR_CUBE_DIR` for `tests/fixtures/hdr/make.sh`: `pq`
+/// and `hlg`, and `pq<nits>` for each PQ bucket.
 #[cfg(feature = "video")]
 #[test]
 #[ignore = "writes the cubes for tests/fixtures/hdr/make.sh"]
 fn write_the_player_hdr_cubes() {
-    use crate::player::tone_map::{Cube, CubeSource, Hdr};
+    use crate::player::tone_map::{Cube, CubeSource};
     let Some(dir) = crate::decode::real_test_file("VIEWR_HDR_CUBE_DIR") else {
         return;
     };
+    let buckets = Peak::BUCKETS.map(|peak| (CubeSource::Pq(peak), format!("pq{}", peak.nits())));
+    let sources = [
+        (CubeSource::Pq(Peak::DEFAULT), "pq".to_owned()),
+        (CubeSource::Hlg, "hlg".to_owned()),
+    ];
     for target in TARGETS {
-        for (hdr, name) in [(Hdr::Pq, "pq"), (Hdr::Hlg, "hlg")] {
+        for (source, name) in buckets.iter().chain(&sources).cloned() {
             let suffix = match target {
                 ColorTarget::DisplayP3 => "p3",
                 ColorTarget::Srgb => "srgb",
             };
-            let cube = Cube {
-                source: CubeSource::Hdr(hdr),
-                target,
-            };
+            let cube = Cube { source, target };
             std::fs::write(dir.join(format!("{name}-{suffix}.cube")), cube.text()).unwrap();
         }
     }

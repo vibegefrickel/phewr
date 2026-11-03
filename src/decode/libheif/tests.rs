@@ -279,6 +279,10 @@ fn decodes_avif_from_env() {
     let thumb = decode_image_with_hint(path, Some((200, 200)), EmbeddedThumbnail::Deny)
         .expect("scaled decode");
     assert!(thumb.width() <= 200 && thumb.height() <= 200);
+    let peak = decode_image(path, None, EmbeddedThumbnail::Deny)
+        .expect("full decode")
+        .peak;
+    println!("VIEWR_TEST_AVIF: HDR10 peak {peak:?}");
 }
 
 /// `VIEWR_TEST_HEIC=/path/to/photo.heic`. The grid uses the embedded thumbnail.

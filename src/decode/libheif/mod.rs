@@ -9,6 +9,7 @@ use super::resize::{Layout, rgb_resize_is_fastest, scaled_down_size};
 use super::{Decoded, EmbeddedThumbnail, FOREGROUND};
 use crate::decode::color::SourceColor;
 use crate::decode::hdr;
+use crate::decode::heif_boxes::HeifItems;
 use crate::scanner;
 use image::{DynamicImage, ImageBuffer};
 use plane::{heif_image_to_rgb, heif_image_to_rgba, heif_plane_pixels, invalid_dimensions};
@@ -64,7 +65,7 @@ pub(super) fn decode_with_libheif(
         .unwrap_or(primary);
     let color = thumbnail_color(&handle, primary_color);
     if hdr::is_hdr(&color) && handle.luma_bits_per_pixel() > 8 {
-        return decode_deep(&handle, target, color);
+        return decode_deep(path, &handle, target, color);
     }
     let layout = decode_layout(&handle, target);
     let chroma = if layout == Layout::Rgb {
@@ -84,12 +85,14 @@ pub(super) fn decode_with_libheif(
         image,
         color,
         opaque: layout != Layout::Rgba,
+        peak: None,
     })
 }
 
-/// Decode a deep HDR image as 16-bit RGB for the tone map of `Decoded`. The samples scale to the
-/// full 16-bit range.
+/// Decode a deep HDR image as 16-bit RGB for the tone map of `Decoded`, with the HDR10 peak of
+/// its boxes. The samples scale to the full 16-bit range.
 fn decode_deep(
+    path: &Path,
     handle: &libheif_rs::ImageHandle,
     target: Option<(u32, u32)>,
     color: SourceColor,
@@ -120,11 +123,13 @@ fn decode_deep(
         ImageBuffer::from_raw(w, h, samples).map(DynamicImage::ImageRgba16)
     } else {
         ImageBuffer::from_raw(w, h, samples).map(DynamicImage::ImageRgb16)
-    };
+    }
+    .ok_or_else(invalid_dimensions)?;
     Ok(Decoded {
-        image: image.ok_or_else(invalid_dimensions)?,
+        image,
         color,
         opaque: !alpha,
+        peak: HeifItems::read(path).and_then(|items| items.primary_peak()),
     })
 }
 

@@ -280,7 +280,7 @@ fn push(graph: &mut String, text: std::fmt::Arguments<'_>) {
 
 /// The cube that maps `info` into `target`, or `None` for an SDR video in the target space.
 pub(crate) fn cube_for(info: &VideoInfo, target: ColorTarget, dirs: &[&Path]) -> Option<PathBuf> {
-    let cube = Cube::for_video(info.hdr, info.primaries, target)?;
+    let cube = Cube::for_video(info.hdr, info.hdr_peak, info.primaries, target)?;
     cube_file(dirs, cube)
 }
 

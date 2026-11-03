@@ -169,6 +169,7 @@ pub(crate) fn info_of(width: u32, height: u32, fps: f64) -> VideoInfo {
         fps,
         duration: 2.0,
         hdr: None,
+        hdr_peak: None,
         primaries: crate::player::tone_map::Primaries::Bt709,
         ten_bit: false,
         rate: crate::player::Rate::Constant,

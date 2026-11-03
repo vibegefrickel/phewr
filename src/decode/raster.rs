@@ -42,6 +42,7 @@ pub(crate) fn decode_jpeg_bytes(
         image,
         color,
         opaque: false,
+        peak: None,
     })
 }
 
@@ -114,6 +115,7 @@ pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
         image: decode::tonemap::to_display(img),
         color,
         opaque: false,
+        peak: None,
     })
 }
 

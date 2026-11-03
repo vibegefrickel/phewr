@@ -8,6 +8,7 @@
 mod math;
 
 use crate::decode::color::{ColorTarget, SourceColor};
+use crate::decode::hdr::Peak;
 use math::{conversion, convert_sdr, rgb_to_xyz, tone_map};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -148,8 +149,10 @@ impl Primaries {
 pub(crate) enum CubeSource {
     /// An SDR signal with the sRGB curve.
     Sdr(Primaries),
-    /// An HDR signal with BT.2020 primaries.
-    Hdr(Hdr),
+    /// An HLG signal with BT.2020 primaries, for the 1000 nit reference display.
+    Hlg,
+    /// A PQ signal with BT.2020 primaries, rolled off to the peak of its HDR10 metadata.
+    Pq(Peak),
 }
 
 /// One cube from its source into the terminal target space.
@@ -160,14 +163,16 @@ pub(crate) struct Cube {
 }
 
 impl Cube {
-    /// `None` for an SDR video in the target space.
+    /// `None` for an SDR video in the target space. `peak` is the HDR10 peak in nits.
     pub(crate) fn for_video(
         hdr: Option<Hdr>,
+        peak: Option<f64>,
         primaries: Primaries,
         target: ColorTarget,
     ) -> Option<Self> {
         let source = match hdr {
-            Some(hdr) => CubeSource::Hdr(hdr),
+            Some(Hdr::Hlg) => CubeSource::Hlg,
+            Some(Hdr::Pq) => CubeSource::Pq(Peak::bucket(peak)),
             None if primaries == Primaries::of_target(target) => return None,
             None => CubeSource::Sdr(primaries),
         };
@@ -178,8 +183,8 @@ impl Cube {
     fn file_name(self) -> String {
         let source = match self.source {
             CubeSource::Sdr(primaries) => format!("color-{}", primaries.file_part()),
-            CubeSource::Hdr(Hdr::Hlg) => "tonemap-hlg".to_owned(),
-            CubeSource::Hdr(Hdr::Pq) => "tonemap-pq".to_owned(),
+            CubeSource::Hlg => "tonemap-hlg".to_owned(),
+            CubeSource::Pq(peak) => format!("tonemap-pq{}", peak.nits()),
         };
         let target = match self.target {
             ColorTarget::DisplayP3 => "p3",
@@ -196,11 +201,8 @@ impl Cube {
                 let matrix = conversion(source, target);
                 Box::new(move |signal| convert_sdr(&matrix, signal))
             }
-            CubeSource::Hdr(hdr) => {
-                let matrix = conversion(Primaries::Bt2020, target);
-                let luma = rgb_to_xyz(target)[1];
-                Box::new(move |signal| tone_map(hdr, &matrix, luma, signal))
-            }
+            CubeSource::Hlg => hdr_mapping(Hdr::Hlg, HDR_PEAK_NITS, target),
+            CubeSource::Pq(peak) => hdr_mapping(Hdr::Pq, f64::from(peak.nits()), target),
         }
     }
 
@@ -249,11 +251,18 @@ impl Cube {
     }
 }
 
-const CUBE_VERSION: u32 = 3;
+/// The tone map of a BT.2020 HDR signal that rolls off to `peak` nits.
+fn hdr_mapping(hdr: Hdr, peak: f64, target: Primaries) -> Box<dyn Fn([f64; 3]) -> [f64; 3]> {
+    let matrix = conversion(Primaries::Bt2020, target);
+    let luma = rgb_to_xyz(target)[1];
+    Box::new(move |signal| tone_map(hdr, peak, &matrix, luma, signal))
+}
+
+const CUBE_VERSION: u32 = 4;
 const SDR_LUT_SIZE: u32 = 17;
 /// 33 points per channel, as in common `.cube` files.
 const HDR_LUT_SIZE: u32 = 33;
-/// The HLG reference display and a common PQ master.
+/// The HLG reference display.
 const HDR_PEAK_NITS: f64 = 1000.0;
 /// The HDR level that becomes SDR white before the roll-off. 500 nits come closest to the
 /// macOS SDR export (`avconvert`) of three iPhone HLG clips.

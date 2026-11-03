@@ -2,7 +2,8 @@
 //!
 //! The map copies the math of the player's HDR cube (`player/tone_map.rs`), and a test compares
 //! both at each cube point. A still and a video of one scene show the same colors. `Decoded`
-//! maps the 16-bit image after the resize. An 8-bit HDR image maps in `color::convert`.
+//! maps the 16-bit image after the resize. An 8-bit HDR image maps in `color::convert`. The
+//! libheif route maps a deep image itself, with the HDR10 peak of its `clli` or `mdcv` box.
 
 mod primaries;
 
@@ -15,7 +16,7 @@ use image::{DynamicImage, RgbImage, RgbaImage};
 use rayon::prelude::*;
 use std::sync::OnceLock;
 
-/// The HLG reference display and a common PQ master. The value of `player/tone_map.rs`.
+/// The HLG reference display. The value of `player/tone_map.rs`.
 const HDR_PEAK_NITS: f64 = 1000.0;
 /// The HDR level that becomes SDR white. The value of `player/tone_map.rs`.
 const SDR_WHITE_NITS: f64 = 500.0;
@@ -23,6 +24,60 @@ const SDR_WHITE_NITS: f64 = 500.0;
 /// the output by less than 0.25 levels.
 const ENCODE_STEPS: usize = 4096;
 const PIXELS_PER_TASK: usize = 64 * 1024;
+/// The HDR10 metadata outside this range in nits is a placeholder or an error.
+const PLAUSIBLE_PEAK_NITS: std::ops::RangeInclusive<f64> = 100.0..=10_000.0;
+
+/// The display peak in nits that a PQ signal rolls off to, in buckets: a few player cubes cover
+/// all clips, and a still maps like a video with the same metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Peak(u32);
+
+impl Peak {
+    /// A common PQ master, for a file without HDR10 metadata.
+    pub(crate) const DEFAULT: Self = Self(1000);
+    /// The 500 nit bucket is SDR white and has no roll-off: content with `MaxCLL` at or below
+    /// 500 nits has no highlight to compress and shows as mastered. The maps above it darken the
+    /// midtones for headroom that the content never uses.
+    pub(crate) const BUCKETS: [Self; 5] =
+        [Self(500), Self(1000), Self(2000), Self(4000), Self(10_000)];
+
+    /// The smallest bucket at or above `nits`: no highlight below the peak clips.
+    pub(crate) fn bucket(nits: Option<f64>) -> Self {
+        let Some(nits) = nits else {
+            return Self::DEFAULT;
+        };
+        Self::BUCKETS
+            .into_iter()
+            .find(|bucket| f64::from(bucket.0) >= nits)
+            .unwrap_or(Self(10_000))
+    }
+
+    #[cfg_attr(
+        not(any(test, feature = "video")),
+        expect(dead_code, reason = "only the cube names of the player show the peak")
+    )]
+    pub(crate) fn nits(self) -> u32 {
+        self.0
+    }
+
+    /// The peak over SDR white: at least 1, so the curve never maps a pixel above its own level.
+    fn over_sdr_white(self) -> f64 {
+        f64::from(self.0) / SDR_WHITE_NITS
+    }
+}
+
+/// The peak of the HDR10 metadata: `MaxCLL` describes the content, the mastering display only
+/// bounds it.
+#[cfg_attr(
+    not(any(test, feature = "video", feature = "heic")),
+    expect(dead_code, reason = "only the player and libheif read HDR10 metadata")
+)]
+pub(crate) fn hdr10_peak(max_content: Option<f64>, mastering_max: Option<f64>) -> Option<f64> {
+    let plausible = |nits: &f64| PLAUSIBLE_PEAK_NITS.contains(nits);
+    max_content
+        .filter(plausible)
+        .or_else(|| mastering_max.filter(plausible))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Curve {
@@ -93,6 +148,8 @@ pub(crate) struct ToneMap {
     luma: [f32; 3],
     /// The source Y row, for the HLG system gamma.
     scene_luma: [f32; 3],
+    /// The display peak over SDR white, where the roll-off reaches white.
+    peak: f32,
 }
 
 impl ToneMap {
@@ -118,7 +175,19 @@ impl ToneMap {
             matrix: conversion.map(|row| single(row.map(|value| value / SDR_WHITE_NITS))),
             luma: single(rgb_to_xyz(target)[1]),
             scene_luma: single(rgb_to_xyz(source)[1]),
+            peak: match curve {
+                Curve::Pq => Peak::DEFAULT.over_sdr_white() as f32,
+                Curve::Hlg => (HDR_PEAK_NITS / SDR_WHITE_NITS) as f32,
+            },
         }
+    }
+
+    /// The peak of the HDR10 metadata. HLG keeps the 1000 nit display of its OOTF.
+    pub(crate) fn with_peak(mut self, peak: Peak) -> Self {
+        if self.curve == Curve::Pq {
+            self.peak = peak.over_sdr_white() as f32;
+        }
+        self
     }
 
     /// Linear SDR light in the target, as `tone_map` in `player/tone_map.rs` computes it.
@@ -138,7 +207,7 @@ impl ToneMap {
         let mut linear = self.matrix.map(|row| dot(row, nits));
         let luminance = dot(self.luma, linear);
         if luminance > 0.0 {
-            let peak = (HDR_PEAK_NITS / SDR_WHITE_NITS) as f32;
+            let peak = self.peak;
             let scale = (1.0 + luminance / (peak * peak)) / (1.0 + luminance);
             linear = linear.map(|value| value * scale);
             let mapped = luminance * scale;

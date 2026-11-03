@@ -87,6 +87,8 @@ pub(crate) struct Decoded {
     pub(crate) color: SourceColor,
     /// Every pixel is opaque: the RGBA buffer of a JPEG or of a HEIF image without alpha.
     pub(crate) opaque: bool,
+    /// The HDR10 peak in nits of a PQ image (`hdr::hdr10_peak`), from the HEIF boxes.
+    pub(crate) peak: Option<f64>,
 }
 
 impl Decoded {
@@ -107,6 +109,7 @@ impl Decoded {
         let Some(map) = hdr::ToneMap::of_source(&self.color, target) else {
             return self;
         };
+        let map = map.with_peak(hdr::Peak::bucket(self.peak));
         let deep = match self.image {
             DynamicImage::ImageRgb8(_)
             | DynamicImage::ImageRgba8(_)
@@ -123,6 +126,7 @@ impl Decoded {
             image: map.map_image(fitted),
             color: SourceColor::of_target(target),
             opaque: self.opaque,
+            peak: None,
         }
     }
 

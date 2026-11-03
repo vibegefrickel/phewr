@@ -496,6 +496,7 @@ mod tests {
             image,
             color: SourceColor::Srgb,
             opaque: true,
+            peak: None,
         }
     }
 

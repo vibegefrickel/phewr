@@ -18,11 +18,14 @@
 #     are XYB and jxl-oxide renders them into the signal
 #   pq-icc.jxl: lossless, the BT.2100 PQ ICC profile of macOS (with a cicp tag), no enum
 #   pq.png, hlg.png: 16 bit with a cICP chunk 9/16/0/1 and 9/18/0/1
+#   pq-4000.avif, pq-4000.heic: as pq.avif and pq.heic, with a clli box of MaxCLL 4000 nits.
+#     avifenc and heif-enc write no mdcv box, so the unit tests of heif_boxes.rs cover mdcv.
 #
 # The references are `ref/<curve>-<target>.png`, for the targets p3 and srgb: ffmpeg maps the
 # signal with the HDR cube of the terminal player (`tone_map::Cube`, written by the ignored test
 # `write_the_player_hdr_cubes`), with the filters of the player: `format=rgb48le`,
-# `lut3d=interp=tetrahedral`, then 8-bit RGB.
+# `lut3d=interp=tetrahedral`, then 8-bit RGB. `ref/pq4000-<target>.png` uses the PQ cube of the
+# 4000 nit bucket.
 set -eu
 
 cd "$(dirname "$0")"
@@ -67,6 +70,11 @@ for curve in pq hlg; do
   cjxl "$work/signal.ppm" "$curve.jxl" -x "color_space=$jxl" -d 0 --quiet
   cjxl "$work/signal.ppm" "$curve-lossy.jxl" -x "color_space=$jxl" -d 1 --quiet
 done
+avifenc -d 10 -y 444 -q 100 -r full --cicp 9/16/9 --clli 4000,400 "$work/signal.png" \
+  pq-4000.avif > /dev/null 2>&1
+heif-enc -b 10 -p chroma=444 -q 100 --matrix_coefficients 9 --colour_primaries 9 \
+  --transfer_characteristic 16 --full_range_flag 1 --clli 4000,400 "$work/signal.png" \
+  -o pq-4000.heic > /dev/null
 
 # sips writes the BT.2100 PQ ICC profile of macOS into a PNG. A lossless JPEG XL file keeps the
 # profile and gets no enum encoding.
@@ -94,7 +102,7 @@ insert_cicp "$work/signal.png" hlg.png 18
 VIEWR_HDR_CUBE_DIR=$work just test-real write_the_player_hdr_cubes > /dev/null 2>&1
 rm -rf ref
 mkdir ref
-for curve in pq hlg; do
+for curve in pq pq4000 hlg; do
   for target in p3 srgb; do
     ffmpeg -v error -i "$work/signal.png" \
       -vf "format=rgb48le,lut3d=file=$work/$curve-$target.cube:interp=tetrahedral" \

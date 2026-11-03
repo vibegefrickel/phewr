@@ -1,8 +1,8 @@
 //! Tests of the probe JSON, the stream choice and the pacing rates.
 
 use super::{
-    bit_depth, clockwise_rotation, fraction, gcd, pacing_fps, parse, sanitize_fps, timing_of,
-    variable_fps,
+    bit_depth, clockwise_rotation, fraction, gcd, pacing_fps, parse, parse_frame_peak,
+    sanitize_fps, timing_of, variable_fps,
 };
 use crate::player::probe::{Rate, VideoInfo};
 use crate::player::tone_map::{Hdr, Primaries};
@@ -10,6 +10,12 @@ use std::time::Duration;
 
 /// An iPhone 15 clip: 4K HLG at 29.97 fps, average 29.99, without a rotation.
 const IPHONE_HLG: &str = r#"{"programs":[],"stream_groups":[],"streams":[{"index":0,"width":3840,"height":2160,"pix_fmt":"yuv420p10le","color_transfer":"arib-std-b67","color_primaries":"bt2020","r_frame_rate":"30000/1001","avg_frame_rate":"249600/8323","time_base":"1/600","nb_frames":"416","disposition":{"default":1,"attached_pic":0},"side_data_list":[{"side_data_type":"DOVI configuration record"},{"side_data_type":"Ambient viewing environment"}]}],"format":{"duration":"13.870000"}}"#;
+
+/// An HDR10 clip in Matroska: the mastering display and `MaxCLL` in the stream side data.
+const HDR10_STREAM: &str = r#"{"streams":[{"index":0,"width":3840,"height":2160,"pix_fmt":"yuv420p10le","color_transfer":"smpte2084","color_primaries":"bt2020","r_frame_rate":"24000/1001","avg_frame_rate":"24000/1001","time_base":"1/1000","disposition":{"default":1,"attached_pic":0},"side_data_list":[{"side_data_type":"Mastering display metadata","max_luminance":"40000000/10000"},{"side_data_type":"Content light level metadata","max_content":0}]}],"format":{"duration":"10.010000"}}"#;
+
+/// The frame probe of the Apple HDR10 example clip: `MaxCLL` 1375 in the SEI of the first frame.
+const HDR10_FRAME: &str = r#"{"frames":[{"side_data_list":[{"side_data_type":"Mastering display metadata","max_luminance":"10000000/10000"},{"side_data_type":"Content light level metadata","max_content":1375},{"side_data_type":"HDR Dynamic Metadata SMPTE2094-40 (HDR10+)"}]}]}"#;
 
 /// A 64x48 clip with the display rotation -90 of an iPhone portrait clip.
 const PORTRAIT: &str = r#"{"programs":[],"stream_groups":[],"streams":[{"index":0,"width":64,"height":48,"pix_fmt":"yuv420p","r_frame_rate":"10/1","avg_frame_rate":"10/1","time_base":"1/10240","nb_frames":"5","disposition":{"default":1,"attached_pic":0},"side_data_list":[{"side_data_type":"Display Matrix","rotation":-90}]}],"format":{"duration":"0.500000"}}"#;
@@ -44,6 +50,29 @@ fn iphone_hlg_is_constant_10_bit() {
     );
     assert!((info.duration - 13.87).abs() < 1e-9);
     assert_eq!(info.stream, 0);
+}
+
+#[test]
+fn hdr10_stream_metadata_gives_peak() {
+    let info = parse(HDR10_STREAM.as_bytes(), None).unwrap();
+    assert_eq!(info.hdr, Some(Hdr::Pq));
+    assert_eq!(info.hdr_peak, Some(4000.0), "MaxCLL 0 is unknown");
+    assert_eq!(parse(IPHONE_HLG.as_bytes(), None).unwrap().hdr_peak, None);
+    // An SDR stream ignores HDR10 metadata.
+    let sdr = HDR10_STREAM.replace("smpte2084", "bt709");
+    assert_eq!(parse(sdr.as_bytes(), None).unwrap().hdr_peak, None);
+}
+
+#[test]
+fn frame_metadata_gives_peak() {
+    assert_eq!(
+        parse_frame_peak(HDR10_FRAME.as_bytes()).unwrap(),
+        Some(1375.0)
+    );
+    let bare = r#"{"frames":[{"side_data_list":[{"side_data_type":"H.26[45] User Data Unregistered SEI message"}]}]}"#;
+    assert_eq!(parse_frame_peak(bare.as_bytes()).unwrap(), None);
+    assert_eq!(parse_frame_peak(b"{}").unwrap(), None);
+    assert!(parse_frame_peak(b"not json").is_err());
 }
 
 #[test]
@@ -205,6 +234,7 @@ fn invalid_rates_use_fallback() {
         fps: 25.0,
         duration: 1.0,
         hdr: None,
+        hdr_peak: None,
         primaries: Primaries::Bt709,
         ten_bit: false,
         rate: Rate::Constant,

@@ -1,6 +1,7 @@
 //! The parse of the `ffprobe` JSON, and the pacing rate from the stream rates or the packets.
 
 use super::{Rate, TIMING_PACKETS, VideoInfo, invalid};
+use crate::decode::hdr::hdr10_peak;
 use crate::player::tone_map::{Hdr, Primaries};
 use serde::Deserialize;
 use std::io;
@@ -32,6 +33,19 @@ struct ProbeOutput {
     format: Format,
 }
 
+/// The output of the frame probe of a PQ stream without HDR10 stream metadata.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct FrameOutput {
+    frames: Vec<Frame>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Frame {
+    side_data_list: Vec<SideData>,
+}
+
 /// `ffprobe` writes the rates and the frame count as text.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -57,12 +71,16 @@ struct Disposition {
     attached_pic: u8,
 }
 
-/// A display matrix carries its counterclockwise `rotation`.
+/// A display matrix carries its counterclockwise `rotation`. The HDR10 metadata carries the
+/// mastering display maximum as a fraction in nits and `MaxCLL` in nits.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SideData {
-    side_data_type: String,
+    #[serde(rename = "side_data_type")]
+    kind: String,
     rotation: f64,
+    max_luminance: String,
+    max_content: u32,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -109,7 +127,7 @@ pub(super) fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<Vide
     let rotation = stream
         .side_data_list
         .iter()
-        .find(|data| data.side_data_type == "Display Matrix")
+        .find(|data| data.kind == "Display Matrix")
         .map_or(0, |data| clockwise_rotation(data.rotation));
     let (width, height) = if rotation.is_multiple_of(180) {
         (stream.width, stream.height)
@@ -117,6 +135,7 @@ pub(super) fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<Vide
         (stream.height, stream.width)
     };
     let hdr = Hdr::of_transfer(&stream.color_transfer);
+    let hdr_peak = hdr.and_then(|_| peak_of(&stream.side_data_list));
     let primaries = Primaries::of_name(&stream.color_primaries);
     let ten_bit = bit_depth(&stream.pix_fmt) == 10;
     if let Some(limit) = packet_limit
@@ -134,6 +153,7 @@ pub(super) fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<Vide
         fps,
         duration,
         hdr,
+        hdr_peak,
         primaries,
         ten_bit,
         rate: if animation {
@@ -145,6 +165,26 @@ pub(super) fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<Vide
         },
         stream: stream.index,
     })
+}
+
+/// The HDR10 peak of the first frame, for a stream that carries its metadata only in the frames.
+pub(super) fn parse_frame_peak(json: &[u8]) -> io::Result<Option<f64>> {
+    let output: FrameOutput =
+        serde_json::from_slice(json).map_err(|error| invalid(&error.to_string()))?;
+    Ok(output
+        .frames
+        .first()
+        .and_then(|frame| peak_of(&frame.side_data_list)))
+}
+
+/// The peak of `MaxCLL` and the mastering display maximum, as a still reads it.
+fn peak_of(side_data: &[SideData]) -> Option<f64> {
+    let of_type = |name: &str| side_data.iter().find(|data| data.kind == name);
+    let max_content =
+        of_type("Content light level metadata").map(|data| f64::from(data.max_content));
+    let mastering_max =
+        of_type("Mastering display metadata").and_then(|data| fraction(&data.max_luminance));
+    hdr10_peak(max_content, mastering_max)
 }
 
 /// The bits per sample of an ffmpeg pixel format name, 8 when the name holds no depth.

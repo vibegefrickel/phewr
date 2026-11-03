@@ -29,8 +29,16 @@ const ALL_PRIMARIES: [Primaries; 6] = [
 ];
 
 fn hdr_cube(hdr: Hdr, target: ColorTarget) -> Cube {
+    let source = match hdr {
+        Hdr::Hlg => CubeSource::Hlg,
+        Hdr::Pq => CubeSource::Pq(Peak::DEFAULT),
+    };
+    Cube { source, target }
+}
+
+fn pq_cube(nits: f64, target: ColorTarget) -> Cube {
     Cube {
-        source: CubeSource::Hdr(hdr),
+        source: CubeSource::Pq(Peak::bucket(Some(nits))),
         target,
     }
 }
@@ -81,6 +89,22 @@ fn tone_map_rolls_off_highlights() {
 }
 
 #[test]
+fn pq_4000_rolls_off_later() {
+    let gray = |nits, signal| pq_cube(nits, ColorTarget::Srgb).mapping()([signal; 3])[0];
+    // The PQ signals of 1000 and 4000 nits.
+    let (thousand, four_thousand) = (0.751_827_5, 0.902_5);
+    assert!(gray(4000.0, four_thousand) > 0.99, "4000 nits is white");
+    let below = gray(4000.0, thousand);
+    assert!(
+        (0.8..0.95).contains(&below),
+        "1000 nits keeps room above it: {below}"
+    );
+    // The midtones darken a little to make room for the highlights.
+    let (default, wide) = (gray(1000.0, 0.5), gray(4000.0, 0.5));
+    assert!(wide < default && wide > 0.9 * default, "{wide} {default}");
+}
+
+#[test]
 fn out_of_gamut_keeps_hue() {
     let srgb = |hdr, signal| hdr_cube(hdr, ColorTarget::Srgb).mapping()(signal);
     let [r, g, b] = srgb(Hdr::Hlg, [1.0, 0.0, 0.0]);
@@ -125,7 +149,7 @@ fn p3_target_widens_saturated_colors() {
 
 #[test]
 fn sdr_cube_matches_still() {
-    let into_p3 = Cube::for_video(None, Primaries::Bt709, ColorTarget::DisplayP3).unwrap();
+    let into_p3 = Cube::for_video(None, None, Primaries::Bt709, ColorTarget::DisplayP3).unwrap();
     // sRGB red is (234, 51, 35) in Display P3.
     let red = levels(into_p3, [255, 0, 0]);
     assert!(
@@ -163,13 +187,16 @@ fn sdr_cube_matches_still() {
 #[test]
 fn target_space_needs_no_cube() {
     let target = ColorTarget::DisplayP3;
-    assert_eq!(Cube::for_video(None, Primaries::DisplayP3, target), None);
     assert_eq!(
-        Cube::for_video(None, Primaries::Bt709, ColorTarget::Srgb),
+        Cube::for_video(None, None, Primaries::DisplayP3, target),
         None
     );
     assert_eq!(
-        Cube::for_video(None, Primaries::Bt709, target),
+        Cube::for_video(None, None, Primaries::Bt709, ColorTarget::Srgb),
+        None
+    );
+    assert_eq!(
+        Cube::for_video(None, None, Primaries::Bt709, target),
         Some(Cube {
             source: CubeSource::Sdr(Primaries::Bt709),
             target
@@ -178,8 +205,17 @@ fn target_space_needs_no_cube() {
     // An HDR video gets the tone mapping in each target.
     for target in [ColorTarget::Srgb, ColorTarget::DisplayP3] {
         assert_eq!(
-            Cube::for_video(Some(Hdr::Pq), Primaries::Bt2020, target),
+            Cube::for_video(Some(Hdr::Pq), None, Primaries::Bt2020, target),
             Some(hdr_cube(Hdr::Pq, target))
+        );
+        assert_eq!(
+            Cube::for_video(Some(Hdr::Pq), Some(1375.0), Primaries::Bt2020, target),
+            Some(pq_cube(2000.0, target))
+        );
+        assert_eq!(
+            Cube::for_video(Some(Hdr::Hlg), Some(4000.0), Primaries::Bt2020, target),
+            Some(hdr_cube(Hdr::Hlg, target)),
+            "HLG keeps its reference display"
         );
     }
     assert_eq!(Primaries::of_name("bt709"), Primaries::Bt709);
@@ -213,7 +249,7 @@ fn cube_text_has_header_and_points() {
 
 #[test]
 fn sdr_cube_rounds_8_bit_output() {
-    let cube = Cube::for_video(None, Primaries::Bt709, ColorTarget::DisplayP3).unwrap();
+    let cube = Cube::for_video(None, None, Primaries::Bt709, ColorTarget::DisplayP3).unwrap();
     assert!(cube.runs_in_8_bit());
     assert!(!hdr_cube(Hdr::Pq, ColorTarget::DisplayP3).runs_in_8_bit());
     let text = cube.text();
@@ -234,7 +270,7 @@ fn real_lut3d_rounds_sdr_cube() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let cube = Cube::for_video(None, Primaries::Bt709, ColorTarget::DisplayP3).unwrap();
+    let cube = Cube::for_video(None, None, Primaries::Bt709, ColorTarget::DisplayP3).unwrap();
     let file = cube_file(&[dir.path()], cube).unwrap();
     // Every 5th level per channel: 52 x 52 x 52 colors.
     let steps: Vec<u8> = (0..=255).step_by(5).collect();
@@ -284,25 +320,27 @@ fn each_cube_has_own_name() {
         hdr_cube(Hdr::Hlg, ColorTarget::DisplayP3),
         hdr_cube(Hdr::Hlg, ColorTarget::Srgb),
         hdr_cube(Hdr::Pq, ColorTarget::DisplayP3),
-        Cube::for_video(None, Primaries::Bt709, ColorTarget::DisplayP3).unwrap(),
-        Cube::for_video(None, Primaries::DisplayP3, ColorTarget::Srgb).unwrap(),
-        Cube::for_video(None, Primaries::Bt2020, ColorTarget::DisplayP3).unwrap(),
-        Cube::for_video(None, Primaries::Smpte170m, ColorTarget::Srgb).unwrap(),
-        Cube::for_video(None, Primaries::DciP3, ColorTarget::DisplayP3).unwrap(),
+        pq_cube(4000.0, ColorTarget::Srgb),
+        Cube::for_video(None, None, Primaries::Bt709, ColorTarget::DisplayP3).unwrap(),
+        Cube::for_video(None, None, Primaries::DisplayP3, ColorTarget::Srgb).unwrap(),
+        Cube::for_video(None, None, Primaries::Bt2020, ColorTarget::DisplayP3).unwrap(),
+        Cube::for_video(None, None, Primaries::Smpte170m, ColorTarget::Srgb).unwrap(),
+        Cube::for_video(None, None, Primaries::DciP3, ColorTarget::DisplayP3).unwrap(),
     ]
     .map(Cube::file_name)
     .into();
     assert_eq!(
         names,
         [
-            "tonemap-hlg-p3-v3.cube",
-            "tonemap-hlg-srgb-v3.cube",
-            "tonemap-pq-p3-v3.cube",
-            "color-bt709-p3-v3.cube",
-            "color-p3-srgb-v3.cube",
-            "color-bt2020-p3-v3.cube",
-            "color-smpte170m-srgb-v3.cube",
-            "color-dcip3-p3-v3.cube",
+            "tonemap-hlg-p3-v4.cube",
+            "tonemap-hlg-srgb-v4.cube",
+            "tonemap-pq1000-p3-v4.cube",
+            "tonemap-pq4000-srgb-v4.cube",
+            "color-bt709-p3-v4.cube",
+            "color-p3-srgb-v4.cube",
+            "color-bt2020-p3-v4.cube",
+            "color-smpte170m-srgb-v4.cube",
+            "color-dcip3-p3-v4.cube",
         ]
     );
 }
@@ -313,7 +351,7 @@ fn cube_file_written_once() {
     let cache = dir.path().join("cache");
     let cube = hdr_cube(Hdr::Pq, ColorTarget::DisplayP3);
     let file = cube_file(&[&cache], cube).unwrap();
-    assert_eq!(file, cache.join("tonemap-pq-p3-v3.cube"));
+    assert_eq!(file, cache.join("tonemap-pq1000-p3-v4.cube"));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), cube.text());
     std::fs::write(&file, "kept").unwrap();
     assert_eq!(cube_file(&[&cache], cube), Some(file.clone()));
@@ -335,7 +373,7 @@ fn unusable_dir_falls_back() {
     for first in [odd.as_path(), unwritable] {
         assert_eq!(
             cube_file(&[first, &fallback], cube),
-            Some(fallback.join("tonemap-hlg-srgb-v3.cube")),
+            Some(fallback.join("tonemap-hlg-srgb-v4.cube")),
             "{}",
             first.display()
         );

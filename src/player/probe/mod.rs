@@ -9,7 +9,7 @@ mod parse;
 
 use super::tone_map::{Hdr, Primaries};
 use lru::LruCache;
-use parse::parse;
+use parse::{parse, parse_frame_peak};
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::{self, Read};
@@ -33,6 +33,8 @@ pub(crate) struct VideoInfo {
     /// 0 when the container does not tell the length.
     pub duration: f64,
     pub hdr: Option<Hdr>,
+    /// The HDR10 peak in nits (`decode::hdr::hdr10_peak`), `None` without plausible metadata.
+    pub hdr_peak: Option<f64>,
     /// An untagged stream is BT.709, as sRGB.
     pub primaries: Primaries,
     /// The hardware decoder gives back `p010le` frames for a 10-bit stream.
@@ -121,7 +123,38 @@ fn probe_args(video: &Path, packet_limit: Option<usize>) -> Vec<OsString> {
     args
 }
 
-/// Read the header of `path` with `ffprobe`. No frame is decoded.
+/// A stream can carry its HDR10 metadata only in the SEI of each frame, without `mdcv` and
+/// `clli` in its sample entry. ffprobe decodes the first frame for it, which costs 1.2 times the
+/// stream probe at 1080p and up to 1.7 times at 4K.
+fn frame_peak_args(video: &Path, stream: usize) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["-v", "error", "-of", "json", "-read_intervals", "%+#1"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    args.extend([
+        OsString::from("-select_streams"),
+        OsString::from(stream.to_string()),
+        OsString::from("-show_entries"),
+        OsString::from("frame_side_data=side_data_type,max_luminance,max_content"),
+        OsString::from("-i"),
+        video.as_os_str().to_owned(),
+    ]);
+    args
+}
+
+/// A failed frame probe leaves the default peak.
+fn frame_peak(program: &Path, path: &Path, stream: usize) -> Option<f64> {
+    let mut command = Command::new(program);
+    command.args(frame_peak_args(path, stream));
+    let output = output_within(command, PROBE_TIMEOUT).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_frame_peak(&output.stdout).ok().flatten()
+}
+
+/// Read the header of `path` with `ffprobe`. Only a PQ stream without HDR10 stream metadata
+/// decodes its first frame.
 pub(crate) fn probe(program: &Path, path: &Path) -> io::Result<VideoInfo> {
     let packet_limit = packet_limit(path);
     let mut command = Command::new(program);
@@ -133,6 +166,9 @@ pub(crate) fn probe(program: &Path, path: &Path) -> io::Result<VideoInfo> {
         return Err(invalid(reason.unwrap_or("ffprobe could not read the file")));
     }
     let mut info = parse(&output.stdout, packet_limit)?;
+    if info.hdr == Some(Hdr::Pq) && info.hdr_peak.is_none() {
+        info.hdr_peak = frame_peak(program, path, info.stream);
+    }
     // ffprobe reports no profile for an animated WebP or APNG. The file can carry one.
     if info.is_animation()
         && info.hdr.is_none()
@@ -297,7 +333,9 @@ fn invalid(text: &str) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProbeCache, Rate, output_within, packet_limit, probe, probe_args};
+    use super::{
+        ProbeCache, Rate, frame_peak_args, output_within, packet_limit, probe, probe_args,
+    };
     use crate::test_support::fixture;
     use crate::test_support::video::real_ffprobe;
     use std::cell::Cell;
@@ -328,6 +366,20 @@ mod tests {
             "{animation:?}"
         );
         assert_eq!(animation[8..10], ["-read_intervals", "%+#17"]);
+    }
+
+    #[test]
+    fn frame_probe_reads_one_frame() {
+        let args: Vec<String> = frame_peak_args(Path::new("-clip.mp4"), 2)
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args[4..8],
+            ["-read_intervals", "%+#1", "-select_streams", "2"]
+        );
+        assert!(args[9].starts_with("frame_side_data="), "{args:?}");
+        assert_eq!(args[10..], ["-i", "-clip.mp4"]);
     }
 
     #[test]
@@ -532,6 +584,7 @@ mod tests {
             assert!(info.width > 0 && info.height > 0, "{info:?}");
             assert!(info.fps > 1.0 && info.duration > 0.0, "{info:?}");
             assert_eq!(info.hdr.is_some(), variable.contains("HDR"), "{info:?}");
+            println!("{variable}: {:?}, HDR10 peak {:?}", info.hdr, info.hdr_peak);
         }
     }
 }

@@ -129,14 +129,21 @@ fn hdr_nits(hdr: Hdr, signal: [f64; 3]) -> [f64; 3] {
 /// One SDR output value per channel (gamma 2.4) in the target primaries. `luma` is the Y row
 /// of the target.
 ///
-/// The highlights roll off with an extended Reinhard curve on the luminance, and the hue
-/// stays. A color outside the target moves toward its gray of the same luminance.
-pub(super) fn tone_map(hdr: Hdr, matrix: &Matrix, luma: [f64; 3], signal: [f64; 3]) -> [f64; 3] {
+/// The highlights roll off with an extended Reinhard curve on the luminance, which reaches
+/// white at `peak` nits, and the hue stays. A color outside the target moves toward its gray of
+/// the same luminance.
+pub(super) fn tone_map(
+    hdr: Hdr,
+    peak: f64,
+    matrix: &Matrix,
+    luma: [f64; 3],
+    signal: [f64; 3],
+) -> [f64; 3] {
     let nits = hdr_nits(hdr, signal);
     let mut linear = apply(matrix, nits).map(|value| value / SDR_WHITE_NITS);
     let luminance = luma[0] * linear[0] + luma[1] * linear[1] + luma[2] * linear[2];
     if luminance > 0.0 {
-        let peak = HDR_PEAK_NITS / SDR_WHITE_NITS;
+        let peak = peak / SDR_WHITE_NITS;
         let scale = (1.0 + luminance / (peak * peak)) / (1.0 + luminance);
         linear = linear.map(|value| value * scale);
         let mapped = luminance * scale;

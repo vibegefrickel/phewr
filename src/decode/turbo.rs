@@ -89,6 +89,7 @@ pub(super) fn decode_jpeg_turbo_bytes(
         image: img,
         color: jpeg_color(data),
         opaque: true,
+        peak: None,
     })
 }
 

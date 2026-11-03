@@ -25,6 +25,7 @@ fn info(rotation: u16, hdr: Option<Hdr>, ten_bit: bool) -> VideoInfo {
         fps: 30.0,
         duration: 10.0,
         hdr,
+        hdr_peak: None,
         primaries: if hdr.is_some() {
             Primaries::Bt2020
         } else {
@@ -288,7 +289,7 @@ fn other_color_space_gets_cube() {
     assert_eq!(cube(&sdr, ColorTarget::Srgb), None, "sRGB needs no step");
     assert_eq!(
         cube(&sdr, ColorTarget::DisplayP3),
-        Some(dir.path().join("color-bt709-p3-v3.cube"))
+        Some(dir.path().join("color-bt709-p3-v4.cube"))
     );
     let p3 = VideoInfo {
         primaries: Primaries::DisplayP3,
@@ -297,11 +298,11 @@ fn other_color_space_gets_cube() {
     assert_eq!(cube(&p3, ColorTarget::DisplayP3), None);
     assert_eq!(
         cube(&p3, ColorTarget::Srgb),
-        Some(dir.path().join("color-p3-srgb-v3.cube"))
+        Some(dir.path().join("color-p3-srgb-v4.cube"))
     );
     for (target, name) in [
-        (ColorTarget::Srgb, "tonemap-hlg-srgb-v3.cube"),
-        (ColorTarget::DisplayP3, "tonemap-hlg-p3-v3.cube"),
+        (ColorTarget::Srgb, "tonemap-hlg-srgb-v4.cube"),
+        (ColorTarget::DisplayP3, "tonemap-hlg-p3-v4.cube"),
     ] {
         assert_eq!(
             cube(&info(0, Some(Hdr::Hlg), true), target),
