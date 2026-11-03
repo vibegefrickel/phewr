@@ -332,8 +332,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config/`: `mod.rs` holds `config.toml`. `Paths` (`from_env`, `from_vars`) holds the two file
   paths, `load(&Paths)` reads the config, `load_at` takes the paths for the tests. `state.rs`
-  holds the state file: the zoom table, `save_visible_rows`, `clear_folder_zoom` and the save
-  through a temp file and a rename.
+  holds the state file: the zoom table, the writer thread (`StateWriter`, `StateChange`) and the
+  save through a temp file and a rename. `save_visible_rows` and `clear_folder_zoom` are
+  test-only.
 - `video/` (feature `video`, `mod.rs` and `tests.rs`): `Tools`, the session lookup of ffmpeg and ffprobe, `cube_dirs` (the
   places of the cube files) and `session_decoder` (ffmpeg with a decoder that has ffprobe), the
   first-frame thumbnails and the video extensions.
@@ -569,6 +570,13 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   plain form `"/path" = 3` also loads. `+` / `-` save the level for the folder and as the
   global fallback. `0` resets the folder and removes its entry. The table keeps the 200 most
   recent folders.
+  `+`, `-` and `0` do no file I/O on the UI thread. They queue a `StateChange` to the writer
+  thread of `App` (`state_writer`). The thread waits 100 ms for more changes, applies them in
+  order to one read of the file, and writes once. `StateWriter` keeps the changes that are not
+  written yet, and `folder_zoom_rows` applies them over the file, so a fast folder switch sees
+  the new level. `0` writes only if the file holds an entry for the folder. The drop of `App`
+  flushes the queue. A panic ends the process with `exit(101)` and loses the changes of the
+  last 100 ms. A zoom test uses `StateWriter::with_delay` and `flush`, not a poll loop.
 - **Grid loops:** every visible video and animated cell loops after its still, as a Kitty
   animation or through ticks (`Loops`), and `[gallery] animate = false` turns them off. The
   frames are in `docs/video.md` ("Grid loop frames"). The two paths, the ids, the jobs and the
