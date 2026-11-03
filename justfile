@@ -66,9 +66,9 @@ doc:
 deny:
     cargo deny check
 
-# What `cargo update` would change.
+# The direct dependencies with a newer version (cargo-outdated from Homebrew).
 outdated:
-    cargo update --dry-run --verbose 2>&1 | grep -E '^\s*(Updating|Unchanged)' || true
+    cargo outdated --root-deps-only
 
 # The full gate.
 check: fmt-check lint test doc deny
