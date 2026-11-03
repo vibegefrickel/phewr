@@ -14,7 +14,7 @@ pub(crate) struct Styles {
     pub cursor_cell: Style,
     /// The plain border, the label and the selection count of a marked image.
     pub marked: Style,
-    /// Errors and the delete question.
+    /// Errors.
     pub error: Style,
     /// Counts, notes and the info panel labels.
     pub dim: Style,

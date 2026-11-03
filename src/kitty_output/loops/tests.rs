@@ -619,23 +619,6 @@ fn overlays_and_fullscreen_stop_loops() {
 }
 
 #[test]
-fn loops_play_during_delete_question() {
-    let mut app = clip_app(3);
-    let mut terminal = FakeTerminal::new();
-    place_stills(&mut app, &mut terminal);
-    let ids = add_loop(&mut app, 1, 3);
-    play_at(&mut app, 0);
-
-    char_key(&mut app, 'd');
-    assert!(app.pending_delete.is_some());
-    assert!(app.loop_plays(1), "no marker beside a visible loop frame");
-    let (tick, _) = play_at(&mut app, FRAME_TICKS);
-    assert!(tick.contains(&format!("i={},c=20,r=6", ids[1])), "{tick}");
-    char_key(&mut app, 'n');
-    assert!(app.pending_delete.is_none());
-}
-
-#[test]
 fn zoom_drops_loops() {
     let mut app = clip_app(3);
     let mut terminal = FakeTerminal::new();

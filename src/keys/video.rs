@@ -199,15 +199,15 @@ mod tests {
     }
 
     #[test]
-    fn no_delete_keys_q_goes_back() {
+    fn player_ignores_d_keys() {
         let mut app = video_app();
         let decoder = with_player(&mut app);
 
         char_key(&mut app, 'd');
         char_key(&mut app, 'D');
         assert!(
-            app.pending_delete.is_none(),
-            "viewr is a viewer: no delete in the player"
+            app.selection.is_empty(),
+            "viewr is a viewer: d does nothing"
         );
         assert_eq!(app.mode, ViewMode::Video);
 

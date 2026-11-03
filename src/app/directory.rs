@@ -29,8 +29,6 @@ impl App {
         self.known_len = 0;
         self.scan_complete = false;
         self.selection.clear();
-        self.pending_delete = None;
-        self.delete_error = None;
         self.slideshow = None;
         self.reset_zoom_and_source();
 

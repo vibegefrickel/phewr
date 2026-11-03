@@ -1,6 +1,6 @@
 //! The folder entries, Enter into a folder and the step to the parent.
 
-use crate::app::{DeleteMode, EntryKind, ViewMode};
+use crate::app::{EntryKind, ViewMode};
 use crate::test_support::{app_with, folder_app, wait_until};
 use image::RgbaImage;
 use ratatui::layout::Rect;
@@ -158,7 +158,7 @@ fn folder_starts_no_background_jobs() {
 }
 
 #[test]
-fn marks_and_delete_skip_folders() {
+fn marks_skip_folders() {
     let mut app = folder_app(&["..", "sub"], &["a.jpg", "b.jpg"]);
     app.toggle_selection_at_cursor();
     assert!(app.selection.is_empty());
@@ -167,37 +167,6 @@ fn marks_and_delete_skip_folders() {
     assert!(!app.is_marked(0));
     assert!(!app.is_marked(1));
     assert!(app.is_marked(2));
-
-    app.clear_selection();
-    app.gallery.cursor = 1;
-    app.begin_delete(DeleteMode::Trash);
-    assert!(
-        app.pending_delete.is_none(),
-        "a folder gets no delete question"
-    );
-
-    // A delete of the files keeps the folders and the cursor on a valid entry.
-    let temp = tempfile::tempdir().unwrap();
-    let photo = temp.path().join("a.png");
-    fs::write(&photo, b"synthetic").unwrap();
-    let mut app = folder_app(&["..", "sub"], &[]);
-    app.images.push(photo.clone());
-    app.filenames.push("a.png".to_owned());
-    app.gallery.filtered_indices = vec![0, 1, 2];
-    app.gallery.cursor = 2;
-    app.begin_delete(DeleteMode::Permanent);
-    assert_eq!(
-        app.pending_delete
-            .as_ref()
-            .map(|pending| pending.paths.clone()),
-        Some(vec![photo.clone()])
-    );
-    app.confirm_delete();
-    assert!(!photo.exists());
-    assert_eq!(app.filenames, ["..", "sub"]);
-    assert_eq!(app.folder_count, 2);
-    assert_eq!(app.gallery.cursor, 1);
-    assert!(!app.has_files());
 }
 
 #[test]

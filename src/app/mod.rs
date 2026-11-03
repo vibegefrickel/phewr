@@ -1,7 +1,6 @@
 //! `App`, the whole view state, and its construction.
 
 mod cell_shape;
-mod delete;
 mod directory;
 mod disk_cache;
 mod folder_prefetch;
@@ -10,6 +9,7 @@ mod fullscreen;
 pub(crate) mod grid_loops;
 mod grid_zoom;
 mod info_panel;
+mod marks;
 mod meta;
 pub(crate) mod mouse;
 mod scan;
@@ -18,7 +18,6 @@ pub(crate) mod thumbnails;
 mod video;
 mod zoom;
 
-pub(crate) use delete::{DeleteMode, PendingDelete};
 pub(crate) use mouse::{Drag, MouseState, ScreenLayout};
 pub(crate) use slideshow::Slideshow;
 #[cfg(feature = "video")]
@@ -60,8 +59,8 @@ pub(crate) enum ViewMode {
     reason = "App is the whole view state; each flag is an independent toggle"
 )]
 pub(crate) struct App {
-    /// The folders first, then the files. The fullscreen view, the slideshow, the prefetch, the
-    /// thumbnails and the delete never touch the folders.
+    /// The folders first, then the files. The fullscreen view, the slideshow, the prefetch and the
+    /// thumbnails never touch the folders.
     pub(crate) images: Vec<PathBuf>,
     pub(crate) filenames: Vec<String>,
     /// The first `folder_count` entries of `images` are folders, `..` first.
@@ -89,8 +88,6 @@ pub(crate) struct App {
     pub(crate) gallery: GalleryState,
     pub(crate) thumb_cache: ThumbnailCache,
     pub(crate) selection: HashSet<PathBuf>,
-    pub(crate) pending_delete: Option<PendingDelete>,
-    pub(crate) delete_error: Option<String>,
 
     pub(crate) current_dir: Option<PathBuf>,
     pub(crate) initial_dir: Option<PathBuf>,
@@ -147,7 +144,7 @@ pub(crate) struct App {
 
     filter_rx: Option<mpsc::Receiver<Vec<usize>>>,
     filter_worker: crate::search::FilterWorker,
-    /// The cursor of the next filter result. A delete sets it, a new query clears it.
+    /// The cursor of the next filter result. A new query clears it.
     filter_cursor: Option<usize>,
 
     thumb_jobs: thumbnails::ThumbnailJobs,
@@ -221,8 +218,6 @@ impl App {
             gallery,
             thumb_cache: ThumbnailCache::new(),
             selection: HashSet::new(),
-            pending_delete: None,
-            delete_error: None,
             current_dir: None,
             initial_dir: None,
             return_to: None,

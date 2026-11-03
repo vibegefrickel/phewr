@@ -1,5 +1,5 @@
 //! The tests of the status row of each view.
-use crate::app::{DeleteMode, PendingDelete, ViewMode};
+use crate::app::ViewMode;
 use crate::ui::tests::{
     app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows, assert_symbol,
     assert_terminal_background, cell_of, render, render_buffer, screen_rows, status_row,
@@ -7,19 +7,6 @@ use crate::ui::tests::{
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
-use std::path::PathBuf;
-
-/// A delete question for `names` below `/photos`.
-fn pending(names: &[&str], mode: DeleteMode) -> PendingDelete {
-    PendingDelete {
-        paths: names
-            .iter()
-            .map(|name| PathBuf::from("/photos").join(name))
-            .collect(),
-        from_fullscreen: false,
-        mode,
-    }
-}
 
 #[test]
 fn gallery_shows_position_without_hints() {
@@ -159,31 +146,6 @@ fn facts_count_display_columns() {
 }
 
 #[test]
-fn gallery_asks_before_delete() {
-    let mut app = app_with(&["a.jpg", "b.jpg"]);
-    app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Trash));
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Move to trash a.jpg? [y/N] ");
-
-    app.pending_delete = Some(pending(&["a.jpg", "b.jpg"], DeleteMode::Permanent));
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Permanently delete 2 files? ");
-}
-
-#[test]
-fn delete_error_comes_before_error() {
-    let mut app = app_with(&["a.jpg"]);
-    app.error = Some("scan failed".to_owned());
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Error: scan failed ");
-
-    app.delete_error = Some("no trash".to_owned());
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Delete error: no trash ");
-    assert_hides(&screen, "scan failed");
-}
-
-#[test]
 fn scan_error_comes_after_error() {
     let mut app = app_with(&["a.jpg"]);
     app.scan_error = Some("denied".to_owned());
@@ -199,8 +161,8 @@ fn scan_error_comes_after_error() {
 #[test]
 fn note_replaces_hints() {
     let mut app = app_with(&["a.jpg"]);
-    let screen = render(&mut app, Some("1 file moved to trash"), 100, 30);
-    assert_shows(&screen, " a.jpg [1/1]  1 file moved to trash ");
+    let screen = render(&mut app, Some("1 file marked"), 100, 30);
+    assert_shows(&screen, " a.jpg [1/1]  1 file marked ");
     assert_hides(&screen, "Enter: open");
 }
 
@@ -253,25 +215,12 @@ fn fullscreen_shows_slideshow_state() {
 }
 
 #[test]
-fn fullscreen_asks_and_shows_errors() {
+fn fullscreen_shows_errors() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
     app.mode = ViewMode::Fullscreen;
-    app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Permanent));
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Permanently delete a.jpg? [y/N] ");
-
-    app.pending_delete = Some(pending(&[], DeleteMode::Trash));
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Move to trash 0 files? [y/N] ");
-
-    app.pending_delete = None;
     app.error = Some("decode failed".to_owned());
     let screen = render(&mut app, None, 100, 30);
     assert_shows(&screen, " Error: decode failed ");
-
-    app.delete_error = Some("no trash".to_owned());
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Delete error: no trash ");
 }
 
 #[test]
@@ -284,9 +233,9 @@ fn fullscreen_uses_ansi_roles() {
     assert_symbol(&buffer, (0, 29), " ", Color::Reset, Modifier::empty());
     assert_symbol(&buffer, (1, 29), "a", Color::Reset, Modifier::empty());
 
-    app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Trash));
+    app.error = Some("decode failed".to_owned());
     let buffer = render_buffer(&mut app, None, 100, 30);
-    assert_ansi(cell_of(&buffer, "Move to trash a.jpg?"), Color::Red);
+    assert_ansi(cell_of(&buffer, "Error: decode failed"), Color::Red);
 }
 
 #[cfg(feature = "video")]

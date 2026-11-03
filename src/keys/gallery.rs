@@ -1,6 +1,5 @@
 //! The keys of the thumbnail grid and of its search line.
 
-use super::delete_key;
 use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io;
@@ -95,7 +94,6 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
         KeyCode::Char('A') => {
             app.clear_selection();
         }
-        KeyCode::Char('d' | 'D') => delete_key(app, key.code),
         code => {
             if move_cursor(app, code, ctrl) {
                 app.pre_decode_hovered();
@@ -130,9 +128,7 @@ fn move_cursor(app: &mut App, code: KeyCode, ctrl: bool) -> bool {
 mod tests {
     use crate::app::ViewMode;
 
-    use crate::test_support::{
-        char_key, folder_app, gallery_app, photo_paths, press, press_with, wait_until,
-    };
+    use crate::test_support::{char_key, folder_app, gallery_app, press, press_with, wait_until};
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::fs;
 
@@ -152,7 +148,7 @@ mod tests {
         });
         assert_eq!(app.filenames, ["..", "sub"]);
 
-        // Space, a and s do nothing on a folder, and d asks no question.
+        // Space, a and s do nothing on a folder.
         press(&mut app, KeyCode::Right);
         char_key(&mut app, ' ');
         char_key(&mut app, 'a');
@@ -160,8 +156,6 @@ mod tests {
         char_key(&mut app, 's');
         assert_eq!(app.mode, ViewMode::Gallery);
         assert!(app.slideshow.is_none());
-        char_key(&mut app, 'd');
-        assert!(app.pending_delete.is_none());
         assert!(
             app.graphics_out.take_bytes().is_empty(),
             "no delete of the pictures"
@@ -274,11 +268,7 @@ mod tests {
         char_key(&mut app, ' ');
         press(&mut app, KeyCode::Right);
         char_key(&mut app, ' ');
-        char_key(&mut app, 'd');
-        let pending = app.pending_delete.as_ref().unwrap();
-        assert_eq!(pending.paths, photo_paths(3)[1..]);
-        assert!(!pending.from_fullscreen);
-        char_key(&mut app, 'n');
+        assert_eq!(app.selection.len(), 2);
     }
 
     #[test]

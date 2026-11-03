@@ -147,7 +147,6 @@ serde_json = { version = "1", optional = true }
 # The temp TIFF of the `sips` route.
 tempfile = { version = "3.27", optional = true }
 toml = "1"
-trash = "5.2"
 turbojpeg = { version = "1.5", optional = true }
 unicode-width = "0.2"
 

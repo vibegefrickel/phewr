@@ -6,7 +6,7 @@ pub(crate) mod mouse;
 #[cfg(feature = "video")]
 pub(crate) mod video;
 
-use crate::app::{App, DeleteMode, ViewMode};
+use crate::app::{App, ViewMode};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use fullscreen::handle_fullscreen_key;
 use gallery::{handle_gallery_key, handle_search_key};
@@ -88,20 +88,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     if app.help_visible {
         app.help_visible = false;
         app.needs_render = true;
-    } else if app.pending_delete.is_some() {
-        match key.code {
-            KeyCode::Char('y' | 'Y') => {
-                app.graphics_delete_all()?;
-                app.confirm_delete();
-                if app.scan_complete && app.images.is_empty() {
-                    return Ok(true);
-                }
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                app.cancel_delete();
-            }
-            _ => {}
-        }
     } else {
         return match app.mode {
             ViewMode::Fullscreen => handle_fullscreen_key(app, key),
@@ -131,24 +117,13 @@ fn step_key(app: &mut App, code: KeyCode) {
     app.slideshow_touch();
 }
 
-/// `d` asks before the trash, `D` before the permanent delete.
-fn delete_key(app: &mut App, code: KeyCode) {
-    app.begin_delete(if code == KeyCode::Char('D') {
-        DeleteMode::Permanent
-    } else {
-        DeleteMode::Trash
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::{LateAnswerFilter, handle_event};
-    use crate::app::{DeleteMode, ViewMode};
+    use crate::app::ViewMode;
     use crate::test_support::{char_key, fullscreen_app, gallery_app, press};
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use std::fs;
-    use std::path::PathBuf;
-    use tempfile::TempDir;
 
     #[test]
     fn resize_marks_pictures_dirty() {
@@ -311,100 +286,26 @@ mod tests {
     }
 
     #[test]
-    fn n_or_esc_cancel_delete() {
-        let mut app = fullscreen_app(3, 1);
-
-        char_key(&mut app, 'd');
-        let pending = app.pending_delete.as_ref().unwrap();
-        assert_eq!(pending.paths, [PathBuf::from("/photos/photo-01.jpg")]);
-        assert!(pending.from_fullscreen);
-        assert_eq!(pending.mode, DeleteMode::Trash);
-
-        char_key(&mut app, 'x');
-        assert!(app.pending_delete.is_some(), "other keys keep the question");
-        char_key(&mut app, 'n');
-        assert!(app.pending_delete.is_none());
-
-        char_key(&mut app, 'D');
-        assert_eq!(
-            app.pending_delete.as_ref().unwrap().mode,
-            DeleteMode::Permanent
-        );
-        char_key(&mut app, 'N');
-        assert!(app.pending_delete.is_none());
-
-        char_key(&mut app, 'D');
-        press(&mut app, KeyCode::Esc);
-        assert!(app.pending_delete.is_none());
-        assert_eq!(
-            app.mode,
-            ViewMode::Fullscreen,
-            "Esc only cancels the question"
-        );
-        assert_eq!(app.images.len(), 3);
-    }
-
-    fn deletable_files(names: &[&str]) -> (TempDir, Vec<PathBuf>) {
+    fn d_keys_change_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = names
-            .iter()
-            .map(|name| {
-                let path = dir.path().join(name);
-                fs::write(&path, b"not an image").unwrap();
-                path
-            })
-            .collect();
-        (dir, paths)
-    }
+        let photo = dir.path().join("a.jpg");
+        fs::write(&photo, b"not an image").unwrap();
+        for mut app in [gallery_app(0), fullscreen_app(0, 0)] {
+            app.images = vec![photo.clone()];
+            app.filenames = vec!["a.jpg".to_owned()];
+            app.gallery.filtered_indices = vec![0];
+            let mode = app.mode;
+            app.graphics_out.take_bytes();
 
-    #[test]
-    fn y_deletes_and_last_delete_quits() {
-        let (_dir, paths) = deletable_files(&["a.jpg", "b.jpg"]);
-        let mut app = gallery_app(0);
-        app.images.clone_from(&paths);
-        app.filenames = vec!["a.jpg".to_owned(), "b.jpg".to_owned()];
-        app.gallery.filtered_indices = vec![0, 1];
+            for key in ['d', 'D', 'y'] {
+                assert!(!char_key(&mut app, key));
+            }
 
-        char_key(&mut app, 'D');
-        assert!(!char_key(&mut app, 'y'));
-        assert!(!paths[0].exists());
-        assert_eq!(app.images, [paths[1].clone()]);
-        assert!(app.pending_delete.is_none());
-
-        char_key(&mut app, 'D');
-        assert!(char_key(&mut app, 'Y'), "an empty scanned list ends viewr");
-        assert!(!paths[1].exists());
-        assert!(app.images.is_empty());
-    }
-
-    #[test]
-    fn y_in_trash_question_calls_trash() {
-        let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("kept.jpg");
-        fs::write(&real, b"not an image").unwrap();
-        let missing = dir.path().join("gone.jpg");
-
-        let mut app = gallery_app(0);
-        app.images = vec![real.clone(), missing.clone()];
-        app.filenames = vec!["kept.jpg".to_owned(), "gone.jpg".to_owned()];
-        app.gallery.filtered_indices = vec![0, 1];
-        app.gallery.cursor = 1;
-
-        char_key(&mut app, 'd');
-        assert_eq!(
-            app.pending_delete.as_ref().map(|pending| pending.mode),
-            Some(DeleteMode::Trash)
-        );
-        assert!(!char_key(&mut app, 'y'));
-        assert!(real.exists(), "the file that was not asked for stays");
-        assert!(
-            app.delete_error
-                .as_ref()
-                .is_some_and(|error| error.contains("gone.jpg")),
-            "{:?}",
-            app.delete_error
-        );
-        assert_eq!(app.images, vec![real, missing]);
-        assert!(app.pending_delete.is_none());
+            assert_eq!(app.mode, mode);
+            assert_eq!(app.images, std::slice::from_ref(&photo));
+            assert!(app.selection.is_empty());
+            assert!(app.graphics_out.take_bytes().is_empty());
+            assert_eq!(fs::read(&photo).unwrap(), b"not an image");
+        }
     }
 }

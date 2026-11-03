@@ -35,7 +35,6 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("p", "Open in the mpv window"),
     ("Space", "Toggle selection"),
     ("a / A", "Select all / clear all"),
-    ("d / D", "Trash / delete for good"),
     ("/", "Search"),
     ("?", "Toggle help"),
     ("q", "Quit"),
@@ -62,7 +61,6 @@ const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
     ("p", "Open in the mpv window"),
     ("Space", "Pause / resume slideshow"),
     ("[ / ]", "Shorter / longer interval"),
-    ("d / D", "Trash / delete for good"),
     ("q / Esc", "Back to gallery"),
     ("?", "Toggle help"),
     #[cfg(feature = "video")]
@@ -164,8 +162,8 @@ pub(super) fn draw_help_popup(
 mod tests {
     use super::HELP_TWO_COLUMN_WIDTH;
     use crate::ui::tests::{
-        app_with, assert_ansi, assert_default_fg, assert_shows, assert_terminal_background,
-        cell_of, render, render_buffer, screen_rows,
+        app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows,
+        assert_terminal_background, cell_of, render, render_buffer, screen_rows,
     };
     use ratatui::style::{Color, Modifier};
 
@@ -178,7 +176,7 @@ mod tests {
         assert_shows(&screen, "h/j/k/l, click  Move in the grid");
         assert_shows(&screen, "Open image or folder");
         assert_shows(&screen, "Backspace  Parent folder");
-        assert_shows(&screen, "Trash / delete for good");
+        assert_hides(&screen, "delete for good");
         assert_shows(&screen, " Fullscreen");
         assert_shows(&screen, "Pan when zoomed");
         assert_shows(&screen, "Shorter / longer interval");

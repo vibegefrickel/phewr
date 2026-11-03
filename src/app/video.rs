@@ -168,7 +168,6 @@ impl App {
             && index < self.images.len()
             && matches!(self.mode, ViewMode::Fullscreen | ViewMode::Gallery)
             && !self.help_visible
-            && self.pending_delete.is_none()
             && !self.gallery.search_active
     }
 

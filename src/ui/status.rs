@@ -2,7 +2,7 @@
 //! facts at the right.
 
 use super::STYLES;
-use crate::app::{App, DeleteMode};
+use crate::app::App;
 use ratatui::{prelude::*, widgets::Paragraph};
 use unicode_width::UnicodeWidthStr;
 
@@ -18,8 +18,6 @@ pub(super) fn draw_status_row(
     let busy = status.is_some()
         || app.error.is_some()
         || app.scan_error.is_some()
-        || app.pending_delete.is_some()
-        || app.delete_error.is_some()
         || app.gallery.search_active;
     let facts = (!busy).then(|| app.meta_line()).flatten();
     let left_width = line.width();
@@ -42,9 +40,9 @@ fn facts_fit(left_width: usize, facts: &str, area_width: u16) -> bool {
     left_width + facts.width() <= usize::from(area_width)
 }
 
-/// A delete question, an error, or the name, the position, the zoom, the slideshow and the note.
+/// An error, or the name, the position, the zoom, the slideshow and the note.
 pub(super) fn fullscreen_status_line(app: &App, status: Option<&str>) -> Line<'static> {
-    if let Some(line) = question_or_error(app) {
+    if let Some(line) = error_line(app) {
         return line;
     }
     let filename = app
@@ -140,14 +138,14 @@ pub(super) fn video_status_line(app: &App, status: Option<&str>) -> Line<'static
     ])
 }
 
-/// A delete question, an error, the search query while typing, or the name, the position, the
+/// An error, the search query while typing, or the name, the position, the
 /// counts, the selection, the scan and the note.
 pub(super) fn gallery_status_line(
     app: &App,
     filtered_count: usize,
     status: Option<&str>,
 ) -> Line<'static> {
-    if let Some(line) = question_or_error(app) {
+    if let Some(line) = error_line(app) {
         return line;
     }
 
@@ -188,31 +186,8 @@ pub(super) fn gallery_status_line(
     Line::from(spans)
 }
 
-/// The delete question, the delete error, the error or the scan error, in this order.
-fn question_or_error(app: &App) -> Option<Line<'static>> {
-    if let Some(pending) = &app.pending_delete {
-        let action = if pending.mode == DeleteMode::Permanent {
-            "Permanently delete"
-        } else {
-            "Move to trash"
-        };
-        let prompt = if pending.paths.len() == 1 {
-            let name = pending.paths[0]
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            format!(" {action} {name}? [y/N] ")
-        } else {
-            format!(" {action} {} files? [y/N] ", pending.paths.len())
-        };
-        return Some(Line::from(Span::styled(prompt, STYLES.error)));
-    }
-    if let Some(err) = &app.delete_error {
-        return Some(Line::from(Span::styled(
-            format!(" Delete error: {err} "),
-            STYLES.error,
-        )));
-    }
+/// The error or the scan error, in this order.
+fn error_line(app: &App) -> Option<Line<'static>> {
     let err = app.error.as_ref().or(app.scan_error.as_ref())?;
     Some(Line::from(Span::styled(
         format!(" Error: {err} "),

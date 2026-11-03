@@ -103,6 +103,13 @@ impl App {
             self.place_cursor(position);
         }
     }
+
+    /// Put the grid cursor on `position`, or on the last image of a shorter list.
+    pub(super) fn place_cursor(&mut self, position: usize) {
+        let last = self.gallery.filtered_indices.len().saturating_sub(1);
+        self.gallery.cursor = position.min(last);
+        self.gallery.ensure_cursor_visible();
+    }
 }
 
 #[cfg(test)]

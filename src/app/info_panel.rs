@@ -2,7 +2,6 @@
 
 use super::{App, ViewMode};
 use crate::info::{self, ImageInfo};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 impl App {
@@ -49,16 +48,6 @@ impl App {
         let loaded = info::load(path);
         self.info_cache.put(path.to_path_buf(), loaded.clone());
         loaded
-    }
-
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "each entry goes on its own; order does not matter"
-    )]
-    pub(super) fn forget_info(&mut self, paths: &HashSet<PathBuf>) {
-        for path in paths {
-            self.info_cache.pop(path);
-        }
     }
 }
 

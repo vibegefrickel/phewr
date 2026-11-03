@@ -1,6 +1,6 @@
 //! The keys of the fullscreen view.
 
-use super::{delete_key, step_key};
+use super::step_key;
 use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::io;
@@ -52,7 +52,6 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.graphics_delete_all()?;
             step_key(app, key.code);
         }
-        KeyCode::Char('d' | 'D') => delete_key(app, key.code),
         _ => {}
     }
     Ok(false)

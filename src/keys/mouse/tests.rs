@@ -215,20 +215,6 @@ fn info_panel_click_closes_it() {
 }
 
 #[test]
-fn click_cancels_delete_question() {
-    let mut app = fullscreen_app(3, 1);
-    char_key(&mut app, 'd');
-    assert!(app.pending_delete.is_some());
-
-    mouse(&mut app, MouseEventKind::ScrollUp, (10, 5));
-    assert!(app.pending_delete.is_some(), "the wheel keeps the question");
-    click(&mut app, (10, 5));
-    assert!(app.pending_delete.is_none());
-    assert_eq!(app.images.len(), 3);
-    assert_eq!(app.mode, ViewMode::Fullscreen);
-}
-
-#[test]
 fn fullscreen_wheel_zooms_and_drag_pans() {
     let mut app = fullscreen_app(3, 1);
     draw_frame(&mut app, 120, 24);

@@ -21,13 +21,6 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent, now: Instant) -> io
         }
         return Ok(false);
     }
-    if app.pending_delete.is_some() {
-        // A click cancels the question. The mouse never deletes.
-        if is_press(mouse.kind) {
-            app.cancel_delete();
-        }
-        return Ok(false);
-    }
     match app.mode {
         ViewMode::Gallery => gallery_mouse(app, mouse, at, now),
         ViewMode::Fullscreen => fullscreen_mouse(app, mouse, at),
