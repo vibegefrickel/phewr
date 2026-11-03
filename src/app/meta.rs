@@ -1,4 +1,4 @@
-//! The facts of the file under the cursor for the status row. A thread reads them, so a cursor
+//! The facts of the file under the cursor for the status row. A thread reads them: a cursor
 //! move never waits for a header, an EXIF block or `ffprobe`.
 
 use super::App;
@@ -9,12 +9,11 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-/// The facts that the cache keeps. One entry is about 200 bytes.
+/// One entry is about 200 bytes.
 const META_CACHE_ENTRIES: NonZeroUsize = NonZeroUsize::new(256).unwrap();
 
 pub(crate) struct MetaState {
     cache: LruCache<PathBuf, FileMeta>,
-    /// The one read that runs, with the path that it reads.
     in_flight: Option<(PathBuf, Receiver<FileMeta>)>,
 }
 
@@ -28,8 +27,8 @@ impl Default for MetaState {
 }
 
 impl App {
-    /// Start a read for the subject if the cache does not hold it. One read runs at a time. A
-    /// newer subject starts when the running read ends, so fast cursor moves start no threads.
+    /// Start a read for the subject if the cache does not hold it. One read runs at a time, and
+    /// fast cursor moves start no threads.
     pub(crate) fn request_meta(&mut self) {
         if self.meta.in_flight.is_some() {
             return;
@@ -52,7 +51,6 @@ impl App {
         self.meta.in_flight = Some((path, receiver));
     }
 
-    /// Take a finished read into the cache and draw it.
     pub(crate) fn poll_meta(&mut self) {
         let Some((path, receiver)) = &self.meta.in_flight else {
             return;
@@ -86,7 +84,7 @@ mod tests {
     use crate::test_support::{app_with_files, wait_until};
 
     #[test]
-    fn the_status_line_follows_the_cursor_after_one_read_each() {
+    fn status_line_follows_cursor() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
         assert_eq!(app.meta_line(), None, "nothing before the read");
@@ -110,7 +108,6 @@ mod tests {
         });
         assert!(app.meta_line().is_some());
 
-        // A cached file starts no read.
         app.gallery.cursor = 0;
         app.request_meta();
         assert!(!app.meta_pending());
@@ -118,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fullscreen_view_shows_the_open_file() {
+    fn fullscreen_shows_open_file() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
         app.mode = ViewMode::Fullscreen;
@@ -136,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn a_disconnected_meta_read_leaves_the_facts_empty_and_starts_again() {
+    fn disconnected_read_starts_again() {
         use std::sync::mpsc;
 
         let dir = tempfile::tempdir().unwrap();

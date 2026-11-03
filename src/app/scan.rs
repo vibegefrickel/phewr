@@ -4,8 +4,8 @@ use super::App;
 use super::cell_shape::SHAPE_SAMPLE;
 use std::path::PathBuf;
 
-/// The order of the files after a scan: `scanner::name_key`, the key of the scanner batches, so
-/// the end of the scan keeps the order of the first screen. The folder prefetch sorts the same way.
+/// `scanner::name_key`, the key of the scanner batches: the end of the scan keeps the order of
+/// the first screen. The folder prefetch sorts the same way.
 pub(super) fn sort_by_name(media: &mut [(PathBuf, String)]) {
     media.sort_by_cached_key(|(path, _)| crate::scanner::name_key(path));
 }
@@ -47,14 +47,13 @@ impl App {
             self.scan_complete = true;
             self.finalize_scan_order();
             self.request_cell_shape();
-            // viewr always starts in the grid, also with one image: it never opens the
-            // fullscreen view by itself.
+            // viewr always starts in the grid, even with one image.
             self.place_cursor_on_return();
         }
     }
 
-    /// Sort the files by name. The folders stay in front, in the order of the scanner. A folder
-    /// scan comes out sorted, so then the list stays as it is: no sort, no copy, no redraw.
+    /// Sort the files by name. The folders stay in front. A sorted folder scan keeps the list: no
+    /// sort, no copy, no redraw.
     fn finalize_scan_order(&mut self) {
         if self.file_count() < 2
             || crate::scanner::is_sorted_by_name(&self.images[self.first_file()..])
@@ -148,7 +147,7 @@ mod tests {
     use crate::image_list::SharedImageList;
 
     #[test]
-    fn scanner_results_extend_the_list_and_sort_at_the_end() {
+    fn results_extend_then_sort() {
         let list = SharedImageList::new();
         let mut app = App::new((8, 16), list.clone());
         assert!(app.is_scanning());
@@ -185,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_that_arrives_sorted_keeps_the_list_and_the_screen() {
+    fn sorted_scan_keeps_list_and_screen() {
         let list = SharedImageList::new();
         let mut app = App::new((8, 16), list.clone());
         list.push_batch(vec![PathBuf::from("/x/a.png"), PathBuf::from("/x/B.png")]);
@@ -208,20 +207,19 @@ mod tests {
     }
 
     #[test]
-    fn a_single_scanned_image_stays_in_the_grid() {
+    fn single_image_stays_in_grid() {
         let list = SharedImageList::new();
         let mut app = App::new((8, 16), list.clone());
         list.push_batch(vec![PathBuf::from("/x/only.png")]);
         list.mark_complete();
         app.refresh_from_scanner();
         assert_eq!(app.mode, ViewMode::Gallery);
-        // A second refresh after the end changes nothing.
         app.refresh_from_scanner();
         assert_eq!(app.images.len(), 1);
     }
 
     #[test]
-    fn scanner_results_respect_an_active_filter() {
+    fn results_respect_active_filter() {
         let list = SharedImageList::new();
         let mut app = App::new((8, 16), list.clone());
         app.gallery.search_query = "be".to_owned();
@@ -248,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn update_filter_runs_in_the_background_and_an_empty_query_resets() {
+    fn filter_runs_in_background_and_resets() {
         let mut app = app_with(&["apple.png", "berry.png", "cherry.png"]);
         app.poll_filter();
         app.gallery.search_query = "rry".to_owned();
@@ -270,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn the_result_of_an_old_query_never_wins() {
+    fn old_query_never_wins() {
         let mut app = app_with(&["apple.png", "berry.png", "cherry.png"]);
         app.gallery.search_query = "app".to_owned();
         app.update_filter();

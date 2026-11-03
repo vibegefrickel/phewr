@@ -1,0 +1,339 @@
+//! The loop jobs and the loop clock of the grid, on files that hold no video.
+
+use crate::app::thumbnails::pad_for_grid;
+use crate::app::{App, ViewMode};
+use crate::config::Config;
+use crate::gallery::GridPicture;
+use crate::image_list::SharedImageList;
+use crate::test_support::{test_dir, wait_until};
+use image::RgbaImage;
+use ratatui::layout::Rect;
+use std::path::Path;
+use std::time::Duration;
+
+fn picture() -> GridPicture {
+    RgbaImage::new(2, 2).into()
+}
+
+/// A grid app with the files `names` in `dir`, each with a sharp still. The video files hold
+/// no video, and a decode fails.
+fn grid_app(dir: &Path, names: &[&str], config: &Config) -> App {
+    let mut app = App::new_with_config((8, 16), SharedImageList::new(), config);
+    app.disk_cache_dir = dir.join("cache");
+    for (index, name) in names.iter().enumerate() {
+        let path = dir.join(name);
+        std::fs::write(&path, b"no video").unwrap();
+        app.images.push(path);
+        app.filenames.push((*name).to_owned());
+        let still = RgbaImage::new(160, 96);
+        app.thumb_cache
+            .insert(index, pad_for_grid(still, (160, 96), (8, 16), true));
+    }
+    app.gallery.filtered_indices = (0..names.len()).collect();
+    app.gallery.zoom_rows = 4;
+    app.gallery.update_grid(Rect::new(0, 0, 106, 29));
+    app.scan_complete = true;
+    app
+}
+
+fn finish_jobs(app: &mut App) {
+    wait_until(|| {
+        app.poll_grid_loops();
+        !app.grid_loops_pending()
+    });
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn jobs_wait_for_stills() {
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["a.jpg", "clip.mp4"], &Config::default());
+    let still = app.thumb_cache.peek(1).unwrap().0.clone();
+    app.thumb_cache.clear();
+    app.thumb_cache.insert(1, still);
+    app.spawn_thumb_decode(0, Rect::new(0, 0, 20, 6));
+    assert!(app.thumbnails_pending());
+    app.poll_grid_loops();
+    assert!(
+        !app.grid_loops_pending(),
+        "the still of the photo comes first"
+    );
+
+    wait_until(|| {
+        app.poll_thumbnails();
+        !app.thumbnails_pending()
+    });
+    app.poll_grid_loops();
+    assert!(app.grid_loops_pending(), "then the clip gets its job");
+    finish_jobs(&mut app);
+}
+
+#[test]
+fn no_ffmpeg_tries_once() {
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["a.jpg", "clip.mp4"], &Config::default());
+    app.poll_grid_loops();
+    assert_eq!(
+        app.grid_loops_pending(),
+        cfg!(feature = "video"),
+        "a job for the clip, none for the photo"
+    );
+    assert_eq!(app.has_pending_work(), cfg!(feature = "video"));
+    finish_jobs(&mut app);
+    assert!(app.grid_loops.loops.is_empty());
+    assert!(!app.loop_plays(1));
+    app.poll_grid_loops();
+    assert!(
+        !app.grid_loops_pending(),
+        "a failed cell does not try again"
+    );
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn warm_folder_reads_loops_from_cache() {
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
+    let target = crate::app::thumbnails::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+    let frames = super::LoopFrames {
+        frames: vec![RgbaImage::new(80, 48), RgbaImage::new(80, 48)],
+        delays: vec![Duration::from_millis(333); 2],
+        shown: (160, 96),
+    };
+    crate::app::disk_cache::try_save_loop(&app.disk_cache_dir, &app.images[0], target, &frames)
+        .unwrap();
+
+    app.poll_grid_loops();
+    finish_jobs(&mut app);
+    let cell = &app.grid_loops.loops[&0];
+    assert_eq!(cell.frames.len(), 2);
+    assert_eq!(cell.cells(), (20, 6), "the cells of the still");
+    assert!(app.loops_to_send());
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn config_key_turns_loops_off() {
+    let dir = test_dir();
+    let config = Config {
+        animate: false,
+        ..Config::default()
+    };
+    let mut app = grid_app(dir.path(), &["clip.mp4"], &config);
+    app.poll_grid_loops();
+    assert!(!app.grid_loops_pending());
+    assert!(!app.grid_loops_shown());
+}
+
+#[test]
+fn poll_drops_hidden_or_old_results() {
+    let dir = test_dir();
+    let names: Vec<String> = (0..40).map(|index| format!("{index}.mp4")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut app = grid_app(dir.path(), &names, &Config::default());
+    app.mode = ViewMode::Fullscreen;
+    let send = |app: &App, generation: u32, index: usize| {
+        app.grid_loops
+            .tx
+            .send(super::LoopResult {
+                generation,
+                index,
+                outcome: super::LoopOutcome::Frames(
+                    vec![picture(), picture()],
+                    vec![Duration::ZERO; 2],
+                ),
+            })
+            .unwrap();
+    };
+    send(&app, 0, 39);
+    send(&app, 1, 0);
+    send(&app, 0, 1);
+    app.poll_grid_loops();
+    assert_eq!(
+        app.grid_loops.loops.keys().copied().collect::<Vec<_>>(),
+        vec![1]
+    );
+}
+
+#[test]
+fn cancelled_result_leaves_cell_free() {
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
+    app.mode = ViewMode::Fullscreen;
+    app.grid_loops
+        .tx
+        .send(super::LoopResult {
+            generation: 0,
+            index: 0,
+            outcome: super::LoopOutcome::Cancelled,
+        })
+        .unwrap();
+    app.poll_grid_loops();
+    assert!(app.grid_loops.loops.is_empty());
+    assert!(
+        !app.grid_loops.failed.contains(&0),
+        "the cell gets a new job later"
+    );
+}
+
+#[test]
+fn at_most_four_jobs_run() {
+    let dir = test_dir();
+    let names = ["a.mp4", "b.mp4", "c.mp4", "d.mp4", "e.mp4"];
+    let mut app = grid_app(dir.path(), &names, &Config::default());
+    for index in 0..4 {
+        app.pretend_loop_job(index);
+    }
+    app.poll_grid_loops();
+    assert_eq!(app.grid_loops.running.len(), 4);
+    assert!(
+        !app.grid_loops.running.contains_key(&4),
+        "the fifth cell waits"
+    );
+}
+
+#[test]
+fn stills_and_other_views_cancel_jobs() {
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["a.png", "clip.mp4"], &Config::default());
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    app.grid_loops
+        .running
+        .insert(1, std::sync::Arc::clone(&cancel));
+    let flag = || cancel.load(std::sync::atomic::Ordering::Relaxed);
+    app.poll_grid_loops();
+    assert!(!flag(), "no still waits");
+
+    app.mode = ViewMode::Fullscreen;
+    app.poll_grid_loops();
+    assert!(flag(), "the fullscreen view takes the cores");
+
+    cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+    app.mode = ViewMode::Gallery;
+    app.thumb_cache.clear();
+    app.spawn_thumb_decode(0, Rect::new(0, 0, 20, 6));
+    assert!(app.thumbnails_pending());
+    app.poll_grid_loops();
+    assert!(flag(), "a new still waits");
+    app.grid_loops.running.clear();
+    wait_until(|| {
+        app.poll_thumbnails();
+        !app.thumbnails_pending()
+    });
+}
+
+/// The job with the fake ffmpeg of the `grid_loop` tests. Without a queued run, ffmpeg gives no
+/// frame, and the decode waits until the cancel.
+#[cfg(feature = "video")]
+#[test]
+fn quit_ends_running_ffmpeg() {
+    use crate::test_support::video::{clip_info, fake_decoder};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, mpsc};
+
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let job_cancel = Arc::clone(&cancel);
+    let (tx, rx) = mpsc::channel();
+    let job = std::thread::spawn(move || {
+        let decoder = fake_decoder(clip_info());
+        let result = crate::grid_loop::decode_loop(
+            decoder.as_ref(),
+            Path::new("ffmpeg"),
+            Path::new("clip.mp4"),
+            (160, 96),
+            &[],
+            &job_cancel,
+        );
+        tx.send((result.err().map(|error| error.kind()), decoder.streaming()))
+            .unwrap();
+    });
+    app.grid_loops.running.insert(0, cancel);
+
+    drop(app);
+
+    let (error, streaming) = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(error, Some(std::io::ErrorKind::Interrupted));
+    assert!(!streaming, "the job killed its ffmpeg");
+    job.join().unwrap();
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn over_budget_retries_on_new_screen() {
+    let dir = test_dir();
+    let names: Vec<String> = (0..40).map(|index| format!("{index}.mp4")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut app = grid_app(dir.path(), &names, &Config::default());
+    app.drop_hidden_loops();
+    // Every job fails without ffmpeg, except the cell that waits above the budget.
+    app.grid_loops.failed.extend(1..40);
+    app.grid_loops.drop_over_budget(0);
+
+    // A render without a scroll, after a cursor move or a meta result.
+    app.drop_hidden_loops();
+    app.poll_grid_loops();
+    assert!(
+        !app.grid_loops_pending(),
+        "no job decodes the loop for nothing"
+    );
+
+    app.gallery.scroll_rows(1);
+    app.drop_hidden_loops();
+    app.gallery.scroll_rows(-1);
+    app.drop_hidden_loops();
+    app.poll_grid_loops();
+    assert!(app.grid_loops_pending(), "another screen tries again");
+    finish_jobs(&mut app);
+}
+
+#[test]
+fn finished_job_goes_out_next_pass() {
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
+    app.pretend_loop_job(0);
+    app.grid_loops
+        .tx
+        .send(super::LoopResult {
+            generation: 0,
+            index: 0,
+            outcome: super::LoopOutcome::Frames(
+                vec![picture(), picture()],
+                vec![Duration::ZERO; 2],
+            ),
+        })
+        .unwrap();
+    assert!(!app.loops_to_send(), "the result waits for the poll");
+    app.poll_grid_loops();
+    assert!(!app.grid_loops_pending());
+    assert!(app.loops_to_send(), "the next pass writes the frames");
+    assert_eq!(crate::run_loop::next_timeout(&app, &[]), Duration::ZERO);
+}
+
+#[test]
+fn same_screen_keeps_hidden_list() {
+    let dir = test_dir();
+    let names: Vec<String> = (0..40).map(|index| format!("{index}.mp4")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut app = grid_app(dir.path(), &names, &Config::default());
+    app.drop_hidden_loops();
+    let list = app.grid_loops.last_visible.as_ptr();
+    let shown = app.grid_loops.last_visible.len();
+    assert!(shown > 0);
+    app.drop_hidden_loops();
+    assert_eq!(app.grid_loops.last_visible.as_ptr(), list);
+    app.gallery.scroll_rows(1);
+    app.drop_hidden_loops();
+    assert_ne!(
+        app.grid_loops.last_visible.first(),
+        Some(&0),
+        "the first row left"
+    );
+    assert_eq!(app.grid_loops.last_visible.len(), shown);
+    assert_eq!(
+        app.grid_loops.last_visible.as_ptr(),
+        list,
+        "a change with the same count reuses the buffer"
+    );
+}

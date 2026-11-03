@@ -7,14 +7,15 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// The files whose headers decide the cell shape of the grid: the first screen, or the first
-/// files of a large folder.
+/// The files whose headers decide the cell shape: the first screen, or the first files of a
+/// large folder.
 pub(super) const SHAPE_SAMPLE: usize = 64;
 
 impl App {
-    /// Read the headers of the first `SHAPE_SAMPLE` files in the background, one time per scan.
-    /// The grid keeps the shape until the next scan, so the columns do not jump while the user
-    /// browses. A later call does nothing.
+    /// Read the headers of the first `SHAPE_SAMPLE` files in the background, once per scan.
+    ///
+    /// The grid keeps the shape until the next scan, and the columns do not jump while the user
+    /// browses.
     pub(crate) fn request_cell_shape(&mut self) {
         if self.shape_requested || !self.has_files() {
             return;
@@ -29,8 +30,8 @@ impl App {
             .collect();
         let (tx, rx) = mpsc::channel();
         self.shape_rx = Some((rx, Instant::now()));
-        // A thread of its own: the rayon pool can be full of decodes of the old folder after a
-        // directory switch, and the first screen of the new folder waits for this read.
+        // A thread of its own: after a directory switch, the rayon pool can be full of old decodes,
+        // and the first screen waits for this read.
         thread::spawn(move || {
             #[expect(
                 clippy::let_underscore_must_use,
@@ -40,21 +41,19 @@ impl App {
         });
     }
 
-    /// True while the header read runs. The thumbnail decodes wait, so that no cell decodes
-    /// twice for two cell sizes.
+    /// True while the header read runs. The thumbnail decodes wait: no cell decodes twice for two
+    /// cell sizes.
     pub(crate) fn cell_shape_pending(&self) -> bool {
         self.shape_rx.is_some()
     }
 
-    /// How long the running header read takes so far, `None` when no read runs. The run loop
-    /// waits less during the first milliseconds, because a local read takes 2 ms to 4 ms.
+    /// How long the running header read takes so far. A local read takes 2 ms to 4 ms.
     pub(crate) fn cell_shape_running_for(&self, now: Instant) -> Option<Duration> {
         let (_, started) = self.shape_rx.as_ref()?;
         Some(now.saturating_duration_since(*started))
     }
 
-    /// Take the folder shape. A changed grid drops the thumbnails. The gallery draws again,
-    /// because its first screen waited for the shape. A fullscreen image stays as it is.
+    /// Take the folder shape. A changed grid drops the thumbnails.
     pub(crate) fn poll_cell_shape(&mut self) {
         let Some(aspect) = self
             .shape_rx
@@ -85,7 +84,7 @@ mod tests {
     use crate::image_list::SharedImageList;
 
     #[test]
-    fn the_folder_shape_comes_from_the_headers_once_per_scan() {
+    fn shape_reads_headers_once_per_scan() {
         let dir = test_dir();
         let mut app = app();
         for index in 0..3 {
@@ -119,11 +118,9 @@ mod tests {
         assert!(app.needs_render);
         let portrait_cols = app.gallery.grid_cols;
 
-        // A second request in the same scan does nothing.
         app.request_cell_shape();
         assert!(!app.cell_shape_pending());
 
-        // A new directory forgets the shape; the next scan reads it again.
         app.switch_to_dir(dir.path());
         app.images = vec![dir.path().join("0.png")];
         app.gallery.filtered_indices = vec![0];
@@ -137,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn the_scan_requests_the_shape_when_it_completes() {
+    fn scan_end_requests_shape() {
         let dir = test_dir();
         RgbaImage::new(8, 8).save(dir.path().join("a.png")).unwrap();
         let list = SharedImageList::new();

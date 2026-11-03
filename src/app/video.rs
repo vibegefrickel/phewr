@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[cfg(feature = "video")]
 use std::sync::mpsc;
 
-/// The view that opened a video, and so the view that comes back after mpv.
+/// The view that opened a video: the view that comes back after mpv.
 #[cfg(feature = "video")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VideoReturn {
@@ -14,16 +14,16 @@ pub(crate) enum VideoReturn {
     Fullscreen,
 }
 
-/// An mpv window that viewr follows: the index of its file and the receiver of its exit code.
+/// An mpv window that viewr follows: its file and the receiver of its exit code.
 #[cfg(feature = "video")]
 pub(super) struct VideoWindow {
     index: usize,
     exit: mpsc::Receiver<Option<i32>>,
-    /// True when a slideshow plays the video one time and waits for the window.
+    /// True when a slideshow plays the video once and waits for the window.
     holds_slideshow: bool,
 }
 
-/// The exit of a followed mpv window: the exit code and the file, for the status note.
+/// The exit code and the file of a followed mpv window, for the status note.
 #[cfg(feature = "video")]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct WindowExit {
@@ -48,15 +48,13 @@ impl App {
         self.clear_before_video = true;
     }
 
-    /// Ask the run loop to open the current video in the mpv window, see
-    /// [`crate::video_handoff::play_videos`]. The terminal player stops first.
+    /// Ask the run loop to open the current video in the mpv window.
     #[cfg(feature = "video")]
     pub(crate) fn request_video_window(&mut self) {
         self.video = None;
         self.video_window_request = true;
     }
 
-    /// Take the request of [`App::request_video_window`].
     #[cfg(feature = "video")]
     pub(crate) fn take_video_window_request(&mut self) -> bool {
         std::mem::take(&mut self.video_window_request)
@@ -69,10 +67,8 @@ impl App {
         self.needs_render = true;
     }
 
-    /// Leave the video for the view that opened it.
-    ///
-    /// The fullscreen view stays on the video and shows a play hint, because the image
-    /// decode cannot read a video. The arrow keys then step on from the video.
+    /// Leave the video for the view that opened it. The fullscreen view stays on the video with a
+    /// play hint: the image decode cannot read a video.
     #[cfg(feature = "video")]
     pub(crate) fn return_from_video(&mut self) {
         if self.video_return == VideoReturn::Gallery {
@@ -87,11 +83,8 @@ impl App {
         self.needs_render = true;
     }
 
-    /// A slideshow video holds the slide until its end. Returns true while it holds.
-    ///
-    /// The terminal player ends the clip and the slideshow moves on. An mpv window holds the
-    /// placeholder until the window closes, see [`App::poll_video_window`]. If the user leaves
-    /// the placeholder, the slideshow forgets the window.
+    /// True while a slideshow video holds the slide. An mpv window holds the placeholder until it
+    /// closes.
     #[cfg(feature = "video")]
     pub(super) fn slideshow_video_holds(&mut self) -> bool {
         if self.mode == ViewMode::Video {
@@ -119,9 +112,8 @@ impl App {
         true
     }
 
-    /// Follow the mpv window of the current video until it exits.
-    ///
-    /// `holds_slideshow` holds a running slideshow on the placeholder until the window closes.
+    /// Follow the mpv window of the current video until it exits. `holds_slideshow` holds a
+    /// running slideshow on the placeholder until then.
     #[cfg(feature = "video")]
     pub(crate) fn watch_video_window(
         &mut self,
@@ -135,7 +127,6 @@ impl App {
         });
     }
 
-    /// True while an mpv window plays and viewr waits for its exit code.
     #[cfg(feature = "video")]
     pub(crate) fn watches_video_window(&self) -> bool {
         self.video_window.is_some()
@@ -143,10 +134,8 @@ impl App {
 
     /// Take the exit code of the followed mpv window, and act on it.
     ///
-    /// `n` and `N` in the window step to the neighbor, see [`App::step_from_video`]. In a
-    /// slideshow, the end of the clip moves on and each other exit stops the slideshow. The
-    /// exit counts only while viewr shows the file of the window in the fullscreen view or in
-    /// the gallery, without an overlay. Otherwise viewr forgets the window.
+    /// In a slideshow, the end of the clip moves on and each other exit stops the slideshow. The
+    /// exit counts only while viewr shows the file of the window without an overlay.
     #[cfg(feature = "video")]
     pub(crate) fn poll_video_window(&mut self) -> Option<WindowExit> {
         let window = self.video_window.as_ref()?;
@@ -183,11 +172,10 @@ impl App {
             && !self.gallery.search_active
     }
 
-    /// Step from the current video to its neighbor in the list, after `n` or `N` in mpv.
+    /// Step to the neighbor after `n` or `N` in mpv. `false` at the end of the list.
     ///
-    /// An image opens in the fullscreen view. A video opens in the video view and keeps the
-    /// view that the first video returns to, so that a run of videos from the gallery ends in
-    /// the gallery. Returns false at the end of the list, and then nothing moves.
+    /// A video keeps the view that the first video returns to: a run of videos from the gallery
+    /// ends in the gallery.
     #[cfg(feature = "video")]
     pub(crate) fn step_from_video(&mut self, step: crate::mpv::Step) -> bool {
         let target = match step {
@@ -211,8 +199,7 @@ impl App {
         true
     }
 
-    /// After a video that a slideshow played one time: the end of the clip moves the slideshow
-    /// on. A quit by the user stops the slideshow and keeps the placeholder.
+    /// A quit by the user stops the slideshow and keeps the placeholder.
     #[cfg(feature = "video")]
     fn after_slideshow_video(&mut self, reached_end: bool) {
         if reached_end {
@@ -222,12 +209,11 @@ impl App {
         }
     }
 
-    /// True in the fullscreen view or in a video player: the views of a slideshow.
     pub(crate) fn in_slideshow_view(&self) -> bool {
         self.mode == ViewMode::Fullscreen || self.in_video_view()
     }
 
-    /// True in the view of a video player, where the clip and not the clock drives the slideshow.
+    /// True in the view of a video player. The clip and not the clock drives the slideshow there.
     #[cfg_attr(
         not(feature = "video"),
         expect(
@@ -243,12 +229,11 @@ impl App {
         in_video
     }
 
-    /// The image decode cannot read a video, so the fullscreen view must not try it.
+    /// The image decode cannot read a video: the fullscreen view must not try it.
     pub(super) fn fullscreen_on_video(&self) -> bool {
         self.is_video(self.current) && self.mode == ViewMode::Fullscreen
     }
 
-    /// True when the image `index` is a video, for the placeholder and the loading icon.
     #[cfg(feature = "video")]
     pub(crate) fn is_video(&self, index: usize) -> bool {
         self.images
@@ -256,22 +241,18 @@ impl App {
             .is_some_and(|path| crate::video::is_video(path))
     }
 
-    /// True when a thumbnail job found the image `index` to be an animated GIF, WebP, APNG or
-    /// AVIS. The grid marker reads it in the draw, so the draw reads no file. Until the job
-    /// is done, the cell shows no marker.
+    /// True when a thumbnail job found an animated GIF, WebP, APNG or AVIS. The draw reads no file.
     pub(crate) fn is_animated(&self, index: usize) -> bool {
         self.stored_animation_flag(index).unwrap_or(false)
     }
 
-    /// The stored animation flag of the image `index`, `None` before a thumbnail job read it.
     fn stored_animation_flag(&self, index: usize) -> Option<bool> {
         let path = self.images.get(index)?;
         self.animated.get(path).copied()
     }
 
-    /// True when the image `index` is animated now. The header check reads the one file after
-    /// a key press, so a file that an export tool rewrote in place takes the right route. The
-    /// stored flag of the grid marker can be older.
+    /// The header check reads the file after a key press: a file that an export tool rewrote in
+    /// place takes the right route. The flag of the grid marker can be older.
     #[cfg(feature = "video")]
     fn reads_as_animated(&self, index: usize) -> bool {
         self.images
@@ -279,14 +260,12 @@ impl App {
             .is_some_and(|path| crate::player::is_animated(path))
     }
 
-    /// True when the image `index` opens in a player: a video or an animated image.
     #[cfg(feature = "video")]
     pub(crate) fn opens_in_player(&self, index: usize) -> bool {
         self.is_video(index) || self.reads_as_animated(index)
     }
 
-    /// True in the fullscreen view on the still frame of an animated image, where Enter
-    /// plays it and `p` opens the mpv window.
+    /// True on the still frame of an animated image: Enter plays it, `p` opens the mpv window.
     #[cfg(feature = "video")]
     pub(crate) fn fullscreen_on_animation(&self) -> bool {
         self.mode == ViewMode::Fullscreen && self.reads_as_animated(self.current)
@@ -321,7 +300,7 @@ mod tests {
     use crate::test_support::{app_with, overdue};
 
     #[test]
-    fn a_video_from_the_grid_returns_to_the_grid() {
+    fn grid_video_returns_to_grid() {
         let mut app = app_with(&["clip.mp4", "b.png"]);
         app.enter_fullscreen_selected();
         assert_eq!(app.mode, ViewMode::Video);
@@ -331,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn a_video_from_fullscreen_returns_to_its_placeholder() {
+    fn fullscreen_video_returns_to_placeholder() {
         let mut app = app_with(&["a.png", "clip.mp4"]);
         app.enter_fullscreen_at(0);
         app.next();
@@ -355,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_error_keeps_the_placeholder_and_survives_enter() {
+    fn scan_error_keeps_placeholder() {
         let mut app = app_with(&["a.png", "clip.mp4"]);
         app.scan_error = Some("denied".to_owned());
         app.enter_fullscreen_at(0);
@@ -368,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn p_asks_for_the_mpv_window_from_the_grid_and_from_the_placeholder() {
+    fn p_asks_for_mpv_window() {
         use crate::test_support::char_key;
 
         let mut app = app_with(&["a.png", "clip.mp4"]);
@@ -398,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn an_animated_image_opens_in_the_player_and_its_still_frame_in_fullscreen() {
+    fn animated_image_opens_in_player() {
         use crate::test_support::{char_key, fixture, press};
         use crossterm::event::KeyCode;
         let still = fixture("still.gif");
@@ -428,7 +407,7 @@ mod tests {
         );
         assert_eq!(app.video_return, VideoReturn::Fullscreen);
 
-        // Esc lands on the still first frame, which the image decode reads.
+        // Esc lands on the still first frame. The image decode reads it.
         app.return_from_video();
         assert_eq!(app.mode, ViewMode::Fullscreen);
         assert!(!app.shows_video_placeholder());
@@ -455,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn the_clock_does_not_move_the_slideshow_in_the_video_view() {
+    fn clock_leaves_video_slideshow() {
         let mut app = app_with(&["a.png", "clip.mp4", "b.png"]);
         app.enter_fullscreen_at(0);
         app.start_slideshow();
@@ -471,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn a_slideshow_can_start_on_a_video() {
+    fn slideshow_starts_on_video() {
         let mut app = app_with(&["clip.mp4", "b.png"]);
         app.slideshow_autostart = true;
         app.scan_complete = true;
@@ -488,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn the_slideshow_moves_past_a_video_placeholder() {
+    fn slideshow_passes_video_placeholder() {
         let mut app = app_with(&["clip.mp4", "b.png"]);
         app.mode = ViewMode::Fullscreen;
         app.start_slideshow();
@@ -496,7 +475,6 @@ mod tests {
         app.slideshow_tick();
         assert_eq!(app.current, 1);
         assert_eq!(app.mode, ViewMode::Fullscreen);
-        // b.png is not prefetched, so its decode starts.
         assert!(app.loaded.is_none());
         assert_eq!(
             app.fullscreen_decode.as_ref().map(|decode| decode.index),

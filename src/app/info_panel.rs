@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 impl App {
     pub(crate) fn toggle_info(&mut self) {
         self.info_visible = !self.info_visible;
-        // The panel changes the image/grid area, so placements must be redone.
+        // The panel changes the image area and the grid area. Every picture needs a new placement.
         self.needs_render = true;
     }
 
-    /// The image that the view is on: the fullscreen file, or the gallery cursor.
+    /// The fullscreen file, or the gallery cursor.
     fn view_index(&self) -> Option<usize> {
         match self.mode {
             ViewMode::Gallery => self.gallery.selected_index(),
@@ -23,8 +23,7 @@ impl App {
     }
 
     /// The file that yazi reveals when viewr quits: the fullscreen file, or the gallery cursor.
-    /// A subfolder cell reveals that folder. The `..` cell reveals the folder of the grid, so
-    /// that yazi stays where viewr was.
+    /// The `..` cell reveals the folder of the grid: yazi stays where viewr was.
     pub(crate) fn reveal_path(&self) -> Option<PathBuf> {
         let index = self.view_index()?;
         if self.is_parent_entry(index) {
@@ -33,8 +32,7 @@ impl App {
         self.images.get(index).cloned()
     }
 
-    /// The file that the info panel and the status row describe: the open file, or the gallery
-    /// cursor. A folder is no file.
+    /// The file that the info panel and the status row describe. A folder is no file.
     pub(crate) fn view_file(&self) -> Option<PathBuf> {
         let index = self.view_index()?;
         if self.is_folder(index) {
@@ -43,7 +41,7 @@ impl App {
         self.images.get(index).cloned()
     }
 
-    /// Metadata for `path`, read on first use and cached for the session.
+    /// The metadata of `path`, read at the first use and kept for the session.
     pub(crate) fn info_for(&mut self, path: &Path) -> ImageInfo {
         if let Some(cached) = self.info_cache.get(path) {
             return cached.clone();
@@ -73,7 +71,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn the_view_file_follows_the_view_and_info_is_cached() {
+    fn view_file_follows_view() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
         app.toggle_info();
@@ -90,7 +88,7 @@ mod tests {
         let path = app.images[0].clone();
         let first = app.info_for(&path);
         fs::remove_file(&path).unwrap();
-        // The cache answers, so the removed file still has its first rows.
+        // The cache answers: the removed file still has its first rows.
         assert_eq!(app.info_for(&path).rows, first.rows);
     }
 }

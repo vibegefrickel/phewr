@@ -5,16 +5,15 @@ use super::VideoReturn;
 use super::{App, ViewMode};
 use std::time::{Duration, Instant};
 
-/// Step for `[` / `]` while a slideshow runs.
+/// The step of `[` and `]`.
 const SLIDESHOW_INTERVAL_STEP: f64 = 0.5;
 const MIN_SLIDESHOW_INTERVAL: f64 = 0.5;
 const MAX_SLIDESHOW_INTERVAL: f64 = 600.0;
 
-/// A running slideshow in fullscreen mode.
 pub(crate) struct Slideshow {
     pub(crate) interval: Duration,
     pub(crate) paused: bool,
-    /// When the next advance is due. Pushed back while an image is still decoding.
+    /// A running decode pushes it back.
     pub(super) next_at: Instant,
 }
 
@@ -41,7 +40,7 @@ impl App {
             paused: false,
             next_at: Instant::now() + interval,
         });
-        // A slideshow lives in the fullscreen view, also when it starts on a video.
+        // A slideshow lives in the fullscreen view, even when it starts on a video.
         #[cfg(feature = "video")]
         if self.mode == ViewMode::Video {
             self.video_return = VideoReturn::Fullscreen;
@@ -49,8 +48,7 @@ impl App {
         self.needs_render = true;
     }
 
-    /// A running slideshow that is not paused. It plays a video one time and then moves on.
-    /// Outside of it, a video plays in a loop until the user stops it.
+    /// A running slideshow that is not paused. It plays a video once and then moves on.
     pub(crate) fn slideshow_advancing(&self) -> bool {
         self.slideshow.as_ref().is_some_and(|show| !show.paused)
     }
@@ -80,8 +78,7 @@ impl App {
         }
     }
 
-    /// Lengthen or shorten the interval by one step; also becomes the default for
-    /// the next slideshow this session.
+    /// The new interval is the default for the next slideshow of this session.
     pub(crate) fn slideshow_adjust_interval(&mut self, steps: f64) {
         let current = self
             .slideshow
@@ -106,7 +103,7 @@ impl App {
         }
     }
 
-    /// How long the event loop may sleep before the slideshow needs attention.
+    /// How long the run loop can sleep before the slideshow needs attention.
     pub(crate) fn slideshow_timeout(&self) -> Option<Duration> {
         let show = self.slideshow.as_ref()?;
         // In the video view, the end of the clip moves the slideshow on, not the clock.
@@ -116,8 +113,7 @@ impl App {
         Some(show.next_at.saturating_duration_since(Instant::now()))
     }
 
-    /// Advance when the interval elapsed. Waits for the current image to finish
-    /// decoding so every slide is actually shown for the full interval.
+    /// Advance when the interval elapsed. The step waits for the decode of the current image.
     pub(crate) fn slideshow_tick(&mut self) {
         if !self.slideshow_advancing() {
             return;
@@ -133,22 +129,21 @@ impl App {
             return;
         }
         if self.loaded.is_none() && !self.fullscreen_on_video() {
-            // Still decoding: check again shortly instead of skipping the slide.
+            // Look again soon and do not skip the slide.
             self.slideshow_check_again_soon();
             return;
         }
         self.slideshow_step();
     }
 
-    /// Push the next check of the slideshow 100 ms out, while a decode or a video holds the slide.
+    /// Push the next check 100 ms out, while a decode or a video holds the slide.
     pub(super) fn slideshow_check_again_soon(&mut self) {
         if let Some(show) = self.slideshow.as_mut() {
             show.next_at = Instant::now() + Duration::from_millis(100);
         }
     }
 
-    /// Go to the next file, or wrap to the first with the loop setting, or stop at the end.
-    /// The next file gets the full interval.
+    /// Go to the next file, wrap with the loop setting, or stop at the end.
     pub(super) fn slideshow_step(&mut self) {
         let last = self.images.len().saturating_sub(1);
         if self.current < last {
@@ -164,8 +159,7 @@ impl App {
         }
     }
 
-    /// Honour `--slideshow` once the directory scan is done, so the show starts
-    /// at the first image in sorted order.
+    /// Start the slideshow of `--slideshow` after the scan, at the first image in the sorted order.
     pub(crate) fn maybe_autostart_slideshow(&mut self) {
         if !self.slideshow_autostart || !self.scan_complete {
             return;
@@ -194,7 +188,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn slideshow_advances_wraps_and_stops_without_loop() {
+    fn advances_wraps_and_stops_without_loop() {
         use super::{App, Slideshow};
         use crate::image_list::SharedImageList;
         use std::path::PathBuf;
@@ -218,7 +212,6 @@ mod tests {
         app.slideshow_tick();
         assert_eq!(app.current, 1);
 
-        // Wrap to the first image when looping.
         app.loaded = Some(RgbaImage::new(1, 1).into());
         app.slideshow.as_mut().unwrap().next_at = Instant::now()
             .checked_sub(Duration::from_millis(1))
@@ -227,7 +220,6 @@ mod tests {
         assert_eq!(app.current, 0);
         assert!(app.slideshow_running());
 
-        // Without looping the show ends on the last image.
         app.slideshow_loop = false;
         app.current = 1;
         app.loaded = Some(RgbaImage::new(1, 1).into());
@@ -240,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn slideshow_waits_for_a_pending_decode() {
+    fn waits_for_pending_decode() {
         use super::{App, Slideshow};
         use crate::image_list::SharedImageList;
         use std::path::PathBuf;
@@ -264,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn slideshow_interval_adjusts_in_steps_and_clamps() {
+    fn interval_adjusts_in_steps_and_clamps() {
         use super::App;
         use crate::image_list::SharedImageList;
 
@@ -277,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn slideshow_starts_pauses_and_stops() {
+    fn starts_pauses_and_stops() {
         let mut app = app();
         app.start_slideshow();
         assert!(!app.slideshow_running(), "no images, no slideshow");
@@ -313,14 +305,13 @@ mod tests {
         app.stop_slideshow();
         assert!(!app.needs_render, "a second stop changes nothing");
 
-        // Without a slideshow, pause and touch do nothing.
         app.slideshow_toggle_pause();
         app.slideshow_touch();
         assert_eq!(app.slideshow_timeout(), None);
     }
 
     #[test]
-    fn slideshow_tick_waits_for_its_turn() {
+    fn tick_waits_for_its_turn() {
         let mut app = app_with(&["a.png", "b.png"]);
         app.slideshow_tick();
         assert_eq!(app.current, 0, "no slideshow");
@@ -348,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn autostart_waits_for_the_scan_and_opens_the_first_image() {
+    fn autostart_waits_for_scan() {
         let mut app = app_with(&["a.png", "b.png"]);
         app.slideshow_autostart = true;
         app.maybe_autostart_slideshow();
@@ -371,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn slideshow_struct_reports_its_interval() {
+    fn struct_reports_interval() {
         let show = Slideshow {
             interval: Duration::from_secs(2),
             paused: true,

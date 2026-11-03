@@ -60,35 +60,32 @@ pub(crate) enum ViewMode {
     reason = "App is the whole view state; each flag is an independent toggle"
 )]
 pub(crate) struct App {
-    /// The entries of the grid: the folders first, then the files. The fullscreen view, the
-    /// slideshow, the prefetch, the thumbnails and the delete never touch the folders.
+    /// The folders first, then the files. The fullscreen view, the slideshow, the prefetch, the
+    /// thumbnails and the delete never touch the folders.
     pub(crate) images: Vec<PathBuf>,
     pub(crate) filenames: Vec<String>,
-    /// The first `folder_count` entries of `images` are folders. `..` is the first one.
+    /// The first `folder_count` entries of `images` are folders, `..` first.
     pub(crate) folder_count: usize,
     pub(crate) mode: ViewMode,
     pub(crate) cell_px: (u32, u32),
     pub(crate) graphics: KittyBackend,
-    /// Where `graphics_delete_all` and the render functions write. A test app writes to a buffer.
+    /// A test app writes to a buffer.
     pub(crate) graphics_out: GraphicsOutput,
 
-    // Info panel (gallery + fullscreen)
     pub(crate) info_visible: bool,
     info_cache: LruCache<PathBuf, ImageInfo>,
 
-    /// The state file that remembers the grid zoom. Tests point it into a temp directory.
+    /// Tests point it into a temp directory.
     pub(crate) state_file: PathBuf,
-    /// The directory of the thumbnail disk cache. Tests point it into a temp directory.
+    /// Tests point it into a temp directory.
     pub(crate) disk_cache_dir: PathBuf,
 
-    // Slideshow (fullscreen)
     pub(crate) slideshow: Option<Slideshow>,
     pub(crate) slideshow_interval: Duration,
     pub(crate) slideshow_loop: bool,
-    /// `--slideshow`: start once the scan has produced the image list.
+    /// `--slideshow`: start after the scan lists the images.
     pub(crate) slideshow_autostart: bool,
 
-    // Gallery state
     pub(crate) gallery: GalleryState,
     pub(crate) thumb_cache: ThumbnailCache,
     pub(crate) selection: HashSet<PathBuf>,
@@ -97,39 +94,30 @@ pub(crate) struct App {
 
     pub(crate) current_dir: Option<PathBuf>,
     pub(crate) initial_dir: Option<PathBuf>,
-    /// The entry that the cursor lands on when the next scan ends: the folder that the user
-    /// came from after a step to the parent.
+    /// The cursor target of the next scan end: the folder that the user came from.
     return_to: Option<PathBuf>,
-    /// The decode of the first screen of the folder under the cursor into the disk cache.
     folder_prefetch: folder_prefetch::FolderPrefetch,
-    /// The facts of the file under the cursor for the status row.
     meta: meta::MetaState,
 
-    // Fullscreen state
     pub(crate) current: usize,
     pub(crate) prefetcher: Prefetcher,
     /// The fullscreen image or zoom crop on the screen, RGB when every pixel is opaque.
     pub(crate) loaded: Option<ScreenImage>,
     pub(crate) error: Option<String>,
-    /// The read errors of the scan. Only the status row reads it. Like the status note, the next key press clears it, and a decode does not.
+    /// The read errors of the scan. The next key press clears them, a decode does not.
     pub(crate) scan_error: Option<String>,
     pub(crate) needs_render: bool,
-    /// The content box of the last fullscreen or video draw. The gallery draw leaves it alone.
     pub(crate) image_rect: Rect,
-    /// The box that a fullscreen image gets in the current terminal. The draw of each frame sets
-    /// it, also in the gallery, so that the pre-decode of the hovered cell has the exact size.
+    /// Each draw sets it, in the gallery too: the pre-decode of the hovered cell needs the size.
     pub(crate) fullscreen_box: Rect,
     pub(crate) help_visible: bool,
-    /// The areas of the last draw that a click lands on.
     pub(crate) layout: ScreenLayout,
     pub(crate) mouse: MouseState,
     loaded_for_rect: Rect,
-    /// The decode of the fullscreen image, while it runs.
     fullscreen_decode: Option<fullscreen::FullscreenDecode>,
 
-    /// The zoom factor of the fullscreen view, 1.0 for the fitted image.
+    /// 1.0 for the fitted image.
     pub(crate) zoom: f64,
-    /// The pan and the full-resolution source of the zoomed view.
     zoom_state: zoom::ZoomState,
 
     #[cfg(feature = "video")]
@@ -139,63 +127,51 @@ pub(crate) struct App {
     /// `p` asked for the mpv window. The run loop takes the request.
     #[cfg(feature = "video")]
     video_window_request: bool,
-    /// The mpv window that plays the current video, until it exits.
     #[cfg(feature = "video")]
     video_window: Option<VideoWindow>,
-    /// The first frame of a new video removes the other pictures first, so that the photo of
-    /// the view before does not show around the frame.
+    /// The first frame of a new video removes the other pictures first.
     #[cfg(feature = "video")]
     pub(crate) clear_before_video: bool,
     /// The terminal player that starts while the gallery cursor rests on a video.
     #[cfg(feature = "video")]
     pub(crate) video_prestart: crate::video_handoff::VideoPrestart,
 
-    // Scanner state
     shared_list: SharedImageList,
     known_len: usize,
     pub(crate) scan_complete: bool,
 
-    /// The header read for the cell shape and its start, while it runs. The thumbnail decodes
-    /// wait for it, and the run loop waits less during its first milliseconds.
+    /// The header read for the cell shape and its start. The thumbnail decodes wait for it.
     shape_rx: Option<(mpsc::Receiver<f64>, std::time::Instant)>,
-    /// True after the header read started for this scan. The shape stays until the next scan.
+    /// True after the header read started for this scan.
     shape_requested: bool,
 
-    // Async filter
     filter_rx: Option<mpsc::Receiver<Vec<usize>>>,
-    /// The long-lived thread behind `filter_rx`.
     filter_worker: crate::search::FilterWorker,
-    /// The cursor position for the next filter result. A delete sets it, a new query clears it.
+    /// The cursor of the next filter result. A delete sets it, a new query clears it.
     filter_cursor: Option<usize>,
 
-    /// The thumbnail jobs of the grid.
     thumb_jobs: thumbnails::ThumbnailJobs,
-    /// The Kitty ids of previews that a sharp thumbnail replaced, with their cell. The next
-    /// write of the grid deletes them in the terminal.
+    /// The Kitty ids of previews that a sharp thumbnail replaced, for the next grid write.
     pub(crate) stale_image_ids: Vec<(usize, u32)>,
-    /// The animation flag of each file that a thumbnail job read: true for an animated GIF,
-    /// WebP, APNG or AVIS. The grid marker reads it, so the draw reads no file header.
+    /// The animation flag of each file that a thumbnail job read. The draw reads no file header.
     pub(crate) animated: HashMap<PathBuf, bool>,
 
-    /// The images that the terminal stores, so a cell can place one by its id instead of a
-    /// transmit. The grid keeps their bytes below a budget.
+    /// The images that the terminal stores. A cell places a stored image by its id.
     pub(crate) terminal_images: TerminalImages,
-    /// The loops of the visible video and animated cells.
     pub(crate) grid_loops: grid_loops::GridLoops,
-    /// True when the LRU thumb cache was invalidated but backend storage has not been cleared yet.
-    /// Consumed by `render_gallery_images` to issue a full `d=A` at the next redraw.
+    /// True after the thumbnail cache dropped its pictures while the terminal still stores them.
+    /// The next redraw then sends a full `d=A`.
     pub(crate) graphics_storage_dirty: bool,
 }
 
 impl App {
-    /// A test app. The state file and the disk cache sit below `/dev/null`, so every write
-    /// fails quietly and no test can touch the real files. A test that needs them sets a temp path.
+    /// A test app. The state file and the disk cache sit below `/dev/null`.
     #[cfg(test)]
     pub(crate) fn new(cell_px: (u32, u32), shared_list: SharedImageList) -> Self {
         Self::new_with_config(cell_px, shared_list, &Config::default())
     }
 
-    /// A test app with `config`. The Kitty sequences go to a buffer, not to the terminal.
+    /// A test app with `config`. The Kitty sequences go to a buffer.
     #[cfg(test)]
     pub(crate) fn new_with_config(
         cell_px: (u32, u32),
@@ -296,8 +272,7 @@ impl App {
         }
     }
 
-    /// Run `write` with a handle on the graphics output, so that the output and the app can
-    /// both change inside. The `_to` twin of each write takes any `Write`, for the tests.
+    /// Run `write` with a handle on the graphics output. The output and the app can both change.
     pub(crate) fn with_graphics_out(
         &mut self,
         write: impl FnOnce(&mut Self, &mut GraphicsOutput) -> io::Result<()>,
@@ -306,7 +281,7 @@ impl App {
         write(self, &mut out)
     }
 
-    /// Wipe backend storage and drop transmitted-image tracking.
+    /// Delete every image in the terminal and forget the stored images and the placements.
     pub(crate) fn graphics_delete_all(&mut self) -> io::Result<()> {
         self.with_graphics_out(|app, out| {
             app.graphics_delete_all_to(out)?;
@@ -325,15 +300,12 @@ impl App {
         &self.images[self.current]
     }
 
-    /// True while a background job runs or waits: a decode for the view, a prefetch, a
-    /// thumbnail, a grid loop, a filter, or the scan. The loop then looks for results every few milliseconds.
     /// The prefetch counts, because only `Prefetcher::poll` starts its waiting jobs.
     pub(crate) fn has_pending_work(&self) -> bool {
         self.has_pending_work_but_loops() || self.grid_loops_pending()
     }
 
-    /// True while any background job except a grid loop job runs. A loop result needs no short
-    /// poll, so the run loop waits the idle time for it.
+    /// True while a background job other than a loop job runs. A loop result needs no short poll.
     pub(crate) fn has_pending_work_but_loops(&self) -> bool {
         self.fullscreen_decode.is_some()
             || self.zoom_state.source_rx.is_some()
@@ -345,8 +317,7 @@ impl App {
             || self.meta_pending()
     }
 
-    /// Drop the shown image, the thumbnails and the prefetch, because the list or the cell size
-    /// changed.
+    /// Drop the shown image, the thumbnails and the prefetch after a new list or cell size.
     pub(crate) fn mark_dirty(&mut self) {
         self.loaded = None;
         self.forget_thumbnails();
@@ -362,7 +333,7 @@ mod tests {
     use crate::test_support::{app, app_with};
 
     #[test]
-    fn apps_from_new_never_write_the_real_state_or_cache() {
+    fn new_never_writes_real_files() {
         let mut app = app_with(&["a.png"]);
         assert!(app.state_file.starts_with("/dev/null"));
         assert!(app.disk_cache_dir.starts_with("/dev/null"));
@@ -372,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn graphics_delete_all_forgets_the_transmitted_ids() {
+    fn delete_all_forgets_transmitted_ids() {
         let mut app = app();
         app.terminal_images.insert(7, 16);
         let mut out = Vec::new();

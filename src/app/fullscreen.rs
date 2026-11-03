@@ -11,15 +11,14 @@ use ratatui::layout::Rect;
 use std::io;
 use std::sync::mpsc;
 
-/// The decode of the fullscreen image that runs: the image, the box that it decodes for, and
-/// the receiver of the result.
+/// The running fullscreen decode: the image, its decode box and the result receiver.
 pub(super) struct FullscreenDecode {
     pub(super) index: usize,
     pub(super) rect: Rect,
     rx: mpsc::Receiver<io::Result<ScreenImage>>,
 }
 
-/// The box that the fullscreen decode fills: the pixel box of `rect`, below the payload cap.
+/// The pixel box of `rect`, below the payload cap.
 fn decode_box(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
     capped_box(box_px(rect, cell_px))
 }
@@ -96,7 +95,7 @@ impl App {
         }
     }
 
-    /// The step back stops at the first file, because the folders come before it.
+    /// The step back stops at the first file. The folders come before it.
     pub(crate) fn prev(&mut self) {
         if self.current > self.first_file() {
             self.jump_to(self.current - 1);
@@ -125,7 +124,7 @@ impl App {
             self.video_window = None;
         }
 
-        // The image on the screen goes back to the prefetch cache, so that a step back is free.
+        // The image on the screen goes back to the prefetch cache: a step back is free.
         if self.zoom <= 1.0
             && self.loaded_for_rect == self.image_rect
             && let Some(shown) = self.loaded.take()
@@ -149,7 +148,7 @@ impl App {
         }
 
         self.mode = ViewMode::Fullscreen;
-        // A prefetch result that arrived since the last pass of the loop counts as a hit.
+        // A prefetch result that arrived since the last pass counts as a hit.
         self.prefetcher.poll();
         if let Some(img) = self
             .prefetcher
@@ -163,9 +162,8 @@ impl App {
         }
     }
 
-    /// Decode the hovered cell at the size of the fullscreen box, so that Enter shows it at
-    /// once. Without the hint, the decode came back at full size and `take_resized` scaled a
-    /// 24 MP frame on the UI thread (50 ms to 70 ms).
+    /// Decode the hovered cell at the size of the fullscreen box. A decode at full size makes
+    /// `take_resized` scale the frame on the UI thread.
     pub(crate) fn pre_decode_hovered(&mut self) {
         if let Some(index) = self.gallery.selected_index()
             && !self.is_folder(index)
@@ -255,7 +253,7 @@ mod tests {
     use image::DynamicImage;
 
     #[test]
-    fn fullscreen_decode_arrives_and_stale_results_are_dropped() {
+    fn drops_stale_decode_results() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
         app.image_rect = Rect::new(0, 0, 4, 4);
@@ -268,14 +266,13 @@ mod tests {
         assert!(app.loaded.is_some());
         assert!(app.error.is_none());
 
-        // Loaded for this rect: nothing to do.
         app.load_if_needed();
         assert!(app.fullscreen_decode.is_none());
 
-        // A result for an image that is no longer current is dropped.
+        // A result for an image that is no longer current goes away.
         app.loaded = None;
         app.load_if_needed();
-        // The same request is in flight, so a second call starts nothing new.
+        // The same request is in flight. A second call starts nothing.
         app.load_if_needed();
         app.current = 1;
         wait_until(|| app.poll_fullscreen());
@@ -283,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_file_reports_the_decode_error() {
+    fn broken_file_reports_decode_error() {
         let dir = test_dir();
         let path = dir.path().join("broken.png");
         fs::write(&path, b"not a png").unwrap();
@@ -300,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_moves_inside_the_list() {
+    fn navigation_stays_inside_list() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png", "b.png", "c.png"]);
         app.enter_fullscreen_at(0);
@@ -321,7 +318,7 @@ mod tests {
         app.first();
         assert_eq!(app.current, 0);
 
-        // A prefetched neighbor shows at once.
+        // A prefetched neighbor shows now.
         app.prefetcher
             .set_target_hint(Rect::new(0, 0, 1, 1), (8, 16));
         app.prefetcher.kick(0, 0, &app.images);
@@ -341,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_gallery_drops_the_zoom_source() {
+    fn enter_gallery_drops_zoom_source() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png"]);
         app.image_rect = Rect::new(0, 0, 2, 2);
@@ -358,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn load_if_needed_takes_a_prefetched_image() {
+    fn load_takes_prefetched_image() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
         app.image_rect = Rect::new(0, 0, 1, 1);
@@ -375,11 +372,8 @@ mod tests {
         assert!(app.fullscreen_decode.is_none());
     }
 
-    /// Regression: a gallery pre-decode before the first fullscreen view has no size hint.
-    /// A large photo (an iPhone HEIC, and also a JPEG or PNG) then showed at its full size,
-    /// larger than the screen.
     #[test]
-    fn the_decode_box_stays_below_the_payload_cap() {
+    fn decode_box_stays_below_payload_cap() {
         assert_eq!(
             decode_box(Rect::new(0, 0, 240, 135), (16, 16)),
             (3840, 2160)
@@ -388,8 +382,10 @@ mod tests {
         assert!(width < 7680, "{width}");
     }
 
+    /// A gallery pre-decode before the first fullscreen view has no size hint. A large photo once
+    /// showed at its full size, larger than the screen.
     #[test]
-    fn a_pre_decode_without_a_hint_fits_the_fullscreen_box() {
+    fn pre_decode_fits_fullscreen_box() {
         let dir = test_dir();
         for name in ["large.png", "large.jpg"] {
             let path = dir.path().join(name);

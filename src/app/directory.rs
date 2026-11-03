@@ -7,11 +7,11 @@ use crate::scanner::{self, canonicalize_or_self};
 use std::path::Path;
 
 impl App {
-    /// Show the folder `dir` and start the view state again. A new scanner thread fills a new
-    /// list. The old scanner fills its old list, which nobody reads, and ends.
+    /// Show the folder `dir` and start the view state again. A new scanner thread fills a new list,
+    /// and the old scanner ends without a reader.
     pub(crate) fn switch_to_dir(&mut self, dir: &Path) {
-        // The thumbnails of this folder stay parked for the way back, keyed by the size that
-        // this folder decoded them for, so the park comes before the zoom of the new folder.
+        // The park key is the size that this folder decoded for. The park comes before the zoom of
+        // the new folder.
         self.park_thumbnails();
         let canonical = canonicalize_or_self(dir);
         self.current_dir = Some(canonical.clone());
@@ -49,15 +49,14 @@ impl App {
         self.scan_error = None;
     }
 
-    /// Apply the saved zoom level for `dir`. This runs when viewr opens a folder at start and
-    /// on every folder switch. A folder without its own entry falls back to the global saved
-    /// level, then to the configured default.
+    /// Apply the saved zoom level for `dir`. A folder without its own entry falls back to the
+    /// global level, then to the configured default.
     pub(crate) fn apply_folder_zoom(&mut self, dir: &Path) {
         let rows = self.folder_zoom_rows(dir);
         self.gallery.set_zoom_rows(rows);
     }
 
-    /// The zoom level that a switch to `dir` applies. The folder prefetch decodes for it too.
+    /// The zoom level that a switch to `dir` applies.
     pub(super) fn folder_zoom_rows(&self, dir: &Path) -> usize {
         let rows = config::load_folder_zoom(&self.state_file, dir)
             .or_else(|| config::load_global_zoom(&self.state_file))
@@ -78,7 +77,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn switching_to_a_folder_applies_its_saved_zoom_level() {
+    fn switch_applies_saved_zoom() {
         let dir = test_dir();
         let root = fs::canonicalize(dir.path()).unwrap();
         let photos = root.join("photos");

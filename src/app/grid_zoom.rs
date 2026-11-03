@@ -18,7 +18,7 @@ impl App {
         }
     }
 
-    /// Back to the configured zoom level; also forgets the remembered level for this folder.
+    /// Go back to the configured zoom level, and forget the remembered level of this folder.
     pub(crate) fn thumb_zoom_reset(&mut self) {
         if let Some(dir) = &self.current_dir {
             config::clear_folder_zoom(&self.state_file, dir);
@@ -28,15 +28,13 @@ impl App {
         }
     }
 
-    /// Show or hide the filename labels. The label row makes the thumbnails one row smaller, so
-    /// every cached one is stale, as after a zoom change.
+    /// The label row makes the thumbnails one row smaller: every cached one is stale.
     pub(crate) fn toggle_filenames(&mut self) {
         self.gallery.toggle_filenames();
         self.mark_dirty();
     }
 
-    /// The pixel size of a terminal cell changed, after a resize or a font change. The cell
-    /// shape and every thumbnail depend on it.
+    /// The cell shape and every thumbnail depend on the pixel size of a terminal cell.
     pub(crate) fn set_cell_px(&mut self, cell_px: (u32, u32)) {
         if cell_px == self.cell_px {
             return;
@@ -47,13 +45,12 @@ impl App {
         self.mark_dirty();
     }
 
-    /// Save the zoom level for this folder and as the global fallback, for the next start.
+    /// Save the zoom level for this folder and as the global fallback.
     fn remember_grid_zoom(&self) {
         let rows = u16::try_from(self.gallery.zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS);
         config::save_visible_rows(&self.state_file, self.current_dir.as_deref(), rows);
     }
 
-    /// Thumbnails are decoded for a pixel size, so every cached one is stale.
     fn after_grid_zoom_change(&mut self) {
         self.mark_dirty();
     }
@@ -68,7 +65,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn thumb_zoom_writes_the_folder_and_the_global_level_reset_clears_the_folder() {
+    fn zoom_saves_and_reset_clears() {
         let dir = test_dir();
         let folder = dir.path().join("photos");
         fs::create_dir(&folder).unwrap();
@@ -109,13 +106,12 @@ mod tests {
         );
         assert!(saved.contains("visible_rows"), "the global fallback stays");
 
-        // A second reset changes nothing.
         app.thumb_zoom_reset();
         assert_eq!(app.gallery.zoom_rows, start);
     }
 
     #[test]
-    fn the_filename_toggle_forgets_the_thumbnails_of_the_taller_box() {
+    fn filename_toggle_forgets_thumbnails() {
         let mut app = gallery_app(3);
         app.thumb_cache.insert(0, image::RgbaImage::new(1, 1));
         let rows_before = app.gallery.thumb_rows;
@@ -130,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_cell_size_forgets_the_thumbnails_and_the_same_one_changes_nothing() {
+    fn new_cell_size_forgets_thumbnails() {
         let mut app = gallery_app(3);
         app.thumb_cache.insert(0, image::RgbaImage::new(1, 1));
         app.graphics_storage_dirty = false;
@@ -140,7 +136,7 @@ mod tests {
         assert!(app.thumb_cache.contains(0), "the same size changes nothing");
         assert!(!app.graphics_storage_dirty);
 
-        // Twice as wide cells: a photo takes half the columns, so the grid gets more of them.
+        // Twice as wide cells: a photo takes half the columns, and the grid gets more of them.
         app.set_cell_px((16, 16));
         assert_eq!(app.cell_px, (16, 16));
         assert!(!app.thumb_cache.contains(0));
@@ -148,10 +144,10 @@ mod tests {
         assert!(app.gallery.grid_cols > cols_before);
     }
 
-    /// A `+` at the largest cells and a `-` at the most rows change nothing: the thumbnails
-    /// stay, no picture is deleted, and nothing draws again.
+    /// A `+` at the largest cells and a `-` at the most rows change nothing: the thumbnails stay,
+    /// no picture goes, and nothing draws again.
     #[test]
-    fn a_zoom_key_at_a_limit_keeps_the_thumbnails_and_the_pictures() {
+    fn zoom_at_limit_keeps_pictures() {
         let dir = test_dir();
         let mut app = gallery_app(3);
         app.state_file = dir.path().join("state.toml");
@@ -182,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn thumb_zoom_stops_at_the_limits() {
+    fn zoom_stops_at_limits() {
         let dir = test_dir();
         let folder = dir.path().join("photos");
         fs::create_dir(&folder).unwrap();
@@ -200,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_without_a_saved_level_uses_the_global_fallback() {
+    fn unsaved_folder_uses_global_level() {
         let dir = test_dir();
         let folder = dir.path().join("photos");
         fs::create_dir(&folder).unwrap();
