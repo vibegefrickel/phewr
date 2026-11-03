@@ -41,6 +41,11 @@ impl VideoPrestart {
         self.player.is_some()
     }
 
+    /// A run that plays once ends the prestarted ffmpeg before its own start.
+    pub(crate) fn drop_player(&mut self) {
+        self.player = None;
+    }
+
     /// Drop the player after a new frame box or a long wait. The next pass starts it again for
     /// a new box.
     fn expire(&mut self, limit: (u32, u32), now: Instant) {

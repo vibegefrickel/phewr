@@ -51,18 +51,20 @@ impl App {
     /// Take the finished loop jobs and start new ones. The poll drops the loop of a hidden cell.
     pub(crate) fn poll_grid_loops(&mut self) {
         while let Ok(result) = self.grid_loops.rx.try_recv() {
-            self.grid_loops.running.remove(&result.index);
+            // The forget cleared the flags of an old generation: the flag now belongs to a new job.
             if result.generation != self.grid_loops.generation {
                 continue;
             }
+            self.grid_loops.running.remove(&result.index);
             match result.outcome {
-                LoopOutcome::Frames(frames, delays) => {
+                LoopOutcome::Frames(frames, delays) if !frames.is_empty() => {
                     if self.gallery.visible_items().any(|(_, i)| i == result.index) {
                         let loops = self.graphics.loops();
                         self.grid_loops.insert(result.index, frames, &delays, loops);
                     }
                 }
-                LoopOutcome::Failed => {
+                // A loop without frames has nothing to place.
+                LoopOutcome::Frames(..) | LoopOutcome::Failed => {
                     self.grid_loops.failed.insert(result.index);
                 }
                 LoopOutcome::Cancelled => {}

@@ -91,6 +91,22 @@ fn frame_cuts_tail_rejects_short_data() {
 }
 
 #[test]
+fn short_frame_keeps_last_frame() {
+    let decoder = fake_decoder(info_of(640, 480, 10.0));
+    let mut player = player(&decoder, true);
+    let clock = Instant::now();
+    decoder.feed(frame(1));
+    assert!(player.poll_at(clock));
+    decoder.feed(vec![2; 10]);
+    assert!(!player.poll_at(clock + FRAME), "no new frame");
+    assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 1);
+    assert_eq!(player.dropped, 1);
+    decoder.feed(frame(3));
+    assert!(player.poll_at(clock + FRAME * 2));
+    assert_eq!(player.current_frame.as_ref().unwrap().pixels().data[0], 3);
+}
+
+#[test]
 fn late_frame_drops_for_newer_one() {
     let decoder = fake_decoder(info_of(640, 480, 10.0));
     let mut player = player(&decoder, true);

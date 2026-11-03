@@ -75,7 +75,11 @@ pub(crate) fn cube_dirs(cache_dir: &Path) -> CubeDirs {
 
 /// Without one of the session programs, the error is `NotFound` and no process starts.
 pub(crate) fn session_decoder() -> io::Result<(&'static Path, SystemDecoder)> {
-    let tools = session_tools();
+    decoder_of(session_tools())
+}
+
+/// The twin of [`session_decoder`] for any `tools`: a test reaches the path with both programs.
+fn decoder_of(tools: &Tools) -> io::Result<(&Path, SystemDecoder)> {
     let (Some(ffmpeg), Some(_)) = (tools.ffmpeg.as_deref(), tools.ffprobe.as_ref()) else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -91,7 +95,16 @@ pub(crate) fn session_first_frame(
     target: (u32, u32),
     cache_dir: &Path,
 ) -> io::Result<RgbaImage> {
-    let (ffmpeg, decoder) = session_decoder()?;
+    first_frame_of(session_tools(), path, target, cache_dir)
+}
+
+fn first_frame_of(
+    tools: &Tools,
+    path: &Path,
+    target: (u32, u32),
+    cache_dir: &Path,
+) -> io::Result<RgbaImage> {
+    let (ffmpeg, decoder) = decoder_of(tools)?;
     decode_first_frame(
         &decoder,
         ffmpeg,

@@ -41,14 +41,19 @@ impl App {
         }
         let (sender, receiver) = mpsc::channel();
         let job = path.clone();
-        thread::spawn(move || {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "the app drops the receiver only when it quits"
-            )]
-            let _ = sender.send(file_meta::read(&job));
-        });
-        self.meta.in_flight = Some((path, receiver));
+        let started = thread::Builder::new()
+            .name("viewr-meta".to_owned())
+            .spawn(move || {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "the app drops the receiver only when it quits"
+                )]
+                let _ = sender.send(file_meta::read(&job));
+            });
+        // Without a thread, the status row shows no facts, and the next request tries again.
+        if started.is_ok() {
+            self.meta.in_flight = Some((path, receiver));
+        }
     }
 
     pub(crate) fn poll_meta(&mut self) {

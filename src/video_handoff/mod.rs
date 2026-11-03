@@ -95,9 +95,17 @@ fn open_terminal_player(app: &mut App, state: &LoopState, program: &Path) {
     let path = app.current_path().to_path_buf();
     let repeat = !app.slideshow_advancing();
     let limit = frame_limit(app.fullscreen_box, app.cell_px);
-    let started = match prestart::take_prestart(app, &path, limit, Instant::now()) {
-        Some(player) if repeat => Ok(player),
-        _ => Player::open(
+    // The prestarted player loops. A run that plays once ends it first: two waiting ffmpeg
+    // runs of a 4K HLG clip hold about 900 MB.
+    let prestarted = if repeat {
+        prestart::take_prestart(app, &path, limit, Instant::now())
+    } else {
+        app.video_prestart.drop_player();
+        None
+    };
+    let started = match prestarted {
+        Some(player) => Ok(player),
+        None => Player::open(
             Rc::clone(&state.video.decoder),
             program,
             &path,

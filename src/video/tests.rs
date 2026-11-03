@@ -1,7 +1,8 @@
 //! Tests of the first frame, the session lookup and the video extensions.
 
 use super::{
-    Tools, convert_first_frame, decode_first_frame, first_frame_cube, is_video, session_first_frame,
+    Tools, convert_first_frame, decode_first_frame, decoder_of, first_frame_cube, first_frame_of,
+    is_video, session_first_frame,
 };
 use crate::decode::color::ColorTarget;
 use crate::player::SystemDecoder;
@@ -95,6 +96,32 @@ fn no_session_lookup_starts_nothing() {
     let error =
         session_first_frame(Path::new("clip.mp4"), (32, 24), Path::new("/dev/null")).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+}
+
+/// Fake paths that hold no program: the probe fails to start, and no ffmpeg runs.
+#[test]
+fn tools_reach_the_decoder() {
+    let dir = test_dir();
+    let tools = Tools {
+        ffmpeg: Some(dir.path().join("ffmpeg")),
+        ffprobe: Some(dir.path().join("ffprobe")),
+    };
+    let (ffmpeg, _) = decoder_of(&tools).unwrap();
+    assert_eq!(ffmpeg, dir.path().join("ffmpeg"));
+    let missing = Tools {
+        ffprobe: None,
+        ..tools.clone()
+    };
+    assert!(decoder_of(&missing).is_err());
+
+    let clip = dir.path().join("clip.mp4");
+    std::fs::write(&clip, b"no video").unwrap();
+    let error = first_frame_of(&tools, &clip, (32, 24), dir.path()).unwrap_err();
+    assert_ne!(
+        error.to_string(),
+        decoder_of(&missing).err().unwrap().to_string(),
+        "the tools pass the lookup"
+    );
 }
 
 #[test]

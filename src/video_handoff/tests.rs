@@ -5,6 +5,7 @@ use crate::app::ViewMode;
 use crate::config::VideoPlayer;
 use crate::encoder::{KittyBackend, Transfer};
 use crate::keys::fullscreen::handle_fullscreen_key;
+use crate::mpv;
 use crate::player::SystemDecoder;
 use crate::test_support::video::{
     clip_info, fake_decoder, fake_runner, fullscreen_video_app, gallery_app_on_video, last_start,
@@ -335,4 +336,33 @@ fn enter_on_placeholder_replays() {
     assert_eq!(app.mode, ViewMode::Video);
     play_videos(&mut app, &mut state, &mut runner);
     assert!(app.video.is_some());
+}
+
+/// A step that moved nothing names the end of the list that it hit.
+#[test]
+fn step_past_list_end_names_end() {
+    let cases = [
+        (
+            ["clip.mp4", "last.mov"],
+            1,
+            mpv::NEXT_FILE,
+            "last.mov is the last file",
+        ),
+        (
+            ["first.mp4", "b.mov"],
+            0,
+            mpv::PREVIOUS_FILE,
+            "first.mp4 is the first file",
+        ),
+    ];
+    for (names, index, code, note) in cases {
+        let mut app = gallery_app_on_video(&names, index);
+        let mut state = window_state();
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
+        runner.window.take().unwrap().send(Some(code)).unwrap();
+        super::window::poll_mpv_window(&mut app, &mut state);
+        assert_eq!(app.current, index, "the step moved nothing");
+        assert_eq!(state.status.as_deref(), Some(note));
+    }
 }

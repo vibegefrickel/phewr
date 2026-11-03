@@ -82,9 +82,14 @@ impl CellLoop {
         }
     }
 
+    /// A loop without ids gives 0, the Kitty id of no image.
     pub(crate) fn id_at(&self, tick: u64) -> u32 {
         let (frame, _) = self.position(tick);
-        self.ids[frame.min(self.ids.len() - 1)]
+        self.ids
+            .get(frame)
+            .or_else(|| self.ids.last())
+            .copied()
+            .unwrap_or_default()
     }
 
     pub(super) fn next_change(&self, tick: u64) -> u64 {
@@ -157,6 +162,14 @@ mod tests {
         assert_eq!(cell.next_change(16), 20);
         cell.start_at(100);
         assert_eq!(cell.start, Some(START_ALIGN), "a running clock stays");
+    }
+
+    #[test]
+    fn loop_without_frames_has_no_id() {
+        let mut cell = CellLoop::new(Vec::new(), &[], 100, false);
+        assert_eq!(cell.id_at(0), 0);
+        cell.start_at(0);
+        assert_eq!(cell.id_at(7), 0);
     }
 
     #[test]

@@ -202,7 +202,8 @@ fn cursor_move_cancels_before_next_file() {
     app.tick_folder_prefetch(start);
     // A grid job holds the new thread before its first file.
     queue_grid_job(app);
-    app.start_folder_prefetch();
+    let key = app.folder_prefetch.rest.clone().unwrap().0;
+    app.start_folder_prefetch(key);
     let control = Arc::clone(&app.folder_prefetch.running.as_ref().unwrap().control);
     assert!(control.paused.load(Ordering::Acquire));
     app.clear_thumb_queue();
@@ -288,7 +289,8 @@ fn grid_jobs_hold_start_and_pause() {
     app.tick_folder_prefetch(due);
     assert_eq!(app.folder_prefetch_running(), None, "the grid has a job");
 
-    app.start_folder_prefetch();
+    let key = app.folder_prefetch.rest.clone().unwrap().0;
+    app.start_folder_prefetch(key);
     app.tick_folder_prefetch(due);
     let control = Arc::clone(&app.folder_prefetch.running.as_ref().unwrap().control);
     assert!(control.paused.load(Ordering::Acquire));

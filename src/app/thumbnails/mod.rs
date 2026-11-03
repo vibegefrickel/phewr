@@ -146,10 +146,11 @@ impl App {
     pub(crate) fn poll_thumbnails(&mut self) -> Vec<usize> {
         let mut new_indices = Vec::new();
         while let Ok(result) = self.thumb_jobs.rx.try_recv() {
-            self.slots_of(result.phase).running.remove(&result.index);
+            // The forget cleared the slots of an old generation: the slot now belongs to a new job.
             if result.generation != self.thumb_jobs.generation {
                 continue;
             }
+            self.slots_of(result.phase).running.remove(&result.index);
             self.store_animation_flag(result.index, result.animated);
             let stored = match result.image {
                 ThumbImage::Sharp(picture) => self.store_thumbnail(result.index, picture, true),
@@ -309,7 +310,10 @@ impl App {
             target: thumb_target_px(rect, self.cell_px),
             cell_px: self.cell_px,
         };
-        if let Some(parked) = self.thumb_cache.take_parked(&self.images[index], key) {
+        let Some(path) = self.images.get(index) else {
+            return;
+        };
+        if let Some(parked) = self.thumb_cache.take_parked(path, key) {
             self.store_thumbnail(index, parked, true);
             return;
         }
@@ -321,7 +325,7 @@ impl App {
                 self.thumb_jobs.previews.waiting.push_back(job);
             }
         }
-        if self.sharp_job_waits(&self.images[index]) || !self.thumb_jobs.sharp.has_free_slot() {
+        if self.waiting_job_holds(&job) || !self.thumb_jobs.sharp.has_free_slot() {
             self.thumb_jobs.sharp.waiting.push_back(job);
             self.read_cache_ahead(job);
             return;
@@ -347,7 +351,9 @@ impl App {
     }
 
     fn wants_preview(&self, index: usize) -> bool {
-        has_embedded_preview(&self.images[index])
+        self.images
+            .get(index)
+            .is_some_and(|path| has_embedded_preview(path))
             && !self.thumb_cache.contains(index)
             && !self.thumb_jobs.previews.holds(index)
     }
@@ -588,10 +594,46 @@ mod folder_switch_tests {
 
 #[cfg(test)]
 mod slot_tests {
-    use super::{AnimationFlag, MAX_ANIMATION_FLAGS, MAX_CACHE_READS, MAX_THUMB_JOBS, ThumbJob};
+    use super::{
+        AnimationFlag, MAX_ANIMATION_FLAGS, MAX_CACHE_READS, MAX_THUMB_JOBS, ThumbImage, ThumbJob,
+        ThumbPhase, ThumbResult,
+    };
     use crate::test_support::{app_with, app_with_files, test_dir, wait_until};
     use ratatui::layout::Rect;
     use std::path::PathBuf;
+
+    /// A late result of the old generation must not free the slot of the new job.
+    #[test]
+    fn old_result_keeps_new_job_slot() {
+        let mut app = app_with(&["a.png"]);
+        app.thumb_jobs.sharp.running.insert(0);
+        let old_generation = app.thumb_jobs.generation;
+        app.forget_thumbnails();
+        app.thumb_jobs.sharp.running.insert(0);
+        app.thumb_jobs
+            .tx
+            .send(ThumbResult {
+                generation: old_generation,
+                index: 0,
+                phase: ThumbPhase::Sharp,
+                image: ThumbImage::Miss,
+                animated: None,
+            })
+            .unwrap();
+        assert!(app.poll_thumbnails().is_empty());
+        assert!(
+            app.thumb_jobs.sharp.running.contains(&0),
+            "the new job runs"
+        );
+    }
+
+    #[test]
+    fn index_past_list_starts_nothing() {
+        let mut app = app_with(&["a.heic"]);
+        app.spawn_thumb_decode(5, Rect::new(0, 0, 1, 1));
+        assert!(!app.wants_preview(5));
+        assert!(app.thumb_jobs.sharp.is_idle() && app.thumb_jobs.previews.is_idle());
+    }
 
     #[test]
     fn full_read_slots_queue_reads() {

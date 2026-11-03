@@ -2,8 +2,9 @@
 
 use super::{App, ViewMode};
 use crate::decode;
+use crate::gallery::DEFAULT_IMAGE_ASPECT;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -32,13 +33,18 @@ impl App {
         self.shape_rx = Some((rx, Instant::now()));
         // A thread of its own: after a directory switch, the rayon pool can be full of old decodes,
         // and the first screen waits for this read.
-        thread::spawn(move || {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "a closed receiver means that a new scan replaced this one"
-            )]
-            let _ = tx.send(decode::shape::folder_aspect(&paths));
-        });
+        let started = thread::Builder::new()
+            .name("viewr-shape".to_owned())
+            .spawn(move || {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "a closed receiver means that a new scan replaced this one"
+                )]
+                let _ = tx.send(decode::shape::folder_aspect(&paths));
+            });
+        if started.is_err() {
+            self.take_cell_shape(DEFAULT_IMAGE_ASPECT);
+        }
     }
 
     /// True while the header read runs. The thumbnail decodes wait: no cell decodes twice for two
@@ -55,13 +61,19 @@ impl App {
 
     /// Take the folder shape. A changed grid drops the thumbnails.
     pub(crate) fn poll_cell_shape(&mut self) {
-        let Some(aspect) = self
-            .shape_rx
-            .as_ref()
-            .and_then(|(rx, _)| rx.try_recv().ok())
-        else {
+        let Some((rx, _)) = &self.shape_rx else {
             return;
         };
+        let aspect = match rx.try_recv() {
+            Ok(aspect) => aspect,
+            Err(TryRecvError::Empty) => return,
+            // A header thread that died must not hold the thumbnail decodes forever.
+            Err(TryRecvError::Disconnected) => DEFAULT_IMAGE_ASPECT,
+        };
+        self.take_cell_shape(aspect);
+    }
+
+    fn take_cell_shape(&mut self, aspect: f64) {
         self.shape_rx = None;
         if self.gallery.set_cell_shape(aspect, self.cell_px) {
             self.forget_thumbnails();
@@ -131,6 +143,21 @@ mod tests {
         );
         app.request_cell_shape();
         assert!(app.cell_shape_pending());
+    }
+
+    #[test]
+    fn dead_shape_thread_takes_default() {
+        let mut app = app();
+        app.gallery.update_grid(Rect::new(0, 0, 120, 20));
+        let default_cols = app.gallery.grid_cols;
+        app.gallery.set_cell_shape(0.5, app.cell_px);
+        assert_ne!(app.gallery.grid_cols, default_cols);
+        let (tx, rx) = std::sync::mpsc::channel::<f64>();
+        drop(tx);
+        app.shape_rx = Some((rx, std::time::Instant::now()));
+        app.poll_cell_shape();
+        assert!(!app.cell_shape_pending());
+        assert_eq!(app.gallery.grid_cols, default_cols);
     }
 
     #[test]

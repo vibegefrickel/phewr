@@ -10,12 +10,13 @@ mod parse;
 use super::tone_map::{Hdr, Primaries};
 use lru::LruCache;
 use parse::parse;
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::{self, Read};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -151,7 +152,15 @@ pub(crate) fn probe_cached(program: &Path, path: &Path) -> io::Result<VideoInfo>
 
 /// The probes of the session, keyed by path. A changed mtime or length probes again.
 struct ProbeCache {
-    entries: Mutex<LruCache<PathBuf, (FileStamp, VideoInfo)>>,
+    state: Mutex<CacheState>,
+    /// Wakes the callers that wait for a probe of their path.
+    probed: Condvar,
+}
+
+struct CacheState {
+    entries: LruCache<PathBuf, (FileStamp, VideoInfo)>,
+    /// The paths whose ffprobe runs now.
+    probing: HashSet<PathBuf>,
 }
 
 type FileStamp = (Option<SystemTime>, u64);
@@ -160,11 +169,16 @@ impl ProbeCache {
     fn new(capacity: usize) -> Self {
         let capacity = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN);
         Self {
-            entries: Mutex::new(LruCache::new(capacity)),
+            state: Mutex::new(CacheState {
+                entries: LruCache::new(capacity),
+                probing: HashSet::new(),
+            }),
+            probed: Condvar::new(),
         }
     }
 
-    /// Only a success goes into the cache.
+    /// Only a success goes into the cache. A second caller for the same path waits for the
+    /// running probe, and the lock stays free while ffprobe runs.
     fn get_or_probe(
         &self,
         path: &Path,
@@ -172,22 +186,51 @@ impl ProbeCache {
     ) -> io::Result<VideoInfo> {
         let metadata = std::fs::metadata(path)?;
         let stamp = (metadata.modified().ok(), metadata.len());
-        let cached = self
-            .lock()
-            .get(path)
-            .filter(|(cached_stamp, _)| *cached_stamp == stamp)
-            .map(|(_, info)| info.clone());
-        if let Some(info) = cached {
-            return Ok(info);
+        let mut state = self.lock();
+        loop {
+            let cached = state
+                .entries
+                .get(path)
+                .filter(|(cached_stamp, _)| *cached_stamp == stamp);
+            if let Some((_, info)) = cached {
+                return Ok(info.clone());
+            }
+            if !state.probing.contains(path) {
+                break;
+            }
+            state = self
+                .probed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
         }
+        state.probing.insert(path.to_path_buf());
+        drop(state);
+        let probing = Probing { cache: self, path };
         let info = run()?;
-        self.lock().put(path.to_path_buf(), (stamp, info.clone()));
+        probing
+            .cache
+            .lock()
+            .entries
+            .put(path.to_path_buf(), (stamp, info.clone()));
         Ok(info)
     }
 
     /// A thumbnail job that panicked leaves the entries usable.
-    fn lock(&self) -> std::sync::MutexGuard<'_, LruCache<PathBuf, (FileStamp, VideoInfo)>> {
-        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, CacheState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Ends the probe of `path` also on an error or a panic: no caller waits forever.
+struct Probing<'a> {
+    cache: &'a ProbeCache,
+    path: &'a Path,
+}
+
+impl Drop for Probing<'_> {
+    fn drop(&mut self) {
+        self.cache.lock().probing.remove(self.path);
+        self.cache.probed.notify_all();
     }
 }
 
@@ -260,6 +303,8 @@ mod tests {
     use std::cell::Cell;
     use std::path::Path;
     use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::time::Duration;
 
     #[test]
@@ -322,6 +367,59 @@ mod tests {
         assert!(cache.get_or_probe(other.path(), error).is_err());
         cache.get_or_probe(other.path(), run).unwrap();
         assert_eq!(runs.get(), 3, "an error does not go into the cache");
+    }
+
+    /// The first probe holds until the second caller had 100 ms to start its own ffprobe.
+    #[test]
+    fn second_caller_waits_for_running_probe() {
+        let cache = ProbeCache::new(8);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "clip").unwrap();
+        let second_runs = AtomicUsize::new(0);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (cache, path) = (&cache, file.path());
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                cache.get_or_probe(path, || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(crate::test_support::video::clip_info())
+                })
+            });
+            started_rx.recv().unwrap();
+            let second = scope.spawn(|| {
+                cache.get_or_probe(path, || {
+                    second_runs.fetch_add(1, Ordering::SeqCst);
+                    Ok(crate::test_support::video::clip_info())
+                })
+            });
+            for _ in 0..10 {
+                if second_runs.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            release_tx.send(()).unwrap();
+            assert!(second.join().unwrap().is_ok());
+        });
+        assert_eq!(
+            second_runs.load(Ordering::SeqCst),
+            0,
+            "one ffprobe per path"
+        );
+    }
+
+    #[test]
+    fn panicked_probe_frees_path() {
+        let cache = ProbeCache::new(8);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cache.get_or_probe(file.path(), || panic!("synthetic probe panic"))
+        }));
+        assert!(panicked.is_err());
+        let info = cache.get_or_probe(file.path(), || Ok(crate::test_support::video::clip_info()));
+        assert!(info.is_ok(), "the next caller probes and does not wait");
     }
 
     #[test]

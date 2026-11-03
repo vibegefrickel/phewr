@@ -257,7 +257,8 @@ fn finish_render(app: &mut App, pending_emits: &mut Vec<usize>) {
 /// How long the loop waits for the next event.
 ///
 /// No event wakes the loop when a decode finishes. The wait is the latency of every background
-/// result. A running grid loop job alone gives no busy poll.
+/// result. A running grid loop job alone gives no busy poll. While the player runs, the frame
+/// clock sets the wait, and background results wait for the next frame.
 pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     if app.mode == ViewMode::Gallery && (!pending_emits.is_empty() || app.loops_to_send()) {
         return Duration::ZERO;

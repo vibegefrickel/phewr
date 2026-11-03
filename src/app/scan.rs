@@ -18,12 +18,11 @@ impl App {
             self.needs_render = true;
         }
 
-        let new_len = self.shared_list.len();
-        if new_len > self.known_len {
-            let (new_paths, new_filenames) = self.shared_list.entries_since(self.known_len);
+        if self.shared_list.len() > self.known_len {
+            let batch = self.shared_list.batch_since(self.known_len);
             let old_len = self.images.len();
-            self.images.extend(new_paths);
-            self.filenames.extend(new_filenames);
+            self.images.extend(batch.paths);
+            self.filenames.extend(batch.filenames);
             self.folder_count = self.shared_list.folder_count();
 
             if self.gallery.search_query.is_empty() {
@@ -34,7 +33,7 @@ impl App {
                 self.update_filter();
             }
 
-            self.known_len = new_len;
+            self.known_len = batch.len;
             if old_len == 0 {
                 self.needs_render = true;
             }

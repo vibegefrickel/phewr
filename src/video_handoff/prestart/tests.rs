@@ -311,6 +311,27 @@ fn enter_takes_player() {
 }
 
 #[test]
+fn slideshow_drops_prestart() {
+    let decoder = fake_decoder(clip_info());
+    let mut app = gallery_on_video();
+    rest_until_started(&mut app, &decoder, Instant::now());
+    press(&mut app, KeyCode::Enter);
+    app.start_slideshow();
+    let (_log, mut runner) = crate::test_support::video::fake_runner();
+    let mut state = state_with(VideoPlayer::Terminal, Rc::clone(&decoder));
+    crate::video_handoff::start_video_view(&mut app, &mut state, &mut runner);
+    assert_eq!(
+        decoder.starts().len(),
+        2,
+        "the slideshow starts a run that plays once"
+    );
+    assert!(
+        !app.video_prestart.running(),
+        "the prestarted ffmpeg ends before the new run"
+    );
+}
+
+#[test]
 fn deadline_counts_from_enter() {
     let decoder = fake_decoder(clip_info());
     let mut app = gallery_on_video();

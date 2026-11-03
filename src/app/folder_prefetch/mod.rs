@@ -138,9 +138,13 @@ impl App {
         }
         let due = prefetch
             .waiting_rest()
-            .is_some_and(|(_, since)| now.duration_since(*since) >= FOLDER_PREFETCH_DELAY);
-        if due && !busy && !prefetch.is_stopping() {
-            self.start_folder_prefetch();
+            .filter(|(_, since)| now.duration_since(*since) >= FOLDER_PREFETCH_DELAY)
+            .map(|(key, _)| key.clone());
+        if let Some(key) = due
+            && !busy
+            && !prefetch.is_stopping()
+        {
+            self.start_folder_prefetch(key);
         }
     }
 
@@ -190,23 +194,30 @@ impl App {
             .filter(|&index| index < self.images.len())
     }
 
-    /// The thread starts paused while the grid has work.
-    fn start_folder_prefetch(&mut self) {
-        let Some((key, _)) = self.folder_prefetch.rest.clone() else {
-            return;
-        };
+    /// The thread starts paused while the grid has work. A folder without a thread counts as
+    /// done: the run loop does not try again every 10 ms.
+    fn start_folder_prefetch(&mut self, key: RestKey) {
         let request = self.folder_request(&key.folder);
         let control = Arc::new(Control::default());
         control
             .paused
             .store(self.has_pending_work(), Ordering::Release);
         let worker = Arc::clone(&control);
-        let handle = thread::spawn(move || prefetch(&request, &worker));
-        self.folder_prefetch.running = Some(Running {
-            key,
-            control,
-            handle,
-        });
+        let started = thread::Builder::new()
+            .name("viewr-folder-prefetch".to_owned())
+            .spawn(move || prefetch(&request, &worker));
+        match started {
+            Ok(handle) => {
+                self.folder_prefetch.running = Some(Running {
+                    key,
+                    control,
+                    handle,
+                });
+            }
+            Err(_) => {
+                self.folder_prefetch.done.insert(key.folder);
+            }
+        }
     }
 
     fn folder_request(&self, folder: &Path) -> Request {

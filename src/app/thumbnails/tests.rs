@@ -297,15 +297,10 @@ fn drops_old_generation_results() {
         .tx
         .send(result(current, 1, ThumbPhase::Sharp, true))
         .unwrap();
-    app.thumb_jobs.sharp.running.insert(0);
 
     assert_eq!(app.poll_thumbnails(), vec![1]);
     assert!(!app.thumb_cache.contains(0));
     assert!(app.thumb_cache.contains(1));
-    assert!(
-        !app.thumb_jobs.sharp.running.contains(&0),
-        "a stale result still ends the load"
-    );
 }
 
 #[test]
@@ -378,28 +373,20 @@ fn only_libheif_sharp_jobs_wait() {
     app.spawn_thumb_decode(1, rect);
     app.spawn_thumb_decode(0, rect);
 
-    {
-        assert_eq!(
-            app.thumb_jobs.sharp.waiting.len(),
-            1,
-            "the HEIC sharp job waits"
-        );
-        assert!(
-            app.thumb_jobs.sharp.running.contains(&0),
-            "the PNG decodes at once"
-        );
-        assert_eq!(app.poll_thumbnails(), Vec::<usize>::new());
-        assert_eq!(
-            app.thumb_jobs.sharp.waiting.len(),
-            1,
-            "the poll keeps the HEIC job waiting"
-        );
-    }
-    #[cfg(not(feature = "heic"))]
     assert_eq!(
-        app.thumb_jobs.sharp.running.len(),
-        2,
-        "without libheif, no job waits"
+        app.thumb_jobs.sharp.waiting.len(),
+        1,
+        "the HEIC sharp job waits"
+    );
+    assert!(
+        app.thumb_jobs.sharp.running.contains(&0),
+        "the PNG decodes at once"
+    );
+    assert_eq!(app.poll_thumbnails(), Vec::<usize>::new());
+    assert_eq!(
+        app.thumb_jobs.sharp.waiting.len(),
+        1,
+        "the poll keeps the HEIC job waiting"
     );
 }
 

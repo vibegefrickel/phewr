@@ -114,7 +114,6 @@ fn pad_centered(image: RgbaImage, canvas: (u32, u32)) -> RgbaImage {
 }
 
 #[cfg(test)]
-#[cfg(feature = "heic")]
 mod tests {
     use super::pad_for_grid;
     use image::RgbaImage;

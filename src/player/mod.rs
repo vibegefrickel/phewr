@@ -252,8 +252,14 @@ impl Player {
                 return false;
             };
             let (_, bytes_per_pixel) = pixel_format(&self.info);
-            self.current_frame = Frame::pooled(self.frame, bytes_per_pixel == 4, frame);
+            let shown = Frame::pooled(self.frame, bytes_per_pixel == 4, frame);
             self.catch_up(now);
+            // A short frame drops, and the screen keeps the last frame.
+            let Some(shown) = shown else {
+                self.dropped += 1;
+                return false;
+            };
+            self.current_frame = Some(shown);
             return true;
         }
     }

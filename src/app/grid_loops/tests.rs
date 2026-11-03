@@ -176,6 +176,48 @@ fn cancelled_result_leaves_cell_free() {
     );
 }
 
+/// A late result of the old generation must not take the cancel flag of the new job.
+#[test]
+fn old_result_keeps_new_cancel_flag() {
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
+    app.pretend_loop_job(0);
+    let old_generation = app.grid_loops.generation;
+    app.forget_grid_loops();
+    app.pretend_loop_job(0);
+    let flag = std::sync::Arc::clone(&app.grid_loops.running[&0]);
+    app.grid_loops
+        .tx
+        .send(super::LoopResult {
+            generation: old_generation,
+            index: 0,
+            outcome: super::LoopOutcome::Cancelled,
+        })
+        .unwrap();
+    app.poll_grid_loops();
+    assert!(app.grid_loops.running.contains_key(&0), "the new job runs");
+    app.grid_loops.cancel_jobs();
+    assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[test]
+fn loop_without_frames_fails() {
+    let dir = test_dir();
+    let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
+    app.mode = ViewMode::Fullscreen;
+    app.grid_loops
+        .tx
+        .send(super::LoopResult {
+            generation: app.grid_loops.generation,
+            index: 0,
+            outcome: super::LoopOutcome::Frames(Vec::new(), Vec::new()),
+        })
+        .unwrap();
+    app.poll_grid_loops();
+    assert!(app.grid_loops.loops.is_empty());
+    assert!(app.grid_loops.failed.contains(&0));
+}
+
 #[test]
 fn at_most_four_jobs_run() {
     let dir = test_dir();

@@ -18,6 +18,13 @@ pub(crate) struct FolderEntry {
     pub(crate) name: String,
 }
 
+/// New entries of the list and the list length that they end at.
+pub(crate) struct Batch {
+    pub(crate) paths: Vec<PathBuf>,
+    pub(crate) filenames: Vec<String>,
+    pub(crate) len: usize,
+}
+
 struct Inner {
     paths: Vec<PathBuf>,
     filenames: Vec<String>,
@@ -117,10 +124,19 @@ impl SharedImageList {
 
     /// A copy of the entries from `known_len` on.
     pub(crate) fn entries_since(&self, known_len: usize) -> (Vec<PathBuf>, Vec<String>) {
+        let batch = self.batch_since(known_len);
+        (batch.paths, batch.filenames)
+    }
+
+    /// The entries from `known_len` on with the length after them, from one lock. A batch that
+    /// the scanner pushes during the poll then comes in the next poll, not twice.
+    pub(crate) fn batch_since(&self, known_len: usize) -> Batch {
         let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        let paths = inner.paths[known_len..].to_vec();
-        let filenames = inner.filenames[known_len..].to_vec();
-        (paths, filenames)
+        Batch {
+            paths: inner.paths[known_len..].to_vec(),
+            filenames: inner.filenames[known_len..].to_vec(),
+            len: inner.paths.len(),
+        }
     }
 
     /// The first `folder_count` entries of `paths` are folders.
@@ -174,6 +190,23 @@ mod tests {
 
         let (empty, _) = list.entries_since(2);
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn batch_ends_at_its_own_length() {
+        let list = SharedImageList::new();
+        list.push_batch(vec![PathBuf::from("a.png")]);
+        let known_len = list.len();
+        // The scanner pushes after the poll read the length.
+        list.push_batch(vec![PathBuf::from("b.png"), PathBuf::from("c.png")]);
+        let batch = list.batch_since(known_len);
+        assert_eq!(
+            batch.paths,
+            [PathBuf::from("b.png"), PathBuf::from("c.png")]
+        );
+        assert_eq!(batch.filenames, ["b.png", "c.png"]);
+        assert_eq!(batch.len, 3);
+        assert!(list.batch_since(batch.len).paths.is_empty());
     }
 
     #[test]
