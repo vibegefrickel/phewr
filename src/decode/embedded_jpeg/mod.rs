@@ -17,7 +17,7 @@ use psd::find_in_psd;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
-use tiff::{find_in_tiff, ifd0_orientation};
+use tiff::{find_in_tiff, find_in_tiff_by, ifd0_orientation};
 
 const WITHOUT_PREVIEW: &[&str] = &["jp2", "pdf", "svg", "icns", "sgi", "dds", "pict"];
 
@@ -94,6 +94,47 @@ pub(crate) fn decode(
     let mut source = Source::open(path)?;
     let data = source.read_at(jpeg.offset, jpeg.length)?;
     decode_jpeg_bytes(&data, target, jpeg.orientation)
+}
+
+/// The shortest side of a reference picture. A smaller thumbnail tells too little.
+const REFERENCE_MIN_SIDE: u32 = 32;
+
+/// How much of the preview JPEG to read for its EXIF block.
+const EXIF_HEAD_BYTES: u64 = 64 * 1024;
+
+/// True when `found` is a better reference than `best`: big enough, and then the smaller one.
+fn smaller_reference(found: &EmbeddedJpeg, best: &EmbeddedJpeg) -> bool {
+    let big_enough = |jpeg: &EmbeddedJpeg| jpeg.width.min(jpeg.height) >= REFERENCE_MIN_SIDE;
+    big_enough(found) && (!big_enough(best) || found.pixels() < best.pixels())
+}
+
+/// A small picture of the same image as `jpeg`, oriented like `jpeg`, for a pixel compare. It
+/// decodes the smallest JPEG of the file or the EXIF thumbnail of `jpeg` instead of the large
+/// preview, because the entropy decode of the large one takes 30 ms to 60 ms.
+pub(crate) fn decode_reference(
+    path: &Path,
+    jpeg: &EmbeddedJpeg,
+    target: (u32, u32),
+) -> Option<Decoded> {
+    let mut source = Source::open(path).ok()?;
+    let (found, data) = if scanner::has_extension(path, &["raf"]) {
+        let head = source
+            .read_at(jpeg.offset, jpeg.length.min(EXIF_HEAD_BYTES))
+            .ok()?;
+        let start = head.windows(6).position(|window| window == b"Exif\0\0")? + 6;
+        let mut exif = Source::from_reader(io::Cursor::new(head[start..].to_vec())).ok()?;
+        let found = find_in_tiff_by(&mut exif, 0, smaller_reference)?;
+        let data = exif.read_at(found.offset, found.length).ok()?;
+        (found, data)
+    } else {
+        let found = find_in_tiff_by(&mut source, 0, smaller_reference)?;
+        let data = source.read_at(found.offset, found.length).ok()?;
+        (found, data)
+    };
+    if found.width.min(found.height) < REFERENCE_MIN_SIDE {
+        return None;
+    }
+    decode_jpeg_bytes(&data, Some(target), jpeg.orientation).ok()
 }
 
 /// `None` when `jpeg` does not cover `box_px`. The caller then decodes the primary image.

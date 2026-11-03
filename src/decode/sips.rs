@@ -11,7 +11,7 @@ use crate::decode::raster::{add_file_color, decode_upright};
 use crate::decode::resize::scaled_down_size;
 use crate::scanner;
 use image::metadata::Orientation;
-use image::{DynamicImage, ImageFormat, ImageReader, Rgba};
+use image::{DynamicImage, GenericImageView, GrayImage, ImageFormat, ImageReader, Luma, Rgba};
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,17 @@ const VECTOR_EXTENSIONS: &[&str] = &["pdf", "svg"];
 
 /// sips writes a vector image at 72 dpi by default: a letter page is only 612x792 px.
 const VECTOR_ZOOM_SIDE: u32 = 4096;
+
+/// Side of the gray pictures that decide a flip: 32x32 keeps the compare below 1 ms.
+const COMPARE_SIDE: u32 = 32;
+
+/// Samples per row and column of one gray cell.
+const COMPARE_SAMPLES: u32 = 4;
+
+/// The oriented candidate must come closer to the preview by this many gray levels (mean over
+/// the picture). The tone of a develop differs from the preview in both candidates alike, so a
+/// symmetric or flat picture gives a gap near 0 and keeps the develop as it is.
+const FLIP_MARGIN: f32 = 2.0;
 
 /// A covering embedded JPEG wins over sips. The zoom has no target and gets the full image from
 /// sips, which the embedded JPEG corrects.
@@ -55,19 +66,84 @@ fn corrected(
         // sips develops some RW2 files black, and a smaller picture beats a black one.
         return embedded_jpeg::decode(path, jpeg, target).unwrap_or(developed);
     }
-    turned_like(developed, jpeg)
+    turned_like(path, developed, jpeg)
 }
 
 /// sips ignores the orientation of RAF and ARW files. A result with the turned aspect stays,
-/// because sips turned it already.
-fn turned_like(mut developed: Decoded, jpeg: &EmbeddedJpeg) -> Decoded {
+/// because sips turned it already. The aspect cannot show a flip or a square turn: the pixel
+/// compare decides there.
+fn turned_like(path: &Path, mut developed: Decoded, jpeg: &EmbeddedJpeg) -> Decoded {
     let size = (developed.image.width(), developed.image.height());
+    let Some((exif, orientation)) = jpeg
+        .orientation
+        .and_then(|exif| Some((exif, Orientation::from_exif(exif)?)))
+    else {
+        return developed;
+    };
     if preview_turns(size, jpeg)
-        && let Some(orientation) = jpeg.orientation.and_then(Orientation::from_exif)
+        || (scanner::has_extension(path, &["raf", "arw"])
+            && aspect_is_blind(size, (jpeg.width, jpeg.height), exif)
+            && flip_gap(path, &developed.image, jpeg, orientation)
+                .is_some_and(|gap| gap > FLIP_MARGIN))
     {
         developed.image.apply_orientation(orientation);
     }
     developed
+}
+
+/// True when the aspect cannot tell whether sips applied the orientation.
+fn aspect_is_blind(developed: (u32, u32), stored: (u32, u32), orientation: u8) -> bool {
+    let square = |(width, height): (u32, u32)| width == height;
+    (2..=4).contains(&orientation)
+        || ((5..=8).contains(&orientation) && (square(developed) || square(stored)))
+}
+
+/// How much closer the oriented develop is to the small reference picture than the develop as
+/// it is, in mean gray levels. `None` when the file has no usable reference.
+fn flip_gap(
+    path: &Path,
+    developed: &DynamicImage,
+    jpeg: &EmbeddedJpeg,
+    orientation: Orientation,
+) -> Option<f32> {
+    let reference = embedded_jpeg::decode_reference(path, jpeg, (COMPARE_SIDE, COMPARE_SIDE))?;
+    let reference = gray_thumbnail(&reference.image);
+    let unoriented = gray_thumbnail(developed);
+    let mut oriented = DynamicImage::ImageLuma8(unoriented.clone());
+    oriented.apply_orientation(orientation);
+    let oriented = oriented.into_luma8();
+    Some(mean_difference(&unoriented, &reference) - mean_difference(&oriented, &reference))
+}
+
+/// A gray picture of `COMPARE_SIDE` squared pixels. It averages a grid of samples per cell
+/// instead of a resize, because a resize of 40 MP reads every pixel.
+fn gray_thumbnail(image: &DynamicImage) -> GrayImage {
+    let samples = COMPARE_SIDE * COMPARE_SAMPLES;
+    let at = |index: u32, length: u32| (index * 2 + 1) * length / (samples * 2);
+    GrayImage::from_fn(COMPARE_SIDE, COMPARE_SIDE, |cell_x, cell_y| {
+        let mut sum = 0_u32;
+        for sample_y in 0..COMPARE_SAMPLES {
+            for sample_x in 0..COMPARE_SAMPLES {
+                let x = at(cell_x * COMPARE_SAMPLES + sample_x, image.width());
+                let y = at(cell_y * COMPARE_SAMPLES + sample_y, image.height());
+                let [red, green, blue, _] = image.get_pixel(x, y).0;
+                sum +=
+                    (299 * u32::from(red) + 587 * u32::from(green) + 114 * u32::from(blue)) / 1000;
+            }
+        }
+        Luma([u8::try_from(sum / (COMPARE_SAMPLES * COMPARE_SAMPLES)).unwrap_or(u8::MAX)])
+    })
+}
+
+/// The mean absolute difference of two gray pictures of the same size, in gray levels.
+fn mean_difference(left: &GrayImage, right: &GrayImage) -> f32 {
+    let total: u64 = left
+        .as_raw()
+        .iter()
+        .zip(right.as_raw())
+        .map(|(&a, &b)| u64::from(a.abs_diff(b)))
+        .sum();
+    total as f32 / left.as_raw().len() as f32
 }
 
 /// True when `orientation` turns by 90 or 270 degrees and `developed` keeps the aspect of the
@@ -252,14 +328,18 @@ fn run(args: &[&OsStr]) -> io::Result<Output> {
 mod tests {
     use super::{
         SIPS, VECTOR_ZOOM_SIDE, argument_path, corrected, covering_side, decode, dimensions,
-        enlarged_side, is_all_black, misses_turn, parse_size, preview_turns,
+        enlarged_side, flip_gap, is_all_black, misses_turn, parse_size, preview_turns,
     };
     use crate::decode::color::SourceColor;
     use crate::decode::embedded_jpeg::find;
     use crate::decode::resize::load_and_resize_px;
     use crate::decode::{Decoded, EmbeddedThumbnail, decode_image_with_hint};
     use crate::info;
-    use crate::test_support::{test_dir, write_psd, write_tiff_raw};
+    use crate::test_support::{
+        encode_jpeg, quadrant_image, test_dir, write_psd, write_raf_with_thumbnail, write_tiff_raw,
+        write_tiff_raw_with_jpeg,
+    };
+    use image::metadata::Orientation;
     use image::{
         DynamicImage, GenericImageView, ImageBuffer, LumaA, Rgb, RgbImage, Rgba, RgbaImage,
     };
@@ -535,6 +615,123 @@ mod tests {
         assert_eq!(kept, turned);
     }
 
+    /// The preview oriented the way the RAW file asks for.
+    fn upright(stored: &RgbImage, orientation: u32) -> DynamicImage {
+        let mut image = DynamicImage::from(stored.clone());
+        image
+            .apply_orientation(Orientation::from_exif(u8::try_from(orientation).unwrap()).unwrap());
+        image
+    }
+
+    /// Both RAW kinds that sips develops without the orientation, with an EXIF thumbnail.
+    fn raw_files(dir: &Path, picture: &RgbImage, orientation: u32) -> [PathBuf; 2] {
+        let (width, height) = picture.dimensions();
+        let jpeg = encode_jpeg(picture);
+        let thumbnail = encode_jpeg(&image::imageops::resize(
+            picture,
+            width * 3 / 4,
+            height,
+            image::imageops::FilterType::Nearest,
+        ));
+        let raf = dir.join("photo.raf");
+        write_raf_with_thumbnail(&raf, &jpeg, orientation, &thumbnail);
+        let arw = dir.join("photo.arw");
+        write_tiff_raw_with_jpeg(&arw, &jpeg, orientation, Some(&thumbnail));
+        [raf, arw]
+    }
+
+    fn flip_files(dir: &Path, size: (u32, u32), orientation: u32) -> [PathBuf; 2] {
+        raw_files(dir, &quadrant_image(size.0, size.1), orientation)
+    }
+
+    /// 30 gray levels brighter than `picture`, as a develop is against the camera JPEG.
+    fn brighter(picture: &RgbImage) -> RgbImage {
+        let mut brighter = picture.clone();
+        for pixel in brighter.pixels_mut() {
+            pixel.0 = pixel.0.map(|level| level.saturating_add(30));
+        }
+        brighter
+    }
+
+    #[test]
+    fn unflipped_develop_flips_for_orientation_2_3_4() {
+        for orientation in [2, 3, 4] {
+            let dir = test_dir();
+            let stored = quadrant_image(64, 32);
+            let want = upright(&stored, orientation);
+            for path in flip_files(dir.path(), (64, 32), orientation) {
+                let jpeg = find(&path).unwrap();
+                let unflipped = DynamicImage::from(stored.clone());
+                let shown = corrected(&path, developed(unflipped.clone()), &jpeg, None).image;
+                assert_eq!(shown, want, "{} orientation {orientation}", path.display());
+                // A develop that is correct already stays.
+                let kept = corrected(&path, developed(want.clone()), &jpeg, None).image;
+                assert_eq!(kept, want, "{} orientation {orientation}", path.display());
+            }
+        }
+    }
+
+    #[test]
+    fn brighter_and_cropped_develop_still_flips() {
+        let dir = test_dir();
+        let stored = quadrant_image(64, 32);
+        // The develop is brighter and misses 2 pixels of each edge of the preview.
+        let tone = brighter(&stored);
+        let cropped = DynamicImage::from(tone).crop_imm(2, 2, 60, 28).to_rgb8();
+        for orientation in [2, 3, 4] {
+            let mut want = DynamicImage::from(cropped.clone());
+            want.apply_orientation(Orientation::from_exif(orientation).unwrap());
+            for path in flip_files(dir.path(), (64, 32), u32::from(orientation)) {
+                let jpeg = find(&path).unwrap();
+                let shown = corrected(&path, developed(cropped.clone().into()), &jpeg, None).image;
+                assert_eq!(shown, want, "{} orientation {orientation}", path.display());
+                let kept = corrected(&path, developed(want.clone()), &jpeg, None).image;
+                assert_eq!(kept, want, "{} orientation {orientation}", path.display());
+            }
+        }
+    }
+
+    #[test]
+    fn square_develop_turns_by_pixels() {
+        let dir = test_dir();
+        let stored = quadrant_image(64, 64);
+        let want = upright(&stored, 6);
+        for path in flip_files(dir.path(), (64, 64), 6) {
+            let jpeg = find(&path).unwrap();
+            let shown = corrected(&path, developed(stored.clone().into()), &jpeg, None).image;
+            assert_eq!(shown, want);
+            let kept = corrected(&path, developed(want.clone()), &jpeg, None).image;
+            assert_eq!(kept, want);
+        }
+    }
+
+    #[test]
+    fn symmetric_picture_stays() {
+        let dir = test_dir();
+        let flat = RgbImage::from_pixel(64, 32, Rgb([200, 30, 30]));
+        // Symmetric left to right, so the horizontal flip changes nothing.
+        let stripes = RgbImage::from_fn(64, 32, |x, y| {
+            let level = if (16..48).contains(&x) { 200 } else { 20 };
+            Rgb([level, level, level + u8::try_from(y).unwrap()])
+        });
+        for (picture, orientations) in [(flat, vec![2, 3, 4]), (stripes, vec![2])] {
+            for orientation in orientations {
+                // The develop is brighter than the preview, as a real develop is.
+                let develop = DynamicImage::from(brighter(&picture));
+                for path in raw_files(dir.path(), &picture, orientation) {
+                    let jpeg = find(&path).unwrap();
+                    let shown = corrected(&path, developed(develop.clone()), &jpeg, None).image;
+                    assert_eq!(
+                        shown,
+                        develop,
+                        "{} orientation {orientation}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn black_develop_takes_preview() {
         let dir = test_dir();
@@ -598,6 +795,54 @@ mod tests {
     #[ignore = "needs PHEWR_TEST_PSD, a real Photoshop file"]
     fn decodes_psd_from_env() {
         decodes_real_file("PHEWR_TEST_PSD");
+    }
+
+    /// `PHEWR_TEST_RAW=/path/to/photo.raf` or `.arw`, upright and unflipped in the file. A copy
+    /// with the orientation 2, 3 and 4 written by exiftool must show flipped like the original.
+    #[test]
+    #[ignore = "needs PHEWR_TEST_RAW, a real RAF or ARW file, and exiftool"]
+    fn real_flipped_copy_shows_upright() {
+        let Some(path) = crate::decode::real_test_file("PHEWR_TEST_RAW") else {
+            return;
+        };
+        if !crate::scanner::has_extension(&path, &["raf", "arw"]) {
+            eprintln!("skipped: {} is no RAF or ARW file", path.display());
+            return;
+        }
+        let dir = test_dir();
+        let decode_full = |file: &Path| {
+            decode_image_with_hint(file, None, EmbeddedThumbnail::Deny).expect("full decode")
+        };
+        let original = decode_full(&path);
+        for orientation in [2_u8, 3, 4] {
+            let copy = dir.path().join(path.file_name().unwrap());
+            std::fs::copy(&path, &copy).unwrap();
+            let status = Command::new("exiftool")
+                .arg(format!("-Orientation#={orientation}"))
+                .arg("-overwrite_original")
+                .arg(&copy)
+                .output()
+                .expect("exiftool")
+                .status;
+            assert!(status.success(), "exiftool cannot write the orientation");
+            let mut want = original.clone();
+            want.apply_orientation(Orientation::from_exif(orientation).unwrap());
+            assert_eq!(decode_full(&copy), want, "orientation {orientation}");
+            // The gap that decides, and what the whole compare costs on this file.
+            let jpeg = find(&copy).unwrap();
+            let rule = Orientation::from_exif(orientation).unwrap();
+            let sips = decode(&copy, None).expect("sips develop").image;
+            let start = std::time::Instant::now();
+            let gap = flip_gap(&copy, &sips, &jpeg, rule).expect("reference");
+            let spent = start.elapsed();
+            let mut turned = sips.clone();
+            turned.apply_orientation(rule);
+            let kept = flip_gap(&copy, &turned, &jpeg, rule).expect("reference");
+            eprintln!(
+                "{} orientation {orientation}: gap {gap:.2} (unoriented develop), {kept:.2} (oriented develop), {spent:?}",
+                copy.file_name().unwrap().to_string_lossy()
+            );
+        }
     }
 
     fn decodes_real_file(variable: &str) {

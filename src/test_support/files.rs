@@ -16,7 +16,19 @@ pub(crate) fn solid_jpeg(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
     encode_jpeg(&image::RgbImage::from_pixel(width, height, image::Rgb(rgb)))
 }
 
-fn encode_jpeg(image: &image::RgbImage) -> Vec<u8> {
+/// Red top left, blue top right, green bottom left, white bottom right: no flip or turn keeps it.
+pub(crate) fn quadrant_image(width: u32, height: u32) -> image::RgbImage {
+    image::RgbImage::from_fn(width, height, |x, y| {
+        image::Rgb(match (x < width / 2, y < height / 2) {
+            (true, true) => RED,
+            (false, true) => BLUE,
+            (true, false) => [0, 255, 0],
+            (false, false) => [255, 255, 255],
+        })
+    })
+}
+
+pub(crate) fn encode_jpeg(image: &image::RgbImage) -> Vec<u8> {
     let mut out = std::io::Cursor::new(Vec::new());
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95)
         .encode_image(image)
@@ -44,8 +56,29 @@ fn tiff_ifd(entries: &[(u16, u16, u32, u32)], next: u32) -> Vec<u8> {
 }
 
 pub(crate) fn with_exif_orientation(jpeg: &[u8], orientation: u32) -> Vec<u8> {
+    with_exif(jpeg, &tiff_with_orientation(orientation))
+}
+
+/// `with_exif_orientation` and an IFD1 that holds the JPEG `thumbnail`, as a camera writes it.
+pub(crate) fn with_exif_thumbnail(jpeg: &[u8], orientation: u32, thumbnail: &[u8]) -> Vec<u8> {
+    // IFD0 with one entry is 18 bytes and starts at 8, IFD1 with two entries is 30 bytes.
+    let (ifd1, data) = (8 + 18, 8 + 18 + 30);
+    let mut tiff = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
+    tiff.extend(tiff_ifd(&[(0x112, 3, 1, orientation)], ifd1));
+    tiff.extend(tiff_ifd(
+        &[
+            (0x201, 4, 1, data),
+            (0x202, 4, 1, u32::try_from(thumbnail.len()).unwrap()),
+        ],
+        0,
+    ));
+    tiff.extend_from_slice(thumbnail);
+    with_exif(jpeg, &tiff)
+}
+
+fn with_exif(jpeg: &[u8], tiff: &[u8]) -> Vec<u8> {
     let mut exif = b"Exif\0\0".to_vec();
-    exif.extend(tiff_with_orientation(orientation));
+    exif.extend_from_slice(tiff);
     let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
     out.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
     out.extend(exif);
@@ -176,17 +209,35 @@ pub(crate) fn write_cr3_with_preview(path: &Path, orientation: u32, size: (u32, 
 
 /// A RAF-like file with a red 64x32 JPEG. With `orientation`, the JPEG carries it in its EXIF.
 pub(crate) fn write_raf(path: &Path, orientation: Option<u32>) {
-    let jpeg = solid_jpeg(64, 32, RED);
+    write_raf_with_jpeg(path, &solid_jpeg(64, 32, RED), orientation);
+}
+
+/// `write_raf` with the JPEG `jpeg` instead of the red one.
+pub(crate) fn write_raf_with_jpeg(path: &Path, jpeg: &[u8], orientation: Option<u32>) {
     let jpeg = match orientation {
-        Some(orientation) => with_exif_orientation(&jpeg, orientation),
-        None => jpeg,
+        Some(orientation) => with_exif_orientation(jpeg, orientation),
+        None => jpeg.to_vec(),
     };
+    write_raf_file(path, &jpeg);
+}
+
+/// `write_raf_with_jpeg` with an EXIF thumbnail in the JPEG.
+pub(crate) fn write_raf_with_thumbnail(
+    path: &Path,
+    jpeg: &[u8],
+    orientation: u32,
+    thumbnail: &[u8],
+) {
+    write_raf_file(path, &with_exif_thumbnail(jpeg, orientation, thumbnail));
+}
+
+fn write_raf_file(path: &Path, jpeg: &[u8]) {
     let mut file = b"FUJIFILMCCD-RAW 0201FF129502".to_vec();
     file.resize(84, 0);
     file.extend_from_slice(&160_u32.to_be_bytes());
     file.extend_from_slice(&u32::try_from(jpeg.len()).unwrap().to_be_bytes());
     file.resize(160, 0);
-    file.extend_from_slice(&jpeg);
+    file.extend_from_slice(jpeg);
     fs::write(path, file).unwrap();
 }
 
@@ -239,20 +290,43 @@ pub(crate) fn write_psd(path: &Path, thumbnail: bool) {
 
 /// A TIFF RAW whose IFD0 names one JPEG preview of `size` pixels, in one color.
 pub(crate) fn write_tiff_raw_with_preview(path: &Path, size: (u32, u32)) {
-    let jpeg = solid_jpeg(size.0, size.1, RED);
+    write_tiff_raw_with_jpeg(path, &solid_jpeg(size.0, size.1, RED), 1, None);
+}
+
+/// A TIFF RAW whose IFD0 names the JPEG `jpeg` as its preview and carries `orientation`. With a
+/// `thumbnail`, IFD1 names it too, as a Sony ARW does.
+pub(crate) fn write_tiff_raw_with_jpeg(
+    path: &Path,
+    jpeg: &[u8],
+    orientation: u32,
+    thumbnail: Option<&[u8]>,
+) {
+    // IFD0 with three entries is 42 bytes and starts at 8, IFD1 with two entries is 30 bytes.
+    let ifd1 = 8 + 42;
+    let jpeg_offset = ifd1 + if thumbnail.is_some() { 30 } else { 0 };
+    let length = |data: &[u8]| u32::try_from(data.len()).unwrap();
     let mut file = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
-    let ifd = tiff_ifd(
+    file.extend(tiff_ifd(
         &[
-            (0x112, 3, 1, 1),
-            (0x201, 4, 1, 0),
-            (0x202, 4, 1, u32::try_from(jpeg.len()).unwrap()),
+            (0x112, 3, 1, orientation),
+            (0x201, 4, 1, jpeg_offset),
+            (0x202, 4, 1, length(jpeg)),
         ],
-        0,
-    );
-    let offset = u32::try_from(8 + ifd.len()).unwrap();
-    file.extend(ifd);
-    // The offset of the JPEG is the value of the second entry: 2 + 12 + 8 bytes into the IFD.
-    file[8 + 2 + 12 + 8..8 + 2 + 12 + 12].copy_from_slice(&offset.to_le_bytes());
-    file.extend_from_slice(&jpeg);
+        if thumbnail.is_some() { ifd1 } else { 0 },
+    ));
+    if let Some(thumbnail) = thumbnail {
+        let thumbnail_offset = jpeg_offset + length(jpeg);
+        file.extend(tiff_ifd(
+            &[
+                (0x201, 4, 1, thumbnail_offset),
+                (0x202, 4, 1, length(thumbnail)),
+            ],
+            0,
+        ));
+        file.extend_from_slice(jpeg);
+        file.extend_from_slice(thumbnail);
+    } else {
+        file.extend_from_slice(jpeg);
+    }
     fs::write(path, file).unwrap();
 }

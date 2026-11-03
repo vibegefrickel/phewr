@@ -158,6 +158,15 @@ pub(super) fn find_in_tiff<R: Read + Seek>(
     source: &mut Source<R>,
     base: u64,
 ) -> Option<EmbeddedJpeg> {
+    find_in_tiff_by(source, base, |found, best| found.pixels() > best.pixels())
+}
+
+/// `find_in_tiff` with another rule: `better(found, best)` picks the JPEG to keep.
+pub(super) fn find_in_tiff_by<R: Read + Seek>(
+    source: &mut Source<R>,
+    base: u64,
+    better: fn(&EmbeddedJpeg, &EmbeddedJpeg) -> bool,
+) -> Option<EmbeddedJpeg> {
     let (order, first) = tiff_order(source, base)?;
     let mut queue = vec![first];
     let mut seen = HashSet::new();
@@ -179,7 +188,7 @@ pub(super) fn find_in_tiff<R: Read + Seek>(
         for (start, length) in ifd_jpeg_ranges(&ifd, order) {
             let found = source.jpeg_at(base + u64::from(start), u64::from(length));
             if let Some(found) = found
-                && best.is_none_or(|best| found.pixels() > best.pixels())
+                && best.as_ref().is_none_or(|best| better(&found, best))
             {
                 best = Some(found);
             }
