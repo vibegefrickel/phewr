@@ -41,6 +41,7 @@ Order: speed first, then formats, then the first release. The first release is p
    - JPEG XL: the 8-bit copy is most of the decode. Measured 2026-10-25 on a 12 MP file: `render_frame` 65 ms (parallel), `ImageStream::write_to_buffer` 166 ms (one thread, an orientation and region lookup per sample). jxl-oxide 0.12.6 is the newest version, and its sample access is sealed (`FrameBufferSample`), so phewr cannot copy in parallel without a fork. `image_planar` copies on one thread too (about 120 ms). Next step: ask jxl-oxide upstream for a parallel or row-based `ImageStream`, or a public sample conversion.
    - ORF previews from the Olympus maker note, if a user asks.
    - Candidate, low priority: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size.
+   - Video start without VideoToolbox: a stream that VideoToolbox cannot decode (AV1 on M1 and M2) pays a failed GPU run of 160 ms to 190 ms at each start. The probe cache can remember the failed run per file, so that later starts go straight to software. 12-bit HEVC and VP9 already start in software (`426d206`).
 2. Formats
    - HDR stills: done 2026-10-31 (`263e48d`). PQ and HLG in AVIF, HEIC, JPEG XL and 16-bit PNG map like the player cube, with fixtures in `tests/fixtures/hdr/`. Thumbnail cache v14. jxl-oxide 0.12 clips lossy HDR JPEG XL outside the sRGB gamut (a test marks it).
    - JPEG XL with a PQ or HLG ICC profile: done with the HDR stills.

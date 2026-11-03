@@ -163,7 +163,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `hdr10-container.mp4` carries `mdcv` (1000 nits) and `clli` (MaxCLL 4000 nits) in its sample
   entry, and `hdr10-sei.mp4` carries MaxCLL 2000 nits only in the SEI.
   `player::probe::tests::real_hdr10_peak_sources` probes both with the real ffprobe, also with
-  the stream probe alone. `cargo nextest run --no-default-features` passes too.
+  the stream probe alone. `pq12-hevc.mp4` (12-bit HEVC, PQ) and `hlg12-prores.mov` (12-bit
+  ProRes 4444, HLG) show the two routes of a stream above 10 bits:
+  `player::decoder::tests::real_12_bit_clips_decode` decodes the HEVC clip in software and the
+  ProRes clip on the GPU. `real_layouts_download_on_gpu` encodes 4:2:2, 4:4:4 and alpha clips
+  in a temp folder and runs each download format through the GPU chain, also turned.
+  `cargo nextest run --no-default-features` passes too.
   `just test-real` skips the benches (`--skip bench::`), because they set the global color target
   of the process.
 - A real ffmpeg playback test uses a virtual clock that jumps to each due frame. The wall-time
@@ -232,7 +237,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `Pipeline::next`, `with_fallback`: an animation decodes in software only, also its first frame
   and its loops), `command/` the command line (one `build` with `Extras` and `Output`), and
   `process.rs` `SystemDecoder`, `FrameStream`, the frame pool and the reap. `probe/` holds
-  `VideoInfo`, the ffprobe run, the probe cache and `output_within`. `probe/parse/` holds the JSON
+  `VideoInfo` (with `Samples` and `hardware`), the ffprobe run, the probe cache and `output_within`. `probe/parse/` holds the JSON
   and the pacing rates. `layout.rs` holds the frame box and the cell box. `tone_map/` holds the
   color cubes (the HDR tone mapping, the SDR primaries conversion and the cube files), and
   `tone_map/math.rs` holds the matrices, the curves and the tone map. `animation.rs` holds the
@@ -374,7 +379,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 
 - **Terminal player:** ffmpeg runs as a subprocess with VideoToolbox and writes raw frames to a
   pipe, one frame per temp file under the image id `u32::MAX - 1`. The command line, the rates,
-  the frame pool and the payload cap are in `docs/video.md` ("Terminal player").
+  the frame pool and the payload cap are in `docs/video.md` ("Terminal player"). The GPU
+  download format follows the frames of VideoToolbox (`download_format`): the chroma layout and
+  the depth pick `nv12`, `p010le`, `nv16`, `p210le`, `nv24`, `p410le`, `p416le` or `ayuv64le`.
+  ffmpeg 9 gives VideoToolbox no HEVC or VP9 stream above 10 bits, so such a stream starts in
+  software (`VideoInfo::hardware`). The software chain keeps its 12 bits up to the cube.
 - **Player real time (rule):** the terminal player never plays in slow motion. A 6 s clip
   plays for 6 s, and a slow decode or a slow terminal drops frames. The clock of a run never
   moves to a late frame. A frame more than one interval late drops when a newer frame waits,

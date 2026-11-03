@@ -12,7 +12,17 @@ rules. This page holds the reasons and the numbers.
 - ffmpeg decodes on the media engine of the Mac (`-hwaccel videotoolbox`).
 - ffmpeg scales and turns the frame on the GPU with `scale_vt` and `transpose_vt`.
 - For 180 degrees, the graph adds `hflip,vflip`. The option `-noautorotate` is on.
-- `hwdownload` writes `p010le` for a 10-bit video and `nv12` for other video.
+- The GPU chain downloads the frames in the format that VideoToolbox gives back. ffmpeg picks it
+  from the chroma layout and the depth of the stream (`videotoolbox_best_pixel_format`), and
+  `hwdownload` takes no other format. 4:2:0 gives `nv12` or `p010le`, 4:2:2 `nv16` or `p210le`,
+  and 4:4:4 `nv24`, `p410le` or, above 10 bits, `p416le`. A stream with alpha gives `ayuv64le`.
+- The probe reads `codec_name` and `pix_fmt` into `VideoInfo::samples` and `VideoInfo::hardware`.
+  ffmpeg 9 offers VideoToolbox no HEVC or VP9 stream above 10 bits (tested on an M5). Such a
+  stream starts in software, because a GPU run fails after 160 ms to 190 ms.
+- The software chain converts `yuv420p12le` into `rgb48le` without an 8-bit or 10-bit step. On a
+  12-bit gradient, 252 levels reach the cube, against 107 through `p010le` and 28 through `nv12`.
+- A 12-bit ProRes 4444 clip decodes on the GPU and downloads as `p416le`. Its frame equals the
+  software frame byte for byte.
 - For HLG and PQ, the graph adds `format=rgb48le,lut3d=...:interp=tetrahedral`.
 - An SDR video or animation gets a `lut3d` cube too, unless its primaries equal the target
   primaries (`Cube::for_video`). See "Color cubes".
