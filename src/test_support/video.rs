@@ -64,6 +64,9 @@ pub(crate) struct FakeDecoder {
     pub(crate) fail_probe: Cell<bool>,
     pub(crate) fail_start: Cell<bool>,
     starts: RefCell<Vec<String>>,
+    /// The files that `remember_software` marked. A later probe of them answers
+    /// `hardware: false`, like the probe cache.
+    remembered: RefCell<Vec<PathBuf>>,
     sender: RefCell<Option<mpsc::SyncSender<Vec<u8>>>>,
     /// The frames of the next runs, one list per start. A start without a list waits for
     /// [`FakeDecoder::feed`].
@@ -73,6 +76,10 @@ pub(crate) struct FakeDecoder {
 impl FakeDecoder {
     pub(crate) fn starts(&self) -> Vec<String> {
         self.starts.borrow().clone()
+    }
+
+    pub(crate) fn remembered(&self) -> usize {
+        self.remembered.borrow().len()
     }
 
     pub(crate) fn last_args(&self) -> String {
@@ -107,14 +114,22 @@ impl FakeDecoder {
 }
 
 impl Decoder for FakeDecoder {
-    fn probe(&self, _video: &Path) -> io::Result<VideoInfo> {
+    fn probe(&self, video: &Path) -> io::Result<VideoInfo> {
         if self.fail_probe.get() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "no video stream",
             ));
         }
-        Ok(self.info.clone())
+        let mut info = self.info.clone();
+        if self.remembered.borrow().iter().any(|path| path == video) {
+            info.hardware = false;
+        }
+        Ok(info)
+    }
+
+    fn remember_software(&self, video: &Path) {
+        self.remembered.borrow_mut().push(video.to_path_buf());
     }
 
     fn start(
@@ -151,6 +166,7 @@ pub(crate) fn fake_decoder(info: VideoInfo) -> Rc<FakeDecoder> {
         fail_probe: Cell::new(false),
         fail_start: Cell::new(false),
         starts: RefCell::new(Vec::new()),
+        remembered: RefCell::new(Vec::new()),
         sender: RefCell::new(None),
         runs: RefCell::new(std::collections::VecDeque::new()),
     })

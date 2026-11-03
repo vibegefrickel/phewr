@@ -45,6 +45,10 @@ impl Decoder for SystemDecoder {
         crate::player::probe::probe_cached(program, video)
     }
 
+    fn remember_software(&self, video: &Path) {
+        crate::player::probe::remember_software(video);
+    }
+
     fn start(
         &self,
         program: &Path,

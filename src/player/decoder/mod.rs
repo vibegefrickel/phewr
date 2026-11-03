@@ -40,14 +40,21 @@ impl Pipeline {
 }
 
 /// The result of `attempt` on the first pipeline that gives a frame. An error stops the
-/// fallback.
+/// fallback, so a cancel or a timeout marks nothing. A software frame after a GPU run without
+/// a frame marks `video` in the decoder (`Decoder::remember_software`).
 pub(crate) fn with_fallback<T>(
+    decoder: &dyn Decoder,
+    video: &Path,
     info: &VideoInfo,
     mut attempt: impl FnMut(Pipeline) -> io::Result<Option<T>>,
 ) -> io::Result<T> {
-    let mut pipeline = Some(Pipeline::first(info));
+    let first = Pipeline::first(info);
+    let mut pipeline = Some(first);
     while let Some(current) = pipeline {
         if let Some(result) = attempt(current)? {
+            if first == Pipeline::Gpu && current == Pipeline::Software {
+                decoder.remember_software(video);
+            }
             return Ok(result);
         }
         pipeline = current.next(info);
@@ -65,6 +72,9 @@ pub(crate) trait Decoder {
     fn has_ffprobe(&self) -> bool {
         true
     }
+    /// The GPU run of `video` failed and the software run gave a frame. Later probes of the
+    /// same file then answer `hardware: false`.
+    fn remember_software(&self, _video: &Path) {}
     /// Start `program` with `args`. Each frame is `frame_bytes` long.
     fn start(
         &self,
@@ -76,14 +86,36 @@ pub(crate) trait Decoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{Decoder, Pipeline, SystemDecoder, args, cube_for, first_frame_args};
+    use super::{
+        Decoder, Pipeline, SystemDecoder, args, cube_for, first_frame_args, with_fallback,
+    };
     use crate::decode::color::{self, ColorTarget, SourceColor};
     use crate::player::probe::VideoInfo;
     use crate::player::tone_map::Primaries;
     use std::ffi::OsString;
+    use std::io;
     use std::path::Path;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    /// A cancel (`Interrupted`) or a timeout (`TimedOut`) of the software run marks nothing.
+    #[test]
+    fn stopped_software_run_marks_nothing() {
+        use crate::test_support::video::{fake_decoder, info_of};
+        for kind in [io::ErrorKind::Interrupted, io::ErrorKind::TimedOut] {
+            let info = info_of(640, 480, 25.0);
+            let decoder = fake_decoder(info.clone());
+            let result = with_fallback(decoder.as_ref(), Path::new("a.mp4"), &info, |pipeline| {
+                if pipeline == Pipeline::Gpu {
+                    Ok(None::<u8>)
+                } else {
+                    Err(io::Error::from(kind))
+                }
+            });
+            assert_eq!(result.unwrap_err().kind(), kind);
+            assert_eq!(decoder.remembered(), 0, "{kind:?}");
+        }
+    }
 
     /// `list` is an ffmpeg list flag, such as `-decoders` or `-hwaccels`.
     fn ffmpeg_lists(program: &Path, list: &str, name: &str) -> bool {

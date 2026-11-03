@@ -211,10 +211,17 @@ pub(crate) fn probe(program: &Path, path: &Path) -> io::Result<VideoInfo> {
     Ok(info)
 }
 
+static PROBES: LazyLock<ProbeCache> = LazyLock::new(|| ProbeCache::new(PROBE_CACHE_ENTRIES));
+
 /// The thumbnail job probes each video of the grid. `Player::open` then starts no `ffprobe`.
 pub(crate) fn probe_cached(program: &Path, path: &Path) -> io::Result<VideoInfo> {
-    static CACHE: LazyLock<ProbeCache> = LazyLock::new(|| ProbeCache::new(PROBE_CACHE_ENTRIES));
-    CACHE.get_or_probe(path, || probe(program, path))
+    PROBES.get_or_probe(path, || probe(program, path))
+}
+
+/// The GPU run of `path` failed and the software run gave a frame: later probes of the file
+/// answer `hardware: false`, so every start skips the GPU. A changed file drops the entry.
+pub(crate) fn remember_software(path: &Path) {
+    PROBES.mark_software(path);
 }
 
 /// The probes of the session, keyed by path. A changed mtime or length probes again.
@@ -280,6 +287,19 @@ impl ProbeCache {
             .entries
             .put(path.to_path_buf(), (stamp, info.clone()));
         Ok(info)
+    }
+
+    /// Clears `hardware` of the entry, only if the file still has the stamp of the entry.
+    fn mark_software(&self, path: &Path) {
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return;
+        };
+        let stamp = (metadata.modified().ok(), metadata.len());
+        if let Some((cached_stamp, info)) = self.lock().entries.peek_mut(path)
+            && *cached_stamp == stamp
+        {
+            info.hardware = false;
+        }
     }
 
     /// A thumbnail job that panicked leaves the entries usable.
@@ -453,6 +473,41 @@ mod tests {
         assert!(cache.get_or_probe(other.path(), error).is_err());
         cache.get_or_probe(other.path(), run).unwrap();
         assert_eq!(runs.get(), 3, "an error does not go into the cache");
+    }
+
+    #[test]
+    fn software_mark_lasts_until_file_changes() {
+        let cache = ProbeCache::new(8);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "clip").unwrap();
+        let run = || Ok(crate::test_support::video::clip_info());
+        assert!(cache.get_or_probe(file.path(), run).unwrap().hardware);
+        cache.mark_software(file.path());
+        assert!(!cache.get_or_probe(file.path(), run).unwrap().hardware);
+        std::fs::write(file.path(), "a longer clip").unwrap();
+        assert!(
+            cache.get_or_probe(file.path(), run).unwrap().hardware,
+            "a changed file starts on the GPU again"
+        );
+        // The same length with a new mtime counts as a change too.
+        cache.mark_software(file.path());
+        assert!(!cache.get_or_probe(file.path(), run).unwrap().hardware);
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(file.path())
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(
+            cache.get_or_probe(file.path(), run).unwrap().hardware,
+            "a new mtime starts on the GPU again"
+        );
+        let missing = Path::new("/nonexistent/a.mov");
+        cache.mark_software(missing);
+        let unprobed = tempfile::NamedTempFile::new().unwrap();
+        cache.mark_software(unprobed.path());
+        assert!(cache.get_or_probe(unprobed.path(), run).unwrap().hardware);
     }
 
     /// The first probe holds until the second caller had 100 ms to start its own ffprobe.

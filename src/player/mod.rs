@@ -127,6 +127,8 @@ pub(crate) struct Player {
     cube: Option<PathBuf>,
     stream: Option<FrameStream>,
     pipeline: Pipeline,
+    /// The GPU run failed and the software run has no frame yet.
+    fell_back: bool,
     pending: Option<PooledFrame>,
     pub(crate) current_frame: Option<Frame>,
     state: State,
@@ -164,6 +166,7 @@ impl Player {
             cube,
             stream: None,
             pipeline,
+            fell_back: false,
             pending: None,
             current_frame: None,
             state: State::Playing,
@@ -223,14 +226,14 @@ impl Player {
                             && now.saturating_duration_since(self.run.started)
                                 > FIRST_FRAME_DEADLINE
                         {
-                            self.end_of_run(now);
+                            self.end_of_run(now, true);
                             return false;
                         }
                         self.catch_up(now);
                         return false;
                     }
                     Some(Err(TryRecvError::Disconnected)) | None => {
-                        self.end_of_run(now);
+                        self.end_of_run(now, false);
                         return false;
                     }
                 }
@@ -241,6 +244,9 @@ impl Player {
                 return false;
             }
             self.run.delivered = true;
+            if std::mem::take(&mut self.fell_back) {
+                self.decoder.remember_software(&self.path);
+            }
             if now > due + self.interval
                 && let Some(Ok(newer)) = self.stream.as_mut().map(FrameStream::try_next_pooled)
             {
@@ -283,7 +289,7 @@ impl Player {
         if lag > self.interval && self.info.duration > 0.0 && clock >= self.info.duration {
             self.stream = None;
             self.pending = None;
-            self.end_of_run(now);
+            self.end_of_run(now, false);
             return;
         }
         if lag <= MAX_LAG {
@@ -327,11 +333,14 @@ impl Player {
     }
 
     /// Repeat, fall back to software or stop after ffmpeg ended.
-    fn end_of_run(&mut self, now: Instant) {
+    /// A GPU run that ended without a frame, not after the first-frame deadline (`timed_out`),
+    /// marks the file: a software frame later makes the next start skip the GPU.
+    fn end_of_run(&mut self, now: Instant, timed_out: bool) {
         // A run after a seek without a frame began past the end of the stream. The stream can be
         // shorter than the container says.
         let failed = !self.run.delivered && self.run.base == 0.0;
         if failed && let Some(next) = self.pipeline.next(&self.info) {
+            self.fell_back = self.pipeline == Pipeline::Gpu && !timed_out;
             self.pipeline = next;
             let position = self.run.base;
             let started = self.start_run(position, now);

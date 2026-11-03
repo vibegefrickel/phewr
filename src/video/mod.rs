@@ -160,7 +160,7 @@ pub(crate) fn decode_first_frame(
     let color_target = color::target();
     let cube = first_frame_cube(&info, color_target, cube_dirs);
     let frame_bytes = frame.0 as usize * frame.1 as usize * 4;
-    let pixels = with_fallback(&info, |pipeline| {
+    let pixels = with_fallback(decoder, path, &info, |pipeline| {
         let args = first_frame_args(path, &info, frame, cube.as_deref(), pipeline);
         // The drop of the stream kills ffmpeg after a timeout.
         match decoder

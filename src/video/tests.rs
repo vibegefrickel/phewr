@@ -7,7 +7,7 @@ use super::{
 use crate::decode::color::ColorTarget;
 use crate::player::tone_map::Hdr;
 use crate::player::tone_map::Primaries;
-use crate::player::{Samples, SystemDecoder};
+use crate::player::{Decoder, Pipeline, Samples, SystemDecoder};
 use crate::test_support::video::{
     animation_info, fake_decoder, info_of, real_ffmpeg, real_ffprobe,
 };
@@ -220,6 +220,41 @@ fn frameless_gpu_run_retries_in_software() {
     assert_eq!(error.to_string(), "no frames decoded");
 }
 
+/// The first start pays one failed GPU run, the second goes to software.
+#[test]
+fn first_frame_marks_the_file_after_a_gpu_failure() {
+    let decoder = fake_decoder(info_of(640, 480, 25.0));
+    decoder.queue_run(Vec::new());
+    decoder.queue_run(vec![vec![1; 32 * 24 * 4]]);
+    decoder.queue_run(vec![vec![1; 32 * 24 * 4]]);
+    let dir = test_dir();
+    let first_frame = || {
+        decode_first_frame(
+            &*decoder,
+            Path::new("/bin/ffmpeg"),
+            Path::new("/v/clip.mp4"),
+            (32, 48),
+            &[dir.path()],
+            WAIT,
+        )
+        .unwrap()
+    };
+    first_frame();
+    assert_eq!(
+        decoder.starts().len(),
+        2,
+        "the first start pays the GPU run"
+    );
+    assert_eq!(decoder.remembered(), 1);
+    first_frame();
+    assert_eq!(
+        decoder.starts().len(),
+        3,
+        "the second start goes to software"
+    );
+    assert!(!decoder.last_args().contains("videotoolbox_vld"));
+}
+
 /// A 12-bit HEVC stream has no `VideoToolbox` path, so it pays no failed GPU run.
 #[test]
 fn stream_without_hardware_starts_in_software() {
@@ -315,6 +350,53 @@ fn real_first_frame_fits_target() {
     let tiny = decode_first_frame(&decoder, &ffmpeg, &clip, (0, 0), &[], WAIT).unwrap();
     assert_eq!(frame.dimensions(), (32, 24));
     assert_eq!(tiny.dimensions(), (2, 2), "the smallest even frame");
+}
+
+/// A VP8 clip is no `VideoToolbox` stream. The first start pays the failed GPU run, the second
+/// starts in software.
+#[test]
+fn real_vp8_pays_the_gpu_failure_once() {
+    let Some((ffmpeg, decoder)) = real_programs() else {
+        return;
+    };
+    let dir = test_dir();
+    let clip = dir.path().join("vp8.webm");
+    let clip_text = clip.to_string_lossy();
+    let written = run_ffmpeg(
+        &ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=24",
+            "-frames:v",
+            "10",
+            "-c:v",
+            "libvpx",
+            "-pix_fmt",
+            "yuv420p",
+            &clip_text,
+        ],
+    );
+    if !written {
+        println!("note: skipped, because ffmpeg has no libvpx");
+        return;
+    }
+    let time = || {
+        let started = std::time::Instant::now();
+        decode_first_frame(&decoder, &ffmpeg, &clip, (160, 120), &[], WAIT).unwrap();
+        started.elapsed()
+    };
+    let before = decoder.probe(&clip).unwrap();
+    let (first, second) = (time(), time());
+    println!("first start {first:?}, second start {second:?}");
+    let after = decoder.probe(&clip).unwrap();
+    assert!(before.hardware, "the probe expects the GPU: {before:?}");
+    if after.hardware {
+        println!("note: skipped, because VideoToolbox decodes VP8 here");
+        return;
+    }
+    assert_eq!(Pipeline::first(&after), Pipeline::Software);
 }
 
 /// A display rotation of 90 degrees counterclockwise gives a portrait frame.

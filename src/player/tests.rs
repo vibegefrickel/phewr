@@ -535,6 +535,55 @@ fn frameless_run_retries_in_software() {
 }
 
 #[test]
+fn gpu_failure_is_paid_once() {
+    let decoder = fake_decoder(info_of(640, 480, 10.0));
+    let mut first = player(&decoder, true);
+    let clock = Instant::now();
+    decoder.end();
+    assert!(!first.poll_at(clock));
+    assert_eq!(decoder.remembered(), 0, "no software frame yet");
+    decoder.feed(frame(1));
+    assert!(first.poll_at(clock));
+    assert_eq!(decoder.remembered(), 1);
+    decoder.feed(frame(2));
+    assert!(first.poll_at(clock + FRAME));
+    assert_eq!(decoder.remembered(), 1, "marked once");
+    let _second = player(&decoder, true);
+    let args = decoder.last_args();
+    assert!(!args.contains("videotoolbox_vld"), "{args}");
+    assert_eq!(decoder.starts().len(), 3, "the second start skips the GPU");
+}
+
+#[test]
+fn software_failure_or_timeout_marks_nothing() {
+    let decoder = fake_decoder(info_of(640, 480, 10.0));
+    let mut failing = player(&decoder, true);
+    let clock = Instant::now();
+    decoder.end();
+    assert!(!failing.poll_at(clock));
+    decoder.end();
+    assert!(!failing.poll_at(clock));
+    assert!(failing.finished());
+    assert_eq!(decoder.remembered(), 0, "both runs failed");
+
+    let decoder = fake_decoder(info_of(640, 480, 10.0));
+    let mut slow = player(&decoder, true);
+    let late = clock + Duration::from_secs(30);
+    assert!(!slow.poll_at(late));
+    assert_eq!(decoder.starts().len(), 2, "the deadline starts software");
+    decoder.feed(frame(1));
+    assert!(slow.poll_at(late));
+    assert_eq!(decoder.remembered(), 0, "a timeout is no GPU failure");
+
+    let decoder = fake_decoder(info_of(640, 480, 10.0));
+    let mut cancelled = player(&decoder, true);
+    decoder.end();
+    assert!(!cancelled.poll_at(clock));
+    drop(cancelled);
+    assert_eq!(decoder.remembered(), 0, "a dropped player marks nothing");
+}
+
+#[test]
 fn failed_probe_or_start_fails_open() {
     let decoder = fake_decoder(info_of(640, 480, 10.0));
     decoder.fail_probe.set(true);

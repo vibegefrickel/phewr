@@ -15,6 +15,7 @@ use crate::video::{
     FIRST_FRAME_TIMEOUT, convert_first_frame, cube_dirs, first_frame_cube, session_decoder,
 };
 use image::RgbaImage;
+use std::cell::Cell;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,6 +93,7 @@ pub(crate) fn decode_loop(
         frame: frame_box(size, loop_box(target)),
         cube: first_frame_cube(&info, color_target, cube_dirs),
         cancel,
+        software: Cell::new(false),
     };
     let (frames, delays) = if info.is_animation() {
         let fps = animation_fps(info.fps, info.duration);
@@ -127,6 +129,8 @@ struct Run<'a> {
     frame: (u32, u32),
     cube: Option<PathBuf>,
     cancel: &'a AtomicBool,
+    /// A GPU run of this job gave no frame and a software run did: the later runs skip the GPU.
+    software: Cell<bool>,
 }
 
 impl Run<'_> {
@@ -170,10 +174,19 @@ impl Run<'_> {
     }
 
     fn frames(&self, sampling: LoopSampling) -> io::Result<Vec<RgbaImage>> {
-        with_fallback(self.info, |pipeline| {
+        let info = VideoInfo {
+            hardware: self.info.hardware && !self.software.get(),
+            ..self.info.clone()
+        };
+        let gave_software = Cell::new(false);
+        let frames = with_fallback(self.decoder, self.path, &info, |pipeline| {
             let frames = self.run(sampling, pipeline)?;
+            gave_software.set(pipeline == Pipeline::Software && !frames.is_empty());
             Ok((!frames.is_empty()).then_some(frames))
-        })
+        })?;
+        self.software
+            .set(self.software.get() || gave_software.get());
+        Ok(frames)
     }
 
     /// A frame that does not come within `FIRST_FRAME_TIMEOUT` kills the run with `TimedOut`.
@@ -454,6 +467,34 @@ mod tests {
         assert_eq!(frames.delays, vec![VIDEO_FRAME_INTERVAL; 12]);
         assert_eq!(frames.frames[0].dimensions(), (320, 180));
         assert_eq!(frames.shown, (640, 360), "the still of the cell");
+    }
+
+    #[test]
+    fn long_clip_pays_the_gpu_failure_once() {
+        let info = clip(120.0);
+        let decoder = fake_decoder(info.clone());
+        decoder.queue_run(Vec::new());
+        let all = frames_for(&info, VIDEO_LOOP_FRAMES);
+        for frame in all {
+            decoder.queue_run(vec![frame]);
+        }
+        decode_loop(
+            decoder.as_ref(),
+            Path::new("ffmpeg"),
+            Path::new("clip.mp4"),
+            TARGET,
+            &[],
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+
+        let starts = decoder.starts();
+        assert_eq!(starts.len(), 13, "one failed GPU run, 12 software seeks");
+        assert!(starts[0].contains("videotoolbox_vld"), "{}", starts[0]);
+        for start in &starts[1..] {
+            assert!(!start.contains("videotoolbox_vld"), "{start}");
+        }
+        assert_eq!(decoder.remembered(), 1);
     }
 
     #[test]
