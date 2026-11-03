@@ -106,7 +106,6 @@ impl App {
     }
 
     pub(crate) fn update_filter(&mut self) {
-        self.filter_cursor = None;
         if self.gallery.search_query.is_empty() {
             self.gallery.filtered_indices = (0..self.images.len()).collect();
             self.gallery.reset_cursor();
@@ -125,10 +124,7 @@ impl App {
         let results = self.filter_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(results) = results {
             self.gallery.filtered_indices = results;
-            match self.filter_cursor.take() {
-                Some(position) => self.place_cursor(position),
-                None => self.gallery.reset_cursor(),
-            }
+            self.gallery.reset_cursor();
             self.needs_render = true;
             self.filter_rx = None;
         }

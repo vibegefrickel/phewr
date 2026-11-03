@@ -195,8 +195,13 @@ pub(super) fn find_in_tiff<R: Read + Seek>(
 
 pub(super) fn tiff_orientation(data: &[u8]) -> Option<u8> {
     let mut source = Source::from_reader(io::Cursor::new(data)).ok()?;
-    let (order, first) = tiff_order(&mut source, 0)?;
-    let ifd = read_ifd(&mut source, 0, first, order)?;
+    ifd0_orientation(&mut source)
+}
+
+/// The IFD0 orientation of a TIFF that starts at the start of `source`.
+pub(super) fn ifd0_orientation<R: Read + Seek>(source: &mut Source<R>) -> Option<u8> {
+    let (order, first) = tiff_order(source, 0)?;
+    let ifd = read_ifd(source, 0, first, order)?;
     ifd.scalar(0x112, order)
         .and_then(|o| u8::try_from(o).ok())
         .filter(|o| (1..=8).contains(o))

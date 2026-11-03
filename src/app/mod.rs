@@ -144,8 +144,6 @@ pub(crate) struct App {
 
     filter_rx: Option<mpsc::Receiver<Vec<usize>>>,
     filter_worker: crate::search::FilterWorker,
-    /// The cursor of the next filter result. A new query clears it.
-    filter_cursor: Option<usize>,
 
     thumb_jobs: thumbnails::ThumbnailJobs,
     /// The Kitty ids of previews that a sharp thumbnail replaced, for the next grid write.
@@ -257,7 +255,6 @@ impl App {
             folder_prefetch: folder_prefetch::FolderPrefetch::default(),
             filter_rx: None,
             filter_worker: crate::search::FilterWorker::default(),
-            filter_cursor: None,
             thumb_jobs: thumbnails::ThumbnailJobs::new(),
             stale_image_ids: Vec::new(),
             animated: HashMap::new(),

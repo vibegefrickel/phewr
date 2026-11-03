@@ -89,7 +89,7 @@ pub(crate) fn dimensions(path: &Path) -> Option<(u32, u32)> {
         Route::Raster => decode::raster::header_dimensions(path),
         Route::Jxl => decode::jxl::dimensions(path),
         #[cfg(all(feature = "sips", target_os = "macos"))]
-        Route::Sips => decode::sips::dimensions(path),
+        Route::Sips => decode::sips::shown_dimensions(path),
     }
 }
 

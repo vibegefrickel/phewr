@@ -190,13 +190,8 @@ pub(crate) fn decode_image(
     match Route::for_path(path) {
         Route::Raster => decode_raster(path, target),
         Route::Jxl => jxl::decode(path, color::target()),
-        // A covering embedded JPEG wins. The zoom has no target and gets the full image from sips.
         #[cfg(all(feature = "sips", target_os = "macos"))]
-        Route::Sips => match target.and_then(|box_px| embedded_jpeg::decode_covering(path, box_px))
-        {
-            Some(image) => Ok(image),
-            None => sips::decode(path, target),
-        },
+        Route::Sips => sips::decode_with_preview(path, target),
     }
 }
 

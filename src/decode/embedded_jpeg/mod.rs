@@ -17,7 +17,7 @@ use psd::find_in_psd;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
-use tiff::find_in_tiff;
+use tiff::{find_in_tiff, ifd0_orientation};
 
 const WITHOUT_PREVIEW: &[&str] = &["jp2", "pdf", "svg", "icns", "sgi", "dds", "pict"];
 
@@ -79,6 +79,13 @@ pub(crate) fn find(path: &Path) -> Option<EmbeddedJpeg> {
     }
 }
 
+/// The IFD0 orientation of a TIFF-based RAW. It also reads an ORF, whose preview is out of reach.
+pub(crate) fn container_orientation(path: &Path) -> Option<u8> {
+    let tiff_based =
+        may_have_embedded_jpeg(path) && !scanner::has_extension(path, &["psd", "cr3", "raf"]);
+    tiff_based.then(|| ifd0_orientation(&mut Source::open(path).ok()?))?
+}
+
 pub(crate) fn decode(
     path: &Path,
     jpeg: &EmbeddedJpeg,
@@ -89,11 +96,15 @@ pub(crate) fn decode(
     decode_jpeg_bytes(&data, target, jpeg.orientation)
 }
 
-/// `None` when the file has no JPEG that covers `box_px`. The caller then decodes the primary
-/// image.
-pub(crate) fn decode_covering(path: &Path, box_px: (u32, u32)) -> Option<Decoded> {
-    let jpeg = find(path).filter(|jpeg| jpeg.covers(box_px))?;
-    decode(path, &jpeg, Some(box_px)).ok()
+/// `None` when `jpeg` does not cover `box_px`. The caller then decodes the primary image.
+pub(crate) fn decode_covering(
+    path: &Path,
+    jpeg: &EmbeddedJpeg,
+    box_px: (u32, u32),
+) -> Option<Decoded> {
+    jpeg.covers(box_px)
+        .then(|| decode(path, jpeg, Some(box_px)).ok())
+        .flatten()
 }
 
 /// A file with its length, for bounded reads.
@@ -238,7 +249,10 @@ fn find_in_raf<R: Read + Seek>(source: &mut Source<R>) -> Option<EmbeddedJpeg> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EmbeddedJpeg, decode, decode_covering, find, jpeg_size, may_have_embedded_jpeg};
+    use super::{
+        EmbeddedJpeg, container_orientation, decode, decode_covering, find, jpeg_size,
+        may_have_embedded_jpeg,
+    };
     use crate::decode::raster::decode_jpeg_bytes;
     use crate::test_support::{
         BLUE, RED, assert_close, red_left_blue_right_jpeg, test_dir, with_exif_orientation,
@@ -317,11 +331,22 @@ mod tests {
         let (left, right) = left_right(&image);
         assert_close(left, RED);
         assert_close(right, BLUE);
-        assert!(decode_covering(&path, (64, 32)).is_some());
+        assert!(decode_covering(&path, &jpeg, (64, 32)).is_some());
         assert!(
-            decode_covering(&path, (65, 32)).is_none(),
+            decode_covering(&path, &jpeg, (65, 32)).is_none(),
             "too small for the box"
         );
+    }
+
+    #[test]
+    fn container_orientation_reads_ifd0() {
+        let dir = test_dir();
+        let orf = dir.path().join("photo.orf");
+        write_tiff_raw(&orf, 6);
+        assert_eq!(container_orientation(&orf), Some(6));
+        let psd = dir.path().join("photo.psd");
+        write_psd(&psd, true);
+        assert_eq!(container_orientation(&psd), None);
     }
 
     #[test]

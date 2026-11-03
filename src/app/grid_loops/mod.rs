@@ -161,7 +161,7 @@ impl Drop for GridLoops {
 }
 
 impl App {
-    /// No overlay, no other view, `[gallery] animate` on. The delete question keeps the loops.
+    /// No overlay, no other view, `[gallery] animate` on.
     pub(crate) fn grid_loops_shown(&self) -> bool {
         self.grid_loops.enabled
             && self.mode == ViewMode::Gallery
