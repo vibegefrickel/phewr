@@ -155,7 +155,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   and 16-bit PNG (`cICP`), `ref/` their renderings through the HDR cube of the player (ffmpeg
   `lut3d`), and `make.sh` rebuilds them. `pq-4000.avif`, `pq-4000.heic` and `pq-4000-8bit.heic`
   carry a `clli` box of 4000 nits, `pq-4000.png` and `pq-icc-4000.png` a `cLLI` chunk, and
-  `pq-4000.jxl` an intensity target of 4000 nits, all with `ref/pq4000-*.png`.
+  `pq-4000.jxl` an intensity target of 4000 nits, all with `ref/pq4000-*.png`. `pq-4000-thumb.heic` is
+  `pq-4000.heic` with an embedded thumbnail of 32x16 pixels, for the peak of the preview.
   `tests/fixtures/video/` holds two HDR10 clips (64x64, 3 frames, 10-bit HEVC, PQ) and `make.sh`:
   `hdr10-container.mp4` carries `mdcv` (1000 nits) and `clli` (MaxCLL 4000 nits) in its sample
   entry, and `hdr10-sei.mp4` carries MaxCLL 2000 nits only in the SEI.
@@ -656,7 +657,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   Kitty id. `emit_new_thumbnails_to` deletes the preview image (`a=d,d=I`) before the transmit
   (`app.stale_image_ids`). The sharp decode still uses the embedded thumbnail when it is at least
   the fitted size of the primary image. Fullscreen, zoom and prefetch pass
-  `EmbeddedThumbnail::Deny`.
+  `EmbeddedThumbnail::Deny`. A PQ preview maps with the HDR10 peak of the primary image, like the
+  sharp picture, so the colors do not jump at the swap. It takes the peak from the boxes of the
+  `irot` and `imir` check and reads no box twice.
 - **libheif reads through a stream.** `open_heif_context` opens a file with
   `libheif_rs::StreamReader`. `HeifContext::read_from_file` copies the whole file first, which
   costs 30 ms to 40 ms per 24 MP photo.

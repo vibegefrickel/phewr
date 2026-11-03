@@ -190,7 +190,8 @@ The code is in `decode/hdr/`.
   - A 16-bit PNG stays 16-bit.
 - `Decoded` resizes the 16-bit image and maps the small image, with the rows in parallel.
 - An 8-bit HDR image maps in `color::convert`. An example is the embedded thumbnail of an HDR
-  HEIC file.
+  HEIC file. A PQ thumbnail maps with the peak of the primary image (`HeifItems::primary_peak`),
+  so it matches the sharp picture.
 - The source is a CICP transfer of 16 (PQ) or 18 (HLG). It comes from one of these places:
   - a HEIF `nclx` box,
   - a PNG `cICP` chunk,
