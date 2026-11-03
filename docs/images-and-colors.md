@@ -234,5 +234,30 @@ The code is in `decode/hdr/`.
   - `test_pattern-PQ`: 6 levels against the player cube.
   - `sunrise-PQ` and `sunset-hdr-pq` (lossy XYB PQ): the XYB clip of jxl-oxide, up to 120 levels.
 - jxl-oxide has no scaled decode, so the grid and the fullscreen box take the time of the full
-  decode: 199 ms for 11 MP (ICC, lossy), 129 ms for 8.3 MP, 88 ms for 5.2 MP.
+  decode. The numbers 199 ms for 11 MP (ICC, lossy), 129 ms for 8.3 MP and 88 ms for 5.2 MP are
+  from before the sample copy on all cores.
+- Sample copy on all cores (`5ae9309`): `ImageStream::write_to_buffer` copies on one thread, with
+  an orientation and a region lookup per sample. phewr copies the grids of
+  `Render::color_channels` and `extra_channels` in tasks of rows on rayon. A lossless file
+  renders as integer grids (I16 for 8 bit, I32 for 16 bit), a lossy file as f32 grids. The
+  output is the same byte for byte on 72 files. Release build, median of 5 runs or more:
+
+  | File | Route | Copy, stream | Copy, all cores | Decode before | Decode after |
+  | --- | --- | ---: | ---: | ---: | ---: |
+  | `09-formats/format.jxl` 6.8 MP lossy | enum | 106.8 ms | 3.9 ms | 158.3 ms | 66.2 ms |
+  | 12 MP lossy | enum | 183.0 ms | 5.3 ms | 254.8 ms | 127.1 ms |
+  | 24 MP lossy | enum | 545.0 ms | 14.4 ms | 676.3 ms | 330.0 ms |
+  | 12 MP lossy, orientation 6 | enum | 291.2 ms | 22.4 ms | 399.0 ms | 163.7 ms |
+  | 12 MP lossy with alpha | enum | 377.4 ms | 11.3 ms | 431.4 ms | 256.1 ms |
+  | 12 MP lossless P3 ICC | ICC 8 bit | 178.8 ms | 4.8 ms | 398.5 ms | 300.0 ms |
+  | 24 MP lossless P3 ICC | ICC 8 bit | 368.6 ms | 9.0 ms | 1147.0 ms | 498.9 ms |
+  | 12 MP lossless 16-bit ICC | ICC 16 bit | 239.2 ms | 11.7 ms | 751.1 ms | 699.2 ms |
+  | 12 MP lossy PQ | HDR | 228.8 ms | 9.2 ms | 400.2 ms | 193.1 ms |
+
+- The fast path needs the keyframe as frame 0, no frame offset, no crop and no spot color.
+  Patches, layers, a frame offset, a crop and spot colors take the stream. cjxl writes patches
+  for text and screenshots, so these files still copy on one thread. The render is now the
+  largest cost: about 70 ms for 12 MP lossy and 280 ms for 12 MP lossless under load.
+- The update rule of the exact pins of `jxl-oxide` and `jxl-render` is in AGENTS.md (gotcha "JPEG
+  XL sample copy").
 - Not tested: a camera or app file (Apple ProRAW, Samsung), a real HLG photo, a P3 PQ file.

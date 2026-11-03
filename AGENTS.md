@@ -22,7 +22,7 @@ It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT).
   The dotfiles install clones it and runs `just install`.
 
 The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
-serde/toml, jxl-oxide, moxcms. The features `turbo` (libjpeg-turbo) and `heic` (libheif) link
+serde/toml, jxl-oxide and jxl-render (both with exact pins), moxcms. The features `turbo` (libjpeg-turbo) and `heic` (libheif) link
 native Homebrew libraries. The feature `video` links no library: it starts `ffmpeg`, `ffprobe` and
 `mpv` from PATH when they exist, and reads ffprobe's JSON with serde_json. The feature `sips` runs
 the macOS tool `/usr/bin/sips`. All four features are on by default.
@@ -141,6 +141,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   RAW file of `PHEWR_TEST_RAW_DIR`. `real_jxl_matches_reference` compares `PHEWR_TEST_JXL` with
   `PHEWR_TEST_JXL_REF` (a djxl rendering, or the player cube for PQ and HLG) and fails above 4
   levels. `PHEWR_TEST_JXL_MAX` sets another limit, and `PHEWR_TEST_JXL_OUT` writes the decode.
+  `bench::decoders::jpeg_xl` reads `PHEWR_TEST_JXL`, measures the decode and both copies, and
+  names the path of the copy. `parallel_copy_matches_stream` compares the copy with the stream
+  on every fixture.
 - `tests/fixtures/color/` holds a Display P3 chart as JPEG, PNG, WebP, TIFF and HEIC with an ICC
   profile, as HEIC and AVIF with nclx, and as PNG with cICP and with gAMA and cHRM, plus an
   Adobe RGB JPEG and untagged sRGB files. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures with
@@ -280,7 +283,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   interleaved plane), `resize.rs` (`load_and_resize`, Catmull-Rom, `Layout`,
   `rgb_resize_is_fastest` and `resize_region`, a resize of a region through a view), `screen/`
   (`ScreenImage` with `Rgb`, `Rgba` and `Opaque`, and `load_for_screen`, the fullscreen decode),
-  `jxl.rs` (JPEG XL, ICC profiles through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and
+  `jxl.rs` (JPEG XL, ICC profiles through `moxcms`, the sample copy on all cores
+  `render_samples`), `sips.rs` (camera RAW, PSD, PDF, SVG and
   other ImageIO formats), `tonemap.rs` (EXR and HDR to 8 bit), `hdr/` (the tone map of PQ and HLG
   stills: `mod.rs` the math of the HDR cube of the player, `primaries.rs` the primaries and the
   matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir`, `ispe`, `clli` and `mdcv`), `shape.rs`
@@ -669,6 +673,14 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   like an RGB file (`Cicp` BT.2100). A gray file with a PQ or HLG ICC profile stays with
   jxl-oxide. 34 of 40 public JPEG XL files match their reference within 4 levels
   (`docs/images-and-colors.md`, "JPEG XL").
+- **JPEG XL sample copy:** every route copies the rendered grids of jxl-oxide in tasks of rows
+  on all cores (`render_samples`), with the codestream orientation, the clamp and the rounding
+  of jxl-oxide. Patches (a reference frame before the keyframe), layers, a frame offset, a crop
+  and spot colors take the one-thread `ImageStream`. The copy reads `ImageBuffer` of
+  `jxl-render` and depends on its private layout: each grid starts at the image origin. For this
+  reason, `jxl-oxide = "=0.12.6"` and `jxl-render = "=0.12.4"` are exact pins. An update is a
+  deliberate step: set `jxl-render` to the version of the new jxl-oxide, then run
+  `parallel_copy_matches_stream` and a byte comparison of the decode on real files.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
   (`default-features = false`). If you add a format to the scanner, add the `image` feature
   too. The `image` feature `avif` is the encoder, not a decoder.
