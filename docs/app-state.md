@@ -88,6 +88,12 @@ holds the queues. `decode.rs` holds the work of one job.
 - `mod.rs` holds the state and the rest of the cursor. `worker.rs` holds the thread and the first
   screen.
 - The start delay is 300 ms (`FOLDER_PREFETCH_DELAY`).
+- The prefetch decodes on the global rayon pool, and its libheif decode counts in the share. On
+  2026-11-03, a pool of 2 threads of its own gave the same grid time as main (2009 ms against
+  2004 ms, median of 10 interleaved runs, `03-landscape` during `01-mixed-big`). One libheif tile
+  thread per prefetch decode gave 1924 ms (4 %, inside the spread), and the prefetch of a 35-cell
+  HEIC folder took 12.2 s instead of 3.9 s. The prefetch slows the cold grid by about 240 ms when
+  it never pauses. The tested design is in the archived report of the worker `prefetch-pool`.
 
 ## Grid loops
 

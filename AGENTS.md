@@ -588,7 +588,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   folder change, a zoom, a resize, a mode change or the quit cancels it, and the next start
   waits for the old thread. `..` takes part only after a real cursor move. A folder that this
   session prefetched, or one with fewer than 2 files, does not start. Only the folder switch
-  bench ticks the prefetch.
+  bench ticks the prefetch. The prefetch decodes on the global rayon pool with the normal libheif
+  share. A pool of its own and one libheif tile thread gave no gain beyond the spread
+  (2026-11-03, `docs/app-state.md`).
 - **Image colors:** viewr converts every image into Display P3 (`[terminal] colorspace`), because
   Ghostty copies the pixels of a Kitty image without a conversion. The sources, the transform
   cache and the cubes of the player are in `docs/images-and-colors.md` ("Color conversion").

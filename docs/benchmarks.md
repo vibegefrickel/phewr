@@ -54,6 +54,10 @@ filter `bench::` finds all 23 benches.
 - `tree_with_subfolder` links the files, because the scan follows a linked file and the cache
   key takes the canonical path.
 - Only `rest_until_prefetched` ticks the folder prefetch. No other bench starts one.
+- `grid_during_prefetch` runs the prefetch in a second `App`. That prefetch never pauses for the
+  grid, so the bench measures the worst case.
+- Compare variants in one session, one after the other. The load of other builds moves the cold
+  grid by up to 600 ms between sessions.
 
 ## Fullscreen (`bench/fullscreen.rs`)
 
