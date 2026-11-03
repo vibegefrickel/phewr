@@ -123,7 +123,9 @@ rules. This page holds the reasons and the numbers.
 - The smooth SDR conversion stays within 1 level at 17 points.
 - `SDR_WHITE_NITS = 500` matches the macOS SDR export on three iPhone clips.
 - A PQ cube name holds its peak bucket (`tonemap-pq<nits>-<target>-v4.cube`). The frame probe
-  runs only for a PQ stream without stream metadata, and the probe cache keeps the result.
+  runs only for a PQ stream without stream metadata, and the probe cache keeps the result. Before
+  `af61a4b`, the stream probe did not ask for `max_luminance` and `max_content`, so every PQ
+  stream paid the frame probe. The fixtures in `tests/fixtures/video/` test both paths.
 - Probe cost on a quiet machine: the stream probe takes 15.9 ms, the frame probe 17.7 ms (1080p
   HEVC) to 20.3 ms (1080p AV1). At a load of 2.2, the stream probe took about 30 ms, and the 4K
   frame probe 47.9 ms (HEVC with SEI), 52.8 ms (HEVC without metadata) and 40.3 ms (AV1). A PQ

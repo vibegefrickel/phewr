@@ -148,7 +148,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   and 16-bit PNG (`cICP`), `ref/` their renderings through the HDR cube of the player (ffmpeg
   `lut3d`), and `make.sh` rebuilds them. `pq-4000.avif`, `pq-4000.heic` and `pq-4000-8bit.heic`
   carry a `clli` box of 4000 nits, `pq-4000.png` and `pq-icc-4000.png` a `cLLI` chunk, and
-  `pq-4000.jxl` an intensity target of 4000 nits, all with `ref/pq4000-*.png`. `cargo nextest run --no-default-features` passes too.
+  `pq-4000.jxl` an intensity target of 4000 nits, all with `ref/pq4000-*.png`.
+  `tests/fixtures/video/` holds two HDR10 clips (64x64, 3 frames, 10-bit HEVC, PQ) and `make.sh`:
+  `hdr10-container.mp4` carries `mdcv` (1000 nits) and `clli` (MaxCLL 4000 nits) in its sample
+  entry, and `hdr10-sei.mp4` carries MaxCLL 2000 nits only in the SEI.
+  `player::probe::tests::real_hdr10_peak_sources` probes both with the real ffprobe, also with
+  the stream probe alone. `cargo nextest run --no-default-features` passes too.
   `just test-real` skips the benches (`--skip bench::`), because they set the global color target
   of the process.
 - A real ffmpeg playback test uses a virtual clock that jumps to each due frame. The wall-time
@@ -414,8 +419,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `MaxCLL` from 100 to 10000 nits, else the mastering display maximum, else 1000 nits
   (`decode::hdr::hdr10_peak`). The peak goes to the smallest bucket at or above it: 500, 1000,
   2000, 4000 or 10000 nits (`Peak::bucket`). The 500 bucket is SDR white and has no roll-off.
-  HLG keeps 1000 nits. The probe reads the stream side data. A stream can carry HDR10 only in the
-  SEI, without `mdcv` and `clli` in its sample entry. Then a second ffprobe reads the first frame,
+  HLG keeps 1000 nits. The probe reads `max_content` and `max_luminance` of the stream side
+  data. A stream can carry HDR10 only in the SEI, without `mdcv` and `clli` in its sample entry.
+  Then a second ffprobe reads the first frame,
   once per file (1.2 times the stream probe at 1080p, up to 1.7 times at 4K). A HEIF still reads
   `clli` and `mdcv` of its primary item (`HeifItems::primary_peak`) into `Decoded::peak`. The
   Apple HDR10 example clip (MaxCLL 1375) is the real test file. A PQ PNG reads
