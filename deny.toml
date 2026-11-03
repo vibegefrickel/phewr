@@ -11,9 +11,9 @@ unmaintained = "workspace"
 ignore = []
 
 [licenses]
-# viewr is MIT, so dependencies must be permissive. The native libraries (libheif,
-# libjpeg-turbo) are system libraries outside this graph, and viewr starts the FFmpeg programs
-# without a link. MPL-2.0 (nucleo-matcher, option-ext) is file-level copyleft: viewr ships them
+# phewr is MIT, so dependencies must be permissive. The native libraries (libheif,
+# libjpeg-turbo) are system libraries outside this graph, and phewr starts the FFmpeg programs
+# without a link. MPL-2.0 (nucleo-matcher, option-ext) is file-level copyleft: phewr ships them
 # unchanged, and their source stays on crates.io.
 # Add a license here only when a new dependency needs it: unused entries are warnings.
 allow = [

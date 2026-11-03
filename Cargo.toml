@@ -1,5 +1,5 @@
 [package]
-name = "viewr"
+name = "phewr"
 version = "0.2.0"
 edition = "2024"
 
@@ -7,16 +7,16 @@ edition = "2024"
 publish = false
 description = "Terminal image and video gallery for the Kitty graphics protocol: thumbnail grid, slideshow, EXIF, HEIC"
 license = "MIT"
-repository = "https://codeberg.org/webgefrickel/viewr"
+repository = "https://codeberg.org/webgefrickel/phewr"
 
 # The lint set is the rule set. `just check` turns every warning into an error. A local
 # exception is `#[expect(lint, reason = "...")]`, never `#[allow]`.
 [lints.rust]
-# viewr needs no unsafe code. A single exception needs `#[expect(unsafe_code, reason)]` and a
+# phewr needs no unsafe code. A single exception needs `#[expect(unsafe_code, reason)]` and a
 # `// SAFETY:` comment.
 unsafe_code = "deny"
 # A `pub` item that no path outside the crate can reach must be `pub(crate)`, so rustc still
-# reports it as dead code. viewr is a binary crate, so every module is private.
+# reports it as dead code. phewr is a binary crate, so every module is private.
 unreachable_pub = "warn"
 rust_2018_idioms = { level = "warn", priority = -1 }
 unused_qualifications = "warn"
@@ -160,7 +160,7 @@ turbo = ["dep:turbojpeg"]
 # HEIC / HEIF and AVIF through the system libheif (>= 1.19).
 heic = ["dep:libheif-rs"]
 # Video playback and first-frame thumbnails through the `ffmpeg` and `ffprobe` programs on PATH,
-# and the mpv window. viewr links no FFmpeg library.
+# and the mpv window. phewr links no FFmpeg library.
 video = ["dep:serde_json"]
 # Camera RAW, PSD, PDF, SVG and the other ImageIO formats through macOS `/usr/bin/sips`. The
 # feature has no effect on other systems.

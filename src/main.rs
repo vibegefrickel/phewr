@@ -1,4 +1,4 @@
-//! viewr: a terminal image and video gallery for the Kitty graphics protocol.
+//! phewr: a terminal image and video gallery for the Kitty graphics protocol.
 
 mod app;
 #[cfg(test)]
@@ -283,7 +283,7 @@ fn main() -> io::Result<()> {
     // The drop cancels the loop jobs. Their ffmpeg runs end before the process.
     drop(app);
     if run_result.is_ok() && restore_result.is_ok() {
-        // viewr quits anyway. A yazi that does not answer keeps its old cursor.
+        // phewr quits anyway. A yazi that does not answer keeps its old cursor.
         reveal_in_yazi(
             reveal_path.as_deref(),
             std::env::var_os("YAZI_ID").as_deref(),

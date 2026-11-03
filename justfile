@@ -37,7 +37,7 @@ fix:
 test *ARGS:
     if command -v cargo-nextest >/dev/null; then cargo nextest run --release {{ARGS}}; else cargo test --release {{ARGS}}; fi
 
-# Also decode real files: VIEWR_TEST_JPEG, _HEIC, _AVIF, _JXL, _RAW, _PSD, _HDR_VIDEO and _SDR_VIDEO
+# Also decode real files: PHEWR_TEST_JPEG, _HEIC, _AVIF, _JXL, _RAW, _PSD, _HDR_VIDEO and _SDR_VIDEO
 # name one file each.
 # A test without its variable skips with a note. FILTER selects tests, for example `just test-real heic`.
 # The benches set the global color target of the process, so they run in `just bench` only.
@@ -46,9 +46,9 @@ test-real *FILTER:
 
 # The speed measurements of src/bench/ on a real folder (grid, fullscreen open, prefetch,
 # Kitty payload). DIR holds the test images, for example a copy of an iPhone folder.
-# VIEWR_BENCH_COLORSPACE=srgb measures with the sRGB target.
-bench DIR=(env("HOME") / "Pictures/viewr-test/01-mixed-big") FILTER="bench::":
-    VIEWR_TEST_DIR={{DIR}} cargo test --release {{FILTER}} -- --ignored --nocapture --test-threads=1 2>&1 | grep -E 'bench [a-z]|^error|panicked|test result' | sed -E 's/^test [^ ]+ \.\.\. //'
+# PHEWR_BENCH_COLORSPACE=srgb measures with the sRGB target.
+bench DIR=(env("HOME") / "Pictures/phewr-test/01-mixed-big") FILTER="bench::":
+    PHEWR_TEST_DIR={{DIR}} cargo test --release {{FILTER}} -- --ignored --nocapture --test-threads=1 2>&1 | grep -E 'bench [a-z]|^error|panicked|test result' | sed -E 's/^test [^ ]+ \.\.\. //'
 
 # Line coverage summary per file (needs cargo-llvm-cov: `brew install cargo-llvm-cov`).
 coverage:
@@ -79,16 +79,16 @@ build:
 
 # Build and start the gallery.
 run *ARGS: build
-    ./target/release/viewr {{ARGS}}
+    ./target/release/phewr {{ARGS}}
 
-# Install into a prefix (default ~/.local): bin/viewr.
+# Install into a prefix (default ~/.local): bin/phewr.
 install: build
     install -d "{{prefix}}/bin"
-    install -m 755 target/release/viewr "{{prefix}}/bin/viewr"
+    install -m 755 target/release/phewr "{{prefix}}/bin/phewr"
 
 # Remove what `just install` put into the prefix.
 uninstall:
-    rm -f "{{prefix}}/bin/viewr"
+    rm -f "{{prefix}}/bin/phewr"
 
 # Remove the build output.
 clean:
@@ -105,8 +105,8 @@ hooks:
 # needs CODEBERG_TOKEN and the sibling checkout ../homebrew-tap.
 
 owner     := "webgefrickel"
-repo      := "viewr"
-bin       := "viewr"
+repo      := "phewr"
+bin       := "phewr"
 version   := `PATH="/opt/homebrew/opt/rustup/bin:$PATH" cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version'`
 tag       := "v" + version
 asset     := bin + "-macos-arm64.tar.gz"
@@ -159,7 +159,7 @@ publish: render
     done
     echo "Published {{tag}}"
 
-# The Homebrew formula in the tap repo, filled from packaging/viewr.rb.in.
+# The Homebrew formula in the tap repo, filled from packaging/phewr.rb.in.
 tap:
     #!/bin/sh
     set -eu

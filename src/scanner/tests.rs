@@ -353,11 +353,11 @@ fn files_of_matches_scan_order() {
     assert_eq!(names, scanned_names);
 }
 
-/// The first entry and the end of the scan on `VIEWR_TEST_DIR`, best of 20.
+/// The first entry and the end of the scan on `PHEWR_TEST_DIR`, best of 20.
 #[test]
-#[ignore = "timing: needs VIEWR_TEST_DIR"]
+#[ignore = "timing: needs PHEWR_TEST_DIR"]
 fn bench_folder_scan() {
-    let Some(dir) = std::env::var_os("VIEWR_TEST_DIR") else {
+    let Some(dir) = std::env::var_os("PHEWR_TEST_DIR") else {
         return;
     };
     let (mut first, mut complete) = (Duration::MAX, Duration::MAX);

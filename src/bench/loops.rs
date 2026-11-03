@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-/// The folders of the loop bench, beside `VIEWR_TEST_DIR`.
+/// The folders of the loop bench, beside `PHEWR_TEST_DIR`.
 const LOOP_FOLDERS: [&str; 2] = ["07-video", "06-animation"];
 
 const LOOP_CELLS: usize = 30;
@@ -231,10 +231,10 @@ fn measure_steady(
 
 /// The grid fill with loops: the first loop frame, all loops, and the steady CPU cost.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn grid() {
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     crate::video::find_session_tools();
@@ -244,7 +244,7 @@ fn grid() {
     }
     let files = loop_files(&dir);
     if files.is_empty() {
-        report("loops: no video or animation beside VIEWR_TEST_DIR");
+        report("loops: no video or animation beside PHEWR_TEST_DIR");
         return;
     }
     let mut screen =

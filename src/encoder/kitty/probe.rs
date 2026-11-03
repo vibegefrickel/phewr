@@ -11,9 +11,9 @@ const ANIMATION_PROBE_ID: u32 = 32;
 /// One transparent RGBA pixel in base64.
 const ONE_PIXEL: &str = "AAAAAA==";
 /// Skips the probe: `direct`, `png` or `file`.
-pub(crate) const TRANSFER_OVERRIDE: &str = "VIEWR_KITTY_TRANSFER";
+pub(crate) const TRANSFER_OVERRIDE: &str = "PHEWR_KITTY_TRANSFER";
 /// Fixes the loop path: `animation` or `ticks`. It wins over `[gallery] loops`.
-pub(crate) const LOOPS_OVERRIDE: &str = "VIEWR_KITTY_LOOPS";
+pub(crate) const LOOPS_OVERRIDE: &str = "PHEWR_KITTY_LOOPS";
 
 /// True when the terminal runs on another machine and cannot read a local file.
 pub(crate) fn is_ssh() -> bool {
@@ -60,7 +60,7 @@ fn answer_for(response: &[u8], id: u32) -> Option<bool> {
     })
 }
 
-/// The loop path that `VIEWR_KITTY_LOOPS` or `[gallery] loops` fixes. `None` lets the probe
+/// The loop path that `PHEWR_KITTY_LOOPS` or `[gallery] loops` fixes. `None` lets the probe
 /// decide.
 pub(crate) fn chosen_loops(override_value: Option<&str>, config: Option<Loops>) -> Option<Loops> {
     override_value.and_then(Loops::parse).or(config)
@@ -91,7 +91,7 @@ pub(crate) fn detect_transfer(
 
 /// Pick the transfer and the loop path in one round trip at most.
 ///
-/// `VIEWR_KITTY_TRANSFER` or SSH fixes the transfer. Else the probe decides: the temp file
+/// `PHEWR_KITTY_TRANSFER` or SSH fixes the transfer. Else the probe decides: the temp file
 /// medium wins only if the answer is `OK` and the terminal deleted the probe file. A terminal
 /// with another `TMPDIR` reads the file but leaves it: raw pixels, about 17 MB for a Retina RGB
 /// still and about 22 MB for an RGBA player or loop frame.
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(transfer, Transfer::Direct);
         assert!(
             !probe_file(&seen).exists(),
-            "viewr removes the probe file itself"
+            "phewr removes the probe file itself"
         );
     }
 

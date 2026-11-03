@@ -177,10 +177,10 @@ impl App {
             cell_px,
             shared_list,
             config,
-            PathBuf::from("/dev/null/viewr-test/state.toml"),
+            PathBuf::from("/dev/null/phewr-test/state.toml"),
         );
-        app.state_file = PathBuf::from("/dev/null/viewr/state.toml");
-        app.disk_cache_dir = PathBuf::from("/dev/null/viewr/cache");
+        app.state_file = PathBuf::from("/dev/null/phewr/state.toml");
+        app.disk_cache_dir = PathBuf::from("/dev/null/phewr/cache");
         app.graphics_out = GraphicsOutput::buffer();
         app
     }

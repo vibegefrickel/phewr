@@ -34,7 +34,7 @@ impl App {
         // A thread of its own: after a directory switch, the rayon pool can be full of old decodes,
         // and the first screen waits for this read.
         let started = thread::Builder::new()
-            .name("viewr-shape".to_owned())
+            .name("phewr-shape".to_owned())
             .spawn(move || {
                 #[expect(
                     clippy::let_underscore_must_use,

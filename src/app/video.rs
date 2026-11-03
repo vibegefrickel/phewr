@@ -14,7 +14,7 @@ pub(crate) enum VideoReturn {
     Fullscreen,
 }
 
-/// An mpv window that viewr follows: its file and the receiver of its exit code.
+/// An mpv window that phewr follows: its file and the receiver of its exit code.
 #[cfg(feature = "video")]
 pub(super) struct VideoWindow {
     index: usize,
@@ -135,7 +135,7 @@ impl App {
     /// Take the exit code of the followed mpv window, and act on it.
     ///
     /// In a slideshow, the end of the clip moves on and each other exit stops the slideshow. The
-    /// exit counts only while viewr shows the file of the window without an overlay.
+    /// exit counts only while phewr shows the file of the window without an overlay.
     #[cfg(feature = "video")]
     pub(crate) fn poll_video_window(&mut self) -> Option<WindowExit> {
         let window = self.video_window.as_ref()?;
@@ -161,7 +161,7 @@ impl App {
         Some(WindowExit { code, path })
     }
 
-    /// True while viewr shows the file `index` of an mpv window and no overlay takes the keys.
+    /// True while phewr shows the file `index` of an mpv window and no overlay takes the keys.
     #[cfg(feature = "video")]
     fn follows_window(&self, index: usize) -> bool {
         index == self.current

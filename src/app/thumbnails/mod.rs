@@ -425,7 +425,7 @@ fn cache_read_pool() -> Option<&'static rayon::ThreadPool> {
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(rayon::current_num_threads().min(MAX_CACHE_READ_THREADS))
-            .thread_name(|index| format!("viewr-cache-read-{index}"))
+            .thread_name(|index| format!("phewr-cache-read-{index}"))
             .build()
             .ok()
     })

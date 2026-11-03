@@ -9,13 +9,13 @@ use std::time::Instant;
 
 /// The phases of one HEIC decode, alone and under the parallel decodes of a grid.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn decode_phases() {
     use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let bench = scanned_app(&dir);

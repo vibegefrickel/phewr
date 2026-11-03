@@ -348,7 +348,7 @@ mod tests {
                 ascii(Tag::GPSLatitudeRef, "N"),
                 rational(Tag::GPSLongitude, &[(13, 1), (24, 1), (0, 1)]),
                 ascii(Tag::GPSLongitudeRef, "W"),
-                ascii(Tag::Software, "viewr test"),
+                ascii(Tag::Software, "phewr test"),
                 ascii(Tag::ImageDescription, "A test photo"),
             ],
         );
@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(row(rows, "Taken"), Some("2024-05-01 10:20:30"));
         assert_eq!(row(rows, "ISO"), Some("400"));
         assert_eq!(row(rows, "GPS"), Some("52.50000, -13.40000"));
-        assert_eq!(row(rows, "Software"), Some("viewr test"));
+        assert_eq!(row(rows, "Software"), Some("phewr test"));
         assert_eq!(row(rows, "Description"), Some("A test photo"));
         let focal = row(rows, "Focal length").unwrap();
         assert!(focal.ends_with("eq.)"), "focal: {focal}");

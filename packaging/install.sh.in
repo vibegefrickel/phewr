@@ -1,17 +1,17 @@
 #!/bin/sh
-# viewr installer, uploaded as a release asset by `just publish`.
+# phewr installer, uploaded as a release asset by `just publish`.
 # Generated from packaging/install.sh.in; @VERSION@ and @SHA256@ are filled in.
 set -eu
 
 main() {
   [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] || {
-    echo "viewr needs macOS on Apple Silicon"
+    echo "phewr needs macOS on Apple Silicon"
     exit 1
   }
-  # The binary links the Homebrew library libheif. ffmpeg and mpv are programs that viewr
+  # The binary links the Homebrew library libheif. ffmpeg and mpv are programs that phewr
   # starts from PATH when they exist, so they are a note, not a stop.
   [ -e /opt/homebrew/opt/libheif/lib/libheif.1.dylib ] || {
-    echo "viewr: Homebrew libheif is missing: brew install libheif" >&2
+    echo "phewr: Homebrew libheif is missing: brew install libheif" >&2
     exit 1
   }
   for program in ffmpeg mpv; do
@@ -19,28 +19,28 @@ main() {
       echo "Note: $program is not on your PATH. Videos need ffmpeg, and 'p' needs mpv: brew install ffmpeg mpv"
     }
   done
-  url="https://codeberg.org/webgefrickel/viewr/releases/download/v@VERSION@/viewr-macos-arm64.tar.gz"
+  url="https://codeberg.org/webgefrickel/phewr/releases/download/v@VERSION@/phewr-macos-arm64.tar.gz"
   prefix="${PREFIX:-$HOME/.local}"
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
-  curl -fsSL -o "$tmp/viewr.tar.gz" "$url" || {
-    echo "viewr: download failed: $url" >&2
+  curl -fsSL -o "$tmp/phewr.tar.gz" "$url" || {
+    echo "phewr: download failed: $url" >&2
     exit 1
   }
-  echo "@SHA256@  $tmp/viewr.tar.gz" | shasum -a 256 -c - >/dev/null 2>&1 || {
-    echo "viewr: checksum mismatch for $url, nothing installed" >&2
+  echo "@SHA256@  $tmp/phewr.tar.gz" | shasum -a 256 -c - >/dev/null 2>&1 || {
+    echo "phewr: checksum mismatch for $url, nothing installed" >&2
     exit 1
   }
   mkdir -p "$prefix"
-  tar -xzf "$tmp/viewr.tar.gz" -C "$prefix" bin/viewr
-  echo "Installed viewr @VERSION@ to $prefix/bin"
+  tar -xzf "$tmp/phewr.tar.gz" -C "$prefix" bin/phewr
+  echo "Installed phewr @VERSION@ to $prefix/bin"
   case ":$PATH:" in
     *":$prefix/bin:"*) ;;
     *) shown=$(printf '%s' "$prefix/bin" | sed "s#^$HOME#\\\$HOME#")
        echo "Note: $prefix/bin is not on your PATH; add this line to ~/.zshrc:"
        echo "  export PATH=\"$shown:\$PATH\"" ;;
   esac
-  echo "Next: run 'viewr' in a folder with pictures, in Ghostty or another terminal with the Kitty graphics protocol."
+  echo "Next: run 'phewr' in a folder with pictures, in Ghostty or another terminal with the Kitty graphics protocol."
 }
 
 main "$@"

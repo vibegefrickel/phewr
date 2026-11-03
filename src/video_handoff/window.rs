@@ -1,4 +1,4 @@
-//! mpv in its own window: viewr follows the window until it exits.
+//! mpv in its own window: phewr follows the window until it exits.
 
 use super::mpv_note;
 use crate::app::App;
@@ -113,7 +113,7 @@ mod tests {
 
         app.next();
         let late_quit = runner.window.take().unwrap().send(Some(mpv::USER_QUIT));
-        assert!(late_quit.is_err(), "viewr dropped the exit of the window");
+        assert!(late_quit.is_err(), "phewr dropped the exit of the window");
         app.prev();
         assert_eq!(app.mode, ViewMode::Video, "prev steps onto the video");
         app.return_from_video();
@@ -239,7 +239,7 @@ mod tests {
 
         assert_eq!(app.current, 1, "the help popup keeps the view");
         assert!(app.shows_video_placeholder());
-        assert!(!app.watches_video_window(), "viewr forgets the window");
+        assert!(!app.watches_video_window(), "phewr forgets the window");
     }
 
     #[test]

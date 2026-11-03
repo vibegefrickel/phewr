@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn missing_file_has_only_format() {
-        let meta = read(std::path::Path::new("/nonexistent/viewr/a.jpg"));
+        let meta = read(std::path::Path::new("/nonexistent/phewr/a.jpg"));
         assert_eq!(meta.size, None);
         assert_eq!(meta.bytes, None);
         assert_eq!(meta.format, "JPG");
@@ -208,11 +208,11 @@ mod tests {
         );
     }
 
-    /// `VIEWR_TEST_HEIC=/path/to/photo.heic`.
+    /// `PHEWR_TEST_HEIC=/path/to/photo.heic`.
     #[test]
-    #[ignore = "needs VIEWR_TEST_HEIC, a real photo"]
+    #[ignore = "needs PHEWR_TEST_HEIC, a real photo"]
     fn real_heic_has_size_and_date() {
-        let Some(path) = crate::decode::real_test_file("VIEWR_TEST_HEIC") else {
+        let Some(path) = crate::decode::real_test_file("PHEWR_TEST_HEIC") else {
             return;
         };
         let meta = read(&path);

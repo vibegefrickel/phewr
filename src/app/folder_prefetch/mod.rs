@@ -204,7 +204,7 @@ impl App {
             .store(self.has_pending_work(), Ordering::Release);
         let worker = Arc::clone(&control);
         let started = thread::Builder::new()
-            .name("viewr-folder-prefetch".to_owned())
+            .name("phewr-folder-prefetch".to_owned())
             .spawn(move || prefetch(&request, &worker));
         match started {
             Ok(handle) => {

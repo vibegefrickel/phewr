@@ -212,7 +212,7 @@ mod tests {
         let mut app = fullscreen_app(2, 1);
         app.graphics_out.take_bytes();
 
-        assert!(!char_key(&mut app, 'q'), "q leaves the view, not viewr");
+        assert!(!char_key(&mut app, 'q'), "q leaves the view, not phewr");
         assert_eq!(app.mode, ViewMode::Gallery);
         assert!(app.needs_render);
         let out = text(&app.graphics_out.take_bytes());
@@ -221,7 +221,7 @@ mod tests {
             "the image goes first: {out}"
         );
 
-        assert!(char_key(&mut app, 'q'), "q in the gallery quits viewr");
+        assert!(char_key(&mut app, 'q'), "q in the gallery quits phewr");
     }
 
     #[test]

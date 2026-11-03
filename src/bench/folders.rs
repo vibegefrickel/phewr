@@ -17,12 +17,12 @@ use tempfile::TempDir;
 
 /// The header read that picks the cell shape.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn shape_from_headers() {
     use crate::decode::shape::{aspect_of, folder_aspect};
 
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let bench = scanned_app(&dir);
@@ -58,10 +58,10 @@ fn shape_from_headers() {
 
 /// The wait for the cell shape after a directory switch, during the old cold decodes.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn switch_waits_for_shape() {
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let mut bench = scanned_app(&dir);
@@ -157,10 +157,10 @@ fn all_file_cells_sharp(app: &App) -> bool {
 
 /// The first screen after Enter on a folder, with and without the folder prefetch.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn switch_with_and_without_prefetch() {
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let (_, cold, cells) = enter_subfolder(&dir, false);
@@ -177,15 +177,15 @@ fn switch_with_and_without_prefetch() {
     ));
 }
 
-/// The cold grid while a folder prefetch of `VIEWR_TEST_PREFETCH_DIR` runs.
+/// The cold grid while a folder prefetch of `PHEWR_TEST_PREFETCH_DIR` runs.
 #[test]
-#[ignore = "reads the folders VIEWR_TEST_DIR and VIEWR_TEST_PREFETCH_DIR"]
+#[ignore = "reads the folders PHEWR_TEST_DIR and PHEWR_TEST_PREFETCH_DIR"]
 fn grid_during_prefetch() {
     let (Some(dir), Some(other)) = (
         test_dir(),
-        std::env::var_os("VIEWR_TEST_PREFETCH_DIR").map(PathBuf::from),
+        std::env::var_os("PHEWR_TEST_PREFETCH_DIR").map(PathBuf::from),
     ) else {
-        report("skipped: VIEWR_TEST_DIR or VIEWR_TEST_PREFETCH_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR or PHEWR_TEST_PREFETCH_DIR is not set");
         return;
     };
     // The app of the other folder: the cursor rests on the folder `sub` and its prefetch starts.

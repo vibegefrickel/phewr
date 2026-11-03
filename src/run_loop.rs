@@ -101,7 +101,7 @@ pub(crate) fn run(
     }
 }
 
-/// Take one input event. Returns `true` when the event quits viewr.
+/// Take one input event. Returns `true` when the event quits phewr.
 fn handle_input(app: &mut App, state: &mut LoopState, event: &Event) -> io::Result<bool> {
     if state.late_answers.swallows(event) {
         return Ok(false);

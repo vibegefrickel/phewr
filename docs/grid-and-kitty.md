@@ -76,7 +76,7 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 ### Temp file medium
 
 - The rule for the choice of the medium is in AGENTS.md (gotcha "Kitty temp file medium").
-- A terminal with another `TMPDIR` reads the file but keeps it. Then viewr leaves a file per
+- A terminal with another `TMPDIR` reads the file but keeps it. Then phewr leaves a file per
   frame. The file holds raw pixels: about 17 MB for an RGB Retina still, and about 22 MB for an
   RGBA frame of the player or of a grid loop.
 - The file name contains `tty-graphics-protocol`, as the protocol requires.

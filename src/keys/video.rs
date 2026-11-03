@@ -207,11 +207,11 @@ mod tests {
         char_key(&mut app, 'D');
         assert!(
             app.selection.is_empty(),
-            "viewr is a viewer: d does nothing"
+            "phewr is a viewer: d does nothing"
         );
         assert_eq!(app.mode, ViewMode::Video);
 
-        assert!(!char_key(&mut app, 'q'), "q goes back, not out of viewr");
+        assert!(!char_key(&mut app, 'q'), "q goes back, not out of phewr");
         assert_ne!(app.mode, ViewMode::Video);
         assert!(app.video.is_none());
         assert!(!decoder.streaming());

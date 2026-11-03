@@ -78,7 +78,7 @@ holds the queues. `decode.rs` holds the work of one job.
   key. `write.rs` holds the temp file write and the prune.
 - The loop files are in `app/disk_cache/loop_file.rs`. The file is `<hash>.loop`. It holds QOI
   frames with their times.
-- The key version of a loop file is `viewr-loop-v1` (`LOOP_CACHE_VERSION`). Change the version
+- The key version of a loop file is `phewr-loop-v1` (`LOOP_CACHE_VERSION`). Change the version
   when the loop output changes.
 - The prune removes the loop files before the stills. It removes each kind oldest first.
 
@@ -121,7 +121,7 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
   - `a=p` places the animation over the still. `d=i` removes the placement of the still. All
     this happens in one synchronized update (`transmit_animation_to` in
     `kitty_output/loops.rs`).
-  - viewr sends nothing per tick. `loop_frames_due` and `grid_loop_timeout` skip an animation.
+  - phewr sends nothing per tick. `loop_frames_due` and `grid_loop_timeout` skip an animation.
   - A hidden or replaced cell sends one `d=I`.
   - A grid redraw places the running animation again by its id.
   - A `d=A` (the help popup, the info panel, the fullscreen view, the zoom) makes the grid send
@@ -155,7 +155,7 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
 
 ### Bench and tests
 
-- The bench `grid_loops` reads `07-video` and `06-animation` beside `VIEWR_TEST_DIR`. It needs
+- The bench `grid_loops` reads `07-video` and `06-animation` beside `PHEWR_TEST_DIR`. It needs
   ffmpeg on PATH. It measures both paths.
 - `FakeTerminal` reads `a=t`, `a=f`, `a=a` and `d=i`.
 

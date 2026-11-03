@@ -63,10 +63,10 @@ const CACHE_FORMATS: [CacheFormat; 3] = [
 
 /// The disk cache formats on the first screen: cold encode and write, warm read and decode, bytes.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn formats() {
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let bench = scanned_app(&dir);

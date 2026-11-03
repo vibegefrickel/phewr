@@ -336,11 +336,11 @@ mod tests {
         );
     }
 
-    /// `VIEWR_TEST_JPEG=/path/to/photo.jpg`, orientation 6 or 8.
+    /// `PHEWR_TEST_JPEG=/path/to/photo.jpg`, orientation 6 or 8.
     #[test]
-    #[ignore = "needs VIEWR_TEST_JPEG, a real photo"]
+    #[ignore = "needs PHEWR_TEST_JPEG, a real photo"]
     fn decodes_jpeg_upright_from_env() {
-        let Some(path) = crate::decode::real_test_file("VIEWR_TEST_JPEG") else {
+        let Some(path) = crate::decode::real_test_file("PHEWR_TEST_JPEG") else {
             return;
         };
         let path = path.as_path();
@@ -368,12 +368,12 @@ mod tests {
         assert_eq!(small.width() < small.height(), expected.0 < expected.1);
     }
 
-    /// `VIEWR_TEST_HEIC=/path/to/photo.heic`.
+    /// `PHEWR_TEST_HEIC=/path/to/photo.heic`.
     #[cfg(feature = "heic")]
     #[test]
-    #[ignore = "needs VIEWR_TEST_HEIC, a real photo"]
+    #[ignore = "needs PHEWR_TEST_HEIC, a real photo"]
     fn decodes_heic_from_env() {
-        let Some(path) = crate::decode::real_test_file("VIEWR_TEST_HEIC") else {
+        let Some(path) = crate::decode::real_test_file("PHEWR_TEST_HEIC") else {
             return;
         };
         let path = path.as_path();
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn unset_variable_skips_real_test() {
-        assert_eq!(super::real_test_file("VIEWR_TEST_UNSET_IN_ANY_RUN"), None);
+        assert_eq!(super::real_test_file("PHEWR_TEST_UNSET_IN_ANY_RUN"), None);
     }
 
     #[cfg(all(feature = "sips", target_os = "macos"))]

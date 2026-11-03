@@ -1578,6 +1578,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "phewr"
+version = "0.2.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "clap",
+ "crossterm",
+ "directories",
+ "fast_image_resize",
+ "image",
+ "jxl-oxide",
+ "kamadak-exif",
+ "libheif-rs",
+ "lru",
+ "moxcms",
+ "nucleo-matcher",
+ "ratatui",
+ "rayon",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "turbojpeg",
+ "unicode-width",
+]
+
+[[package]]
 name = "phf"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2547,34 +2575,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "viewr"
-version = "0.2.0"
-dependencies = [
- "base64 0.23.1",
- "chrono",
- "clap",
- "crossterm",
- "directories",
- "fast_image_resize",
- "image",
- "jxl-oxide",
- "kamadak-exif",
- "libheif-rs",
- "lru",
- "moxcms",
- "nucleo-matcher",
- "ratatui",
- "rayon",
- "rustix",
- "serde",
- "serde_json",
- "tempfile",
- "toml",
- "turbojpeg",
- "unicode-width",
-]
 
 [[package]]
 name = "vtparse"

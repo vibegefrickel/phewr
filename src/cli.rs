@@ -1,4 +1,4 @@
-//! The command line: the arguments of `viewr` and the start directory that they name.
+//! The command line: the arguments of `phewr` and the start directory that they name.
 
 use crate::scanner::canonicalize_or_self;
 use clap::Parser;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
-    name = "viewr",
+    name = "phewr",
     version,
     about = "Terminal gallery for images, videos and animations: thumbnail grid, slideshow, EXIF"
 )]
@@ -50,7 +50,7 @@ fn parse_interval(value: &str) -> Result<f64, String> {
 }
 
 /// One file argument opens its folder with the cursor on that file. A file manager starts
-/// viewr on the hovered file. The second value is the cursor target.
+/// phewr on the hovered file. The second value is the cursor target.
 pub(crate) fn start_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Option<PathBuf>) {
     let [file] = paths.as_slice() else {
         return (paths, None);
@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn parses_files_and_options() {
         let cli = Cli::try_parse_from([
-            "viewr", "-j", "4", "-s", "-n", "2.5", "-i", "a.jpg", "photos",
+            "phewr", "-j", "4", "-s", "-n", "2.5", "-i", "a.jpg", "photos",
         ])
         .unwrap();
 
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn parses_long_options() {
         let cli = Cli::try_parse_from([
-            "viewr",
+            "phewr",
             "--threads",
             "2",
             "--slideshow",
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn defaults_are_empty() {
-        let cli = Cli::try_parse_from(["viewr"]).unwrap();
+        let cli = Cli::try_parse_from(["phewr"]).unwrap();
 
         assert!(cli.files.is_empty());
         assert_eq!(cli.threads, None);
@@ -137,20 +137,20 @@ mod tests {
 
     #[test]
     fn rejects_bad_values_and_unknown_flags() {
-        assert!(Cli::try_parse_from(["viewr", "--interval", "soon"]).is_err());
-        assert!(Cli::try_parse_from(["viewr", "--threads", "-1"]).is_err());
-        assert!(Cli::try_parse_from(["viewr", "--fullscreen"]).is_err());
-        assert!(Cli::try_parse_from(["viewr", "-t", "nord"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "--interval", "soon"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "--threads", "-1"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "--fullscreen"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "-t", "nord"]).is_err());
     }
 
     #[test]
     fn zero_threads_or_interval_fail() {
-        assert!(Cli::try_parse_from(["viewr", "-j", "0"]).is_err());
-        assert!(Cli::try_parse_from(["viewr", "-n", "0"]).is_err());
-        assert!(Cli::try_parse_from(["viewr", "-n", "-1"]).is_err());
-        assert!(Cli::try_parse_from(["viewr", "-n", "inf"]).is_err());
-        assert!(Cli::try_parse_from(["viewr", "-n", "NaN"]).is_err());
-        assert!(Cli::try_parse_from(["viewr", "-j", "1", "-n", "0.5"]).is_ok());
+        assert!(Cli::try_parse_from(["phewr", "-j", "0"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "-n", "0"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "-n", "-1"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "-n", "inf"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "-n", "NaN"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "-j", "1", "-n", "0.5"]).is_ok());
     }
 
     #[test]

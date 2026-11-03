@@ -17,7 +17,7 @@
 #   p3-nclx.heic, p3-nclx.avif: an nclx box with primaries 12 and transfer 13, no ICC profile
 #   p3-cicp.png: a cICP chunk 12/13/0/1, no ICC profile
 #   p3-chrm.png: the cHRM chunk of Display P3 and gAMA 45455, no ICC profile
-#   srgb.jpg, srgb.png: nothing, so viewr reads them as sRGB
+#   srgb.jpg, srgb.png: nothing, so phewr reads them as sRGB
 #
 # The references are `ref/<name>-p3.png` and `ref/<name>-srgb.png`: sips converts each fixture
 # with `--matchTo` into the Display P3 or the sRGB profile of ColorSync. An untagged fixture

@@ -1,7 +1,7 @@
 //! The first frame of a video for the grid thumbnails, the video extensions and the lookup of
 //! the `ffmpeg` and `ffprobe` programs.
 //!
-//! viewr links no `FFmpeg` library. It starts the programs when PATH has them. Without them, a
+//! phewr links no `FFmpeg` library. It starts the programs when PATH has them. Without them, a
 //! video cell keeps its play icon, and a video opens in the mpv window.
 
 use crate::decode::color::{self, ColorTarget};
@@ -60,7 +60,7 @@ pub(crate) fn session_tools() -> &'static Tools {
     SESSION_TOOLS.get().unwrap_or(&NO_TOOLS)
 }
 
-/// `cache_dir`, else `$TMPDIR/viewr`.
+/// `cache_dir`, else `$TMPDIR/phewr`.
 pub(crate) struct CubeDirs([PathBuf; 2]);
 
 impl CubeDirs {
@@ -70,7 +70,7 @@ impl CubeDirs {
 }
 
 pub(crate) fn cube_dirs(cache_dir: &Path) -> CubeDirs {
-    CubeDirs([cache_dir.to_path_buf(), std::env::temp_dir().join("viewr")])
+    CubeDirs([cache_dir.to_path_buf(), std::env::temp_dir().join("phewr")])
 }
 
 /// Without one of the session programs, the error is `NotFound` and no process starts.

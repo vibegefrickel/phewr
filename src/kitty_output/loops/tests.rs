@@ -516,7 +516,7 @@ fn lost_frame_falls_back_to_still() {
     terminal.feed(play_at(&mut app, 0).0.as_bytes());
     assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
 
-    // The terminal drops one frame, and viewr forgets it, as after a trim.
+    // The terminal drops one frame, and phewr forgets it, as after a trim.
     let mut out = Vec::new();
     kitty::delete_image_to(&mut out, ids[2]).unwrap();
     terminal.feed(&out);

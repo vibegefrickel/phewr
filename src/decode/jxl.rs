@@ -538,7 +538,7 @@ mod tests {
 
     #[test]
     fn hdr_gray_ramps_stay_neutral() {
-        // viewr puts SDR white at 500 nits, like the player. libjxl puts it at about 250 nits in
+        // phewr puts SDR white at 500 nits, like the player. libjxl puts it at about 250 nits in
         // pq.
         for name in ["pq", "hlg", "pq-icc", "hlg-icc"] {
             assert_gray_ramp(name);
@@ -656,11 +656,11 @@ mod tests {
         assert_eq!(super::exif(&fixture("jxl/srgb-lossless.jxl")), None);
     }
 
-    /// Decode a real JPEG XL file: `VIEWR_TEST_JXL=/path/to/image.jxl`.
+    /// Decode a real JPEG XL file: `PHEWR_TEST_JXL=/path/to/image.jxl`.
     #[test]
-    #[ignore = "needs VIEWR_TEST_JXL, a real JPEG XL file"]
+    #[ignore = "needs PHEWR_TEST_JXL, a real JPEG XL file"]
     fn decodes_jxl_from_env() {
-        let Some(path) = crate::decode::real_test_file("VIEWR_TEST_JXL") else {
+        let Some(path) = crate::decode::real_test_file("PHEWR_TEST_JXL") else {
             return;
         };
         let path = path.as_path();
@@ -689,14 +689,14 @@ mod tests {
     }
 
     /// Compare a real file with a djxl rendering into 8-bit sRGB:
-    /// `VIEWR_TEST_JXL=a.jxl VIEWR_TEST_JXL_REF=a.png`. The test prints the differences in levels
-    /// and fails above 4 levels. `VIEWR_TEST_JXL_MAX` sets another limit, `VIEWR_TEST_JXL_OUT` writes the decode.
+    /// `PHEWR_TEST_JXL=a.jxl PHEWR_TEST_JXL_REF=a.png`. The test prints the differences in levels
+    /// and fails above 4 levels. `PHEWR_TEST_JXL_MAX` sets another limit, `PHEWR_TEST_JXL_OUT` writes the decode.
     #[test]
-    #[ignore = "needs VIEWR_TEST_JXL and VIEWR_TEST_JXL_REF, a real file and its rendering"]
+    #[ignore = "needs PHEWR_TEST_JXL and PHEWR_TEST_JXL_REF, a real file and its rendering"]
     fn real_jxl_matches_reference() {
         let (Some(path), Some(reference)) = (
-            crate::decode::real_test_file("VIEWR_TEST_JXL"),
-            crate::decode::real_test_file("VIEWR_TEST_JXL_REF"),
+            crate::decode::real_test_file("PHEWR_TEST_JXL"),
+            crate::decode::real_test_file("PHEWR_TEST_JXL_REF"),
         ) else {
             return;
         };
@@ -704,7 +704,7 @@ mod tests {
             .expect("full decode")
             .to_rgba8();
         let reference = image::open(&reference).expect("reference").to_rgba8();
-        if let Some(out) = std::env::var_os("VIEWR_TEST_JXL_OUT") {
+        if let Some(out) = std::env::var_os("PHEWR_TEST_JXL_OUT") {
             decoded.save(out).expect("write the decode");
         }
         assert_eq!(decoded.dimensions(), reference.dimensions(), "size");
@@ -727,7 +727,7 @@ mod tests {
         let mean = sum as f64 / count.max(1) as f64;
         // clippy.toml allows output in tests.
         eprintln!("REFERENCE largest={largest} mean={mean:.4}");
-        let limit = std::env::var("VIEWR_TEST_JXL_MAX")
+        let limit = std::env::var("PHEWR_TEST_JXL_MAX")
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(4);

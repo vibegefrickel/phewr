@@ -367,14 +367,14 @@ fn frameless_animation_stays_in_software() {
     assert!(!starts[0].contains("-hwaccel_output_format"), "{starts:?}");
 }
 
-/// A real SDR clip: `VIEWR_TEST_SDR_VIDEO`, with ffmpeg and ffprobe from PATH.
+/// A real SDR clip: `PHEWR_TEST_SDR_VIDEO`, with ffmpeg and ffprobe from PATH.
 #[test]
-#[ignore = "needs VIEWR_TEST_SDR_VIDEO, a real video file, and ffmpeg and ffprobe on PATH"]
+#[ignore = "needs PHEWR_TEST_SDR_VIDEO, a real video file, and ffmpeg and ffprobe on PATH"]
 fn real_clip_first_frame() {
     let (Some(ffmpeg), Some(ffprobe)) = (real_ffmpeg(), real_ffprobe()) else {
         return;
     };
-    let Some(clip) = crate::decode::real_test_file("VIEWR_TEST_SDR_VIDEO") else {
+    let Some(clip) = crate::decode::real_test_file("PHEWR_TEST_SDR_VIDEO") else {
         return;
     };
     let tools = Tools {

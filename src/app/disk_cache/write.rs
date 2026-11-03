@@ -81,7 +81,7 @@ fn prunes_after_write(sequence: u64) -> bool {
     sequence != 0 && sequence.is_multiple_of(64)
 }
 
-/// A write takes milliseconds. An older temp file belongs to a viewr that ended during its
+/// A write takes milliseconds. An older temp file belongs to a phewr that ended during its
 /// write.
 const STALE_TEMP_AGE: Duration = Duration::from_secs(3600);
 

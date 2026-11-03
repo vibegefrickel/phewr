@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 /// A key repeat moves the cursor every 30 ms to 50 ms. A scroll through the grid starts no
 /// ffmpeg.
 const PRESTART_DELAY: Duration = Duration::from_millis(200);
-/// An idle viewr on a video cell then holds no ffmpeg, no `VideoToolbox` session and no frame
+/// An idle phewr on a video cell then holds no ffmpeg, no `VideoToolbox` session and no frame
 /// buffers.
 const PRESTART_LIFETIME: Duration = Duration::from_secs(10);
 

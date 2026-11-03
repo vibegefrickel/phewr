@@ -6,13 +6,13 @@ use std::time::Instant;
 
 /// The embedded JPEG previews of RAW and PSD files against the sips decode.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn raw_and_psd() {
     use crate::decode::embedded_jpeg;
     use crate::test_support::{write_cr3_with_preview, write_tiff_raw_with_preview};
 
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let synthetic = tempfile::tempdir().unwrap();
@@ -43,9 +43,9 @@ fn raw_and_psd() {
     }
 }
 
-/// The real camera RAW files of `VIEWR_TEST_RAW_DIR`: the route, the times and the sizes.
+/// The real camera RAW files of `PHEWR_TEST_RAW_DIR`: the route, the times and the sizes.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_RAW_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_RAW_DIR"]
 fn raw_files() {
     raw_dir_files();
 }
@@ -93,16 +93,16 @@ fn measure_file(path: &Path, grid_box: (u32, u32), fullscreen_box: (u32, u32)) {
     ));
 }
 
-/// The real RAW files of `VIEWR_TEST_RAW_DIR`: each route, and the size that a decode returns.
+/// The real RAW files of `PHEWR_TEST_RAW_DIR`: each route, and the size that a decode returns.
 fn raw_dir_files() {
     use crate::decode::{EmbeddedThumbnail, decode_image_with_hint};
 
-    let Some(dir) = std::env::var_os("VIEWR_TEST_RAW_DIR").map(PathBuf::from) else {
-        report("raw files: VIEWR_TEST_RAW_DIR is not set");
+    let Some(dir) = std::env::var_os("PHEWR_TEST_RAW_DIR").map(PathBuf::from) else {
+        report("raw files: PHEWR_TEST_RAW_DIR is not set");
         return;
     };
     let Ok(read) = std::fs::read_dir(&dir) else {
-        report("raw files: VIEWR_TEST_RAW_DIR is not a folder");
+        report("raw files: PHEWR_TEST_RAW_DIR is not a folder");
         return;
     };
     let mut files: Vec<PathBuf> = read

@@ -90,7 +90,7 @@ pub(crate) fn canonicalize_or_self(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// A folder that viewr cannot read stays in. `Enter` on it shows the error, and a check costs
+/// A folder that phewr cannot read stays in. `Enter` on it shows the error, and a check costs
 /// one `opendir` per subfolder.
 #[cfg(test)]
 pub(crate) fn subfolders(dir: &Path) -> Vec<FolderEntry> {

@@ -1,4 +1,4 @@
-//! Speed measurements on a real folder (`VIEWR_TEST_DIR`). `just bench` runs them.
+//! Speed measurements on a real folder (`PHEWR_TEST_DIR`). `just bench` runs them.
 //!
 //! The tests drive the run loop steps without a terminal. A sleep stands in for `event::poll`.
 //! The Kitty sequences go to the buffer of the test app, so the tests measure the payload too.
@@ -45,13 +45,13 @@ fn settle(app: &mut App) {
 
 fn test_dir() -> Option<PathBuf> {
     // The color target of `main`. One test thread, so the global target cannot change.
-    let target = std::env::var("VIEWR_BENCH_COLORSPACE")
+    let target = std::env::var("PHEWR_BENCH_COLORSPACE")
         .ok()
         .and_then(|value| ColorTarget::parse(&value))
         .unwrap_or_default();
     color::set_target(target);
     // Canonical, as `main` passes the start folder: `/tmp` is a link to `/private/tmp`.
-    std::env::var_os("VIEWR_TEST_DIR")
+    std::env::var_os("PHEWR_TEST_DIR")
         .map(PathBuf::from)
         .map(|dir| std::fs::canonicalize(&dir).unwrap_or(dir))
 }

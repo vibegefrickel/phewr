@@ -1,7 +1,7 @@
 //! The conversion of decoded pixels into the color space of the terminal.
 //!
 //! Ghostty copies the pixels of a Kitty image into its Display P3 surface without a conversion.
-//! viewr converts every image into the target after the resize. A PQ or HLG source gets the tone
+//! phewr converts every image into the target after the resize. A PQ or HLG source gets the tone
 //! map of `decode::hdr`, because `moxcms` does not tone-map.
 
 mod jpeg;

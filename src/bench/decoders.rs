@@ -9,7 +9,7 @@ use std::time::Instant;
 
 /// The resize filters on a 24 MP frame.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn resize_filters_24_mp() {
     use fast_image_resize as fir;
     let (w, h) = (5712u32, 4284u32);
@@ -58,7 +58,7 @@ fn resize_filters_24_mp() {
 
 /// The color conversion alone, at the fullscreen box, a grid cell and a 24 MP frame (median of 5).
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn color_conversion() {
     use crate::decode::resize::fit_rgba_within;
     use crate::decode::{EmbeddedThumbnail, decode_image};

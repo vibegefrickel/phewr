@@ -22,10 +22,10 @@ fn switch_and_scan(app: &mut App, dir: &Path) {
 
 /// The first thumbnail and the full grid: cold, warm (disk cache) and on the way back (parked).
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn first_thumbnail_and_full_grid() {
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let mut bench = scanned_app(&dir);

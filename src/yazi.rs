@@ -1,4 +1,4 @@
-//! The reveal of the last file in the yazi that started viewr.
+//! The reveal of the last file in the yazi that started phewr.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// A yazi that does not answer must not hold viewr.
+/// A yazi that does not answer must not hold phewr.
 const YA_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Move the cursor of the yazi that started viewr to `path`.
+/// Move the cursor of the yazi that started phewr to `path`.
 ///
 /// yazi sets `YAZI_ID` for each program that it starts. Without it, or without `ya` on PATH,
 /// nothing happens. `run` starts `ya emit reveal <path>`.

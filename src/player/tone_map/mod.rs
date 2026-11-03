@@ -269,9 +269,9 @@ const HDR_PEAK_NITS: f64 = 1000.0;
 const SDR_WHITE_NITS: f64 = 500.0;
 const D65: [f64; 2] = [0.3127, 0.3290];
 
-/// The file of `cube` in the first of `dirs` that works. viewr writes it when it is missing.
+/// The file of `cube` in the first of `dirs` that works. phewr writes it when it is missing.
 ///
-/// A directory fails when viewr cannot write there, or when its path holds filter graph
+/// A directory fails when phewr cannot write there, or when its path holds filter graph
 /// syntax. Without a directory that works, the video plays without the cube.
 pub(crate) fn cube_file(dirs: &[&Path], cube: Cube) -> Option<PathBuf> {
     dirs.iter().find_map(|dir| cube_file_in(dir, cube))
@@ -290,7 +290,7 @@ fn cube_file_in(dir: &Path, cube: Cube) -> Option<PathBuf> {
     }
     if !file.is_file() {
         std::fs::create_dir_all(dir).ok()?;
-        // A temp file and a rename: a second viewr or a parallel thumbnail job never reads half a
+        // A temp file and a rename: a second phewr or a parallel thumbnail job never reads half a
         // cube.
         let partial = dir.join(format!(
             "{name}.{}.{}.partial",

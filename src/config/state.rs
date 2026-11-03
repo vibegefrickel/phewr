@@ -156,7 +156,7 @@ pub(super) fn write_state(path: &Path, state: &StateFile) {
 }
 
 /// Remove the stale temp files `<name>.*.tmp` beside the state file. A fresh one can belong to
-/// a running viewr.
+/// a running phewr.
 fn prune_stale_temp_files(path: &Path) {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return;

@@ -179,7 +179,7 @@ pub(crate) enum Transfer {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Loops {
-    /// viewr swaps the frame placements on the ticks of its loop clock.
+    /// phewr swaps the frame placements on the ticks of its loop clock.
     #[default]
     Ticks,
     /// The terminal plays each loop as a Kitty animation (`a=f`, `a=a`).

@@ -31,7 +31,7 @@ fn video_programs(label: &str) -> Option<(PathBuf, crate::player::SystemDecoder)
 
 /// The decode side of the terminal player: ffmpeg frames into a sink at two frame boxes.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn player_decode_rate() {
     use crate::player::{Decoder, Pipeline, VideoInfo, frame_box};
     use std::sync::mpsc::TryRecvError;
@@ -107,7 +107,7 @@ fn player_decode_rate() {
 
 /// The whole terminal player without a terminal, for 5 s of the first video: frames shown and dropped.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn player_realtime() {
     use crate::encoder::{KittyBackend, Transfer};
     use crate::player::Player;
@@ -208,7 +208,7 @@ fn report_video_frame_write(app: &App, frames: usize, file_bytes: u64) {
 
 /// The time from Enter on the first video to its first frame write, after cursor rests of 0 ms to 1 s.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn player_first_frame_after_enter() {
     use crate::config::VideoPlayer;
     use crate::player::Decoder;
@@ -452,10 +452,10 @@ fn drop_after_a_rest(dir: &Path, state: &mut crate::run_loop::LoopState) -> Opti
 
 /// The header check and the probe of `Player::open` of each animated file, on the UI thread.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn animation_open() {
     let Some(dir) = test_dir() else {
-        report("animation open: skipped, VIEWR_TEST_DIR is not set");
+        report("animation open: skipped, PHEWR_TEST_DIR is not set");
         return;
     };
     let Some((_, decoder)) = video_programs("animation open") else {
@@ -492,10 +492,10 @@ fn animation_open() {
 
 /// The probe and the first-frame thumbnail of each video in the folder, process start included.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn probe_and_first_frame() {
     let Some(dir) = test_dir() else {
-        report("video probe: skipped, VIEWR_TEST_DIR is not set");
+        report("video probe: skipped, PHEWR_TEST_DIR is not set");
         return;
     };
     let Some((ffmpeg, decoder)) = video_programs("video probe") else {

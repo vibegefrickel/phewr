@@ -174,7 +174,7 @@ impl Drop for PooledFrame {
 fn reap(child: Child) {
     let (send, receive) = mpsc::channel::<Child>();
     let reaper = thread::Builder::new()
-        .name("viewr-reap".to_owned())
+        .name("phewr-reap".to_owned())
         .spawn(move || {
             if let Ok(mut child) = receive.recv() {
                 wait_for_exit(&mut child);

@@ -19,7 +19,7 @@ use video::handle_video_key;
 /// Drops a Kitty probe answer that comes after the timeout.
 ///
 /// crossterm reads a late `ESC _ G i=31 ; OK ESC \\` as the keys Alt+`_`, `G`, `i`, `=`, ...
-/// and Alt+`\\`. Unfiltered, those keys zoom, jump and open the info panel. Nothing in viewr
+/// and Alt+`\\`. Unfiltered, those keys zoom, jump and open the info panel. Nothing in phewr
 /// uses Alt+`_`, and a key that fits no answer ends the swallow.
 #[derive(Debug, Default)]
 pub(crate) struct LateAnswerFilter {

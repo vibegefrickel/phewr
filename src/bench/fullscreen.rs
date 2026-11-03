@@ -49,10 +49,10 @@ fn wait_for_prefetch(app: &mut App) {
 
 /// Enter on a grid cell until the fullscreen image shows, cold and after the gallery pre-decode.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn open_from_grid() {
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     for extensions in [&["heic"][..], &["jpg", "jpeg"][..], &["png"][..]] {
@@ -99,10 +99,10 @@ fn open_from_grid() {
 
 /// The steps to the next and the previous image with the pre-decode of the neighbors.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn prefetch_hits_for_next_and_previous() {
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     for pause in [Duration::ZERO, Duration::from_millis(300)] {
@@ -160,12 +160,12 @@ fn prefetch_hits_for_next_and_previous() {
 
 /// The bytes and the write time of one fullscreen frame through the temp file medium.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn kitty_payload() {
     const RUNS: usize = 10;
 
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     for extensions in [&["heic"][..], &["png"][..]] {
@@ -208,12 +208,12 @@ fn kitty_payload() {
 
 /// One pan step of the zoomed view: the new crop and its write through the temp file medium.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn zoom_pan_step() {
     const STEPS: usize = 10;
 
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let mut bench = scanned_app(&dir);

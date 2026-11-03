@@ -1,4 +1,4 @@
-//! The start of viewr up to the first grid picture.
+//! The start of phewr up to the first grid picture.
 
 use super::{CELL_PX, COLS, LIMIT, ROWS, count_transmissions, millis, report, test_dir};
 use crate::app::App;
@@ -149,10 +149,10 @@ fn start_once(dir: &Path, cache_dir: &Path) -> StartTimes {
 
 /// The start up to the first grid picture, with a cold and a warm disk cache.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn first_grid_picture() {
     let Some(dir) = test_dir() else {
-        report("skipped: VIEWR_TEST_DIR is not set");
+        report("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let test_binary = std::env::current_exe().unwrap();

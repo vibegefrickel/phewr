@@ -27,7 +27,7 @@ AGENTS.md holds the rules and the layout of the files.
 - From a scale of 1/2 down, RGB is as fast.
 - The RGB copy of an opaque RGBA resize happens after the resize, at the size of the screen.
 - The tests of `decode/screen/` compare the RGB layouts with the RGBA reference path. This is the
-  path that viewr used before the RGB layouts.
+  path that phewr used before the RGB layouts.
 
 ## libheif
 
@@ -92,7 +92,7 @@ AGENTS.md holds the rules and the layout of the files.
 | ARW | 4608x3072 | 19 ms | 27 ms | 521 ms |
 
 - sips ignores the orientation of RAF and ARW files. Four real portrait files of raw.pixls.us
-  (Fujifilm X-A3 and X-H2, Sony DSLR-A450 and SLT-A58) showed it on macOS 26.7.2. viewr turns a
+  (Fujifilm X-A3 and X-H2, Sony DSLR-A450 and SLT-A58) showed it on macOS 26.7.2. phewr turns a
   develop that keeps the unturned aspect (`sips::corrected`). The turn costs about 30 ms for a
   fullscreen develop and 196 ms for a 7728x5152 zoom develop.
 - sips develops `P1000475.RW2` (Panasonic) all black. A RAW develop with only zero color samples
@@ -114,13 +114,13 @@ AGENTS.md holds the rules and the layout of the files.
 
 The code is in `decode/color/`.
 
-### Why viewr converts
+### Why phewr converts
 
 - Ghostty on macOS draws into a Display P3 surface.
 - The image shader of Ghostty copies the pixels of a Kitty image without a conversion. This holds
   also with `window-colorspace = srgb`, because that setting converts only the text colors.
 - So Ghostty shows each image pixel as Display P3.
-- viewr converts every image into Display P3. The key is `[terminal] colorspace`. The default is
+- phewr converts every image into Display P3. The key is `[terminal] colorspace`. The default is
   `display-p3`. The value `srgb` is for a terminal that shows the pixels as sRGB.
 - `main` sets the target. The tests keep sRGB.
 
@@ -146,7 +146,7 @@ Each decoder reports the color of its pixels.
   and unknown CICP codes.
 - A PQ or HLG source (CICP transfer 16 or 18, also from the `cicp` tag of an ICC profile) gets
   the tone map of `decode::hdr`, because `moxcms` does not tone-map.
-- The "as is" column of the table of `fixtures_match_colorsync` is what viewr sent before the
+- The "as is" column of the table of `fixtures_match_colorsync` is what phewr sent before the
   color conversion existed.
 
 ### Player cubes
@@ -174,7 +174,7 @@ The code is in `decode/hdr/`.
   files), a PNG from `cLLI` or `mDCV` (the draft spellings `cLLi` and `mDCv` count too), and a
   JPEG XL from `intensity_target`. The 500 bucket has no roll-off, for content at or below SDR
   white. The 8-bit HDR path maps through `color::convert_with_peak`.
-- cjxl writes an intensity target of 10000 nits into each PQ file. viewr counts 255 and 10000 as
+- cjxl writes an intensity target of 10000 nits into each PQ file. phewr counts 255 and 10000 as
   unset. A JPEG XL that really is mastered at 10000 nits maps with the 1000 nit bucket and clips
   its highlights above about 1000 nits.
 - The libavif test stills: `colors_hdr_rec2020.avif` (MaxCLL 470, bucket 500) gets brighter, its
@@ -209,9 +209,9 @@ The code is in `decode/hdr/`.
 - On 2026-11-03, 40 public files (27 of the libjxl conformance set, 13 from jpegxl.info,
   convertico.com and libjxl/testdata) went through `real_jxl_matches_reference`. 34 match their
   reference within 4 levels. The six others:
-  - `cmyk_layers`: viewr refuses CMYK on purpose.
+  - `cmyk_layers`: phewr refuses CMYK on purpose.
   - `grayscale_jpeg`: djxl writes the gray ICC profile into an RGB PNG. Against the lcms
-    conversion of the restored JPEG, viewr is within 4 levels.
+    conversion of the restored JPEG, phewr is within 4 levels.
   - `spot`: `moxcms` clips red at the sRGB gamut edge of a ProPhoto-like profile, where lcms keeps
     it (up to 32 levels on 144 of 240 000 pixels).
   - `test_pattern-PQ`: 6 levels against the player cube.

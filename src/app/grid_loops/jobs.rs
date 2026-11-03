@@ -146,7 +146,7 @@ impl App {
             guard.send(outcome);
         };
         let started = std::thread::Builder::new()
-            .name("viewr-loop".to_owned())
+            .name("phewr-loop".to_owned())
             .spawn(job);
         if started.is_ok() {
             self.grid_loops.running.insert(index, cancel);
@@ -194,7 +194,7 @@ fn decode_loop(
 ) -> io::Result<LoopFrames> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "viewr has no video feature",
+        "phewr has no video feature",
     ))
 }
 

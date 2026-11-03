@@ -204,10 +204,10 @@ fn measure_decoders(jpeg: Option<&PathBuf>, heic: Option<&PathBuf>) {
 
 /// The fullscreen fit, write and decoders in the new layouts against the RGBA layout.
 #[test]
-#[ignore = "reads the folder VIEWR_TEST_DIR"]
+#[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn layouts_against_rgba() {
-    let Some(dir) = std::env::var_os("VIEWR_TEST_DIR").map(PathBuf::from) else {
-        eprintln!("skipped: VIEWR_TEST_DIR is not set");
+    let Some(dir) = std::env::var_os("PHEWR_TEST_DIR").map(PathBuf::from) else {
+        eprintln!("skipped: PHEWR_TEST_DIR is not set");
         return;
     };
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)

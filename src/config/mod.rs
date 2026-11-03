@@ -1,6 +1,6 @@
-//! The user configuration (`~/.config/viewr/config.toml`) and the zoom state file.
+//! The user configuration (`~/.config/phewr/config.toml`) and the zoom state file.
 //!
-//! viewr ignores unknown keys. An old file with the removed keys `theme` and `theme_catalog`
+//! phewr ignores unknown keys. An old file with the removed keys `theme` and `theme_catalog`
 //! still loads.
 
 use crate::decode::color::ColorTarget;
@@ -40,7 +40,7 @@ pub(crate) struct Config {
     pub(crate) mouse: bool,
     /// Play a loop in each visible video and animated cell.
     pub(crate) animate: bool,
-    /// `[gallery] loops`. `None` (`auto`) lets the start probe decide. `VIEWR_KITTY_LOOPS` wins.
+    /// `[gallery] loops`. `None` (`auto`) lets the start probe decide. `PHEWR_KITTY_LOOPS` wins.
     pub(crate) loops: Option<Loops>,
     /// The color space of the terminal pixels.
     pub(crate) colorspace: ColorTarget,
@@ -49,7 +49,7 @@ pub(crate) struct Config {
 /// The value of `[video] player`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum VideoPlayer {
-    /// The viewr player draws the frames into this terminal, without sound.
+    /// The phewr player draws the frames into this terminal, without sound.
     #[default]
     Terminal,
     /// mpv opens its own fullscreen window, with sound.
@@ -152,8 +152,8 @@ impl Paths {
         xdg_state_home: Option<OsString>,
     ) -> Self {
         Self {
-            config: xdg_path(xdg_config_home, home, ".config", "viewr/config.toml"),
-            state: xdg_path(xdg_state_home, home, ".local/state", "viewr/state.toml"),
+            config: xdg_path(xdg_config_home, home, ".config", "phewr/config.toml"),
+            state: xdg_path(xdg_state_home, home, ".local/state", "phewr/state.toml"),
         }
     }
 }
@@ -245,12 +245,12 @@ mod tests {
     fn paths_follow_absolute_xdg_values() {
         let home = Path::new("/home/a");
         let fallback = Paths::from_vars(home, None, None);
-        assert_eq!(fallback.config, home.join(".config/viewr/config.toml"));
-        assert_eq!(fallback.state, home.join(".local/state/viewr/state.toml"));
+        assert_eq!(fallback.config, home.join(".config/phewr/config.toml"));
+        assert_eq!(fallback.state, home.join(".local/state/phewr/state.toml"));
 
         let xdg = Paths::from_vars(home, Some("/x/c".into()), Some("/x/s".into()));
-        assert_eq!(xdg.config, Path::new("/x/c/viewr/config.toml"));
-        assert_eq!(xdg.state, Path::new("/x/s/viewr/state.toml"));
+        assert_eq!(xdg.config, Path::new("/x/c/phewr/config.toml"));
+        assert_eq!(xdg.state, Path::new("/x/s/phewr/state.toml"));
 
         let relative = Paths::from_vars(home, Some("c".into()), Some("s".into()));
         assert_eq!(relative, fallback);
@@ -443,26 +443,26 @@ mod tests {
     fn xdg_path_needs_absolute_base() {
         let home = Path::new("/home/synthetic");
         assert_eq!(
-            xdg_path(None, home, ".config", "viewr/config.toml"),
-            home.join(".config/viewr/config.toml")
+            xdg_path(None, home, ".config", "phewr/config.toml"),
+            home.join(".config/phewr/config.toml")
         );
         assert_eq!(
             xdg_path(
                 Some(OsString::from("relative/config")),
                 home,
                 ".config",
-                "viewr/config.toml"
+                "phewr/config.toml"
             ),
-            home.join(".config/viewr/config.toml")
+            home.join(".config/phewr/config.toml")
         );
         assert_eq!(
             xdg_path(
                 Some(OsString::from("/xdg/state")),
                 home,
                 ".local/state",
-                "viewr/state.toml"
+                "phewr/state.toml"
             ),
-            PathBuf::from("/xdg/state/viewr/state.toml")
+            PathBuf::from("/xdg/state/phewr/state.toml")
         );
     }
 }

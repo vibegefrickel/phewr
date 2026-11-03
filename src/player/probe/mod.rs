@@ -569,14 +569,14 @@ mod tests {
         assert!(probe(Path::new("/nonexistent/ffprobe"), &fixture("anim.gif")).is_err());
     }
 
-    /// A real video: `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`.
+    /// A real video: `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`.
     #[test]
-    #[ignore = "needs VIEWR_TEST_HDR_VIDEO or VIEWR_TEST_SDR_VIDEO, real video files"]
+    #[ignore = "needs PHEWR_TEST_HDR_VIDEO or PHEWR_TEST_SDR_VIDEO, real video files"]
     fn real_videos_report_size_and_rate() {
         let Some(ffprobe) = real_ffprobe() else {
             return;
         };
-        for variable in ["VIEWR_TEST_HDR_VIDEO", "VIEWR_TEST_SDR_VIDEO"] {
+        for variable in ["PHEWR_TEST_HDR_VIDEO", "PHEWR_TEST_SDR_VIDEO"] {
             let Some(path) = crate::decode::real_test_file(variable) else {
                 continue;
             };

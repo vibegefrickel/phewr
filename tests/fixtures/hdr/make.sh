@@ -118,7 +118,7 @@ insert_cicp "$work/signal.png" pq-4000.png 16 4000
 insert_cicp "$work/pq-icc.png" pq-icc-4000.png 0 4000
 
 # The cubes of the player, then the references through them.
-VIEWR_HDR_CUBE_DIR=$work just test-real write_the_player_hdr_cubes > /dev/null 2>&1
+PHEWR_HDR_CUBE_DIR=$work just test-real write_the_player_hdr_cubes > /dev/null 2>&1
 rm -rf ref
 mkdir ref
 for curve in pq pq4000 hlg; do

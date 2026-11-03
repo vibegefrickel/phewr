@@ -21,8 +21,8 @@ impl App {
         }
     }
 
-    /// The file that yazi reveals when viewr quits: the fullscreen file, or the gallery cursor.
-    /// The `..` cell reveals the folder of the grid: yazi stays where viewr was.
+    /// The file that yazi reveals when phewr quits: the fullscreen file, or the gallery cursor.
+    /// The `..` cell reveals the folder of the grid: yazi stays where phewr was.
     pub(crate) fn reveal_path(&self) -> Option<PathBuf> {
         let index = self.view_index()?;
         if self.is_parent_entry(index) {

@@ -7,11 +7,11 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Change it when the loop output changes.
-const LOOP_CACHE_VERSION: &str = "viewr-loop-v1";
+const LOOP_CACHE_VERSION: &str = "phewr-loop-v1";
 
 pub(super) const LOOP_EXTENSION: &str = "loop";
 
-const LOOP_MAGIC: &[u8; 8] = b"VIEWRLP1";
+const LOOP_MAGIC: &[u8; 8] = b"PHEWRLP1";
 
 /// The loop frames of `path` for a grid picture of `target` pixels. A broken file goes away.
 pub(in crate::app) fn try_load_loop(

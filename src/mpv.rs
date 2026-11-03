@@ -28,10 +28,10 @@ const CONNECT_RETRY: Duration = Duration::from_millis(20);
 /// button. mpv uses it after a signal too. In [`Playback::Loop`], a quit exits with 0.
 pub(crate) const USER_QUIT: i32 = 4;
 
-/// The mpv exit code after `n`: viewr steps to the next file.
+/// The mpv exit code after `n`: phewr steps to the next file.
 pub(crate) const NEXT_FILE: i32 = 10;
 
-/// The mpv exit code after `N` (Shift+n): viewr steps to the previous file.
+/// The mpv exit code after `N` (Shift+n): phewr steps to the previous file.
 pub(crate) const PREVIOUS_FILE: i32 = 11;
 
 /// mpv 0.41 binds neither `n` nor `N` by default. The seek keys (the arrows) and the playlist
@@ -63,14 +63,14 @@ pub(crate) fn socket_path(dir: &Path, process: u32, window: u32) -> Option<PathB
     (path.as_os_str().len() <= MAX_SOCKET_PATH).then_some(path)
 }
 
-/// A new socket path for the next window: the thumbnail cache, then `$TMPDIR/viewr`. Each
-/// window owns its path, because a window that viewr forgot can still run.
+/// A new socket path for the next window: the thumbnail cache, then `$TMPDIR/phewr`. Each
+/// window owns its path, because a window that phewr forgot can still run.
 pub(crate) fn socket_for_window(cache_dir: &Path) -> Option<PathBuf> {
     static WINDOWS: AtomicU32 = AtomicU32::new(0);
     let process = std::process::id();
     let window = WINDOWS.fetch_add(1, Ordering::Relaxed);
     socket_path(cache_dir, process, window)
-        .or_else(|| socket_path(&std::env::temp_dir().join("viewr"), process, window))
+        .or_else(|| socket_path(&std::env::temp_dir().join("phewr"), process, window))
 }
 
 /// True when mpv in [`Playback::Once`] played the file to its end.
@@ -93,7 +93,7 @@ pub(crate) fn step(code: Option<i32>) -> Option<Step> {
     }
 }
 
-/// mpv in a window of its own. `--no-terminal` keeps it away from the keys of viewr.
+/// mpv in a window of its own. `--no-terminal` keeps it away from the keys of phewr.
 ///
 /// `--hwdec=auto-safe` gives the GPU output the hardware frames without a copy. The GPU output
 /// does its own HDR tone mapping.
@@ -388,13 +388,13 @@ mod tests {
     }
     #[test]
     fn once_names_socket() {
-        let socket = Path::new("/tmp/viewr/mpv-1.sock");
+        let socket = Path::new("/tmp/phewr/mpv-1.sock");
         let args = strings(&window_args(
             Path::new("b.webm"),
             Playback::Once,
             Some(socket),
         ));
-        assert!(args.contains(&"--input-ipc-server=/tmp/viewr/mpv-1.sock".to_owned()));
+        assert!(args.contains(&"--input-ipc-server=/tmp/phewr/mpv-1.sock".to_owned()));
         let args = strings(&window_args(
             Path::new("b.webm"),
             Playback::Loop,
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn windows_own_sockets() {
-        let cache = Path::new("/tmp/viewr");
+        let cache = Path::new("/tmp/phewr");
         let first = socket_for_window(cache).unwrap();
         let second = socket_for_window(cache).unwrap();
         assert_ne!(first, second);
@@ -418,11 +418,11 @@ mod tests {
         let long = PathBuf::from("/").join("x".repeat(120));
         assert_eq!(socket_path(&long, 7, 3), None);
         assert_eq!(
-            socket_path(Path::new("/tmp/viewr"), 7, 3),
-            Some(PathBuf::from("/tmp/viewr/mpv-7-3.sock"))
+            socket_path(Path::new("/tmp/phewr"), 7, 3),
+            Some(PathBuf::from("/tmp/phewr/mpv-7-3.sock"))
         );
         let fallback = socket_for_window(&long).unwrap();
-        assert!(fallback.starts_with(std::env::temp_dir().join("viewr")));
+        assert!(fallback.starts_with(std::env::temp_dir().join("phewr")));
     }
 
     #[test]

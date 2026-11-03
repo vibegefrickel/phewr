@@ -100,7 +100,7 @@ pub(crate) fn decode(path: &Path, target: Option<(u32, u32)>) -> io::Result<Deco
     let path = &argument_path(path);
     let max_side = requested_side(path, target)?.map(|side| side.to_string());
     let tiff = tempfile::Builder::new()
-        .prefix("viewr-sips-")
+        .prefix("phewr-sips-")
         .suffix(".tiff")
         .tempfile()?;
     let mut args = vec![OsStr::new("-s"), OsStr::new("format"), OsStr::new("tiff")];
@@ -123,7 +123,7 @@ pub(crate) fn decode(path: &Path, target: Option<(u32, u32)>) -> io::Result<Deco
     Ok(decoded)
 }
 
-/// sips reads an argument that starts with `-` as a function name (`viewr -- -x.cr2`). A
+/// sips reads an argument that starts with `-` as a function name (`phewr -- -x.cr2`). A
 /// relative path gets `./` in front.
 fn argument_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
@@ -586,18 +586,18 @@ mod tests {
         assert!(is_all_black(&DynamicImage::ImageLumaA16(gray)));
     }
 
-    /// `VIEWR_TEST_RAW=/path/to/photo.cr2`. A portrait photo must come out upright and not black.
+    /// `PHEWR_TEST_RAW=/path/to/photo.cr2`. A portrait photo must come out upright and not black.
     #[test]
-    #[ignore = "needs VIEWR_TEST_RAW, a real camera RAW file"]
+    #[ignore = "needs PHEWR_TEST_RAW, a real camera RAW file"]
     fn decodes_raw_from_env() {
-        decodes_real_file("VIEWR_TEST_RAW");
+        decodes_real_file("PHEWR_TEST_RAW");
     }
 
-    /// `VIEWR_TEST_PSD=/path/to/image.psd`.
+    /// `PHEWR_TEST_PSD=/path/to/image.psd`.
     #[test]
-    #[ignore = "needs VIEWR_TEST_PSD, a real Photoshop file"]
+    #[ignore = "needs PHEWR_TEST_PSD, a real Photoshop file"]
     fn decodes_psd_from_env() {
-        decodes_real_file("VIEWR_TEST_PSD");
+        decodes_real_file("PHEWR_TEST_PSD");
     }
 
     fn decodes_real_file(variable: &str) {

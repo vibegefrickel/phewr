@@ -1,7 +1,7 @@
 # Benchmarks
 
 The benches live in `src/bench/`, one file per group. A bench path is `bench::<file>::<name>`.
-`just bench [DIR] [FILTER]` runs them on `~/Pictures/viewr-test/01-mixed-big` by default. The
+`just bench [DIR] [FILTER]` runs them on `~/Pictures/phewr-test/01-mixed-big` by default. The
 filter `bench::` finds all 23 benches.
 
 ## The shared driver (`bench/mod.rs`)
@@ -22,7 +22,7 @@ filter `bench::` finds all 23 benches.
 
 - `start_once` uses a `TestBackend`. The numbers do not hold the round trips of the cell size
   query and the Kitty probe. The probe time is the time of its temp file only.
-- The process start runs the test binary. It links the same libraries as viewr.
+- The process start runs the test binary. It links the same libraries as phewr.
 
 ## Cache formats (`bench/cache.rs`)
 
@@ -37,7 +37,7 @@ filter `bench::` finds all 23 benches.
   in a CR3. The folder adds its first file of each RAW or PSD extension.
 - The bench measures the find, the decode for a grid cell and the decode for the fullscreen box.
   It compares each with sips.
-- `raw_files` measures every RAW file of `VIEWR_TEST_RAW_DIR` with the real thumb box. It skips
+- `raw_files` measures every RAW file of `PHEWR_TEST_RAW_DIR` with the real thumb box. It skips
   hidden files and the files that the scanner does not list.
 
 ## Decoders (`bench/decoders.rs`)

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Change it when the thumbnail output changes.
-const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v17";
+const THUMBNAIL_CACHE_VERSION: &str = "phewr-thumbnail-v17";
 
 /// QOI decodes twice as fast as PNG at the same file size.
 const CACHE_FORMAT: image::ImageFormat = image::ImageFormat::Qoi;
@@ -24,8 +24,8 @@ const OLD_CACHE_EXTENSION: &str = "png";
 
 /// The cache below the user's cache directory, or a temp directory without one.
 pub(super) fn default_disk_cache_dir() -> PathBuf {
-    ProjectDirs::from("", "", "viewr").map_or_else(
-        || std::env::temp_dir().join("viewr-cache"),
+    ProjectDirs::from("", "", "phewr").map_or_else(
+        || std::env::temp_dir().join("phewr-cache"),
         |dirs| dirs.cache_dir().to_path_buf(),
     )
 }

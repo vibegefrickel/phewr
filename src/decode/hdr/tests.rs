@@ -552,14 +552,14 @@ fn map_matches_player_cube() {
     }
 }
 
-/// Write the player's HDR cubes into `VIEWR_HDR_CUBE_DIR` for `tests/fixtures/hdr/make.sh`: `pq`
+/// Write the player's HDR cubes into `PHEWR_HDR_CUBE_DIR` for `tests/fixtures/hdr/make.sh`: `pq`
 /// and `hlg`, and `pq<nits>` for each PQ bucket.
 #[cfg(feature = "video")]
 #[test]
 #[ignore = "writes the cubes for tests/fixtures/hdr/make.sh"]
 fn write_the_player_hdr_cubes() {
     use crate::player::tone_map::{Cube, CubeSource};
-    let Some(dir) = crate::decode::real_test_file("VIEWR_HDR_CUBE_DIR") else {
+    let Some(dir) = crate::decode::real_test_file("PHEWR_HDR_CUBE_DIR") else {
         return;
     };
     let buckets = Peak::BUCKETS.map(|peak| (CubeSource::Pq(peak), format!("pq{}", peak.nits())));

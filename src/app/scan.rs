@@ -46,7 +46,7 @@ impl App {
             self.scan_complete = true;
             self.finalize_scan_order();
             self.request_cell_shape();
-            // viewr always starts in the grid, even with one image.
+            // phewr always starts in the grid, even with one image.
             self.place_cursor_on_return();
         }
     }

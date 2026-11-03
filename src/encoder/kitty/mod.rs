@@ -159,7 +159,7 @@ pub(crate) fn write_pixels<W: Write + ?Sized>(
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             write_direct(out, keys, 100, &STANDARD.encode(&png_buf))
         }
-        // A full or read-only temp dir must not stop viewr. The pixels go through the pty.
+        // A full or read-only temp dir must not stop phewr. The pixels go through the pty.
         Transfer::TempFile => match write_temp_file(pixels.data, temp_dir) {
             Ok(path) => write_temp_file_reference(out, keys, raw_format(pixels), &path),
             Err(_) => write_pixels(out, pixels, keys, Transfer::Direct, temp_dir),
@@ -233,7 +233,7 @@ fn write_temp_file(pixels: &[u8], temp_dir: &Path) -> io::Result<PathBuf> {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let path = temp_dir.join(format!(
-        "{TEMP_FILE_MARKER}-viewr-{}-{sequence}.raw",
+        "{TEMP_FILE_MARKER}-phewr-{}-{sequence}.raw",
         std::process::id()
     ));
     if let Err(error) = std::fs::write(&path, pixels) {

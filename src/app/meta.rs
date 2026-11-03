@@ -42,7 +42,7 @@ impl App {
         let (sender, receiver) = mpsc::channel();
         let job = path.clone();
         let started = thread::Builder::new()
-            .name("viewr-meta".to_owned())
+            .name("phewr-meta".to_owned())
             .spawn(move || {
                 #[expect(
                     clippy::let_underscore_must_use,

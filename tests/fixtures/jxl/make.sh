@@ -13,7 +13,7 @@
 # sRGB chart, converted by libjxl into a PQ or HLG signal.
 #
 # The reference of each fixture is `ref/<name>.png`: djxl renders it into 8-bit sRGB with the
-# relative intent. pq, hlg, pq-icc, hlg-icc and gray-pq have no reference: viewr tone-maps them
+# relative intent. pq, hlg, pq-icc, hlg-icc and gray-pq have no reference: phewr tone-maps them
 # like the HDR cube of its terminal player (src/decode/hdr/), and tests/fixtures/hdr/ holds the
 # references of that map.
 set -eu

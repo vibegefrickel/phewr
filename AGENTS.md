@@ -1,21 +1,21 @@
 # AGENTS.md
 
-This file is the entry point for each person and coding agent that works on viewr. Read it
+This file is the entry point for each person and coding agent that works on phewr. Read it
 first. Then read `TODO.md` for the open work. The pages in `docs/` hold the design facts of the
 modules. Read the page of the module that you change.
 
 ## What this is
 
-viewr is a terminal image and video gallery for the Kitty graphics protocol, written in Rust.
+phewr is a terminal image and video gallery for the Kitty graphics protocol, written in Rust.
 It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork had the name
-imgrrr before 2026-10-17.
+imgrrr before 2026-10-17 and viewr before 2026-11-03.
 
-- The main goal: viewr is a fast viewer for all common image and video formats in the terminal,
+- The main goal: phewr is a fast viewer for all common image and video formats in the terminal,
   with full mouse support. Each change makes opening, scrolling or switching files faster, or it
   adds a common format. `TODO.md` holds the full goal and its scope.
-- viewr is a viewer only. It does not edit, convert, write, move, rename or delete files. Do not
+- phewr is a viewer only. It does not edit, convert, write, move, rename or delete files. Do not
   add file operations.
-- The target is macOS on Apple Silicon, in Ghostty. viewr uses the Kitty graphics protocol, not the
+- The target is macOS on Apple Silicon, in Ghostty. phewr uses the Kitty graphics protocol, not the
   Kitty terminal. Nobody tests in the Kitty terminal.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
 
@@ -31,10 +31,10 @@ the macOS tool `/usr/bin/sips`. All four features are on by default.
 just                 # = just check: fmt --check, clippy -D warnings (2 feature sets), check per feature, nextest, rustdoc, cargo deny
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
-just test-real [FILTER]  # also the ignored tests that decode real files (VIEWR_TEST_*)
+just test-real [FILTER]  # also the ignored tests that decode real files (PHEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
-just bench [DIR] [FILTER]  # the speed measurements of src/bench/ on VIEWR_TEST_DIR (default ~/Pictures/viewr-test/01-mixed-big), FILTER selects a bench (default bench::)
+just bench [DIR] [FILTER]  # the speed measurements of src/bench/ on PHEWR_TEST_DIR (default ~/Pictures/phewr-test/01-mixed-big), FILTER selects a bench (default bench::)
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | outdated   # the single steps
@@ -63,10 +63,10 @@ The repository pins the toolchain, the formatter and the lints:
 
 Files at run time:
 
-- Config: `~/.config/viewr/config.toml`, or `$XDG_CONFIG_HOME/viewr/config.toml`. The sections
+- Config: `~/.config/phewr/config.toml`, or `$XDG_CONFIG_HOME/phewr/config.toml`. The sections
   are `[gallery]`, `[slideshow]`, `[info]`, `[video]` and `[terminal]`.
-- State (the remembered zoom levels): `~/.local/state/viewr/state.toml`.
-- Thumbnail cache: `~/Library/Caches/viewr/`, QOI files and the `.loop` files of the grid loops,
+- State (the remembered zoom levels): `~/.local/state/phewr/state.toml`.
+- Thumbnail cache: `~/Library/Caches/phewr/`, QOI files and the `.loop` files of the grid loops,
   pruned at 512 MB.
 
 ### Release (maintainer only)
@@ -78,7 +78,7 @@ There is no CI. The maintainer builds and publishes each release from their own 
 
 One-time setup:
 
-1. Create the Codeberg repository `viewr` under `webgefrickel`.
+1. Create the Codeberg repository `phewr` under `webgefrickel`.
 2. Export `CODEBERG_TOKEN`.
 3. Clone `homebrew-tap` next to this repository (`../homebrew-tap`).
 
@@ -90,7 +90,7 @@ For each release:
 
 The release binary is arm64 only, because Homebrew's libheif is an arm64 library. The formula
 depends on libheif, and ffmpeg and mpv are recommended dependencies. `install.sh` stops if libheif
-is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without them.
+is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without them.
 
 ## Rules
 
@@ -126,16 +126,16 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 ### Tests
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module.
-- Tests that need a real file are `#[ignore = "..."]` and read `VIEWR_TEST_JPEG`,
-  `VIEWR_TEST_HEIC`, `VIEWR_TEST_AVIF`, `VIEWR_TEST_JXL`, `VIEWR_TEST_RAW`, `VIEWR_TEST_PSD`,
-  `VIEWR_TEST_HDR_VIDEO` or `VIEWR_TEST_SDR_VIDEO`. `VIEWR_TEST_SDR_VIDEO` also feeds the first
+- Tests that need a real file are `#[ignore = "..."]` and read `PHEWR_TEST_JPEG`,
+  `PHEWR_TEST_HEIC`, `PHEWR_TEST_AVIF`, `PHEWR_TEST_JXL`, `PHEWR_TEST_RAW`, `PHEWR_TEST_PSD`,
+  `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. `PHEWR_TEST_SDR_VIDEO` also feeds the first
   frame test `video::tests::real_clip_first_frame`. The bench `previews::raw_files` reads every
-  RAW file of `VIEWR_TEST_RAW_DIR`. `real_jxl_matches_reference` compares `VIEWR_TEST_JXL` with
-  `VIEWR_TEST_JXL_REF` (a djxl rendering, or the player cube for PQ and HLG) and fails above 4
-  levels. `VIEWR_TEST_JXL_MAX` sets another limit, and `VIEWR_TEST_JXL_OUT` writes the decode.
+  RAW file of `PHEWR_TEST_RAW_DIR`. `real_jxl_matches_reference` compares `PHEWR_TEST_JXL` with
+  `PHEWR_TEST_JXL_REF` (a djxl rendering, or the player cube for PQ and HLG) and fails above 4
+  levels. `PHEWR_TEST_JXL_MAX` sets another limit, and `PHEWR_TEST_JXL_OUT` writes the decode.
 - `tests/fixtures/color/` holds a Display P3 chart as JPEG, PNG, WebP, TIFF and HEIC with an ICC
   profile, as HEIC and AVIF with nclx, and as PNG with cICP and with gAMA and cHRM, plus an
-  Adobe RGB JPEG and untagged sRGB files. `VIEWR_BENCH_COLORSPACE=srgb just bench` measures with
+  Adobe RGB JPEG and untagged sRGB files. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures with
   the sRGB target.
 - `tests/fixtures/png/` holds 10 PNG layouts (16 bit, palette, tRNS, gray, gray with alpha,
   RGBA, interlaced, EXIF orientation 6), and `make.sh` rebuilds them with magick and exiftool.
@@ -144,7 +144,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   test skips WebP without FFmpeg 9 (`webp_anim` decoder). `tests/fixtures/jxl/` holds 19 JPEG XL
   color charts and gradients, `ref/` their djxl renderings, and `make.sh` rebuilds both with
   cjxl, djxl, magick, exiftool and sips. `jxl/ref/` holds no `pq.png`: djxl maps PQ to a 255-nit
-  display, and viewr maps like the player. `tests/fixtures/hdr/` holds a PQ and an HLG chart with
+  display, and phewr maps like the player. `tests/fixtures/hdr/` holds a PQ and an HLG chart with
   BT.2020 primaries as 10-bit AVIF and HEIC (nclx), JPEG XL (lossless and lossy, and `pq-icc.jxl`)
   and 16-bit PNG (`cICP`), `ref/` their renderings through the HDR cube of the player (ffmpeg
   `lut3d`), and `make.sh` rebuilds them. `pq-4000.avif`, `pq-4000.heic` and `pq-4000-8bit.heic`
@@ -330,8 +330,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
   the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
-  frame, and `chosen_loops` reads `VIEWR_KITTY_LOOPS` and the config key.
-  `VIEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `Pixels` is a view of RGB or
+  frame, and `chosen_loops` reads `PHEWR_KITTY_LOOPS` and the config key.
+  `PHEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `Pixels` is a view of RGB or
   RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
   every medium. The check and the copy go in chunks of 4096 pixels and stop at the first
   transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost. `KittyBackend` has
@@ -345,11 +345,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `FakeDecoder` and the app builders of the video tests (feature `video`).
 - `bench/` (test only): the ignored speed benchmarks, one file per group. A bench path is
   `bench::<file>::<name>`. They drive the real loop steps without a terminal and read
-  `VIEWR_TEST_DIR`. `mod.rs` holds the shared driver (`Bench`, `settle`, `measure_grid`).
+  `PHEWR_TEST_DIR`. `mod.rs` holds the shared driver (`Bench`, `settle`, `measure_grid`).
   `start::first_grid_picture` measures the process start and the steps of `main`,
   `cache::formats` the cache formats, `layout_bench::layouts_against_rgba` the pixel layouts of
   the fullscreen path (the A/B table of the RGB and RGBA resizes). `folders::grid_during_prefetch`
-  runs the cold grid while a folder prefetch of `VIEWR_TEST_PREFETCH_DIR` runs. `measure_grid`
+  runs the cold grid while a folder prefetch of `PHEWR_TEST_PREFETCH_DIR` runs. `measure_grid`
   stops the clock at the end of the pass. Each bench lets its background work end before the next
   one starts (the `Drop` of `Bench`, `settle`), so the numbers of the full `just bench` match a
   run of one bench. `docs/benchmarks.md` holds what each bench leaves out.
@@ -397,13 +397,13 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `keybind N "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
   file that mpv played, not from the gallery cursor.
-- **mpv window:** viewr follows each mpv window until it exits (`App::poll_video_window`). The
-  run loop polls every 100 ms (`WINDOW_POLL`) while a window plays. A step in viewr away from
+- **mpv window:** phewr follows each mpv window until it exits (`App::poll_video_window`). The
+  run loop polls every 100 ms (`WINDOW_POLL`) while a window plays. A step in phewr away from
   the file of the window forgets the window. The window gets `--fs --native-fs=no` and
   `--hwdec=auto-safe`. `--fs` overrides `fs=no` of a user `mpv.conf`.
 - **HDR in the terminal:** `player::probe` reads the transfer curve. For HLG and PQ,
   `player::tone_map::cube_file` writes a 3D cube into the thumbnail cache directory, or into
-  `$TMPDIR/viewr` if the cache path holds filter graph syntax. `Cube::for_video` picks the cube, and
+  `$TMPDIR/phewr` if the cache path holds filter graph syntax. `Cube::for_video` picks the cube, and
   the decoder calls it through `cube_for(info, target, dirs)`. The names are
   `tonemap-hlg-{p3,srgb}-v4.cube`, `tonemap-pq<nits>-{p3,srgb}-v4.cube` and, for SDR,
   `color-<primaries>-<target>-v4.cube`. `CUBE_VERSION` is the one version for all cube names: change
@@ -440,11 +440,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   the AppleDouble `._x.jpg`). One folder argument is one `read_dir`
   (`scanner::read_folder`): the files come out sorted by `name_key`, so the first batch is in the
   final order and the end of the scan keeps the list. The first batch waits for the read and the
-  sort of the whole folder (6.3 ms for 10 000 files). The grid lists a folder that viewr cannot
+  sort of the whole folder (6.3 ms for 10 000 files). The grid lists a folder that phewr cannot
   read, and `Enter` shows the read error, so a listing of the home folder opens no subfolder and
-  triggers no macOS privacy prompt. viewr always starts in the grid, also with one
+  triggers no macOS privacy prompt. phewr always starts in the grid, also with one
   image: it never opens the fullscreen view or a slideshow by itself (only `--slideshow` does).
-- **Video programs:** viewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
+- **Video programs:** phewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
   time, and the tests never do, so `session_first_frame` gives `NotFound` in a test. The probe
   (`player/probe/`) is one `ffprobe -of json` process of about 32 ms with a 2 s timeout
   (`output_within`). A probe cache keys each `VideoInfo` by path, mtime and length, so
@@ -463,10 +463,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   player. The timings and the reasons are in `docs/video.md` ("Start ahead of Enter").
 - **One file argument:** `cli::start_paths` turns one file argument into its canonical folder
   and a cursor target (`App::place_cursor_after_scan`, the `return_to` of `Backspace`). Several
-  arguments stay a plain file list. yazi starts viewr with the hovered path (`viewr %h`).
+  arguments stay a plain file list. yazi starts phewr with the hovered path (`phewr %h`).
 - **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
-  that does not answer cannot hold viewr. Tests pass a closure and never start `ya`.
+  that does not answer cannot hold phewr. Tests pass a closure and never start `ya`.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
   no status note. The note shows in the status row at the bottom. The next key press or mouse
   button press clears it (`clears_status`), a key release or repeat does not. A read error of the
@@ -502,7 +502,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   the terminal deleted the probe file. Otherwise a terminal with another `TMPDIR` keeps the
   files. The file name contains `tty-graphics-protocol`, as the protocol requires. The frame
   layouts per medium are in `docs/grid-and-kitty.md` ("Temp file medium").
-- **Kitty images are not ratatui widgets.** ratatui draws the frame and the borders. viewr then
+- **Kitty images are not ratatui widgets.** ratatui draws the frame and the borders. phewr then
   writes the pictures with Kitty escape sequences at the cell positions of the last draw. A
   popup must delete the pictures first (`graphics_delete_all`), because Kitty draws them above
   the text.
@@ -523,9 +523,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   start, the run loop asks again after each resize. The read takes every byte of the tty, so
   a key typed in that millisecond is lost. At the start, the query goes out together with the
   Kitty probes and the DA1 query, in one round trip. A terminal that answers neither the probes
-  nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time. `VIEWR_KITTY_LOOPS` or `[gallery] loops` skips
-  the animation probe. SSH and `VIEWR_KITTY_TRANSFER` skip only the transfer probe.
-- **Mouse:** viewr enables only the mouse modes 1000, 1002 and 1006 (`terminal::enable_mouse`),
+  nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time. `PHEWR_KITTY_LOOPS` or `[gallery] loops` skips
+  the animation probe. SSH and `PHEWR_KITTY_TRANSFER` skip only the transfer probe.
+- **Mouse:** phewr enables only the mouse modes 1000, 1002 and 1006 (`terminal::enable_mouse`),
   never 1003, so a pointer move without a button does not wake the run loop. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. `[gallery] mouse = false` turns
   the capture off. The run loop releases the mouse while an mpv window plays
@@ -586,12 +586,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Process start:** about 30 ms pass before `main`, most of it the dylib load of libheif and its
   codec libraries (a C program that links libheif needs 24.9 ms, with no library 4.6 ms).
   The removal of the `trash` crate took Foundation out of the binary, with no measurable change of
-  the start time (50 runs of `viewr --version`: median 15.2 ms before, 15.4 ms after). The `dist` profile and `target-cpu` give no
+  the start time (50 runs of `phewr --version`: median 15.2 ms before, 15.4 ms after). The `dist` profile and `target-cpu` give no
   measurable gain, so `just install` builds `--release`.
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v17` (`THUMBNAIL_CACHE_VERSION`, v17 since the PNG and JPEG XL peak), the
+- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v17` (`THUMBNAIL_CACHE_VERSION`, v17 since the PNG and JPEG XL peak), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
@@ -612,7 +612,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   bench ticks the prefetch. The prefetch decodes on the global rayon pool with the normal libheif
   share. A pool of its own and one libheif tile thread gave no gain beyond the spread
   (2026-11-03, `docs/app-state.md`).
-- **Image colors:** viewr converts every image into Display P3 (`[terminal] colorspace`), because
+- **Image colors:** phewr converts every image into Display P3 (`[terminal] colorspace`), because
   Ghostty copies the pixels of a Kitty image without a conversion. The sources, the transform
   cache and the cubes of the player are in `docs/images-and-colors.md` ("Color conversion").
 - **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
@@ -656,7 +656,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   1.1 s per file). The real-file numbers are in `docs/images-and-colors.md` ("sips").
   `sips::decode_with_preview` reads the embedded JPEG once and corrects each RAW develop with it.
   sips ignores the orientation of RAF and ARW, also of real portrait shots. If the known
-  orientation turns by 90 or 270 degrees and the develop keeps the unturned aspect, viewr turns
+  orientation turns by 90 or 270 degrees and the develop keeps the unturned aspect, phewr turns
   it. An orientation of 2, 3 or 4 on RAF and ARW stays unturned, because the aspect cannot show
   it. If a RAW develop has only zero color samples, the embedded JPEG takes its place (sips
   develops `P1000475.RW2` black). A PSD never takes this fallback. The info panel shows the

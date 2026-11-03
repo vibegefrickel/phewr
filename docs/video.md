@@ -215,7 +215,7 @@ rules. This page holds the reasons and the numbers.
 - The rules are in AGENTS.md. The code is in `mpv.rs`, `video_handoff/window.rs` and
   `app/video.rs`.
 - A slideshow window (`Playback::Once`) gets the IPC socket `mpv-<pid>-<n>.sock` in the
-  thumbnail cache directory, else in `$TMPDIR/viewr`. Each window has its own socket, and the
+  thumbnail cache directory, else in `$TMPDIR/phewr`. Each window has its own socket, and the
   path stays below 100 bytes. The runner removes a stale socket before the start and the socket
   after the exit.
 - The reader thread tries to connect for 2 s, because mpv creates the socket after its start. A
