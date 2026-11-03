@@ -122,7 +122,15 @@ rules. This page holds the reasons and the numbers.
   33-point cube (mean error 0.84 to 1.09 levels against 0.51 to 0.56). HDR keeps 33 points.
 - The smooth SDR conversion stays within 1 level at 17 points.
 - `SDR_WHITE_NITS = 500` matches the macOS SDR export on three iPhone clips.
-- The PQ cube has no test on a real PQ file.
+- A PQ cube name holds its peak bucket (`tonemap-pq<nits>-<target>-v4.cube`). The frame probe
+  runs only for a PQ stream without stream metadata, and the probe cache keeps the result.
+- Probe cost on a quiet machine: the stream probe takes 15.9 ms, the frame probe 17.7 ms (1080p
+  HEVC) to 20.3 ms (1080p AV1). At a load of 2.2, the stream probe took about 30 ms, and the 4K
+  frame probe 47.9 ms (HEVC with SEI), 52.8 ms (HEVC without metadata) and 40.3 ms (AV1). A PQ
+  file without HDR10 metadata pays the frame probe for nothing.
+- The Apple HDR10 example clip (MaxCLL 1375, bucket 2000): the midtones stay within 1 % of the
+  1000-nit map. The highlights from 1000 to 1375 nits no longer clip at white. They come out
+  about 10 levels darker, with detail.
 - A PQ or HLG still maps with a copy of the same math. See
   [Images and colors](images-and-colors.md#hdr-stills).
 

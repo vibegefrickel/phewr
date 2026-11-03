@@ -170,6 +170,13 @@ Each decoder reports the color of its pixels.
 
 The code is in `decode/hdr/`.
 
+- A PQ still maps with `Decoded::peak`, which libheif fills from `clli` or `mdcv`. The 500 bucket
+  has no roll-off, for content at or below SDR white. The 8-bit HDR path in `color::convert`,
+  PNG and JPEG XL still map with 1000 nits.
+- The libavif test stills: `colors_hdr_rec2020.avif` (MaxCLL 470, bucket 500) gets brighter, its
+  mean level goes from 151.6 to 172.2. `seine_hdr_rec2020.avif` (MaxCLL 703, bucket 1000) stays
+  the same.
+
 - The cube of the player samples the map at 33 points per channel, and `lut3d` interpolates
   between them. A still runs the map per pixel, with one table for the signal curve and one for
   the output curve.

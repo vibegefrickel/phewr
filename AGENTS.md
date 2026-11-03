@@ -147,7 +147,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   display, and viewr maps like the player. `tests/fixtures/hdr/` holds a PQ and an HLG chart with
   BT.2020 primaries as 10-bit AVIF and HEIC (nclx), JPEG XL (lossless and lossy, and `pq-icc.jxl`)
   and 16-bit PNG (`cICP`), `ref/` their renderings through the HDR cube of the player (ffmpeg
-  `lut3d`), and `make.sh` rebuilds them. `cargo nextest run --no-default-features` passes too.
+  `lut3d`), and `make.sh` rebuilds them. `pq-4000.avif` and `pq-4000.heic` carry a `clli` box of
+  4000 nits, with `ref/pq4000-*.png`. `cargo nextest run --no-default-features` passes too.
+  `just test-real` skips the benches (`--skip bench::`), because they set the global color target
+  of the process.
 - A real ffmpeg playback test uses a virtual clock that jumps to each due frame. The wall-time
   twin is `#[ignore]` and runs in `just test-real`.
   `just test-real` runs them. A test without its variable skips with a note.
@@ -258,7 +261,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `jxl.rs` (JPEG XL, ICC profiles through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and
   other ImageIO formats), `tonemap.rs` (EXR and HDR to 8 bit), `hdr/` (the tone map of PQ and HLG
   stills: `mod.rs` the math of the HDR cube of the player, `primaries.rs` the primaries and the
-  matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and `ispe`), `shape.rs`
+  matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir`, `ispe`, `clli` and `mdcv`), `shape.rs`
   (the image dimensions from the file headers, for the cell shape), `embedded_jpeg/` (the safe
   reader for the JPEG inside camera RAW and PSD files: `mod.rs` with RAF, `tiff.rs`, `cr3.rs`,
   `psd.rs`), `color/` (the conversion into the color space of the terminal: `mod.rs` with
@@ -401,13 +404,21 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `player::tone_map::cube_file` writes a 3D cube into the thumbnail cache directory, or into
   `$TMPDIR/viewr` if the cache path holds filter graph syntax. `Cube::for_video` picks the cube, and
   the decoder calls it through `cube_for(info, target, dirs)`. The names are
-  `tonemap-hlg-{p3,srgb}-v3.cube`, `tonemap-pq-{p3,srgb}-v3.cube` and, for SDR,
-  `color-<primaries>-<target>-v3.cube`. `CUBE_VERSION` is the one version for all cube names: change
+  `tonemap-hlg-{p3,srgb}-v4.cube`, `tonemap-pq<nits>-{p3,srgb}-v4.cube` and, for SDR,
+  `color-<primaries>-<target>-v4.cube`. `CUBE_VERSION` is the one version for all cube names: change
   it when the cube output changes. The tone mapping writes the target primaries. ffmpeg parses a
   cube at each start: 33 points take about 42 ms, 17 points about 16 ms. A 17-point HDR cube
   saves about 20 ms per start but moves colors by up to 39 levels (mean error 0.84 to 1.09 levels
   against 0.51 to 0.56), so HDR keeps 33 points. `SDR_WHITE_NITS = 500` matches the macOS SDR
-  export on three iPhone clips. The PQ cube has no test on a real PQ file. A PQ or HLG still
+  export on three iPhone clips. A PQ video or still maps with the peak of its HDR10 metadata:
+  `MaxCLL` from 100 to 10000 nits, else the mastering display maximum, else 1000 nits
+  (`decode::hdr::hdr10_peak`). The peak goes to the smallest bucket at or above it: 500, 1000,
+  2000, 4000 or 10000 nits (`Peak::bucket`). The 500 bucket is SDR white and has no roll-off.
+  HLG keeps 1000 nits. The probe reads the stream side data. A stream can carry HDR10 only in the
+  SEI, without `mdcv` and `clli` in its sample entry. Then a second ffprobe reads the first frame,
+  once per file (1.2 times the stream probe at 1080p, up to 1.7 times at 4K). A HEIF still reads
+  `clli` and `mdcv` of its primary item (`HeifItems::primary_peak`) into `Decoded::peak`. The
+  Apple HDR10 example clip (MaxCLL 1375) is the real test file. A PQ or HLG still
   (AVIF, HEIC, JPEG XL, 16-bit PNG with `cICP`) maps with a copy of the same math in
   `decode/hdr/`, per pixel and without a cube, after the resize: the primaries are BT.2020,
   Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a file in
@@ -575,7 +586,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v15` (`THUMBNAIL_CACHE_VERSION`, v15 since the RAW turn and the black RAW fallback), the
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v16` (`THUMBNAIL_CACHE_VERSION`, v16 since the HDR10 peak of PQ stills), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
