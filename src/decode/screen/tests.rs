@@ -193,13 +193,13 @@ mod jpeg {
     fn half_scale_jpeg_stays_rgb() {
         let dir = test_dir();
         let path = gradient_jpeg(dir.path());
-        // libjpeg-turbo scales to 320x240, and the fit to 300x40 scales to 1/6 after.
-        let box_px = (300, 40);
+        // libjpeg-turbo scales to 80x60, and the fit to 300x30 scales to 1/2 after.
+        let box_px = (300, 30);
         let decoded = decode_image(&path, Some(box_px), EmbeddedThumbnail::Deny).unwrap();
         let DynamicImage::ImageRgb8(rgb) = &decoded.image else {
             panic!("the decode is RGB: {:?}", decoded.image.color())
         };
-        assert_eq!(rgb.dimensions(), (320, 240));
+        assert_eq!(rgb.dimensions(), (80, 60));
         let source = decoded.color.clone();
         let screen = ScreenImage::of_decode(decoded.image, decoded.opaque);
         assert!(matches!(screen, ScreenImage::Rgb(_)), "the layout is RGB");
@@ -218,7 +218,7 @@ mod jpeg {
             "the write has nothing to scan or copy"
         );
         let after = written(loaded);
-        assert!(String::from_utf8_lossy(&after).contains(",f=24,s=53,v=40,"));
+        assert!(String::from_utf8_lossy(&after).contains(",f=24,s=40,v=30,"));
         assert_eq!(
             after,
             written_before(&path, box_px),
