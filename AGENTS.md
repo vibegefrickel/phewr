@@ -148,7 +148,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - `tests/fixtures/png/` holds 10 PNG layouts (16 bit, palette, tRNS, gray, gray with alpha,
   RGBA, interlaced, EXIF orientation 6), and `make.sh` rebuilds them with magick and exiftool.
 - `tests/fixtures/` holds 8 small animated and still files (GIF, WebP, APNG, AVIF), and
-  `test_support::fixture(name)` finds them. `avifenc` makes a new AVIS fixture. The real ffmpeg
+  `test_support::fixture(name)` finds them. `make.sh` rebuilds them from FFmpeg `testsrc` with
+  magick, avifenc, ffmpeg and img2webp, and its optional argument selects the output folder. The
+  AVIF settings `-q 30 -s 6` reproduce the committed pixels. The real ffmpeg
   test skips WebP without FFmpeg 9 (`webp_anim` decoder). `tests/fixtures/jxl/` holds 19 JPEG XL
   color charts and gradients, `ref/` their djxl renderings, and `make.sh` rebuilds both with
   cjxl, djxl, magick, exiftool and sips. `jxl/ref/` holds no `pq.png`: djxl maps PQ to a 255-nit
