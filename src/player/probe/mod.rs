@@ -84,7 +84,7 @@ const PROBE_CACHE_ENTRIES: usize = 1024;
 
 const STREAM_ENTRIES: &str = "stream=index,width,height,pix_fmt,color_transfer,color_primaries,\
     r_frame_rate,avg_frame_rate,time_base,nb_frames:stream_disposition=default,attached_pic:\
-    stream_side_data=side_data_type,rotation:format=duration";
+    stream_side_data=side_data_type,rotation,max_luminance,max_content:format=duration";
 
 /// `None` for a file without an animation extension.
 fn packet_limit(path: &Path) -> Option<usize> {
@@ -336,6 +336,8 @@ mod tests {
     use super::{
         ProbeCache, Rate, frame_peak_args, output_within, packet_limit, probe, probe_args,
     };
+    use crate::decode::hdr::Peak;
+    use crate::player::tone_map::Hdr;
     use crate::test_support::fixture;
     use crate::test_support::video::real_ffprobe;
     use std::cell::Cell;
@@ -554,6 +556,40 @@ mod tests {
         assert!(avis.is_animation(), "{avis:?}");
         assert_eq!((avis.fps, avis.stream), (5.0, 1));
         assert!((avis.duration - 0.6).abs() < 1e-9, "{avis:?}");
+    }
+
+    /// The HDR10 fixtures: the peak comes from the container, or from the SEI of the first frame.
+    #[test]
+    fn real_hdr10_peak_sources() {
+        let Some(ffprobe) = real_ffprobe() else {
+            return;
+        };
+        // `mdcv` (1000 nits) and `clli` (MaxCLL 4000 nits): MaxCLL wins over the display.
+        // The SEI file has MaxCLL 2000 and a display maximum of 4000 nits, only in the frames.
+        for (name, peak, bucket) in [
+            ("video/hdr10-container.mp4", 4000.0, 4000),
+            ("video/hdr10-sei.mp4", 2000.0, 2000),
+        ] {
+            let info = probe(&ffprobe, &fixture(name)).unwrap();
+            assert_eq!(info.hdr, Some(Hdr::Pq), "{name}: {info:?}");
+            assert_eq!(info.hdr_peak, Some(peak), "{name}: {info:?}");
+            assert_eq!(Peak::bucket(info.hdr_peak).nits(), bucket, "{name}");
+            assert_eq!((info.width, info.height), (64, 64), "{name}");
+        }
+        // The stream probe alone, without the frame fallback: the frames of the container file
+        // also carry the values, so `probe` would hide a broken stream path.
+        for (name, peak) in [
+            ("video/hdr10-container.mp4", Some(4000.0)),
+            ("video/hdr10-sei.mp4", None),
+        ] {
+            let path = fixture(name);
+            let limit = packet_limit(&path);
+            let mut command = Command::new(&ffprobe);
+            command.args(probe_args(&path, limit));
+            let output = output_within(command, Duration::from_secs(5)).unwrap();
+            let info = super::parse::parse(&output.stdout, limit).unwrap();
+            assert_eq!(info.hdr_peak, peak, "{name}: {info:?}");
+        }
     }
 
     #[test]
