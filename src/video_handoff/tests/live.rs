@@ -340,3 +340,157 @@ fn real_motion_plays_once() {
         "{seconds} s, never slow motion"
     );
 }
+
+/// The real motion of a fullscreen still, through the real ffmpeg and ffprobe. The first rest
+/// probes on a thread, and the slowest pass of the UI thread stays short. Then the time from
+/// Enter to the first frame, without a rest and after a rest of 500 ms.
+#[test]
+#[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe, runs about 15 s"]
+fn real_rest_starts_motion_ahead() {
+    use crate::config::Config;
+    use crate::player::{Decoder, SystemDecoder};
+    use crate::test_support::live::{real_live_dir, scanned_app};
+    use crate::test_support::video::{real_ffmpeg, real_ffprobe, state_with_decoder};
+    use std::time::Duration;
+    let (Some(dir), Some(ffmpeg), Some(ffprobe)) = (real_live_dir(), real_ffmpeg(), real_ffprobe())
+    else {
+        return;
+    };
+    // New paths: the probe cache of the process knows none of them.
+    let copy = tempfile::tempdir().unwrap();
+    for name in [
+        "IMG_0711.HEIC",
+        "IMG_2927.HEIC",
+        "IMG_2927.MOV",
+        "IMG_2928.HEIC",
+        "IMG_2928.MOV",
+        "IMG_2929.HEIC",
+        "IMG_2929.MOV",
+        "IMG_5001.JPG",
+        "IMG_5001.MOV",
+    ] {
+        std::fs::copy(dir.join(name), copy.path().join(name)).unwrap();
+    }
+    let cache = tempfile::tempdir().unwrap();
+    let mut app = scanned_app(copy.path(), &Config::default());
+    app.disk_cache_dir = cache.path().to_path_buf();
+    app.fullscreen_box = ratatui::layout::Rect::new(0, 0, 100, 40);
+    let decoder: Rc<dyn Decoder> = Rc::new(SystemDecoder::new(Some(ffprobe)));
+    let mut real = Real {
+        state: state_with_decoder(VideoPlayer::Terminal, Rc::clone(&decoder), ffmpeg),
+        runner: fake_runner(),
+        pending: Vec::new(),
+    };
+    let other = index_of(&app, "IMG_0711.HEIC");
+    for name in [
+        "IMG_2927.HEIC",
+        "IMG_2928.HEIC",
+        "IMG_2929.HEIC",
+        "IMG_5001.JPG",
+    ] {
+        let still = index_of(&app, name);
+        let motion = app.live_motion(still).unwrap().to_path_buf();
+        assert!(
+            decoder.cached_probe(&motion).is_none(),
+            "{name}: a cold probe"
+        );
+        let (started, slowest) = real.cold_rest(&mut app, still);
+        assert!(
+            decoder.cached_probe(&motion).is_some(),
+            "{name}: the thread probed"
+        );
+        let mut report = vec![format!(
+            "cold rest: start at {} ms, slowest pass {:.1} ms, Enter {:.1} ms",
+            started.as_millis(),
+            slowest.as_secs_f64() * 1000.0,
+            real.enter_to_first_frame(&mut app).as_secs_f64() * 1000.0
+        )];
+        for rest in [Duration::ZERO, Duration::from_millis(500)] {
+            for _ in 0..3 {
+                // A step away ends the mark of the played motion.
+                real.show(&mut app, other);
+                real.show(&mut app, still);
+                real.rest(&mut app, rest);
+                assert_eq!(app.video_prestart.running(), !rest.is_zero(), "{name}");
+                let time = real.enter_to_first_frame(&mut app);
+                report.push(format!(
+                    "{} ms rest: {:.1} ms",
+                    rest.as_millis(),
+                    time.as_secs_f64() * 1000.0
+                ));
+            }
+        }
+        println!("{name}: {}", report.join(", "));
+    }
+    assert!(real.runner.0.borrow().is_empty(), "no mpv");
+}
+
+/// The loop state, the mpv runner and the emits of the real run.
+struct Real {
+    state: LoopState,
+    runner: (
+        crate::test_support::video::Log,
+        crate::test_support::video::FakeRunner,
+    ),
+    pending: Vec<usize>,
+}
+
+impl Real {
+    /// The fullscreen view of `index`, after its decode and the prefetch.
+    fn show(&mut self, app: &mut crate::app::App, index: usize) {
+        app.enter_fullscreen_at(index);
+        crate::test_support::wait_until(|| {
+            app.load_if_needed();
+            crate::run_loop::poll_background(app, &mut self.pending);
+            !app.has_pending_work()
+        });
+        play_videos(app, &mut self.state, &mut self.runner.1);
+    }
+
+    /// The passes of the run loop for `rest`.
+    fn rest(&mut self, app: &mut crate::app::App, rest: std::time::Duration) {
+        let start = std::time::Instant::now();
+        while start.elapsed() < rest {
+            play_videos(app, &mut self.state, &mut self.runner.1);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// The rest on `still` until its player runs: the time of the start and the slowest pass.
+    fn cold_rest(
+        &mut self,
+        app: &mut crate::app::App,
+        still: usize,
+    ) -> (std::time::Duration, std::time::Duration) {
+        use std::time::{Duration, Instant};
+        self.show(app, still);
+        assert!(!app.video_prestart.running());
+        let start = Instant::now();
+        let mut slowest = Duration::ZERO;
+        while !app.video_prestart.running() {
+            assert!(start.elapsed() < Duration::from_secs(3), "no start");
+            let pass = Instant::now();
+            play_videos(app, &mut self.state, &mut self.runner.1);
+            slowest = slowest.max(pass.elapsed());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        (start.elapsed(), slowest)
+    }
+
+    /// Enter, the first frame, and `q` back to the still.
+    fn enter_to_first_frame(&mut self, app: &mut crate::app::App) -> std::time::Duration {
+        use std::time::{Duration, Instant};
+        press(app, KeyCode::Enter);
+        let enter = Instant::now();
+        play_videos(app, &mut self.state, &mut self.runner.1);
+        let player = app.video.as_mut().unwrap();
+        while !player.poll() {
+            assert!(enter.elapsed() < Duration::from_secs(5), "no frame");
+            std::thread::sleep(Duration::from_micros(200));
+        }
+        let time = enter.elapsed();
+        assert!(!char_key(app, 'q'));
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+        time
+    }
+}

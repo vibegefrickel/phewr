@@ -44,8 +44,9 @@ impl VideoState {
 /// Start the player for the current video, when the view waits for one.
 ///
 /// The terminal player needs the temp file medium, ffmpeg and ffprobe. Without them, the
-/// video goes to the mpv window with a note. In the gallery, a rest of the cursor on a video
-/// starts its player ahead of Enter, see [`prestart`].
+/// video goes to the mpv window with a note. A rest of the gallery cursor on a video, and a
+/// rest of the fullscreen view on a Live Photo still, start the player ahead of Enter, see
+/// [`prestart`].
 pub(crate) fn play_videos(app: &mut App, state: &mut LoopState, runner: &mut impl mpv::Runner) {
     finish_motion(app, state);
     start_video_view(app, state, runner);
@@ -55,6 +56,10 @@ pub(crate) fn play_videos(app: &mut App, state: &mut LoopState, runner: &mut imp
 fn start_video_view(app: &mut App, state: &mut LoopState, runner: &mut impl mpv::Runner) {
     if app.mode != ViewMode::Video || app.video.is_some() {
         return;
+    }
+    if app.plays_motion() {
+        app.video_prestart
+            .mark_played(app.current_path().to_path_buf());
     }
     let mismatch = identifier_note(app);
     if app.take_video_window_request() {
@@ -138,14 +143,16 @@ fn open_terminal_player(app: &mut App, state: &mut LoopState, program: &Path) {
     let path = app.video_path().to_path_buf();
     let repeat = !app.slideshow_advancing() && !app.plays_motion();
     let limit = frame_limit(app.fullscreen_box, app.cell_px);
-    // The prestarted player loops. A run that plays once ends it first: two waiting ffmpeg
-    // runs of a 4K HLG clip hold about 900 MB.
-    let prestarted = if repeat {
-        prestart::take_prestart(app, &path, limit, Instant::now())
-    } else {
-        app.video_prestart.drop_player();
+    // A grid cell prestarts a loop, a Live Photo still a motion that plays once. A slideshow
+    // run plays once and takes no prestart.
+    let prestarted = if app.slideshow_advancing() {
         None
+    } else {
+        prestart::take_prestart(app, &path, repeat, limit, Instant::now())
     };
+    // A new run ends the prestarted ffmpeg first: two waiting ffmpeg runs of a 4K HLG clip hold
+    // about 900 MB.
+    app.video_prestart.drop_player();
     let started = match prestarted {
         Some(player) => Ok(player),
         None => Player::open(

@@ -71,6 +71,13 @@ pub(crate) struct FakeDecoder {
     /// The frames of the next runs, one list per start. A start without a list waits for
     /// [`FakeDecoder::feed`].
     runs: RefCell<std::collections::VecDeque<Vec<Vec<u8>>>>,
+    /// True while the probe cache holds no entry: `cached_probe` answers `None`.
+    pub(crate) cold: Cell<bool>,
+    /// The probes that ran while `cold` was true, the ffprobe runs on the calling thread.
+    cold_probes: Cell<usize>,
+    /// The files of `prepare_on_thread`, and the sender of the last one while `cold`.
+    prepared: RefCell<Vec<PathBuf>>,
+    prepare_sender: RefCell<Option<mpsc::Sender<bool>>>,
 }
 
 impl FakeDecoder {
@@ -99,6 +106,26 @@ impl FakeDecoder {
             .expect("the player dropped its stream");
     }
 
+    pub(crate) fn cold_probes(&self) -> usize {
+        self.cold_probes.get()
+    }
+
+    pub(crate) fn prepared(&self) -> Vec<PathBuf> {
+        self.prepared.borrow().clone()
+    }
+
+    /// End the last `prepare_on_thread`. A success fills the cache.
+    pub(crate) fn finish_prepare(&self, ready: bool) {
+        if ready {
+            self.cold.set(false);
+        }
+        let sender = self.prepare_sender.borrow_mut().take();
+        sender
+            .expect("no probe on a thread")
+            .send(ready)
+            .expect("the prestart dropped its receiver");
+    }
+
     pub(crate) fn end(&self) {
         self.sender.borrow_mut().take();
     }
@@ -121,6 +148,9 @@ impl Decoder for FakeDecoder {
                 "no video stream",
             ));
         }
+        if self.cold.get() {
+            self.cold_probes.set(self.cold_probes.get() + 1);
+        }
         let mut info = self.info.clone();
         if self.remembered.borrow().iter().any(|path| path == video) {
             info.hardware = false;
@@ -130,6 +160,27 @@ impl Decoder for FakeDecoder {
 
     fn remember_software(&self, video: &Path) {
         self.remembered.borrow_mut().push(video.to_path_buf());
+    }
+
+    fn cached_probe(&self, video: &Path) -> Option<VideoInfo> {
+        if self.cold.get() {
+            return None;
+        }
+        self.probe(video).ok()
+    }
+
+    fn prepare_on_thread(&self, video: &Path, _cube_dirs: Vec<PathBuf>) -> mpsc::Receiver<bool> {
+        let (sender, receiver) = mpsc::channel();
+        self.prepared.borrow_mut().push(video.to_path_buf());
+        if self.cold.get() {
+            *self.prepare_sender.borrow_mut() = Some(sender);
+        } else {
+            // A warm cache: only a failing probe comes here, and it ends at once.
+            sender
+                .send(self.probe(video).is_ok())
+                .expect("the receiver is alive");
+        }
+        receiver
     }
 
     fn start(
@@ -169,6 +220,10 @@ pub(crate) fn fake_decoder(info: VideoInfo) -> Rc<FakeDecoder> {
         remembered: RefCell::new(Vec::new()),
         sender: RefCell::new(None),
         runs: RefCell::new(std::collections::VecDeque::new()),
+        cold: Cell::new(false),
+        cold_probes: Cell::new(0),
+        prepared: RefCell::new(Vec::new()),
+        prepare_sender: RefCell::new(None),
     })
 }
 

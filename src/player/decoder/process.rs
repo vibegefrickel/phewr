@@ -45,6 +45,30 @@ impl Decoder for SystemDecoder {
         crate::player::probe::probe_cached(program, video)
     }
 
+    fn cached_probe(&self, video: &Path) -> Option<VideoInfo> {
+        crate::player::probe_peek(video)
+    }
+
+    fn prepare_on_thread(&self, video: &Path, cube_dirs: Vec<PathBuf>) -> mpsc::Receiver<bool> {
+        let (sender, receiver) = mpsc::channel();
+        let program = self.ffprobe.clone();
+        let video = video.to_path_buf();
+        thread::spawn(move || {
+            let info = program
+                .and_then(|program| crate::player::probe::probe_cached(&program, &video).ok());
+            if let Some(info) = &info {
+                let dirs: Vec<&Path> = cube_dirs.iter().map(PathBuf::as_path).collect();
+                super::cube_for(info, crate::decode::color::target(), &dirs);
+            }
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a dropped receiver wants no answer"
+            )]
+            let _ = sender.send(info.is_some());
+        });
+        receiver
+    }
+
     fn remember_software(&self, video: &Path) {
         crate::player::probe::remember_software(video);
     }

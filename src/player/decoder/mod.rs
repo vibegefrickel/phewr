@@ -13,7 +13,8 @@ pub(crate) use process::{FrameStream, PooledFrame, SystemDecoder};
 use super::probe::VideoInfo;
 use std::ffi::OsString;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 /// The ffmpeg filter chain: on the GPU, or in software for a format that the GPU cannot take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +76,12 @@ pub(crate) trait Decoder {
     /// The GPU run of `video` failed and the software run gave a frame. Later probes of the
     /// same file then answer `hardware: false`.
     fn remember_software(&self, _video: &Path) {}
+    /// The probe of `video` from the session cache. A start ahead of Enter on the UI thread
+    /// then runs no ffprobe.
+    fn cached_probe(&self, video: &Path) -> Option<VideoInfo>;
+    /// Probe `video` into the cache on a thread, and write the cube of its run. The receiver
+    /// gets `true` after a success.
+    fn prepare_on_thread(&self, video: &Path, cube_dirs: Vec<PathBuf>) -> mpsc::Receiver<bool>;
     /// Start `program` with `args`. Each frame is `frame_bytes` long.
     fn start(
         &self,
