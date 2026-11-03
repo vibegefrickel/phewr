@@ -228,6 +228,7 @@ impl App {
             zoom_rows: self.folder_zoom_rows(folder),
             cell_px: self.cell_px,
             cache_dir: self.disk_cache_dir.clone(),
+            live_photos: self.live_photos,
         }
     }
 }

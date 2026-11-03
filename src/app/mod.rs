@@ -32,6 +32,7 @@ use crate::image_list::SharedImageList;
 use crate::info::ImageInfo;
 use crate::kitty_output::TerminalImages;
 use crate::prefetch::Prefetcher;
+use crate::scanner::LivePhotos;
 use disk_cache::default_disk_cache_dir;
 use lru::LruCache;
 use ratatui::layout::Rect;
@@ -39,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 #[cfg(feature = "video")]
 use video::VideoWindow;
@@ -121,6 +122,9 @@ pub(crate) struct App {
 
     #[cfg(feature = "video")]
     pub(crate) video: Option<crate::player::Player>,
+    /// The motion of the Live Photo that the player plays. `current` stays on the still.
+    #[cfg(feature = "video")]
+    motion: Option<PathBuf>,
     #[cfg(feature = "video")]
     pub(crate) video_return: VideoReturn,
     /// `p` asked for the mpv window. The run loop takes the request.
@@ -138,6 +142,10 @@ pub(crate) struct App {
     shared_list: SharedImageList,
     known_len: usize,
     pub(crate) scan_complete: bool,
+    /// `[gallery] live_photos`: a directory switch hides the motion of each Live Photo still.
+    live_photos: bool,
+    /// The motion of each Live Photo still of the scanned folder.
+    live: Arc<LivePhotos>,
 
     /// The header read for the cell shape and its start. The thumbnail decodes wait for it.
     shape_rx: Option<(mpsc::Receiver<f64>, std::time::Instant)>,
@@ -241,6 +249,8 @@ impl App {
             #[cfg(feature = "video")]
             video: None,
             #[cfg(feature = "video")]
+            motion: None,
+            #[cfg(feature = "video")]
             video_return: VideoReturn::Gallery,
             #[cfg(feature = "video")]
             video_window_request: false,
@@ -253,6 +263,8 @@ impl App {
             shared_list,
             known_len: 0,
             scan_complete: false,
+            live_photos: config.live_photos,
+            live: Arc::default(),
             shape_rx: None,
             shape_requested: false,
             folder_prefetch: folder_prefetch::FolderPrefetch::default(),

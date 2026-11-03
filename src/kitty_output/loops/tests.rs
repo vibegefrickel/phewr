@@ -642,3 +642,31 @@ fn animate_off_shows_no_loop() {
     assert!(play_at(&mut app, 0).0.is_empty());
     assert!(!app.loop_plays(1));
 }
+
+/// The grid places the stamped still of a Live Photo until its loop plays, then the loop takes
+/// the place of the still.
+#[test]
+fn live_still_gives_way_to_its_loop() {
+    let mut app = clip_app(2);
+    app.images[1] = PathBuf::from("/clips/IMG_0001.JPG");
+    app.set_live_photos(crate::scanner::LivePhotos::from_pairs([(
+        app.images[1].clone(),
+        PathBuf::from("/clips/IMG_0001.MOV"),
+    )]));
+    let mut terminal = FakeTerminal::new();
+    place_stills(&mut app, &mut terminal);
+    let (_, still) = app.thumb_cache.peek(1).unwrap();
+    assert_eq!(placed(&terminal, &[still]), vec![still], "the still shows");
+
+    let ids = add_loop(&mut app, 1, 3);
+    let (first, started) = play_at(&mut app, 0);
+    terminal.feed(first.as_bytes());
+
+    assert!(started);
+    assert!(
+        placed(&terminal, &[still]).is_empty(),
+        "the loop replaces the still"
+    );
+    assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
+    assert!(app.loop_plays(1));
+}

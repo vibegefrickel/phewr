@@ -34,12 +34,16 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
     Ok(false)
 }
 
-/// A running slideshow stops.
+/// A running slideshow stops. The motion of a Live Photo goes back to its still.
 pub(super) fn leave_player(app: &mut App) -> io::Result<()> {
     app.graphics_delete_all()?;
     app.stop_slideshow();
-    // The player has no controls. The fullscreen placeholder is no step back.
-    app.exit_video();
+    if app.plays_motion() {
+        app.return_from_video();
+    } else {
+        // The player has no controls. The fullscreen placeholder is no step back.
+        app.exit_video();
+    }
     focus_gallery_on_current(app);
     Ok(())
 }

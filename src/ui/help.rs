@@ -53,7 +53,9 @@ const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
     ("+ / -, wheel", "Zoom in / out"),
     ("0", "Reset zoom to fit"),
     #[cfg(feature = "video")]
-    ("Enter", "Play a video or an animation"),
+    ("Enter, click middle", "Play video or animation"),
+    #[cfg(feature = "video")]
+    ("Enter on Live Photo", "Play the motion once"),
     ("h/j/k/l, drag", "Pan when zoomed"),
     ("i / right click", "Toggle info panel"),
     ("s", "Start / stop slideshow"),

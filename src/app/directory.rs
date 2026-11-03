@@ -18,8 +18,9 @@ impl App {
         self.apply_folder_zoom(&canonical);
 
         let new_list = SharedImageList::new();
-        scanner::spawn(vec![canonical.clone()], new_list.clone());
+        scanner::spawn_with(vec![canonical.clone()], new_list.clone(), self.live_photos);
         self.shared_list = new_list;
+        self.live = std::sync::Arc::default();
 
         self.images.clear();
         self.filenames.clear();

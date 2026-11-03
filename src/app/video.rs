@@ -2,7 +2,7 @@
 
 use super::{App, ViewMode};
 #[cfg(feature = "video")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "video")]
 use std::sync::mpsc;
 
@@ -45,7 +45,51 @@ impl App {
         self.needs_render = true;
         self.loaded = None;
         self.video = None;
+        self.motion = None;
         self.clear_before_video = true;
+    }
+
+    /// Play the motion of the Live Photo still `index` one time. `current` stays on the still,
+    /// and the shown still goes to the prefetch cache: the way back needs no decode.
+    #[cfg(feature = "video")]
+    pub(crate) fn enter_motion_at(&mut self, index: usize) {
+        let Some(motion) = self.live_motion(index).map(Path::to_path_buf) else {
+            return;
+        };
+        if self.mode == ViewMode::Fullscreen && index == self.current {
+            self.park_shown_image();
+        }
+        self.enter_video(index);
+        self.motion = Some(motion);
+    }
+
+    /// True while the player plays the motion of a Live Photo.
+    #[cfg(feature = "video")]
+    pub(crate) fn plays_motion(&self) -> bool {
+        self.motion.is_some()
+    }
+
+    /// The file of the player and the mpv window: the motion of a Live Photo, else the current
+    /// file.
+    #[cfg(feature = "video")]
+    pub(crate) fn video_path(&self) -> &Path {
+        self.motion
+            .as_deref()
+            .unwrap_or_else(|| self.current_path())
+    }
+
+    /// True on a Live Photo still in the fullscreen view: Enter plays its motion.
+    #[cfg(feature = "video")]
+    pub(crate) fn fullscreen_on_live(&self) -> bool {
+        self.mode == ViewMode::Fullscreen && self.is_live(self.current)
+    }
+
+    /// True when the gallery cursor is on a Live Photo still, for `p` in the gallery.
+    #[cfg(feature = "video")]
+    pub(crate) fn selected_is_live(&self) -> bool {
+        self.gallery
+            .selected_index()
+            .is_some_and(|index| self.is_live(index))
     }
 
     /// Ask the run loop to open the current video in the mpv window.
@@ -63,12 +107,13 @@ impl App {
     #[cfg(feature = "video")]
     pub(crate) fn exit_video(&mut self) {
         self.video = None;
+        self.motion = None;
         self.mode = ViewMode::Gallery;
         self.needs_render = true;
     }
 
     /// Leave the video for the view that opened it. The fullscreen view stays on the video with a
-    /// play hint: the image decode cannot read a video.
+    /// play hint: the image decode cannot read a video. After a motion, it shows the still.
     #[cfg(feature = "video")]
     pub(crate) fn return_from_video(&mut self) {
         if self.video_return == VideoReturn::Gallery {
@@ -76,6 +121,7 @@ impl App {
             return;
         }
         self.video = None;
+        self.motion = None;
         self.mode = ViewMode::Fullscreen;
         self.loaded = None;
         self.fullscreen_decode = None;

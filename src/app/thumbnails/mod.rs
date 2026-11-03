@@ -371,6 +371,8 @@ impl App {
         let cache_dir = self.disk_cache_dir.clone();
         let missed = self.thumb_jobs.cache_misses.contains(&job.index);
         let known = self.known_animation_flag(&path);
+        // A Live Photo still loops its motion, so it gets the stamp while the loops are on.
+        let rolls = self.grid_loops.enabled && self.is_live(job.index);
         spawn_job(phase, move || {
             let entry = LazyEntry::new(&cache_dir, &path, target);
             let (image, sharp) = match phase {
@@ -389,7 +391,7 @@ impl App {
             };
             // The still carries the play triangle until its loop starts. The disk cache keeps
             // the still without the stamp.
-            let playable = is_playable(&path, animated.map(|flag| flag.animated));
+            let playable = rolls || is_playable(&path, animated.map(|flag| flag.animated));
             let picture = image.map(|mut image| {
                 if playable {
                     crate::icons::stamp_play(&mut image);
@@ -589,6 +591,43 @@ mod folder_switch_tests {
             "a stale thumbnail was stored"
         );
         assert!(!app.thumb_cache.contains(0));
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "video")]
+mod live_tests {
+    use crate::config::Config;
+    use crate::test_support::live::{LIVE_ID, LIVE_STILL_RGB, scanned_app, write_live_pair};
+    use crate::test_support::{assert_close, test_dir, wait_until};
+
+    /// The center pixel of the grid picture of the Live Photo still, with `config`.
+    fn still_center(config: &Config) -> [u8; 4] {
+        let dir = test_dir();
+        write_live_pair(dir.path(), "IMG_0001", Some(LIVE_ID), Some(LIVE_ID));
+        let mut app = scanned_app(dir.path(), config);
+        app.disk_cache_dir = dir.path().join("cache");
+        let index = app.folder_count;
+        assert!(app.is_live(index));
+        app.spawn_thumb_decode(index, app.gallery.thumb_box());
+        wait_until(|| {
+            app.poll_thumbnails();
+            !app.thumbnails_pending()
+        });
+        let image = &app.thumb_cache.peek(index).unwrap().0.image;
+        image.get_pixel(image.width() / 2, image.height() / 2).0
+    }
+
+    #[test]
+    fn live_still_carries_stamp_while_loops_are_on() {
+        let stamped = still_center(&Config::default());
+        assert_close(stamped, [255, 255, 255]);
+
+        let plain = still_center(&Config {
+            animate: false,
+            ..Config::default()
+        });
+        assert_close(plain, LIVE_STILL_RGB);
     }
 }
 

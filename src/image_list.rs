@@ -1,5 +1,6 @@
 //! The list of scanned entries that the scanner fills and the UI reads.
 
+use crate::scanner::LivePhotos;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -30,6 +31,8 @@ struct Inner {
     filenames: Vec<String>,
     folder_count: usize,
     errors: Vec<String>,
+    /// The motions that the scan took out of `paths`.
+    live_photos: Arc<LivePhotos>,
 }
 
 #[derive(Clone)]
@@ -47,6 +50,7 @@ impl SharedImageList {
                 filenames: Vec::new(),
                 folder_count: 0,
                 errors: Vec::new(),
+                live_photos: Arc::default(),
             })),
             len: Arc::new(AtomicUsize::new(0)),
             complete: Arc::new(AtomicBool::new(false)),
@@ -83,6 +87,25 @@ impl SharedImageList {
         inner.filenames.splice(at..at, names);
         inner.folder_count += count;
         self.len.store(inner.paths.len(), Ordering::Release);
+    }
+
+    /// The scanner calls it before the folders and the first batch, so the first read of the
+    /// entries finds the pairs.
+    pub(crate) fn set_live_photos(&self, live_photos: LivePhotos) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .live_photos = Arc::new(live_photos);
+    }
+
+    pub(crate) fn live_photos(&self) -> Arc<LivePhotos> {
+        Arc::clone(
+            &self
+                .inner
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .live_photos,
+        )
     }
 
     pub(crate) fn folder_count(&self) -> usize {

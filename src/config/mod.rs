@@ -42,6 +42,8 @@ pub(crate) struct Config {
     pub(crate) mouse: bool,
     /// Play a loop in each visible video and animated cell.
     pub(crate) animate: bool,
+    /// Hide the motion `.mov` of each Live Photo still of a folder. Off, both cells show.
+    pub(crate) live_photos: bool,
     /// `[gallery] loops`. `None` (`auto`) lets the start probe decide. `PHEWR_KITTY_LOOPS` wins.
     pub(crate) loops: Option<Loops>,
     /// The color space of the terminal pixels.
@@ -81,6 +83,7 @@ impl Default for Config {
             video_player: VideoPlayer::default(),
             mouse: true,
             animate: true,
+            live_photos: true,
             loops: None,
             colorspace: ColorTarget::default(),
         }
@@ -106,6 +109,7 @@ struct GallerySection {
     visible_rows: Option<u16>,
     mouse: Option<bool>,
     animate: Option<bool>,
+    live_photos: Option<bool>,
     loops: Option<String>,
 }
 
@@ -189,6 +193,9 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     }
     if let Some(animate) = file.gallery.animate {
         config.animate = animate;
+    }
+    if let Some(live_photos) = file.gallery.live_photos {
+        config.live_photos = live_photos;
     }
     // `auto` and an unknown value keep the probe.
     if let Some(loops) = file.gallery.loops.as_deref() {
@@ -280,7 +287,7 @@ mod tests {
         let state_path = root.path().join("state.toml");
         std::fs::write(
             &config_path,
-            "[gallery]\nvisible_rows = 6\nmouse = false\nanimate = false\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
+            "[gallery]\nvisible_rows = 6\nmouse = false\nanimate = false\nlive_photos = false\n[slideshow]\ninterval = 1.5\nloop = false\n[info]\nshow_on_start = true\n",
         )
         .unwrap();
 
@@ -289,6 +296,8 @@ mod tests {
         assert!(!config.mouse);
         assert!(!config.animate);
         assert!(Config::default().animate, "the loops are on by default");
+        assert!(!config.live_photos);
+        assert!(Config::default().live_photos, "the pairs are on by default");
         assert_eq!(config.slideshow_interval, 1.5);
         assert!(!config.slideshow_loop);
         assert!(config.info_panel);

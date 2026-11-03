@@ -245,7 +245,7 @@ fn main() -> io::Result<()> {
     let initial_dir = initial_dir_from_paths(&paths);
 
     let shared_list = SharedImageList::new();
-    scanner::spawn(paths, shared_list.clone());
+    scanner::spawn_with(paths, shared_list.clone(), config.live_photos);
 
     install_panic_hook(config.mouse);
     let mut session = TerminalSession::enter(config.mouse)?;

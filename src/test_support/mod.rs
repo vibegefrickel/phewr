@@ -7,6 +7,8 @@ mod heif;
 mod input;
 pub(crate) mod kitty;
 #[cfg(feature = "video")]
+pub(crate) mod live;
+#[cfg(feature = "video")]
 pub(crate) mod video;
 
 #[cfg(all(feature = "sips", target_os = "macos"))]

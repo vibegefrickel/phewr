@@ -158,8 +158,12 @@ fn fullscreen_mouse(app: &mut App, mouse: MouseEvent, at: Position) -> io::Resul
             let Some(drag) = app.mouse.drag.take() else {
                 return Ok(false);
             };
-            if !drag.moved && app.zoom <= 1.0 && regions.content.contains(at) {
-                edge_step(app, regions.content, at);
+            if !drag.moved
+                && app.zoom <= 1.0
+                && regions.content.contains(at)
+                && !edge_step(app, regions.content, at)
+            {
+                super::fullscreen::play_in_place(app)?;
             }
         }
         MouseEventKind::Down(MouseButton::Right) => {
@@ -195,17 +199,19 @@ fn share(pixels: f64, range: f64) -> f64 {
     if range > 0.0 { pixels / range } else { 0.0 }
 }
 
-/// A click near the left edge steps back, near the right edge forward.
-fn edge_step(app: &mut App, content: Rect, at: Position) {
+/// A click near the left edge steps back, near the right edge forward. `false` for a click on
+/// the middle.
+fn edge_step(app: &mut App, content: Rect, at: Position) -> bool {
     let edge = (content.width / EDGE_SHARE).max(1);
     if at.x < content.x + edge {
         app.prev();
     } else if at.x >= content.right().saturating_sub(edge) {
         app.next();
     } else {
-        return;
+        return false;
     }
     app.slideshow_touch();
+    true
 }
 
 /// A click on the picture does nothing. A click beside it or a right click goes back like `q`.

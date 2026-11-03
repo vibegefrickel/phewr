@@ -256,6 +256,16 @@ pub(crate) fn write_clip(program: &Path, path: &Path, variable: bool) -> Option<
 }
 
 pub(crate) fn state_with(player: VideoPlayer, decoder: Rc<FakeDecoder>) -> LoopState {
+    state_with_decoder(player, decoder, PathBuf::from("/bin/ffmpeg"))
+}
+
+/// A loop state with any decoder and the ffmpeg program `ffmpeg`, for a test with the real
+/// programs.
+pub(crate) fn state_with_decoder(
+    player: VideoPlayer,
+    decoder: Rc<dyn Decoder>,
+    ffmpeg: PathBuf,
+) -> LoopState {
     LoopState {
         status: None,
         late_answers: crate::keys::LateAnswerFilter::default(),
@@ -265,7 +275,7 @@ pub(crate) fn state_with(player: VideoPlayer, decoder: Rc<FakeDecoder>) -> LoopS
         video: VideoState {
             player,
             mpv: Some(PathBuf::from("/bin/mpv")),
-            ffmpeg: Some(PathBuf::from("/bin/ffmpeg")),
+            ffmpeg: Some(ffmpeg),
             decoder,
         },
     }

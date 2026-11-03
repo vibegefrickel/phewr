@@ -561,3 +561,41 @@ fn narrow_grid_cuts_first_cell() {
     );
     assert_eq!(app.gallery.cell_at(1, 1), Some(0));
 }
+
+/// `IMG_0001.JPG` is a Live Photo still with its motion `IMG_0001.MOV`.
+fn live_app() -> App {
+    let mut app = app_with(&["a.jpg", "IMG_0001.JPG", "c.jpg"]);
+    app.set_live_photos(crate::scanner::LivePhotos::from_pairs([(
+        "/photos/IMG_0001.JPG".into(),
+        "/photos/IMG_0001.MOV".into(),
+    )]));
+    app
+}
+
+#[test]
+fn live_still_carries_mark_above_cell() {
+    let mut app = live_app();
+    let buffer = render_buffer(&mut app, None, 100, 30);
+    let border = app.gallery.border_rect(1);
+    let rows = screen_rows(&buffer);
+    let top = &rows[usize::from(border.y)];
+    assert!(top.contains("\u{25ce} Live"), "{top}");
+    let mark = cell_of(&buffer, "\u{25ce} Live");
+    assert_default_fg(mark, Modifier::empty());
+    assert_eq!(
+        rows.iter().filter(|row| row.contains("Live")).count(),
+        1,
+        "only the Live cell carries the mark"
+    );
+
+    app.gallery.cursor = 1;
+    let buffer = render_buffer(&mut app, None, 100, 30);
+    assert_ansi_bold(cell_of(&buffer, "\u{25ce} Live"), Color::Blue);
+    assert_symbol(
+        &buffer,
+        (border.x, border.y),
+        "\u{250f}",
+        Color::Blue,
+        Modifier::BOLD,
+    );
+}

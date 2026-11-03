@@ -22,12 +22,13 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.graphics_delete_all()?;
             app.toggle_info();
         }
-        KeyCode::Enter if app.shows_video_placeholder() || on_animation(app) => {
-            if !app.shows_video_placeholder() {
-                app.graphics_delete_all()?;
-            }
-            app.stop_slideshow();
-            app.enter_fullscreen_at(app.current);
+        KeyCode::Enter => {
+            play_in_place(app)?;
+        }
+        #[cfg(feature = "video")]
+        KeyCode::Char('p') if app.fullscreen_on_live() => {
+            app.enter_motion_at(app.current);
+            app.request_video_window();
         }
         #[cfg(feature = "video")]
         KeyCode::Char('p') if app.shows_video_placeholder() || app.fullscreen_on_animation() => {
@@ -56,6 +57,45 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
     }
     Ok(false)
 }
+
+/// Enter and a click on the middle of the picture: play the video of the placeholder, the
+/// animation or the motion of a Live Photo. `false` when the file has nothing to play.
+pub(super) fn play_in_place(app: &mut App) -> io::Result<bool> {
+    if on_live(app) {
+        // The still stays on the screen until the first frame of the motion replaces it.
+        app.stop_slideshow();
+        enter_motion(app);
+        return Ok(true);
+    }
+    if !app.shows_video_placeholder() && !on_animation(app) {
+        return Ok(false);
+    }
+    if !app.shows_video_placeholder() {
+        app.graphics_delete_all()?;
+    }
+    app.stop_slideshow();
+    app.enter_fullscreen_at(app.current);
+    Ok(true)
+}
+
+/// A motion plays only with the `video` feature, and without it the scan lists no `.mov`.
+#[cfg(feature = "video")]
+fn on_live(app: &App) -> bool {
+    app.fullscreen_on_live()
+}
+
+#[cfg(not(feature = "video"))]
+fn on_live(_app: &App) -> bool {
+    false
+}
+
+#[cfg(feature = "video")]
+fn enter_motion(app: &mut App) {
+    app.enter_motion_at(app.current);
+}
+
+#[cfg(not(feature = "video"))]
+fn enter_motion(_app: &mut App) {}
 
 /// An animation plays only with the `video` feature.
 #[cfg(feature = "video")]

@@ -63,6 +63,14 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             }
         }
         #[cfg(feature = "video")]
+        KeyCode::Char('p') if app.selected_is_live() => {
+            app.graphics_delete_all()?;
+            if let Some(index) = app.gallery.selected_index() {
+                app.enter_motion_at(index);
+            }
+            app.request_video_window();
+        }
+        #[cfg(feature = "video")]
         KeyCode::Char('p') if app.selected_is_video() => {
             app.graphics_delete_all()?;
             app.enter_fullscreen_selected();

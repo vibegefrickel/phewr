@@ -47,6 +47,7 @@ impl VideoState {
 /// video goes to the mpv window with a note. In the gallery, a rest of the cursor on a video
 /// starts its player ahead of Enter, see [`prestart`].
 pub(crate) fn play_videos(app: &mut App, state: &mut LoopState, runner: &mut impl mpv::Runner) {
+    finish_motion(app, state);
     start_video_view(app, state, runner);
     prestart::tick_prestart(app, state, Instant::now());
 }
@@ -55,15 +56,56 @@ fn start_video_view(app: &mut App, state: &mut LoopState, runner: &mut impl mpv:
     if app.mode != ViewMode::Video || app.video.is_some() {
         return;
     }
+    let mismatch = identifier_note(app);
     if app.take_video_window_request() {
         open_window(app, state, runner, None);
+    } else {
+        // The note of a failed motion goes to `state`, so the program path is a copy.
+        match terminal_player_program(app, state).map(Path::to_path_buf) {
+            Ok(program) => open_terminal_player(app, state, &program),
+            Err(Blocker::Configured) => open_window(app, state, runner, None),
+            Err(Blocker::Missing(reason)) => open_window(app, state, runner, Some(reason)),
+        }
+    }
+    if let Some(note) = mismatch {
+        state.status = Some(match state.status.take() {
+            Some(other) => format!("{note}; {other}"),
+            None => note,
+        });
+    }
+}
+
+/// The note for a Live Photo pair whose content identifiers differ. The motion plays anyway:
+/// the base name paired it. The read of both files costs less than 1 ms.
+fn identifier_note(app: &App) -> Option<String> {
+    if !app.plays_motion() {
+        return None;
+    }
+    let (still, motion) = (app.current_path(), app.video_path());
+    crate::scanner::identifiers_differ(still, motion).then(|| {
+        format!(
+            "{} and {} carry different Live Photo identifiers",
+            mpv::file_name(still),
+            mpv::file_name(motion)
+        )
+    })
+}
+
+/// Go back to the still after the motion of a Live Photo. A failed decode leaves its note.
+fn finish_motion(app: &mut App, state: &mut LoopState) {
+    if app.mode != ViewMode::Video || !app.plays_motion() {
         return;
     }
-    match terminal_player_program(app, state) {
-        Ok(program) => open_terminal_player(app, state, program),
-        Err(Blocker::Configured) => open_window(app, state, runner, None),
-        Err(Blocker::Missing(reason)) => open_window(app, state, runner, Some(reason)),
+    let Some(player) = app.video.as_ref() else {
+        return;
+    };
+    if !player.finished() {
+        return;
     }
+    if let Some(error) = player.error.clone() {
+        state.status = Some(error);
+    }
+    app.return_from_video();
 }
 
 enum Blocker {
@@ -90,10 +132,11 @@ fn terminal_player_program<'a>(app: &App, state: &'a LoopState) -> Result<&'a Pa
 }
 
 /// Open the current video in the terminal player, or take its prestarted player. A failed
-/// open shows its error in the fullscreen view, where Enter does not retry it.
-fn open_terminal_player(app: &mut App, state: &LoopState, program: &Path) {
-    let path = app.current_path().to_path_buf();
-    let repeat = !app.slideshow_advancing();
+/// open shows its error in the fullscreen view, where Enter does not retry it. The motion of a
+/// Live Photo plays one time, and a failed open goes back to the still with a note.
+fn open_terminal_player(app: &mut App, state: &mut LoopState, program: &Path) {
+    let path = app.video_path().to_path_buf();
+    let repeat = !app.slideshow_advancing() && !app.plays_motion();
     let limit = frame_limit(app.fullscreen_box, app.cell_px);
     // The prestarted player loops. A run that plays once ends it first: two waiting ffmpeg
     // runs of a 4K HLG clip hold about 900 MB.
@@ -124,6 +167,10 @@ fn open_terminal_player(app: &mut App, state: &LoopState, program: &Path) {
             }
             app.video = Some(player);
         }
+        Err(error) if app.plays_motion() => {
+            state.status = Some(error.to_string());
+            app.return_from_video();
+        }
         Err(error) => {
             app.error = Some(error.to_string());
             app.mode = ViewMode::Fullscreen;
@@ -141,7 +188,7 @@ fn open_window(
     runner: &mut impl mpv::Runner,
     reason: Option<&str>,
 ) {
-    let path = app.current_path().to_path_buf();
+    let path = app.video_path().to_path_buf();
     let name = mpv::file_name(&path);
     let once = app.slideshow_advancing();
     let playback = if once {

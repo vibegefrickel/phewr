@@ -111,6 +111,57 @@ fn warm_folder_reads_loops_from_cache() {
     assert!(app.loops_to_send());
 }
 
+/// A grid app with the Live Photo still `IMG_0001.JPG` and its motion `IMG_0001.MOV`, which
+/// holds no video.
+#[cfg(feature = "video")]
+fn live_grid_app(dir: &Path, config: &Config) -> (App, std::path::PathBuf) {
+    let mut app = grid_app(dir, &["IMG_0001.JPG"], config);
+    let motion = dir.join("IMG_0001.MOV");
+    std::fs::write(&motion, b"no video").unwrap();
+    app.set_live_photos(crate::scanner::LivePhotos::from_pairs([(
+        app.images[0].clone(),
+        motion.clone(),
+    )]));
+    (app, motion)
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn live_still_loops_its_motion() {
+    let dir = test_dir();
+    let (mut app, motion) = live_grid_app(dir.path(), &Config::default());
+    assert_eq!(app.loop_source(0), Some(motion.clone()));
+    let target = crate::app::thumbnails::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+    let frames = super::LoopFrames {
+        frames: vec![RgbaImage::new(80, 48); 3],
+        delays: vec![Duration::from_millis(333); 3],
+        shown: (160, 96),
+    };
+    // The loop of the motion sits in the cache under the path of the motion.
+    crate::app::disk_cache::try_save_loop(&app.disk_cache_dir, &motion, target, &frames).unwrap();
+
+    app.poll_grid_loops();
+    assert!(app.grid_loops_pending(), "the still gets a loop job");
+    finish_jobs(&mut app);
+
+    assert_eq!(app.grid_loops.loops[&0].frames.len(), 3);
+    assert!(app.loops_to_send());
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn live_still_without_animate_keeps_still() {
+    let dir = test_dir();
+    let config = Config {
+        animate: false,
+        ..Config::default()
+    };
+    let (mut app, _motion) = live_grid_app(dir.path(), &config);
+    app.poll_grid_loops();
+    assert!(!app.grid_loops_pending());
+    assert!(!app.grid_loops_shown());
+}
+
 #[cfg(feature = "video")]
 #[test]
 fn config_key_turns_loops_off() {
@@ -412,4 +463,63 @@ fn wrapped_ids_skip_live_loops() {
             assert!(!loops.stale_ids.contains(id));
         }
     }
+}
+
+/// The real motion of `IMG_2927.HEIC` in `PHEWR_TEST_LIVE_DIR` decodes into a loop, and the
+/// grid cell of the still plays it.
+#[cfg(feature = "video")]
+#[test]
+#[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe"]
+fn real_live_still_loops_its_motion() {
+    use crate::player::SystemDecoder;
+    use crate::test_support::live::{index_of, real_live_dir, scanned_app};
+    use crate::test_support::video::{real_ffmpeg, real_ffprobe};
+    use std::sync::atomic::AtomicBool;
+    let (Some(dir), Some(ffmpeg), Some(ffprobe)) = (real_live_dir(), real_ffmpeg(), real_ffprobe())
+    else {
+        return;
+    };
+    let cache = test_dir();
+    let mut app = scanned_app(&dir, &Config::default());
+    app.disk_cache_dir = cache.path().to_path_buf();
+    let still = index_of(&app, "IMG_2927.HEIC");
+    let motion = app.loop_source(still).unwrap();
+    assert_eq!(motion, dir.join("IMG_2927.MOV"));
+    let target = crate::app::thumbnails::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+
+    let decoder = SystemDecoder::new(Some(ffprobe));
+    let start = std::time::Instant::now();
+    let frames = crate::grid_loop::decode_loop(
+        &decoder,
+        &ffmpeg,
+        &motion,
+        target,
+        &[cache.path()],
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    println!(
+        "IMG_2927.MOV: {} loop frames of {:?} for a target of {target:?} in {:?}",
+        frames.frames.len(),
+        frames.frames[0].dimensions(),
+        start.elapsed()
+    );
+    crate::app::disk_cache::try_save_loop(&app.disk_cache_dir, &motion, target, &frames).unwrap();
+    app.thumb_cache.insert(
+        still,
+        pad_for_grid(
+            RgbaImage::new(target.0, target.1),
+            target,
+            app.cell_px,
+            true,
+        ),
+    );
+
+    app.poll_grid_loops();
+    finish_jobs(&mut app);
+    assert_eq!(
+        app.grid_loops.loops[&still].frames.len(),
+        frames.frames.len()
+    );
+    assert!(frames.frames.len() >= 2);
 }

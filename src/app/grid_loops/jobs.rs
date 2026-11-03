@@ -5,7 +5,7 @@ use crate::app::disk_cache::{try_load_loop, try_save_loop};
 use crate::app::thumbnails::{pad_loop_frame, thumb_target_px};
 use crate::app::{App, ViewMode};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, mpsc};
 
@@ -102,7 +102,8 @@ impl App {
         }
     }
 
-    /// True for a video or animated cell with its sharp still and without a loop or a job.
+    /// True for a video, animated or Live Photo cell with its sharp still and without a loop or
+    /// a job.
     fn wants_loop(&self, index: usize) -> bool {
         let loops = &self.grid_loops;
         self.thumb_cache.is_sharp(index)
@@ -110,13 +111,13 @@ impl App {
             && !loops.running.contains_key(&index)
             && !loops.failed.contains(&index)
             && !loops.over_budget.contains(&index)
-            && (self.is_video(index) || self.is_animated(index))
+            && (self.is_video(index) || self.is_animated(index) || self.is_live(index))
     }
 
     /// Read the loop of `index` from the disk cache, or decode it, on a thread of its own. The job
-    /// pads each frame off the UI thread.
+    /// pads each frame off the UI thread. A Live Photo still loops its motion.
     fn spawn_loop_job(&mut self, index: usize) {
-        let Some(path) = self.images.get(index).cloned() else {
+        let Some(path) = self.loop_source(index) else {
             return;
         };
         let guard = ResultGuard {
@@ -153,6 +154,15 @@ impl App {
         } else {
             self.grid_loops.failed.insert(index);
         }
+    }
+}
+
+impl App {
+    /// The file of the loop of `index`: the motion of a Live Photo still, else the file itself.
+    pub(crate) fn loop_source(&self, index: usize) -> Option<PathBuf> {
+        self.live_motion(index)
+            .or_else(|| self.images.get(index).map(PathBuf::as_path))
+            .map(Path::to_path_buf)
     }
 }
 

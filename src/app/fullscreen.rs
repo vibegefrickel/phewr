@@ -121,17 +121,11 @@ impl App {
         #[cfg(feature = "video")]
         {
             self.video = None;
+            self.motion = None;
             self.video_window = None;
         }
 
-        // The image on the screen goes back to the prefetch cache: a step back is free.
-        if self.zoom <= 1.0
-            && self.loaded_for_rect == self.image_rect
-            && let Some(shown) = self.loaded.take()
-        {
-            self.prefetcher
-                .store(self.current, shown, self.image_rect, self.cell_px);
-        }
+        self.park_shown_image();
         self.current = target;
         self.error = None;
         self.needs_render = true;
@@ -159,6 +153,17 @@ impl App {
         } else {
             self.loaded = None;
             self.start_fullscreen_decode(self.current, self.image_rect);
+        }
+    }
+
+    /// The image on the screen goes back to the prefetch cache: a step back is free.
+    pub(super) fn park_shown_image(&mut self) {
+        if self.zoom <= 1.0
+            && self.loaded_for_rect == self.image_rect
+            && let Some(shown) = self.loaded.take()
+        {
+            self.prefetcher
+                .store(self.current, shown, self.image_rect, self.cell_px);
         }
     }
 

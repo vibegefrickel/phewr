@@ -432,3 +432,35 @@ fn bench_folder_scan() {
     }
     eprintln!("bench scan: first entry {first:?}, complete {complete:?}");
 }
+
+/// The first entry of a scan of `PHEWR_TEST_DIR` with and without the Live Photo pairs, in
+/// turns: the best and the median of 41 runs each.
+#[test]
+#[ignore = "timing: needs PHEWR_TEST_DIR"]
+fn bench_live_pairs_scan() {
+    let Some(dir) = std::env::var_os("PHEWR_TEST_DIR") else {
+        return;
+    };
+    let mut times = [Vec::new(), Vec::new()];
+    for _ in 0..41 {
+        for (live_photos, runs) in [false, true].into_iter().zip(times.iter_mut()) {
+            let list = SharedImageList::new();
+            let start = Instant::now();
+            super::spawn_with(vec![PathBuf::from(&dir)], list.clone(), live_photos);
+            while list.len() == 0 {
+                thread::yield_now();
+            }
+            runs.push(start.elapsed());
+            wait_for_complete(&list);
+        }
+    }
+    let [off, on] = times.map(|mut runs| {
+        runs.sort_unstable();
+        (runs[0], runs[runs.len() / 2])
+    });
+    eprintln!(
+        "bench live pairs scan: first entry without pairs {:?} (median {:?}), with pairs {:?} \
+         (median {:?})",
+        off.0, off.1, on.0, on.1
+    );
+}

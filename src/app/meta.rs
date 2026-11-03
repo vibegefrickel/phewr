@@ -72,10 +72,15 @@ impl App {
         }
     }
 
-    /// The status line of the subject, or `None` before its read ends.
+    /// The status line of the subject, or `None` before its read ends. A Live Photo still
+    /// starts with `Live`.
     pub(crate) fn meta_line(&self) -> Option<String> {
         let path = self.view_file()?;
-        self.meta.cache.peek(&path).map(FileMeta::describe)
+        let facts = self.meta.cache.peek(&path).map(FileMeta::describe)?;
+        if self.live.motion(&path).is_some() {
+            return Some(format!("Live \u{b7} {facts}"));
+        }
+        Some(facts)
     }
 
     pub(crate) fn meta_pending(&self) -> bool {
@@ -87,6 +92,33 @@ impl App {
 mod tests {
     use crate::app::ViewMode;
     use crate::test_support::{app_with_files, wait_until};
+
+    #[test]
+    fn live_still_starts_with_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
+        let still = app.images[0].clone();
+        app.set_live_photos(crate::scanner::LivePhotos::from_pairs([(
+            still.clone(),
+            still.with_extension("mov"),
+        )]));
+
+        app.request_meta();
+        wait_until(|| {
+            app.poll_meta();
+            !app.meta_pending()
+        });
+        let line = app.meta_line().unwrap();
+        assert!(line.starts_with("Live \u{b7} 8\u{d7}8 \u{b7} "), "{line}");
+
+        app.gallery.cursor = 1;
+        app.request_meta();
+        wait_until(|| {
+            app.poll_meta();
+            !app.meta_pending()
+        });
+        assert!(!app.meta_line().unwrap().contains("Live"));
+    }
 
     #[test]
     fn status_line_follows_cursor() {

@@ -2,7 +2,7 @@
 
 use super::App;
 use super::cell_shape::SHAPE_SAMPLE;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// `scanner::name_key`, the key of the scanner batches: the end of the scan keeps the order of
 /// the first screen. The folder prefetch sorts the same way.
@@ -19,6 +19,10 @@ impl App {
         }
 
         if self.shared_list.len() > self.known_len {
+            // The scanner sets the pairs before the first entry.
+            if self.known_len == 0 {
+                self.live = self.shared_list.live_photos();
+            }
             let batch = self.shared_list.batch_since(self.known_len);
             let old_len = self.images.len();
             self.images.extend(batch.paths);
@@ -47,6 +51,7 @@ impl App {
             self.finalize_scan_order();
             self.request_cell_shape();
             // phewr always starts in the grid, even with one image.
+            self.return_to_still();
             self.place_cursor_on_return();
         }
     }
@@ -99,6 +104,31 @@ impl App {
         );
         self.known_len = self.images.len();
         self.mark_dirty();
+    }
+
+    /// A cursor target on a hidden motion goes to its still: `phewr IMG_1234.MOV` from yazi.
+    fn return_to_still(&mut self) {
+        if let Some(path) = self.return_to.as_deref()
+            && let Some(still) = self.live.still_of(path)
+        {
+            self.return_to = Some(still.to_path_buf());
+        }
+    }
+
+    /// The motion of the Live Photo still `index`, or `None` for each other entry.
+    pub(crate) fn live_motion(&self, index: usize) -> Option<&Path> {
+        self.live.motion(self.images.get(index)?)
+    }
+
+    /// The pairs of a test list that no scan filled.
+    #[cfg(test)]
+    pub(crate) fn set_live_photos(&mut self, live: crate::scanner::LivePhotos) {
+        self.live = std::sync::Arc::new(live);
+    }
+
+    /// True for a Live Photo still: its cell carries the Live mark.
+    pub(crate) fn is_live(&self, index: usize) -> bool {
+        self.live_motion(index).is_some()
     }
 
     pub(crate) fn is_scanning(&self) -> bool {
@@ -260,6 +290,91 @@ mod tests {
         app.update_filter();
         assert_eq!(app.gallery.filtered_indices, vec![0, 1, 2]);
         assert!(app.filter_rx.is_none());
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn live_photos_off_shows_both_cells() {
+        use crate::config::Config;
+        use crate::test_support::live::{LIVE_ID, scanned_app, write_live_pair};
+        let dir = crate::test_support::test_dir();
+        write_live_pair(dir.path(), "IMG_0001", Some(LIVE_ID), Some(LIVE_ID));
+        let off = Config {
+            live_photos: false,
+            ..Config::default()
+        };
+
+        let app = scanned_app(dir.path(), &off);
+        assert_eq!(
+            app.filenames[app.folder_count..],
+            ["IMG_0001.JPG", "IMG_0001.MOV"]
+        );
+        assert!(!app.is_live(app.folder_count));
+
+        let mut app = scanned_app(dir.path(), &Config::default());
+        assert_eq!(app.filenames[app.folder_count..], ["IMG_0001.JPG"]);
+        assert!(app.is_live(app.folder_count));
+        app.live_photos = false;
+        app.switch_to_dir(dir.path());
+        wait_until(|| {
+            app.refresh_from_scanner();
+            app.scan_complete
+        });
+        assert_eq!(
+            app.filenames[app.folder_count..],
+            ["IMG_0001.JPG", "IMG_0001.MOV"],
+            "a directory switch keeps the config"
+        );
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn edited_copy_pairs_only_with_its_motion() {
+        use crate::config::Config;
+        use crate::test_support::live::{
+            index_of, scanned_app, write_live_motion, write_live_pair, write_live_still,
+        };
+        let dir = crate::test_support::test_dir();
+        write_live_pair(dir.path(), "IMG_E0001", None, None);
+        write_live_still(&dir.path().join("IMG_E0002.HEIC"), None);
+        write_live_motion(&dir.path().join("IMG_0002.MOV"), None);
+
+        let app = scanned_app(dir.path(), &Config::default());
+
+        assert_eq!(
+            app.filenames[app.folder_count..],
+            ["IMG_0002.MOV", "IMG_E0001.JPG", "IMG_E0002.HEIC"]
+        );
+        assert!(app.is_live(index_of(&app, "IMG_E0001.JPG")));
+        assert!(!app.is_live(index_of(&app, "IMG_E0002.HEIC")));
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn hidden_motion_target_selects_still() {
+        use crate::config::Config;
+        use crate::image_list::SharedImageList;
+        use crate::test_support::live::{LIVE_ID, write_live_pair};
+        let dir = crate::test_support::test_dir();
+        image::RgbaImage::new(8, 8)
+            .save(dir.path().join("a.png"))
+            .unwrap();
+        let still = write_live_pair(dir.path(), "IMG_0001", Some(LIVE_ID), Some(LIVE_ID));
+        let folder = still.parent().unwrap().to_path_buf();
+        let list = SharedImageList::new();
+        crate::scanner::spawn_with(vec![folder.clone()], list.clone(), true);
+        let mut app = App::new_with_config((8, 16), list, &Config::default());
+        app.place_cursor_after_scan(folder.join("IMG_0001.MOV"));
+
+        wait_until(|| {
+            app.refresh_from_scanner();
+            app.scan_complete
+        });
+
+        assert_eq!(
+            app.gallery.selected_index().map(|index| &app.images[index]),
+            Some(&still)
+        );
     }
 
     #[test]

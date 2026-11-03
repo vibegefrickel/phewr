@@ -45,6 +45,8 @@ pub(super) struct Request {
     pub(super) zoom_rows: usize,
     pub(super) cell_px: (u32, u32),
     pub(super) cache_dir: PathBuf,
+    /// `[gallery] live_photos`: the listing hides the motions, as the switch does.
+    pub(super) live_photos: bool,
 }
 
 /// The files of the first screen and their decode box.
@@ -57,7 +59,7 @@ pub(super) struct FirstScreen {
 /// The first screen that a switch to `request.folder` shows. A folder with fewer than 2 files
 /// gets no prefetch: its grid saves one decode at most.
 pub(super) fn first_screen(request: &Request) -> FirstScreen {
-    let (folders, files, names) = scanner::folder_listing(&request.folder);
+    let (folders, files, names) = scanner::folder_listing(&request.folder, request.live_photos);
     if files.len() < 2 {
         return FirstScreen::default();
     }

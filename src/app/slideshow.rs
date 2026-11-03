@@ -361,6 +361,24 @@ mod tests {
         assert!(!empty.slideshow_running());
     }
 
+    #[cfg(feature = "video")]
+    #[test]
+    fn live_photo_shows_still_only() {
+        use crate::test_support::live::{LIVE_ID, fullscreen_on_still};
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+        let still = app.current;
+        app.start_slideshow();
+        app.loaded = Some(RgbaImage::new(1, 1).into());
+
+        app.slideshow.as_mut().unwrap().next_at = overdue();
+        app.slideshow_tick();
+
+        assert_eq!(app.current, still + 1, "the slide moves on after the still");
+        assert_eq!(app.mode, ViewMode::Fullscreen, "no motion plays");
+        assert!(!app.plays_motion());
+    }
+
     #[test]
     fn struct_reports_interval() {
         let show = Slideshow {

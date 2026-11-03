@@ -2,6 +2,7 @@
 //! in the final order.
 
 mod extensions;
+mod live;
 
 #[cfg(feature = "heic")]
 pub(crate) use extensions::LIBHEIF_EXTENSIONS;
@@ -10,6 +11,9 @@ pub(crate) use extensions::SIPS_EXTENSIONS;
 #[cfg(feature = "video")]
 pub(crate) use extensions::VIDEO_EXTENSIONS;
 pub(crate) use extensions::{IMAGE_EXTENSIONS, JXL_EXTENSIONS, has_extension, is_supported};
+pub(crate) use live::LivePhotos;
+#[cfg(feature = "video")]
+pub(crate) use live::identifiers_differ;
 
 use crate::image_list::{FolderEntry, SharedImageList};
 use std::ffi::OsString;
@@ -19,12 +23,18 @@ use std::thread;
 
 const BATCH_SIZE: usize = 64;
 
-/// One folder lists its subfolders too. Several paths have no common parent and list no
-/// folders.
+/// The benches scan with the pairs of Live Photos, the default of the config.
+#[cfg(test)]
 pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
+    spawn_with(paths, list, true);
+}
+
+/// One folder lists its subfolders too. Several paths have no common parent and list no
+/// folders. With `live_photos`, one folder hides the motion of each Live Photo still.
+pub(crate) fn spawn_with(paths: Vec<PathBuf>, list: SharedImageList, live_photos: bool) {
     thread::spawn(move || {
         match paths.as_slice() {
-            [dir] if dir.is_dir() => scan_folder(dir, &list),
+            [dir] if dir.is_dir() => scan_folder(dir, &list, live_photos),
             _ => scan_paths(paths, &list),
         }
         list.mark_complete();
@@ -32,9 +42,12 @@ pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
 }
 
 /// The folders come before the first file. The list waits for the end of the read, then the
-/// files go out sorted in batches.
-fn scan_folder(dir: &Path, list: &SharedImageList) {
-    let listing = read_folder(dir, list);
+/// files go out sorted in batches. The pairs go out before the folders.
+fn scan_folder(dir: &Path, list: &SharedImageList, live_photos: bool) {
+    let mut listing = read_folder(dir, list);
+    if live_photos {
+        list.set_live_photos(live::pair(&mut listing.files));
+    }
     list.push_folders(folder_entries(dir, listing.folder_names));
     let mut files = listing.files.into_iter();
     loop {
@@ -68,15 +81,22 @@ fn scan_paths(paths: Vec<PathBuf>, list: &SharedImageList) {
 
 #[cfg(test)]
 pub(crate) fn files_of(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
-    let (_, files, names) = folder_listing(dir);
+    let (_, files, names) = folder_listing(dir, true);
     (files, names)
 }
 
 /// The subfolders (`..` first) and the sorted files of `dir` from one read, as a switch lists
-/// them. The folder prefetch reads without a thread and without the errors.
-pub(crate) fn folder_listing(dir: &Path) -> (Vec<FolderEntry>, Vec<PathBuf>, Vec<String>) {
+/// them. With `live_photos`, the motions of the Live Photos stay out. The folder prefetch reads
+/// without a thread and without the errors.
+pub(crate) fn folder_listing(
+    dir: &Path,
+    live_photos: bool,
+) -> (Vec<FolderEntry>, Vec<PathBuf>, Vec<String>) {
     let list = SharedImageList::new();
-    let listing = read_folder(dir, &list);
+    let mut listing = read_folder(dir, &list);
+    if live_photos {
+        live::pair(&mut listing.files);
+    }
     list.push_batch(listing.files);
     let batch = list.batch_since(0);
     (
@@ -94,7 +114,7 @@ pub(crate) fn canonicalize_or_self(p: &Path) -> PathBuf {
 /// one `opendir` per subfolder.
 #[cfg(test)]
 pub(crate) fn subfolders(dir: &Path) -> Vec<FolderEntry> {
-    folder_listing(dir).0
+    folder_listing(dir, true).0
 }
 
 /// The canonical paths let the cursor find the folder of origin after a step to the parent.
