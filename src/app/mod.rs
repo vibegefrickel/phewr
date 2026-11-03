@@ -76,6 +76,8 @@ pub(crate) struct App {
 
     /// Tests point it into a temp directory.
     pub(crate) state_file: PathBuf,
+    /// The thread that writes the state file. Its drop flushes the queued writes.
+    pub(crate) state_writer: config::StateWriter,
     /// Tests point it into a temp directory.
     pub(crate) disk_cache_dir: PathBuf,
 
@@ -208,6 +210,7 @@ impl App {
             info_visible: config.info_panel,
             info_cache: LruCache::new(INFO_CACHE_CAPACITY),
             state_file,
+            state_writer: config::StateWriter::default(),
             disk_cache_dir: default_disk_cache_dir(),
             slideshow: None,
             slideshow_interval: Duration::from_secs_f64(config.slideshow_interval),

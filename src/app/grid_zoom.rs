@@ -20,8 +20,9 @@ impl App {
 
     /// Go back to the configured zoom level, and forget the remembered level of this folder.
     pub(crate) fn thumb_zoom_reset(&mut self) {
-        if let Some(dir) = &self.current_dir {
-            config::clear_folder_zoom(&self.state_file, dir);
+        if let Some(dir) = self.current_dir.clone() {
+            self.state_writer
+                .send(&self.state_file, config::StateChange::ClearFolder(dir));
         }
         if self.gallery.reset_zoom() {
             self.after_grid_zoom_change();
@@ -45,10 +46,14 @@ impl App {
         self.mark_dirty();
     }
 
-    /// Save the zoom level for this folder and as the global fallback.
-    fn remember_grid_zoom(&self) {
+    /// Queue the zoom level for this folder and as the global fallback. The writer thread saves it.
+    fn remember_grid_zoom(&mut self) {
         let rows = u16::try_from(self.gallery.zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS);
-        config::save_visible_rows(&self.state_file, self.current_dir.as_deref(), rows);
+        let change = config::StateChange::SetRows {
+            folder: self.current_dir.clone(),
+            rows,
+        };
+        self.state_writer.send(&self.state_file, change);
     }
 
     fn after_grid_zoom_change(&mut self) {
@@ -59,10 +64,14 @@ impl App {
 #[cfg(test)]
 mod tests {
 
-    use crate::config;
+    use crate::config::{self, StateWriter};
     use crate::test_support::{app_with, char_key, gallery_app, test_dir};
 
     use std::fs;
+    use std::time::Duration;
+
+    /// A delay that no test reaches: only a flush or a drop writes.
+    const HOLD: Duration = Duration::from_secs(60);
 
     #[test]
     fn zoom_saves_and_reset_clears() {
@@ -77,6 +86,7 @@ mod tests {
         app.thumb_zoom_in();
         assert_eq!(app.gallery.zoom_rows, start - 1);
         assert!(app.graphics_storage_dirty);
+        app.state_writer.flush();
         let saved = fs::read_to_string(&app.state_file).unwrap();
         assert!(
             saved.contains(&format!("visible_rows = {}", app.gallery.zoom_rows)),
@@ -96,6 +106,7 @@ mod tests {
 
         app.thumb_zoom_reset();
         assert_eq!(app.gallery.zoom_rows, start);
+        app.state_writer.flush();
         let saved = fs::read_to_string(&app.state_file).unwrap();
         assert!(
             !saved.contains(&format!(
@@ -189,8 +200,10 @@ mod tests {
             app.thumb_zoom_out();
         }
         let most = app.gallery.zoom_rows;
+        app.state_writer.flush();
         fs::remove_file(&app.state_file).unwrap();
         app.thumb_zoom_out();
+        app.state_writer.flush();
         assert_eq!(app.gallery.zoom_rows, most);
         assert!(!app.state_file.exists(), "no change, no write");
     }
@@ -213,6 +226,114 @@ mod tests {
         assert_eq!(
             app.gallery.zoom_rows, 3,
             "a folder without an entry uses the global level"
+        );
+    }
+
+    /// The ends of a fast run of steps: the file holds the last level, for the folder and global.
+    #[test]
+    fn fast_steps_end_in_the_last_level() {
+        let dir = test_dir();
+        let folder = dir.path().join("photos");
+        fs::create_dir(&folder).unwrap();
+        let mut app = app_with(&["a.png"]);
+        app.state_file = dir.path().join("state.toml");
+        app.state_writer = StateWriter::with_delay(HOLD);
+        app.current_dir = Some(folder.clone());
+        let start = app.gallery.zoom_rows;
+
+        app.thumb_zoom_in();
+        app.thumb_zoom_in();
+        app.thumb_zoom_out();
+        assert!(!app.state_file.exists(), "the batch waits for the delay");
+        app.state_writer.flush();
+
+        let expected = u16::try_from(start - 1).unwrap();
+        assert_eq!(app.gallery.zoom_rows, start - 1);
+        assert_eq!(
+            config::load_folder_zoom(&app.state_file, &folder),
+            Some(expected)
+        );
+        assert_eq!(config::load_global_zoom(&app.state_file), Some(expected));
+    }
+
+    #[test]
+    fn reset_without_entry_writes_nothing() {
+        let dir = test_dir();
+        let folder = dir.path().join("photos");
+        fs::create_dir(&folder).unwrap();
+        let mut app = app_with(&["a.png"]);
+        app.state_file = dir.path().join("state.toml");
+        app.current_dir = Some(folder);
+
+        app.thumb_zoom_reset();
+        app.state_writer.flush();
+
+        assert!(!app.state_file.exists(), "no entry, no write");
+    }
+
+    #[test]
+    fn quit_flushes_queued_write() {
+        let dir = test_dir();
+        let folder = dir.path().join("photos");
+        fs::create_dir(&folder).unwrap();
+        let mut app = app_with(&["a.png"]);
+        let state_file = dir.path().join("state.toml");
+        app.state_file = state_file.clone();
+        app.state_writer = StateWriter::with_delay(HOLD);
+        app.current_dir = Some(folder.clone());
+
+        app.thumb_zoom_in();
+        let rows = u16::try_from(app.gallery.zoom_rows).unwrap();
+        assert!(!state_file.exists(), "the write is still queued");
+        drop(app);
+
+        assert_eq!(config::load_folder_zoom(&state_file, &folder), Some(rows));
+    }
+
+    #[test]
+    fn broken_state_file_stays_unchanged() {
+        let dir = test_dir();
+        let mut app = app_with(&["a.png"]);
+        app.state_file = dir.path().join("state.toml");
+        app.current_dir = Some(dir.path().to_path_buf());
+        let broken = "visible_rows = 4\n[zoom\nbad line";
+        fs::write(&app.state_file, broken).unwrap();
+
+        app.thumb_zoom_in();
+        app.thumb_zoom_reset();
+        app.state_writer.flush();
+
+        assert_eq!(fs::read_to_string(&app.state_file).unwrap(), broken);
+    }
+
+    /// A folder switch right after a key sees the queued level, not the old file.
+    #[test]
+    fn folder_switch_sees_queued_levels() {
+        let dir = test_dir();
+        let folder = dir.path().join("photos");
+        let other = dir.path().join("other");
+        let mut app = app_with(&["a.png"]);
+        app.state_file = dir.path().join("state.toml");
+        app.state_writer = StateWriter::with_delay(HOLD);
+        app.current_dir = Some(folder.clone());
+        config::save_visible_rows(&app.state_file, Some(&folder), 5);
+        let start = app.gallery.zoom_rows;
+
+        app.thumb_zoom_in();
+        let zoomed = app.gallery.zoom_rows;
+        assert_eq!(app.folder_zoom_rows(&folder), zoomed, "the folder level");
+        assert_eq!(app.folder_zoom_rows(&other), zoomed, "the global level");
+
+        app.thumb_zoom_reset();
+        assert_ne!(zoomed, start);
+        assert_eq!(
+            app.folder_zoom_rows(&folder),
+            zoomed,
+            "cleared: the global level"
+        );
+        assert!(
+            !app.state_file.exists()
+                || config::load_folder_zoom(&app.state_file, &folder) == Some(5)
         );
     }
 }

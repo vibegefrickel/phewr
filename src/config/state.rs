@@ -3,6 +3,7 @@ use super::{MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
 /// The most folders with a remembered zoom level.
@@ -68,37 +69,256 @@ pub(crate) fn load_global_zoom(path: &Path) -> Option<u16> {
         .map(|rows| rows.clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS))
 }
 
-/// Remember `rows` for `folder` and as the global fallback.
-pub(crate) fn save_visible_rows(path: &Path, folder: Option<&Path>, rows: u16) {
-    let rows = rows.clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS);
-    let Some(mut state) = read_state_to_change(path) else {
-        return;
-    };
-    state.visible_rows = Some(rows);
-    if let Some(folder) = folder {
-        state.zoom_counter += 1;
-        state.zoom.insert(
-            folder.to_path_buf(),
-            ZoomValue::Detailed(ZoomEntry {
-                rows,
-                order: state.zoom_counter,
-            }),
-        );
-    }
-    prune_oldest_zoom_entries(&mut state);
-    write_state(path, &state);
+/// One change of the state file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StateChange {
+    /// Remember the rows for the folder (if any) and as the global fallback.
+    SetRows { folder: Option<PathBuf>, rows: u16 },
+    /// Forget the zoom level of the folder. The global fallback stays.
+    ClearFolder(PathBuf),
 }
 
-/// Forget the zoom level of `folder`. The global fallback stays.
-pub(crate) fn clear_folder_zoom(path: &Path, folder: &Path) {
+impl StateChange {
+    /// Apply the change in memory. The result tells whether the state differs now.
+    fn apply(&self, state: &mut StateFile) -> bool {
+        match self {
+            Self::SetRows { folder, rows } => {
+                let rows = (*rows).clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS);
+                state.visible_rows = Some(rows);
+                if let Some(folder) = folder {
+                    state.zoom_counter += 1;
+                    state.zoom.insert(
+                        folder.clone(),
+                        ZoomValue::Detailed(ZoomEntry {
+                            rows,
+                            order: state.zoom_counter,
+                        }),
+                    );
+                }
+                prune_oldest_zoom_entries(state);
+                true
+            }
+            Self::ClearFolder(folder) => state.zoom.remove(folder).is_some(),
+        }
+    }
+}
+
+/// Apply the changes in order to one read of the file, and write once if the state differs. A
+/// broken file stays as it is.
+fn apply_changes(path: &Path, changes: &[StateChange]) {
     let Some(mut state) = read_state_to_change(path) else {
         return;
     };
-    if state.zoom.remove(folder).is_none() {
-        return;
+    let mut changed = false;
+    for change in changes {
+        changed |= change.apply(&mut state);
     }
-    prune_oldest_zoom_entries(&mut state);
-    write_state(path, &state);
+    if changed {
+        write_state(path, &state);
+    }
+}
+
+/// Remember `rows` for `folder` and as the global fallback, now. The app queues a change instead.
+#[cfg(test)]
+pub(crate) fn save_visible_rows(path: &Path, folder: Option<&Path>, rows: u16) {
+    let change = StateChange::SetRows {
+        folder: folder.map(Path::to_path_buf),
+        rows,
+    };
+    apply_changes(path, &[change]);
+}
+
+/// Forget the zoom level of `folder`, now. The global fallback stays.
+#[cfg(test)]
+pub(crate) fn clear_folder_zoom(path: &Path, folder: &Path) {
+    apply_changes(path, &[StateChange::ClearFolder(folder.to_path_buf())]);
+}
+
+/// How long the writer waits for the next change before it writes, so a run of key presses gives
+/// one write.
+const WRITE_DELAY: Duration = Duration::from_millis(100);
+
+enum Message {
+    Change(PathBuf, StateChange),
+    /// Write what is queued now, then answer.
+    #[cfg(test)]
+    Flush(mpsc::Sender<()>),
+}
+
+/// The one writer thread of the state file. The thread starts with the first change. The drop
+/// closes the channel, and the thread writes the queued changes before the drop returns.
+pub(crate) struct StateWriter {
+    thread: Option<(mpsc::Sender<Message>, std::thread::JoinHandle<()>)>,
+    /// The changes that are not on disk yet, oldest first. A read applies them over the file.
+    pending: Arc<Mutex<Vec<(PathBuf, StateChange)>>>,
+    delay: Duration,
+}
+
+impl Default for StateWriter {
+    fn default() -> Self {
+        Self {
+            thread: None,
+            pending: Arc::default(),
+            delay: WRITE_DELAY,
+        }
+    }
+}
+
+impl StateWriter {
+    /// A writer that waits `delay` before it writes, so a test controls the batch.
+    #[cfg(test)]
+    pub(crate) fn with_delay(delay: Duration) -> Self {
+        let mut writer = Self::default();
+        writer.delay = delay;
+        writer
+    }
+
+    /// The folder level with the queued changes applied over the file.
+    pub(crate) fn folder_zoom(&self, path: &Path, folder: &Path) -> Option<u16> {
+        let mut rows = load_folder_zoom(path, folder);
+        for (_, change) in self.pending_for(path) {
+            match change {
+                StateChange::SetRows {
+                    folder: Some(f),
+                    rows: set,
+                } if f == folder => {
+                    rows = Some(set.clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS));
+                }
+                StateChange::ClearFolder(f) if f == folder => rows = None,
+                _ => {}
+            }
+        }
+        rows
+    }
+
+    /// The global level with the queued changes applied over the file.
+    pub(crate) fn global_zoom(&self, path: &Path) -> Option<u16> {
+        let mut rows = load_global_zoom(path);
+        for (_, change) in self.pending_for(path) {
+            if let StateChange::SetRows { rows: set, .. } = change {
+                rows = Some(set.clamp(MIN_VISIBLE_ROWS, MAX_VISIBLE_ROWS));
+            }
+        }
+        rows
+    }
+
+    fn pending_for(&self, path: &Path) -> Vec<(PathBuf, StateChange)> {
+        let pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        pending
+            .iter()
+            .filter(|(candidate, _)| candidate == path)
+            .cloned()
+            .collect()
+    }
+
+    /// Queue a change of the file at `path`. The UI thread does no file I/O.
+    pub(crate) fn send(&mut self, path: &Path, change: StateChange) {
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((path.to_path_buf(), change.clone()));
+        let (pending, delay) = (Arc::clone(&self.pending), self.delay);
+        let (sender, _) = self.thread.get_or_insert_with(|| {
+            let (sender, receiver) = mpsc::channel();
+            let thread = std::thread::spawn(move || write_loop(&receiver, &pending, delay));
+            (sender, thread)
+        });
+        // A send fails only if the thread is gone. The state file is a convenience, so the
+        // change is lost.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a lost zoom level is harmless"
+        )]
+        let _ = sender.send(Message::Change(path.to_path_buf(), change));
+    }
+
+    /// Wait until the queued changes are on disk.
+    #[cfg(test)]
+    pub(crate) fn flush(&self) {
+        let Some((sender, _)) = &self.thread else {
+            return;
+        };
+        let (done, answer) = mpsc::channel();
+        if sender.send(Message::Flush(done)).is_ok() {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a dead thread has nothing to flush"
+            )]
+            let _ = answer.recv();
+        }
+    }
+}
+
+impl Drop for StateWriter {
+    fn drop(&mut self) {
+        if let Some((sender, handle)) = self.thread.take() {
+            drop(sender);
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a panicked writer has nothing left to write"
+            )]
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Collect the changes until the delay passes without a new one, then write them.
+fn write_loop(
+    receiver: &mpsc::Receiver<Message>,
+    unwritten: &Mutex<Vec<(PathBuf, StateChange)>>,
+    delay: Duration,
+) {
+    while let Ok(first) = receiver.recv() {
+        let mut batch = Vec::new();
+        let mut pending = Some(first);
+        let mut open = true;
+        while let Some(message) = pending.take() {
+            match message {
+                Message::Change(path, change) => batch.push((path, change)),
+                #[cfg(test)]
+                Message::Flush(done) => {
+                    write_batch(&mut batch, unwritten);
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "the waiting test may be gone"
+                    )]
+                    let _ = done.send(());
+                }
+            }
+            match receiver.recv_timeout(delay) {
+                Ok(next) => pending = Some(next),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => open = false,
+            }
+        }
+        write_batch(&mut batch, unwritten);
+        if !open {
+            return;
+        }
+    }
+}
+
+/// Write the batch, one read and at most one write per file.
+fn write_batch(
+    batch: &mut Vec<(PathBuf, StateChange)>,
+    pending: &Mutex<Vec<(PathBuf, StateChange)>>,
+) {
+    let mut paths: Vec<PathBuf> = batch.iter().map(|(path, _)| path.clone()).collect();
+    paths.sort();
+    paths.dedup();
+    for path in paths {
+        let changes: Vec<StateChange> = batch
+            .iter()
+            .filter(|(candidate, _)| *candidate == path)
+            .map(|(_, change)| change.clone())
+            .collect();
+        apply_changes(&path, &changes);
+    }
+    // The batch is the oldest part of the queue: a read sees each change in the file or here.
+    let mut queue = pending.lock().unwrap_or_else(PoisonError::into_inner);
+    let written = batch.len().min(queue.len());
+    queue.drain(..written);
+    batch.clear();
 }
 
 fn prune_oldest_zoom_entries(state: &mut StateFile) {

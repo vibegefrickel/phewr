@@ -56,8 +56,10 @@ impl App {
 
     /// The zoom level that a switch to `dir` applies.
     pub(super) fn folder_zoom_rows(&self, dir: &Path) -> usize {
-        let rows = config::load_folder_zoom(&self.state_file, dir)
-            .or_else(|| config::load_global_zoom(&self.state_file))
+        let rows = self
+            .state_writer
+            .folder_zoom(&self.state_file, dir)
+            .or_else(|| self.state_writer.global_zoom(&self.state_file))
             .unwrap_or_else(|| {
                 u16::try_from(self.gallery.default_zoom_rows).unwrap_or(config::MAX_VISIBLE_ROWS)
             });

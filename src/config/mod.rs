@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 mod state;
 
 use state::read_state;
-pub(crate) use state::{clear_folder_zoom, load_folder_zoom, load_global_zoom, save_visible_rows};
+pub(crate) use state::{StateChange, StateWriter};
+#[cfg(test)]
+pub(crate) use state::{load_folder_zoom, load_global_zoom, save_visible_rows};
 
 /// The thumbnail rows until the user zooms.
 pub(crate) const DEFAULT_VISIBLE_ROWS: u16 = 4;
