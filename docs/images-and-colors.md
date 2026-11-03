@@ -173,7 +173,7 @@ The code is in `decode/hdr/`.
 - A PQ still maps with `Decoded::peak`. libheif fills it from `clli` or `mdcv` (deep and 8-bit
   files), a PNG from `cLLI` or `mDCV` (the draft spellings `cLLi` and `mDCv` count too), and a
   JPEG XL from `intensity_target`. The 500 bucket has no roll-off, for content at or below SDR
-  white. The 8-bit HDR path maps through `color::convert_with_peak`.
+  white. The 8-bit HDR path maps through `color::convert`.
 - cjxl writes an intensity target of 10000 nits into each PQ file. phewr counts 255 and 10000 as
   unset. A JPEG XL that really is mastered at 10000 nits maps with the 1000 nit bucket and clips
   its highlights above about 1000 nits.

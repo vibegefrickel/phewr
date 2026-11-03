@@ -422,7 +422,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `cLLI`, else `mDCV`, also with a PQ `iCCP` profile. A PQ JPEG XL reads `intensity_target`. Its
   values 255 (the header default) and 10000 (cjxl writes it for each PQ file) count as unset, so
   a JPEG XL really mastered at 10000 nits maps with 1000 nits. An 8-bit PQ HEIF reads `clli` and
-  `mdcv` too, and the 8-bit path maps through `color::convert_with_peak`. A PQ or HLG still
+  `mdcv` too, and the 8-bit path maps through `color::convert`. A PQ or HLG still
   (AVIF, HEIC, JPEG XL, 16-bit PNG with `cICP`) maps with a copy of the same math in
   `decode/hdr/`, per pixel and without a cube, after the resize: the primaries are BT.2020,
   Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a file in
