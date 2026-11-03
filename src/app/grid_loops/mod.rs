@@ -111,11 +111,32 @@ impl GridLoops {
         delays: &[Duration],
         loops: Loops,
     ) {
-        let cell = CellLoop::new(frames, delays, self.next_id, loops == Loops::Animation);
-        let count = u32::try_from(cell.ids.len()).unwrap_or(u32::MAX);
-        self.next_id = self.next_id.wrapping_add(count).max(LOOP_ID_BASE);
+        let animation = loops == Loops::Animation;
+        let count = CellLoop::id_count(animation, frames.len());
+        let first_id = self.allocate_ids(u32::try_from(count).unwrap_or(u32::MAX));
+        let cell = CellLoop::new(frames, delays, first_id, animation);
         if let Some(old) = self.loops.insert(index, cell) {
             self.stale_ids.extend(old.ids);
+        }
+    }
+
+    /// The first id of a free run of `count` ids. The run skips the ids of the loops in the map
+    /// and of the loops that wait for their delete, which only matters after the counter wraps.
+    fn allocate_ids(&mut self, count: u32) -> u32 {
+        loop {
+            let first = self.next_id;
+            let end = first.checked_add(count).filter(|end| *end < u32::MAX);
+            let Some(end) = end else {
+                self.next_id = LOOP_ID_BASE;
+                continue;
+            };
+            self.next_id = end;
+            let in_run = |id: &u32| (first..end).contains(id);
+            let used = self.loops.values().any(|cell| cell.ids.iter().any(in_run))
+                || self.stale_ids.iter().any(in_run);
+            if !used {
+                return first;
+            }
         }
     }
 

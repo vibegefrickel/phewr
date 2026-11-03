@@ -379,3 +379,37 @@ fn same_screen_keeps_hidden_list() {
         "a change with the same count reuses the buffer"
     );
 }
+
+#[test]
+fn wrapped_ids_skip_live_loops() {
+    use crate::encoder::Loops;
+    let mut loops = super::GridLoops::new(true);
+    let delays = [Duration::from_millis(100); 3];
+    loops.insert(
+        0,
+        vec![picture(), picture(), picture()],
+        &delays,
+        Loops::Ticks,
+    );
+    let live = loops.loops[&0].ids.clone();
+    loops.insert(1, vec![picture()], &delays[..1], Loops::Ticks);
+    loops.stale_ids.push(live[live.len() - 1] + 2);
+    // `MAX - 2` overflows the sum and wraps to the base, onto the live loop. `MAX - 3` ends on
+    // `MAX`, which the filter refuses because `MAX - 1` is the video frame.
+    for (index, start) in [(2, u32::MAX - 2), (3, u32::MAX - 3)] {
+        loops.next_id = start;
+        let frames = vec![picture(), picture(), picture()];
+        loops.insert(index, frames, &delays, Loops::Ticks);
+        let fresh = &loops.loops[&index].ids;
+        assert!(
+            fresh
+                .iter()
+                .all(|id| *id >= super::LOOP_ID_BASE && *id < u32::MAX - 1)
+        );
+        for id in fresh {
+            assert!(!live.contains(id), "id {id} belongs to a live loop");
+            assert!(!loops.loops[&1].ids.contains(id));
+            assert!(!loops.stale_ids.contains(id));
+        }
+    }
+}

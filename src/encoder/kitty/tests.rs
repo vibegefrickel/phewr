@@ -440,3 +440,14 @@ fn animate_sets_root_gap_and_loops() {
         b"\x1b_Ga=a,q=2,i=9,r=1,z=333\x1b\\\x1b_Ga=a,q=2,i=9,s=3,v=1\x1b\\"
     );
 }
+
+#[test]
+fn empty_image_writes_nothing() {
+    let empty = RgbaImage::new(0, 0);
+    for transfer in [Transfer::Direct, Transfer::Png, Transfer::TempFile] {
+        let mut output = Vec::new();
+        transmit_to(&mut output, (&empty).into(), &options(Some(3)), transfer).unwrap();
+        transmit_frame_to(&mut output, (&empty).into(), 3, 40, transfer, false).unwrap();
+        assert!(output.is_empty(), "no bytes for an empty image");
+    }
+}

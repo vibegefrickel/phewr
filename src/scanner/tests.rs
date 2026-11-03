@@ -3,7 +3,7 @@
 use super::{
     BATCH_SIZE, files_of, is_sorted_by_name, name_key, parent_entry, scan_dir, spawn, subfolders,
 };
-use crate::image_list::SharedImageList;
+use crate::image_list::{Batch, SharedImageList};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -192,7 +192,7 @@ fn first_batch_has_final_order() {
     spawn(vec![dir], list.clone());
     wait_for_complete(&list);
 
-    let (paths, _) = list.entries_since(list.folder_count());
+    let paths = list.batch_since(list.folder_count()).paths;
     let mut expected = paths.clone();
     expected.sort_by_cached_key(|path| name_key(path));
     assert_eq!(paths.len(), count);
@@ -249,7 +249,9 @@ fn only_one_folder_lists_subfolders() {
     spawn(vec![dir.clone()], list.clone());
     wait_for_complete(&list);
     assert_eq!(list.folder_count(), 2);
-    let (paths, filenames) = list.entries_since(0);
+    let Batch {
+        paths, filenames, ..
+    } = list.batch_since(0);
     assert_eq!(filenames, ["..", "sub", "photo.jpg"]);
     assert_eq!(paths[1], dir.join("sub"));
 
@@ -316,7 +318,7 @@ fn flushes_batches_in_name_order() {
     wait_for_complete(&list);
 
     assert_eq!(list.len(), 2 * count);
-    let (all, _) = list.entries_since(0);
+    let all = list.batch_since(0).paths;
     let names: Vec<String> = all
         .iter()
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
@@ -340,7 +342,11 @@ fn files_of_matches_scan_order() {
     let list = SharedImageList::new();
     spawn(vec![root.path().to_path_buf()], list.clone());
     wait_for_complete(&list);
-    let (scanned, scanned_names) = list.entries_since(list.folder_count());
+    let Batch {
+        paths: scanned,
+        filenames: scanned_names,
+        ..
+    } = list.batch_since(list.folder_count());
     let (files, names) = files_of(root.path());
     assert_eq!(files.len(), count, "no folder, no unsupported file");
     assert_eq!(files, scanned);

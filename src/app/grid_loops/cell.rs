@@ -30,14 +30,20 @@ pub(crate) struct CellLoop {
 }
 
 impl CellLoop {
+    /// An animation holds one id, ticks hold one id per frame.
+    pub(super) fn id_count(animation: bool, frame_count: usize) -> usize {
+        if animation { 1 } else { frame_count }
+    }
+
     pub(super) fn new(
         frames: Vec<GridPicture>,
         delays: &[Duration],
         first_id: u32,
         animation: bool,
     ) -> Self {
-        let count = if animation { 1 } else { frames.len() };
-        let ids = (first_id..).take(count).collect();
+        let ids = (first_id..)
+            .take(Self::id_count(animation, frames.len()))
+            .collect();
         let gaps_ms = delays
             .iter()
             .map(|delay| u32::try_from(delay.as_millis()).unwrap_or(u32::MAX).max(1))

@@ -78,8 +78,12 @@ pub(crate) fn folder_listing(dir: &Path) -> (Vec<FolderEntry>, Vec<PathBuf>, Vec
     let list = SharedImageList::new();
     let listing = read_folder(dir, &list);
     list.push_batch(listing.files);
-    let (files, names) = list.entries_since(0);
-    (folder_entries(dir, listing.folder_names), files, names)
+    let batch = list.batch_since(0);
+    (
+        folder_entries(dir, listing.folder_names),
+        batch.paths,
+        batch.filenames,
+    )
 }
 
 pub(crate) fn canonicalize_or_self(p: &Path) -> PathBuf {

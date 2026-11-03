@@ -139,6 +139,10 @@ pub(crate) fn write_pixels<W: Write + ?Sized>(
     transfer: Transfer,
     temp_dir: &Path,
 ) -> io::Result<()> {
+    // The protocol defines no empty image, so nothing goes out and the run loop goes on.
+    if pixels.width == 0 || pixels.height == 0 {
+        return Ok(());
+    }
     match transfer {
         Transfer::Direct => {
             write_direct(out, keys, raw_format(pixels), &STANDARD.encode(pixels.data))

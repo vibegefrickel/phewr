@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(app.current, 2);
         assert_eq!(app.current_path(), Path::new("/x/C.png"));
         assert!(app.graphics_storage_dirty);
-        let (paths, _) = list.entries_since(0);
+        let paths = list.batch_since(0).paths;
         assert_eq!(paths, app.images);
     }
 

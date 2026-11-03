@@ -122,12 +122,6 @@ impl SharedImageList {
         self.len.load(Ordering::Acquire)
     }
 
-    /// A copy of the entries from `known_len` on.
-    pub(crate) fn entries_since(&self, known_len: usize) -> (Vec<PathBuf>, Vec<String>) {
-        let batch = self.batch_since(known_len);
-        (batch.paths, batch.filenames)
-    }
-
     /// The entries from `known_len` on with the length after them, from one lock. A batch that
     /// the scanner pushes during the poll then comes in the next poll, not twice.
     pub(crate) fn batch_since(&self, known_len: usize) -> Batch {
@@ -156,14 +150,16 @@ impl SharedImageList {
 
 #[cfg(test)]
 mod tests {
-    use super::{FolderEntry, SharedImageList};
+    use super::{Batch, FolderEntry, SharedImageList};
     use std::path::PathBuf;
 
     #[test]
     fn paths_and_filenames_remain_aligned() {
         let list = SharedImageList::new();
         list.push_batch(vec![PathBuf::from("synthetic-a.png")]);
-        let (paths, filenames) = list.entries_since(0);
+        let Batch {
+            paths, filenames, ..
+        } = list.batch_since(0);
         assert_eq!(paths, vec![PathBuf::from("synthetic-a.png")]);
         assert_eq!(filenames, vec!["synthetic-a.png"]);
     }
@@ -184,11 +180,13 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert!(!list.is_complete());
 
-        let (paths, filenames) = list.entries_since(0);
+        let Batch {
+            paths, filenames, ..
+        } = list.batch_since(0);
         assert_eq!(paths, vec![PathBuf::from("a.png"), PathBuf::from("b.png")]);
         assert_eq!(filenames, vec!["a.png", "b.png"]);
 
-        let (empty, _) = list.entries_since(2);
+        let Batch { paths: empty, .. } = list.batch_since(2);
         assert!(empty.is_empty());
     }
 
@@ -221,7 +219,9 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list.folder_count(), 0);
 
-        let (paths, filenames) = list.entries_since(0);
+        let Batch {
+            paths, filenames, ..
+        } = list.batch_since(0);
         assert_eq!(paths, vec![PathBuf::from("x.png")]);
         assert_eq!(filenames, vec!["x.png"]);
     }
@@ -241,7 +241,9 @@ mod tests {
 
         assert_eq!(list.len(), 3);
         assert_eq!(list.folder_count(), 2);
-        let (paths, filenames) = list.entries_since(0);
+        let Batch {
+            paths, filenames, ..
+        } = list.batch_since(0);
         assert_eq!(
             paths,
             vec![
@@ -261,7 +263,7 @@ mod tests {
         let list = SharedImageList::new();
         list.push_batch(vec![PathBuf::from("/")]);
 
-        let (_, filenames) = list.entries_since(0);
+        let Batch { filenames, .. } = list.batch_since(0);
         assert_eq!(filenames, vec![""]);
     }
 }
