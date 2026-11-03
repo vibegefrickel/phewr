@@ -136,6 +136,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `PHEWR_TEST_HEIC`, `PHEWR_TEST_AVIF`, `PHEWR_TEST_JXL`, `PHEWR_TEST_RAW`, `PHEWR_TEST_PSD`,
   `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. `real_flipped_copy_shows_upright` copies `PHEWR_TEST_RAW`
   (a RAF or ARW) into a temp dir and writes the orientations 2, 3 and 4 with exiftool.
+  `real_orf_preview_turns_like_develop` copies `PHEWR_TEST_ORF`, writes the IFD0 orientation 1
+  and 6 with exiftool, and compares the preview with the sips develop.
   `PHEWR_TEST_SDR_VIDEO` also feeds the first
   frame test `video::tests::real_clip_first_frame`. The bench `previews::raw_files` reads every
   RAW file of `PHEWR_TEST_RAW_DIR`. `real_jxl_matches_reference` compares `PHEWR_TEST_JXL` with
@@ -290,7 +292,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir`, `ispe`, `clli` and `mdcv`), `shape.rs`
   (the image dimensions from the file headers, for the cell shape), `embedded_jpeg/` (the safe
   reader for the JPEG inside camera RAW and PSD files: `mod.rs` with RAF and `decode_reference`,
-  `tiff.rs`, `cr3.rs`,
+  `tiff.rs`, `cr3.rs`, `orf.rs`,
   `psd.rs`), `color/` (the conversion into the color space of the terminal: `mod.rs` with
   `ColorTarget`, `SourceColor` and `convert`, `transform.rs` the transform cache, `jpeg.rs` the
   JPEG segment walk `jpeg_segments`, the APP2 ICC profile and the Adobe RGB mark, `tags.rs` the
@@ -639,7 +641,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v19` (`THUMBNAIL_CACHE_VERSION`, v19 since the rounding target curve for moxcms 0.9.1), the
+- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v20` (`THUMBNAIL_CACHE_VERSION`, v20 since the ORF maker note preview and the fit rule of `covers`), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
@@ -713,10 +715,14 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   zoom gets the full image. A relative path gets `./` in front, because sips reads `-x` as a
   function name. JPEG, PNG and HEIC never take this route. RAW and PSD try the embedded JPEG
   first (`decode/embedded_jpeg/`): the largest JPEG of the TIFF IFDs, the CR3 boxes, the RAF
-  header or PSD resource 1036. It is the grid preview. A JPEG that covers the box is the sharp
-  thumbnail and goes into the disk cache, so sips does not run for the cell. The fullscreen view
-  and the prefetch also take a JPEG that covers their box. The zoom keeps sips. ORF has no
-  reachable preview. `sips -Z` reads no preview: it develops the RAW and then scales (0.5 s to
+  header, the ORF maker note or PSD resource 1036. It is the grid preview. A JPEG covers a box
+  when its fit into the box needs no upscale: one side reaches the box (`EmbeddedJpeg::covers`).
+  A JPEG that covers the box is the sharp thumbnail and goes into the disk cache, so sips does
+  not run for the cell. The fullscreen view and the prefetch also take a JPEG that covers their
+  box, so a 3200x2400 preview serves the 2736x2052 fit of a 3392x2052 box. The zoom keeps sips.
+  An ORF holds its preview in the Olympus maker note (`decode/embedded_jpeg/orf.rs`). An OM-1
+  ORF gives a 3200x2400 preview in about 1 ms, and its grid cell decodes in about 20 ms instead
+  of 1.3 s to 1.6 s of sips. `sips -Z` reads no preview: it develops the RAW and then scales (0.5 s to
   1.1 s per file). The real-file numbers are in `docs/images-and-colors.md` ("sips").
   `sips::decode_with_preview` reads the embedded JPEG once and corrects each RAW develop with it.
   sips ignores the orientation of RAF and ARW, also of real portrait shots. If the known
@@ -729,8 +735,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   63 ms to decode. A tie, or a file without a reference, keeps the develop. If a RAW develop has only zero color samples, the embedded JPEG takes its place (sips
   develops `P1000475.RW2` black). A PSD never takes this fallback. The info panel shows the
   oriented size (`sips::shown_dimensions`).
-- **Embedded JPEG orientation:** the container orientation (IFD0 of a TIFF RAW, `CMT1` of a
-  CR3) wins over the EXIF of the embedded JPEG. Without a container orientation, the EXIF of
+- **Embedded JPEG orientation:** the container orientation (IFD0 of a TIFF RAW or an ORF, `CMT1`
+  of a CR3) wins over the EXIF of the embedded JPEG. Without a container orientation, the EXIF of
   the JPEG applies (RAF). The turbo path, the `image` fallback and the cell shape use this one
   rule. The DCT scaling of a rotated JPEG compares against the turned box.
 

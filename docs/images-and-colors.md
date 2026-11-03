@@ -60,10 +60,24 @@ AGENTS.md holds the rules and the layout of the files.
 - Canon CR3 is ISOBMFF. The `PRVW` and `THMB` boxes hold the JPEGs. `CMT1` holds the TIFF with
   the orientation.
 - Fujifilm RAF has a fixed header with the JPEG offset and length.
+- An Olympus or OM System ORF holds no JPEG in its TIFF IFDs. Its preview sits in the maker
+  note: tag 0x927C of the EXIF IFD, the maker note IFD, the `CameraSettings` sub-IFD (0x2020)
+  and the pair `PreviewImageStart` (0x101) and `PreviewImageLength` (0x102).
+  - The forms `OLYMPUS\0` and `OM SYSTEM\0` count the offsets from the maker note start. The
+    old form `OLYMP\0` or `EPSON\0` counts them from the TIFF header.
+  - `CameraSettings` can be a pointer or inline `undef` data. A `PreviewImageValid` (0x100) of 0
+    gives no preview.
+  - Without that preview, an ORF takes the TIFF IFD walk.
+- A JPEG covers a box when its fit into the box needs no upscale (`EmbeddedJpeg::covers`). The
+  grid, the fullscreen view and the prefetch use this one rule.
 - A Photoshop file carries its thumbnail in the image resource 1036 (JPEG RGB).
 - sips takes 0.1 s to 1 s per RAW file. The embedded JPEG decodes in a few milliseconds, so the
   grid shows it without a wait.
-- The files are `decode/embedded_jpeg/` (`mod.rs`, `tiff.rs`, `cr3.rs`, `psd.rs`).
+- The files are `decode/embedded_jpeg/` (`mod.rs`, `tiff.rs`, `cr3.rs`, `orf.rs`, `psd.rs`).
+- `P5048182.ORF` (OM-1): the 3200x2400 preview is found in 1 ms. The grid decodes it in 17 ms
+  to 23 ms, against 1.3 s to 1.6 s for `sips -Z 624`. The fullscreen view (box 3392x2052)
+  decodes it in 31 ms to 73 ms, against 2.2 s to 7.5 s for sips, under the load of other
+  workers.
 
 ## sips
 
