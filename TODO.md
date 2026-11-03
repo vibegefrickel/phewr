@@ -31,7 +31,7 @@ After the tests:
 
 ## Next
 
-Order: speed first, then formats, then the first release.
+Order: speed first, then formats, then the first release. The first release is postponed to Q1 2027 at the earliest (decided 2026-11-03). Until then, the maintainer tests phewr and only pushes the source to Codeberg for the dotfiles install.
 
 1. Speed
    - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The issue draft `~/Projects/dev/herdr-issue-kitty-graphics-performance.md` holds the three findings with these numbers. Post it. The RGBA fast path idea for phewr waits for the answer.
@@ -51,7 +51,7 @@ Order: speed first, then formats, then the first release.
    - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.
 3. Delete removal: done 2026-11-03 (`5da64fa`). The keys `d` and `D`, the delete question and the `trash` crate are gone. The marks (`Space`, `a`, `A`) stay in `app/marks.rs` for a later use, for example a slideshow of the marked images.
 4. Grid loops: done (merged 2026-10-27). Native Kitty animations for the loops: done (merged 2026-10-30, `9d84897`, the follow-ups in `e0a9e62`). Open: the terminal test of both paths in Ghostty 1.4.0 and herdr 0.9.5 ("Now"). Stop the loops, the player and the slideshow while the tab is hidden (mode 2033): stopped on 2026-10-30, crossterm 0.27 to 0.29 never end the report sequence and lose all input after it, the issue draft is `~/Projects/dev/crossterm-issue-visibility-report.md` (`REVIEW-2026-10-28.md` K3).
-5. First release: create the Codeberg repository `phewr`, then `just render` and `just release`. The dry run `just render` passed on 2026-11-03: a 3.3 MB arm64 tarball, and the formula passes `brew style` in a tap folder. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
+5. First release, postponed to Q1 2027 at the earliest: create the Codeberg repository `phewr`, then `just render` and `just release`. The dry run `just render` passed on 2026-11-03: a 3.3 MB arm64 tarball, and the formula passes `brew style` in a tap folder. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 6. Small leftovers of the cleanup review: done 2026-11-03 (`df7ba6d`). `batch_since` replaces `entries_since`, the loop ids skip the live ids after a wrap, an empty image writes nothing, and `video::tests::real_clip_first_frame` tests the first frame on a real clip.
 
 ## Later

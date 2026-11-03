@@ -103,6 +103,7 @@ hooks:
 # ---------------------------------------------------------------------------------------------
 # Release (Codeberg, curl installer, Homebrew tap). No CI: everything runs here. `just release`
 # needs CODEBERG_TOKEN and the sibling checkout ../homebrew-tap.
+# Postponed: no release before Q1 2027 (AGENTS.md, "Release").
 
 owner     := "webgefrickel"
 repo      := "phewr"

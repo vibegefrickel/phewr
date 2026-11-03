@@ -15,9 +15,11 @@ phewr is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork 
 
 ## Install
 
+There is no release yet. Build phewr from source (see "From source" below). The maintainer tests phewr until the end of 2026. The first release comes in Q1 2027 at the earliest. The Homebrew tap and the installer script below work only after that release.
+
 phewr is for macOS on Apple Silicon. The binary links the Homebrew library libheif. phewr starts `ffmpeg`, `ffprobe` and `mpv` when they are installed: they are optional, and without them videos have no thumbnails and play only in the mpv window, or not at all.
 
-### Homebrew
+### Homebrew (after the first release)
 
 ```bash
 brew tap webgefrickel/tap https://codeberg.org/webgefrickel/homebrew-tap.git
@@ -26,7 +28,7 @@ brew install webgefrickel/tap/phewr
 
 The formula installs libheif as a dependency. ffmpeg and mpv are recommended dependencies: `brew install` adds them by default, and `--without-ffmpeg` or `--without-mpv` leaves them out.
 
-### Installer script
+### Installer script (after the first release)
 
 ```bash
 brew install libheif ffmpeg mpv   # ffmpeg and mpv are optional

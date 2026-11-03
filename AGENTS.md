@@ -17,6 +17,9 @@ It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT).
 - The target is macOS on Apple Silicon, in Ghostty. phewr uses the Kitty graphics protocol, not the
   Kitty terminal. Nobody tests in the Kitty terminal.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
+- phewr is not published. The maintainer tests phewr until the end of 2026. The first release
+  comes in Q1 2027 at the earliest. Until then, the Codeberg repository holds only the source.
+  The dotfiles install clones it and runs `just install`.
 
 The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
 serde/toml, jxl-oxide, moxcms. The features `turbo` (libjpeg-turbo) and `heic` (libheif) link
@@ -72,6 +75,10 @@ Files at run time:
 
 CAUTION: Do not run `just release` or `just publish` unless the maintainer asks for it. These
 recipes publish to Codeberg and push the Homebrew tap.
+
+The release is postponed to Q1 2027 at the earliest. Until then, there is no Codeberg release,
+no Homebrew tap and no installer script. Do not prepare or change release steps unless the
+maintainer asks for it. Keep the recipes and the templates in `packaging/` as they are.
 
 There is no CI. The maintainer builds and publishes each release from their own machine.
 
