@@ -140,8 +140,7 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
 - New stills or another view cancel the running loop runs. The flag ends ffmpeg within 20 ms. The
   cells get new jobs later.
 - A `ResultGuard` sends `Failed` for a job that panics.
-- The help popup, the info panel and the other views stop the loops. The delete question does
-  not.
+- The help popup, the info panel and the other views stop the loops.
 - `[gallery] animate = false` turns the loops off.
 - `App::drop_hidden_loops`: the render of the grid calls it, also after a cursor move without a
   scroll.

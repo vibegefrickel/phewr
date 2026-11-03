@@ -13,9 +13,8 @@ imgrrr before 2026-10-17.
 - The main goal: viewr is a fast viewer for all common image and video formats in the terminal,
   with full mouse support. Each change makes opening, scrolling or switching files faster, or it
   adds a common format. `TODO.md` holds the full goal and its scope.
-- viewr is a viewer only. It does not edit, convert, write, move, rename or delete files. The
-  remaining delete code (trash, permanent delete) goes after the open terminal tests. Do not add
-  new file operations.
+- viewr is a viewer only. It does not edit, convert, write, move, rename or delete files. Do not
+  add file operations.
 - The target is macOS on Apple Silicon, in Ghostty. viewr uses the Kitty graphics protocol, not the
   Kitty terminal. Nobody tests in the Kitty terminal.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
@@ -165,7 +164,6 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `Paths::from_vars`, `config::save_visible_rows(path, ..)`.
 - A test waits for background work in a loop with a limit (for example 2 s in 10 ms steps), and
   never depends on the clock within a frame interval.
-- A test calls `trash::delete` only with a missing path, so it never asks Finder.
 
 ## Layout
 
@@ -230,7 +228,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter), `cell_shape.rs`,
   `fullscreen.rs` (enter, leave, the steps and the decode, `FullscreenDecode`, the image as a
   `ScreenImage`), `zoom.rs` (zoom,
-  pan and the full-resolution source in `ZoomState`), `delete.rs` (the marks and the delete question, the tests in `delete/tests.rs`), `directory.rs`
+  pan and the full-resolution source in `ZoomState`), `marks.rs` (the marks of the grid, the tests in `marks/tests.rs`), `directory.rs`
   (the directory switch), `folder_prefetch/` (the decode of the first screen of the folder under
   the cursor into the disk cache: the state and the rest of the cursor in `mod.rs`, the thread
   and the first screen in `worker.rs`), `mouse.rs` (the mouse state and the screen layout of the last draw),
@@ -268,7 +266,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   module in `tests.rs`.
 - `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
   `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
-  view. `status.rs` holds the status row of each view (`draw_status_row`, `question_or_error`,
+  view. `status.rs` holds the status row of each view (`draw_status_row`, `error_line`,
   `gallery_status_line`, `fullscreen_status_line`, `video_status_line`, `is_empty_folder`).
   `grid.rs` holds the grid cells: the borders, the labels (`label_text`, the column width through
   `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` holds the help popup: two columns
@@ -411,7 +409,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Entry kinds:** the first `App::folder_count` entries of `images` are folders, `..` first.
   The scanner pushes them before the first file batch, and the sort at the end of the scan sorts
   the files only. Every step of the fullscreen view starts at `App::first_file()`, the prefetch
-  gets the first file index, and the thumbnail jobs, the marks, the delete, the cell shape and
+  gets the first file index, and the thumbnail jobs, the marks, the cell shape and
   the info panel skip folders. A folder cell has no thumbnail and no Kitty image. An empty
   folder (no file, and no folder besides `..`) shows a note in the status row (`is_empty_folder`
   in `ui/status.rs`). There is no directory picker. A start with several paths lists no
@@ -449,9 +447,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
   no status note. The note shows in the status row at the bottom. The next key press or mouse
   button press clears it (`clears_status`), a key release or repeat does not. A read error of the
-  scan lives in `App::scan_error`, not in `App::error`: the status row shows it after the delete
-  question, the delete error and `error`, it never hides the video placeholder, it survives the
-  first decode, and a key press or a folder switch clears it.
+  scan lives in `App::scan_error`, not in `App::error`. The status row shows it after `error`. It
+  never hides the video placeholder, it survives the first decode, and a key press or a folder
+  switch clears it.
 - **Status row:** the row shows no key hints. At the right, it shows the facts of the selected
   file (`file_meta.rs`): the size, the file size, the format, the date and, for a video, the
   length, the frame rate and the HDR curve. A thread reads them (`app/meta.rs`, one read at a
@@ -564,7 +562,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   fixtures), so the cache version did not change.
 - **Process start:** about 30 ms pass before `main`, most of it the dylib load of libheif and its
   codec libraries (a C program that links libheif needs 24.9 ms, with no library 4.6 ms).
-  Foundation (the `trash` crate) costs about 3.5 ms. The `dist` profile and `target-cpu` give no
+  The removal of the `trash` crate took Foundation out of the binary, with no measurable change of
+  the start time (50 runs of `viewr --version`: median 15.2 ms before, 15.4 ms after). The `dist` profile and `target-cpu` give no
   measurable gain, so `just install` builds `--release`.
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times

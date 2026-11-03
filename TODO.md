@@ -6,7 +6,7 @@ Scope:
 
 - Speed comes first: every change must make opening, scrolling or switching files faster, or it must add a common image/video format.
 - Full mouse support is a first-class input method, on par with the keyboard. Every view and overlay must be usable with the mouse.
-- Viewer only: viewr does not trash, delete, move, rename or otherwise modify files. After the terminal tests, remove the remaining delete code.
+- Viewer only: viewr does not trash, delete, move, rename or otherwise modify files.
 - Target terminal: Ghostty on macOS Apple Silicon, using the Kitty graphics protocol.
 - Measure speed changes with `just bench` on `VIEWR_TEST_DIR`.
 
@@ -26,17 +26,15 @@ Test run of 2026-10-24 (plain Ghostty): steps 1 and 2 passed. The run stopped at
 After the tests:
 
 - RAW: the portrait RAW files in `08-raw` (except `IMG_1361.DNG`) are copies with a changed Orientation tag, so they test the container orientation, not a real portrait shot.
-- Then start the delete removal (Next, item 3).
 
 ## Next
 
-Order: speed first, then formats, then the delete removal, then the first release.
+Order: speed first, then formats, then the first release.
 
 1. Speed
    - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The issue draft `~/Projects/dev/herdr-issue-kitty-graphics-performance.md` holds the three findings with these numbers. Post it. The RGBA fast path idea for viewr waits for the answer.
    - Player start: done 2026-10-31 (`6008ca7`). The player starts while the cursor rests on a video, and the run loop wakes at the end of the 200 ms rest delay: after a rest of 500 ms or more, the first frame comes 1 ms to 2 ms after Enter (about 240 ms without a rest). The 17-point HDR cube was measured and dropped (colors move by up to 39 levels). A waiting player ends after 10 s (decided 2026-11-03), because a waiting ffmpeg on a 4K HLG clip holds about 450 MB. `Esc` does nothing in the grid (decided 2026-11-03), only `q` quits. The herdr and crossterm issue drafts stay unposted for now.
-   - Process start: libheif costs about 20 ms of dylib load before `main`. The delete removal takes `trash` and Foundation out (about 3.5 ms).
-   - Keep the fullscreen image as RGB from the decode on and build the zoom crop as RGB. That removes the `to_rgba8` copy and the RGB step of each fullscreen write and each pan step (a type change of `App::loaded`, the prefetch and the zoom).
+   - Process start: libheif costs about 20 ms of dylib load before `main`. The delete removal took `trash` and Foundation out on 2026-11-03, with no measurable change (50 runs of `viewr --version`: median 15.2 ms before, 15.4 ms after).
    - Lower thread priority for the folder prefetch: a utility QoS class on the prefetch, loop and meta threads (crate `qos-threads`) gave no gain beyond the spread of five runs on 2026-10-31 (bench `grid_during_a_folder_prefetch`, `VIEWR_TEST_PREFETCH_DIR`), because the decode work runs on the rayon and libheif tile threads. Next candidate: a small utility pool of its own for the prefetch decodes, measured with that bench.
    - JPEG XL: the 8-bit copy is most of the decode. Measured 2026-10-25 on a 12 MP file: `render_frame` 65 ms (parallel), `ImageStream::write_to_buffer` 166 ms (one thread, an orientation and region lookup per sample). jxl-oxide 0.12.6 is the newest version, and its sample access is sealed (`FrameBufferSample`), so viewr cannot copy in parallel without a fork. `image_planar` copies on one thread too (about 120 ms). Next step: ask jxl-oxide upstream for a parallel or row-based `ImageStream`, or a public sample conversion.
    - ORF previews from the Olympus maker note, if a user asks.
@@ -50,9 +48,7 @@ Order: speed first, then formats, then the delete removal, then the first releas
      - Measure whether `sips -Z` on a RAW uses the embedded preview, and measure the `sips` times with a real RAW.
    - The PQ cube has no test on a real PQ file (iPhone files are HLG). It maps with a 1000 nit peak. Candidate: read the mastering metadata of HDR10 files.
    - No real HEIC test file has an embedded thumbnail with another aspect than the primary image. Such a preview shows another margin than the sharp picture, not a stretch.
-3. Delete removal, after the terminal tests in "Now"
-   - viewr is a viewer only. Remove trash, permanent delete, the delete question, the `d` / `D` keys, their tests and docs, and the `trash` crate if nothing else needs it.
-   - Keep the marks (`Space`, `a`, `A`) for a later use, for example a slideshow of the marked images.
+3. Delete removal: done 2026-11-03 (`5da64fa`). The keys `d` and `D`, the delete question and the `trash` crate are gone. The marks (`Space`, `a`, `A`) stay in `app/marks.rs` for a later use, for example a slideshow of the marked images.
 4. Grid loops: done (merged 2026-10-27). Native Kitty animations for the loops: done (merged 2026-10-30, `9d84897`, the follow-ups in `e0a9e62`). Open: the terminal test of both paths in Ghostty 1.4.0 and herdr 0.9.5 ("Now"). Stop the loops, the player and the slideshow while the tab is hidden (mode 2033): stopped on 2026-10-30, crossterm 0.27 to 0.29 never end the report sequence and lose all input after it, the issue draft is `~/Projects/dev/crossterm-issue-visibility-report.md` (`REVIEW-2026-10-28.md` K3).
 5. First release: create the Codeberg repository `viewr`, then `just render` and `just release`. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
 6. Small leftovers of the cleanup review (2026-11-03): the scanner callers of `entries_since` can move to `batch_since`. `GridLoops::next_id` wraps to `LOOP_ID_BASE` after 2^31 ids, which is theoretical in one session. The success path of `video::first_frame_of` has no test, because the tests start no fake ffprobe or ffmpeg program. `write_direct` writes nothing for an empty image, and no caller sends one.

@@ -107,7 +107,6 @@ run  = 'shell -- open -na Ghostty.app --args -e sh -c "YAZI_ID=$YAZI_ID exec $HO
 | `/` | Search. `Enter` applies, `Esc` clears, `Backspace` deletes |
 | `Space` | Toggle selection |
 | `a` `A` | Select all / clear selection |
-| `d` `D` | Trash / permanently delete, with confirm |
 | `q` | Quit |
 | `?` | Full help |
 
@@ -130,7 +129,6 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 | `Space` | Pause / resume the slideshow |
 | `[` `]` | Shorter / longer interval (0.5 s steps) |
 | `i` | Toggle the info panel |
-| `d` `D` | Trash / permanently delete, with confirm |
 | `Enter` | Play the video (on a video placeholder) |
 | `p` | Play the video in the mpv window, with sound (on a video placeholder) |
 | `q` | Back to the gallery. In a running slideshow, `q` stops it and goes back in one press |
