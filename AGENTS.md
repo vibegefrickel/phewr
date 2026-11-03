@@ -147,8 +147,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   display, and viewr maps like the player. `tests/fixtures/hdr/` holds a PQ and an HLG chart with
   BT.2020 primaries as 10-bit AVIF and HEIC (nclx), JPEG XL (lossless and lossy, and `pq-icc.jxl`)
   and 16-bit PNG (`cICP`), `ref/` their renderings through the HDR cube of the player (ffmpeg
-  `lut3d`), and `make.sh` rebuilds them. `pq-4000.avif` and `pq-4000.heic` carry a `clli` box of
-  4000 nits, with `ref/pq4000-*.png`. `cargo nextest run --no-default-features` passes too.
+  `lut3d`), and `make.sh` rebuilds them. `pq-4000.avif`, `pq-4000.heic` and `pq-4000-8bit.heic`
+  carry a `clli` box of 4000 nits, `pq-4000.png` and `pq-icc-4000.png` a `cLLI` chunk, and
+  `pq-4000.jxl` an intensity target of 4000 nits, all with `ref/pq4000-*.png`. `cargo nextest run --no-default-features` passes too.
   `just test-real` skips the benches (`--skip bench::`), because they set the global color target
   of the process.
 - A real ffmpeg playback test uses a virtual clock that jumps to each due frame. The wall-time
@@ -418,7 +419,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   SEI, without `mdcv` and `clli` in its sample entry. Then a second ffprobe reads the first frame,
   once per file (1.2 times the stream probe at 1080p, up to 1.7 times at 4K). A HEIF still reads
   `clli` and `mdcv` of its primary item (`HeifItems::primary_peak`) into `Decoded::peak`. The
-  Apple HDR10 example clip (MaxCLL 1375) is the real test file. A PQ or HLG still
+  Apple HDR10 example clip (MaxCLL 1375) is the real test file. A PQ PNG reads
+  `cLLI`, else `mDCV`, also with a PQ `iCCP` profile. A PQ JPEG XL reads `intensity_target`. Its
+  values 255 (the header default) and 10000 (cjxl writes it for each PQ file) count as unset, so
+  a JPEG XL really mastered at 10000 nits maps with 1000 nits. An 8-bit PQ HEIF reads `clli` and
+  `mdcv` too, and the 8-bit path maps through `color::convert_with_peak`. A PQ or HLG still
   (AVIF, HEIC, JPEG XL, 16-bit PNG with `cICP`) maps with a copy of the same math in
   `decode/hdr/`, per pixel and without a cube, after the resize: the primaries are BT.2020,
   Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a file in
@@ -586,7 +591,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v16` (`THUMBNAIL_CACHE_VERSION`, v16 since the HDR10 peak of PQ stills), the
+- **Thumbnail cache key:** the key hashes `viewr-thumbnail-v17` (`THUMBNAIL_CACHE_VERSION`, v17 since the PNG and JPEG XL peak), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
