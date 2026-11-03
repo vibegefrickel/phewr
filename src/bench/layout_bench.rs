@@ -81,12 +81,18 @@ fn measure_fit(name: &str, full: &RgbaImage, color: &color::SourceColor) {
                 time(|| {
                     before_input
                         .crop_resized((0, 0, size.0, size.1), dst)
-                        .convert(color, target)
+                        .convert(color, target, crate::decode::hdr::Peak::DEFAULT)
                 })
             },
             || {
                 let input = after_input.clone();
-                time(|| input.fit_within(BOX_PX.0, BOX_PX.1).convert(color, target))
+                time(|| {
+                    input.fit_within(BOX_PX.0, BOX_PX.1).convert(
+                        color,
+                        target,
+                        crate::decode::hdr::Peak::DEFAULT,
+                    )
+                })
             },
         );
         report(

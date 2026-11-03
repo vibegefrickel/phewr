@@ -2,6 +2,7 @@
 
 use super::{ScreenImage, load_for_screen};
 use crate::decode::color::{self, ColorTarget, converts};
+use crate::decode::hdr::Peak;
 use crate::decode::resize::{Layout, fit_rgba_within, resize_region};
 use crate::decode::{Decoded, EmbeddedThumbnail, decode_image};
 use crate::encoder::Pixels;
@@ -44,7 +45,7 @@ fn rgba_fullscreen(decoded: Decoded, (w, h): (u32, u32), target: ColorTarget) ->
 fn screen_fullscreen(decoded: Decoded, (w, h): (u32, u32), target: ColorTarget) -> ScreenImage {
     ScreenImage::of_decode(decoded.image, decoded.opaque)
         .fit_within(w, h)
-        .convert(&decoded.color, target)
+        .convert(&decoded.color, target, Peak::DEFAULT)
         .opaque_as_rgb()
 }
 
@@ -79,7 +80,7 @@ fn screen_zoom(
     target: ColorTarget,
 ) -> ScreenImage {
     ScreenImage::of_decode(decoded.image, decoded.opaque)
-        .convert(&decoded.color, target)
+        .convert(&decoded.color, target, Peak::DEFAULT)
         .for_crops()
         .crop_resized(crop, dst)
 }
@@ -203,7 +204,7 @@ mod jpeg {
         assert!(matches!(screen, ScreenImage::Rgb(_)), "the layout is RGB");
         let fitted = screen.fit_within(box_px.0, box_px.1);
         assert!(matches!(fitted, ScreenImage::Rgb(_)), "the resize is RGB");
-        let converted = fitted.convert(&source, color::target());
+        let converted = fitted.convert(&source, color::target(), Peak::DEFAULT);
         assert!(
             matches!(converted, ScreenImage::Rgb(_)),
             "the conversion is RGB"
@@ -241,7 +242,10 @@ mod jpeg {
         let fitted = screen.fit_within(box_px.0, box_px.1);
         assert!(matches!(fitted, ScreenImage::Rgb(_)), "the fit gives RGB");
         let loaded = load_for_screen(&path, box_px).unwrap();
-        assert_eq!(loaded, fitted.convert(&source, color::target()));
+        assert_eq!(
+            loaded,
+            fitted.convert(&source, color::target(), Peak::DEFAULT)
+        );
         let pixels = Pixels::from(&loaded);
         assert!(!pixels.alpha && pixels.opaque_rgb().is_none());
         let after = written(loaded);

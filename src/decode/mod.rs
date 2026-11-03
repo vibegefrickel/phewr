@@ -87,7 +87,8 @@ pub(crate) struct Decoded {
     pub(crate) color: SourceColor,
     /// Every pixel is opaque: the RGBA buffer of a JPEG or of a HEIF image without alpha.
     pub(crate) opaque: bool,
-    /// The HDR10 peak in nits of a PQ image (`hdr::hdr10_peak`), from the HEIF boxes.
+    /// The HDR10 peak in nits of a PQ image (`hdr::hdr10_peak`): the HEIF `clli` and `mdcv` boxes,
+    /// the PNG `cLLI` and `mDCV` chunks or the JPEG XL `intensity_target`.
     pub(crate) peak: Option<f64>,
 }
 
@@ -97,19 +98,31 @@ impl Decoded {
     pub(crate) fn into_display(self) -> DynamicImage {
         let target = color::target();
         let this = self.tone_mapped(None, target);
+        let peak = this.peak_bucket();
         if !color::converts(&this.color, target) {
             return this.image;
         }
-        DynamicImage::ImageRgba8(color::convert(this.image.into_rgba8(), &this.color, target))
+        DynamicImage::ImageRgba8(color::convert_with_peak(
+            this.image.into_rgba8(),
+            &this.color,
+            target,
+            peak,
+        ))
+    }
+
+    /// The roll-off bucket of the peak, for each route that maps after the resize.
+    fn peak_bucket(&self) -> hdr::Peak {
+        hdr::Peak::bucket(self.peak)
     }
 
     /// A deep HDR image resized in 16 bit and tone-mapped into `target`. Each other image comes
-    /// back unchanged. An 8-bit HDR image maps in `color::convert`.
+    /// back unchanged. An 8-bit HDR image maps in
+    /// `color::convert_with_peak`, with the peak that `Decoded` keeps.
     fn tone_mapped(self, box_px: Option<(u32, u32)>, target: ColorTarget) -> Self {
         let Some(map) = hdr::ToneMap::of_source(&self.color, target) else {
             return self;
         };
-        let map = map.with_peak(hdr::Peak::bucket(self.peak));
+        let map = map.with_peak(self.peak_bucket());
         let deep = match self.image {
             DynamicImage::ImageRgb8(_)
             | DynamicImage::ImageRgba8(_)
@@ -134,6 +147,7 @@ impl Decoded {
     pub(crate) fn fit_within(self, max_w: u32, max_h: u32) -> RgbaImage {
         let target = color::target();
         let this = self.tone_mapped(Some((max_w, max_h)), target);
+        let peak = this.peak_bucket();
         let size = (this.image.width(), this.image.height());
         let rgb_is_fastest = rgb_resize_is_fastest(size, scaled_down_size(size, (max_w, max_h)));
         let opaque = this.opaque || !this.image.color().has_alpha();
@@ -144,16 +158,17 @@ impl Decoded {
             image if opaque => resize::fit_opaque_rgba_within(image.into_rgba8(), max_w, max_h),
             image => resize::fit_rgba_within(image.into_rgba8(), max_w, max_h),
         };
-        color::convert(fitted, &this.color, target)
+        color::convert_with_peak(fitted, &this.color, target, peak)
     }
 
     /// The fullscreen image fitted into `max_w` x `max_h`, in the terminal color space.
     pub(crate) fn fit_for_screen(self, max_w: u32, max_h: u32) -> ScreenImage {
         let target = color::target();
         let this = self.tone_mapped(Some((max_w, max_h)), target);
+        let peak = this.peak_bucket();
         ScreenImage::of_decode(this.image, this.opaque)
             .fit_within(max_w, max_h)
-            .convert(&this.color, target)
+            .convert(&this.color, target, peak)
             .opaque_as_rgb()
     }
 
@@ -161,8 +176,9 @@ impl Decoded {
     pub(crate) fn into_screen(self) -> ScreenImage {
         let target = color::target();
         let this = self.tone_mapped(None, target);
+        let peak = this.peak_bucket();
         ScreenImage::of_decode(this.image, this.opaque)
-            .convert(&this.color, target)
+            .convert(&this.color, target, peak)
             .for_crops()
     }
 }

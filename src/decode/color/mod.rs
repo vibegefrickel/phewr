@@ -15,7 +15,7 @@ pub(crate) use jpeg::jpeg_color;
 pub(crate) use jpeg::tests::jpeg_with_color_space;
 #[cfg(feature = "video")]
 pub(crate) use tags::icc_known_space;
-pub(crate) use tags::{png_color, tiff_icc_profile};
+pub(crate) use tags::{png_color, png_peak, tiff_icc_profile};
 
 use super::hdr;
 use image::{RgbImage, RgbaImage};
@@ -122,24 +122,38 @@ impl SourceColor {
 }
 
 /// A source that `moxcms` cannot read converts as sRGB. A PQ or HLG source maps to SDR.
-pub(crate) fn convert(
+#[cfg_attr(
+    not(any(test, feature = "video", feature = "heic")),
+    expect(
+        dead_code,
+        reason = "only the player and libheif convert without a peak"
+    )
+)]
+pub(crate) fn convert(image: RgbaImage, source: &SourceColor, target: ColorTarget) -> RgbaImage {
+    convert_with_peak(image, source, target, hdr::Peak::DEFAULT)
+}
+
+/// [`convert`] with the HDR10 peak of a PQ source.
+pub(crate) fn convert_with_peak(
     mut image: RgbaImage,
     source: &SourceColor,
     target: ColorTarget,
+    peak: hdr::Peak,
 ) -> RgbaImage {
     let width = image.width();
-    convert_pixels(&mut image, width, Channels::Rgba, source, target);
+    convert_pixels(&mut image, width, Channels::Rgba, source, target, peak);
     image
 }
 
 /// [`convert`] without an alpha channel. An opaque image keeps 3 bytes per pixel.
-pub(crate) fn convert_rgb(
+pub(crate) fn convert_rgb_with_peak(
     mut image: RgbImage,
     source: &SourceColor,
     target: ColorTarget,
+    peak: hdr::Peak,
 ) -> RgbImage {
     let width = image.width();
-    convert_pixels(&mut image, width, Channels::Rgb, source, target);
+    convert_pixels(&mut image, width, Channels::Rgb, source, target, peak);
     image
 }
 
@@ -149,9 +163,10 @@ fn convert_pixels(
     channels: Channels,
     source: &SourceColor,
     target: ColorTarget,
+    peak: hdr::Peak,
 ) {
     if let Some(map) = hdr::ToneMap::of_source(source, target) {
-        map.map_in_place(pixels, channels.count());
+        map.with_peak(peak).map_in_place(pixels, channels.count());
         return;
     }
     let Some(transform) = transform_for(source, target, channels) else {

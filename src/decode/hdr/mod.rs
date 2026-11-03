@@ -68,10 +68,6 @@ impl Peak {
 
 /// The peak of the HDR10 metadata: `MaxCLL` describes the content, the mastering display only
 /// bounds it.
-#[cfg_attr(
-    not(any(test, feature = "video", feature = "heic")),
-    expect(dead_code, reason = "only the player and libheif read HDR10 metadata")
-)]
 pub(crate) fn hdr10_peak(max_content: Option<f64>, mastering_max: Option<f64>) -> Option<f64> {
     let plausible = |nits: &f64| PLAUSIBLE_PEAK_NITS.contains(nits);
     max_content
@@ -136,6 +132,11 @@ impl Curve {
 /// `moxcms` cannot convert a PQ or HLG signal.
 pub(crate) fn is_hdr(source: &SourceColor) -> bool {
     matches!(source, SourceColor::Cicp { transfer, .. } if Curve::of_transfer(*transfer).is_some())
+}
+
+/// A PQ source: only PQ takes an HDR10 peak.
+pub(crate) fn is_pq(source: &SourceColor) -> bool {
+    matches!(source, SourceColor::Cicp { transfer, .. } if Curve::of_transfer(*transfer) == Some(Curve::Pq))
 }
 
 /// The map of one HDR source into one target, in single precision.

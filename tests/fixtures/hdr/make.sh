@@ -20,6 +20,11 @@
 #   pq.png, hlg.png: 16 bit with a cICP chunk 9/16/0/1 and 9/18/0/1
 #   pq-4000.avif, pq-4000.heic: as pq.avif and pq.heic, with a clli box of MaxCLL 4000 nits.
 #     avifenc and heif-enc write no mdcv box, so the unit tests of heif_boxes.rs cover mdcv.
+#   pq-4000-8bit.heic: pq-4000.heic in 8 bit, which takes the 8-bit route of the decoder
+#   pq-icc-4000.png: the PQ ICC profile of pq-icc.jxl in an iCCP chunk, no cICP, with a cLLI chunk
+#     of 4000 nits
+#   pq-4000.png: pq.png with a cLLI chunk of MaxCLL 4000 nits (40000000 in units of 0.0001 cd/m2)
+#   pq-4000.jxl: pq.jxl with intensity_target 4000 nits in the image header
 #
 # The references are `ref/<curve>-<target>.png`, for the targets p3 and srgb: ffmpeg maps the
 # signal with the HDR cube of the terminal player (`tone_map::Cube`, written by the ignored test
@@ -70,11 +75,16 @@ for curve in pq hlg; do
   cjxl "$work/signal.ppm" "$curve.jxl" -x "color_space=$jxl" -d 0 --quiet
   cjxl "$work/signal.ppm" "$curve-lossy.jxl" -x "color_space=$jxl" -d 1 --quiet
 done
+cjxl "$work/signal.ppm" pq-4000.jxl -x color_space=Rec2100PQ -d 0 --intensity_target=4000 --quiet
 avifenc -d 10 -y 444 -q 100 -r full --cicp 9/16/9 --clli 4000,400 "$work/signal.png" \
   pq-4000.avif > /dev/null 2>&1
 heif-enc -b 10 -p chroma=444 -q 100 --matrix_coefficients 9 --colour_primaries 9 \
   --transfer_characteristic 16 --full_range_flag 1 --clli 4000,400 "$work/signal.png" \
   -o pq-4000.heic > /dev/null
+magick "$work/signal.png" -depth 8 "$work/signal8.png"
+heif-enc -p chroma=444 -q 100 --matrix_coefficients 9 --colour_primaries 9 \
+  --transfer_characteristic 16 --full_range_flag 1 --clli 4000,400 "$work/signal8.png" \
+  -o pq-4000-8bit.heic > /dev/null
 
 # sips writes the BT.2100 PQ ICC profile of macOS into a PNG. A lossless JPEG XL file keeps the
 # profile and gets no enum encoding.
@@ -83,20 +93,29 @@ magick "$work/pq-sips.png" "$work/pq.icc"
 magick "$work/signal.png" -set profile "$work/pq.icc" "$work/pq-icc.png"
 cjxl "$work/pq-icc.png" pq-icc.jxl -d 0 --quiet
 
-# ImageMagick cannot write a cICP chunk, so python3 inserts it after IHDR.
+# ImageMagick cannot write a cICP chunk, so python3 inserts it after IHDR, with a cLLI chunk
+# when a MaxCLL in nits is given. The transfer 0 writes no cICP chunk.
 insert_cicp() {
   python3 -I - "$@" <<'EOF'
 import struct, sys, zlib
-source, target, transfer = sys.argv[1:]
+source, target, transfer = sys.argv[1:4]
+max_cll = int(sys.argv[4]) if len(sys.argv) > 4 else None
 data = open(source, "rb").read()
 end_of_ihdr = 8 + 8 + 13 + 4
-body = bytes([9, int(transfer), 0, 1])
-chunk = struct.pack(">I", len(body)) + b"cICP" + body + struct.pack(">I", zlib.crc32(b"cICP" + body))
-open(target, "wb").write(data[:end_of_ihdr] + chunk + data[end_of_ihdr:])
+
+def chunk(kind, body):
+    return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+chunks = chunk(b"cICP", bytes([9, int(transfer), 0, 1])) if transfer != "0" else b""
+if max_cll is not None:
+    chunks += chunk(b"cLLI", struct.pack(">II", max_cll * 10000, 400 * 10000))
+open(target, "wb").write(data[:end_of_ihdr] + chunks + data[end_of_ihdr:])
 EOF
 }
 insert_cicp "$work/signal.png" pq.png 16
 insert_cicp "$work/signal.png" hlg.png 18
+insert_cicp "$work/signal.png" pq-4000.png 16 4000
+insert_cicp "$work/pq-icc.png" pq-icc-4000.png 0 4000
 
 # The cubes of the player, then the references through them.
 VIEWR_HDR_CUBE_DIR=$work just test-real write_the_player_hdr_cubes > /dev/null 2>&1

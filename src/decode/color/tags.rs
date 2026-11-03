@@ -61,6 +61,46 @@ pub(crate) fn png_color(path: &Path) -> Option<SourceColor> {
     })
 }
 
+/// The HDR10 peak of a PNG in nits: `cLLI` (`MaxCLL`) or else `mDCV` (the mastering maximum).
+/// Both store 0.0001 cd/m² units (PNG third edition, W3C Recommendation, tables 19 and 20). Older
+/// drafts and encoders spell the names `cLLi` and `mDCv`, so both spellings count.
+pub(crate) fn png_peak(path: &Path) -> Option<f64> {
+    let mut file = BufReader::new(File::open(path).ok()?);
+    let mut signature = [0; 8];
+    file.read_exact(&mut signature).ok()?;
+    let (mut max_content, mut mastering_max) = (None, None);
+    let mut header = [0; 8];
+    while file.read_exact(&mut header).is_ok() {
+        let [l0, l1, l2, l3, k0, k1, k2, k3] = header;
+        let length = u32::from_be_bytes([l0, l1, l2, l3]);
+        let kind = [k0, k1, k2, k3];
+        if matches!(&kind, b"IDAT" | b"IEND") {
+            break;
+        }
+        let wanted = match &kind {
+            b"cLLI" | b"cLLi" => 8,
+            b"mDCV" | b"mDCv" => 24,
+            _ => 0,
+        };
+        if wanted == 0 || length != wanted {
+            file.seek_relative(i64::from(length) + 4).ok()?;
+            continue;
+        }
+        let mut body = vec![0; length as usize + 4];
+        file.read_exact(&mut body).ok()?;
+        let units = |at: usize| {
+            let bytes = body.get(at..at + 4)?.try_into().ok()?;
+            Some(f64::from(u32::from_be_bytes(bytes)) / 10_000.0)
+        };
+        if wanted == 8 {
+            max_content = units(0);
+        } else {
+            mastering_max = units(16);
+        }
+    }
+    super::hdr::hdr10_peak(max_content, mastering_max)
+}
+
 const MAX_ICC_BYTES: u32 = 16 * 1024 * 1024;
 
 /// Tag 34675 of the first image. The TIFF decoder of `image` 0.25 asks for the type BYTE, and
@@ -160,7 +200,7 @@ pub(super) fn icc_cicp(data: &[u8]) -> Option<(u8, u8)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{icc_cicp, png_color, tiff_icc_profile};
+    use super::{icc_cicp, png_color, png_peak, tiff_icc_profile};
     use crate::decode::color::SourceColor;
     use crate::test_support::{fixture, test_dir};
 
@@ -215,6 +255,73 @@ mod tests {
         };
         assert_eq!(gamma, Some(45_455));
         assert_eq!(chromaticities.map(|c| c[2]), Some(68_000), "red x");
+    }
+
+    #[test]
+    fn png_peak_reads_both_spellings() {
+        let dir = test_dir();
+        let chunk = |kind: &[u8; 4], body: &[u8]| {
+            let mut bytes = (body.len() as u32).to_be_bytes().to_vec();
+            bytes.extend(kind);
+            bytes.extend(body);
+            bytes.extend([0; 4]);
+            bytes
+        };
+        let write = |name: &str, chunks: Vec<Vec<u8>>| {
+            let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
+            data.extend(chunk(b"IHDR", &[0; 13]));
+            data.extend(chunks.concat());
+            data.extend(chunk(b"IDAT", &[]));
+            let path = dir.path().join(name);
+            std::fs::write(&path, data).unwrap();
+            path
+        };
+        let units = |nits: u32| (nits * 10_000).to_be_bytes();
+        let light = |nits: u32| [units(nits), units(400)].concat();
+        let mastering = |nits: u32| [vec![0; 16], units(nits).to_vec(), units(0).to_vec()].concat();
+        let peak = |name, chunks| png_peak(&write(name, chunks));
+        assert_eq!(
+            peak("a.png", vec![chunk(b"cLLI", &light(4000))]),
+            Some(4000.0)
+        );
+        assert_eq!(
+            peak("b.png", vec![chunk(b"cLLi", &light(2000))]),
+            Some(2000.0)
+        );
+        assert_eq!(
+            peak("c.png", vec![chunk(b"mDCV", &mastering(1000))]),
+            Some(1000.0)
+        );
+        assert_eq!(
+            peak("d.png", vec![chunk(b"mDCv", &mastering(4000))]),
+            Some(4000.0)
+        );
+        let both = vec![
+            chunk(b"mDCV", &mastering(1000)),
+            chunk(b"cLLI", &light(1375)),
+        ];
+        assert_eq!(peak("e.png", both), Some(1375.0), "MaxCLL wins");
+        assert_eq!(
+            peak("f.png", vec![chunk(b"cLLI", &light(0))]),
+            None,
+            "0 is unknown"
+        );
+        assert_eq!(
+            peak("g.png", vec![chunk(b"cLLI", &[0; 4])]),
+            None,
+            "wrong length"
+        );
+        assert_eq!(peak("h.png", vec![]), None);
+        let private = vec![
+            chunk(b"mDCV", &mastering(4000)),
+            chunk(b"prVt", &[]),
+            chunk(b"cLLI", &light(0)),
+        ];
+        assert_eq!(
+            peak("i.png", private),
+            Some(4000.0),
+            "empty chunk keeps the peak"
+        );
     }
 
     #[test]

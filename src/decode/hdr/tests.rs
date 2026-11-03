@@ -160,7 +160,15 @@ fn pq_4000_still_rolls_off_later() {
 
 /// AVIF and HEIC need libheif.
 fn fixtures() -> Vec<&'static str> {
-    let mut names = vec!["pq.jxl", "hlg.jxl", "pq-icc.jxl", "pq.png", "hlg.png"];
+    let mut names = vec![
+        "pq.jxl",
+        "hlg.jxl",
+        "pq-icc.jxl",
+        "pq.png",
+        "hlg.png",
+        "pq-4000.png",
+        "pq-4000.jxl",
+    ];
     if cfg!(feature = "heic") {
         names.extend([
             "pq.avif",
@@ -287,6 +295,60 @@ fn clli_fixtures_use_own_peak() {
     }
     let plain = decode_image(&fixture("hdr/pq.avif"), None, EmbeddedThumbnail::Deny).unwrap();
     assert_eq!(plain.peak, None);
+}
+
+/// The PNG `cLLI` chunk and the JPEG XL `intensity_target` move the roll-off like `clli` does.
+#[test]
+fn png_and_jxl_use_own_peak() {
+    let default = patch_means(&reference("pq.png", ColorTarget::Srgb));
+    for name in ["pq-4000.png", "pq-4000.jxl", "pq-icc-4000.png"] {
+        let image = decode_image(
+            &fixture(&format!("hdr/{name}")),
+            None,
+            EmbeddedThumbnail::Deny,
+        )
+        .unwrap();
+        assert_eq!(image.peak, Some(4000.0), "{name}");
+        let mapped = image.tone_mapped(None, ColorTarget::Srgb).image.to_rgba8();
+        assert!(patch_means(&mapped)[6][1] + 10.0 < default[6][1], "{name}");
+    }
+    for name in ["pq.png", "pq.jxl", "pq-icc.jxl", "hlg.png", "hlg.jxl"] {
+        let image = decode_image(
+            &fixture(&format!("hdr/{name}")),
+            None,
+            EmbeddedThumbnail::Deny,
+        )
+        .unwrap();
+        assert_eq!(image.peak, None, "{name}");
+    }
+}
+
+/// An 8-bit HEIC takes the 8-bit route, which reads `clli` too.
+#[cfg(feature = "heic")]
+#[test]
+fn eight_bit_heic_uses_peak() {
+    let image = decode_image(
+        &fixture("hdr/pq-4000-8bit.heic"),
+        None,
+        EmbeddedThumbnail::Deny,
+    )
+    .unwrap();
+    assert!(image.image.color().bytes_per_pixel() <= 4, "8-bit samples");
+    assert_eq!(image.peak, Some(4000.0));
+}
+
+/// An 8-bit PQ image maps in `color::convert_with_peak`, with the peak of its metadata.
+#[test]
+fn eight_bit_pq_uses_peak() {
+    let decoded = |peak| Decoded {
+        image: DynamicImage::ImageRgb8(RgbImage::from_pixel(4, 4, Rgb([191; 3]))),
+        color: cicp(9, 16),
+        opaque: true,
+        peak,
+    };
+    let level = |peak| decoded(peak).into_display().to_rgb8().get_pixel(0, 0).0[1];
+    assert!(level(Some(4000.0)) + 10 < level(None));
+    assert_eq!(level(Some(1000.0)), level(None));
 }
 
 #[test]

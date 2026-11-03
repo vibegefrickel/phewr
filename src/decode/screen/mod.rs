@@ -5,6 +5,7 @@
 //! A downscale to 1/2 or less resizes as RGB (`rgb_resize_is_fastest`).
 
 use super::color::{self, ColorTarget, SourceColor};
+use super::hdr::Peak;
 use super::resize::{Layout, Resized, resize_region, rgb_resize_is_fastest, scaled_down_size};
 use super::{EmbeddedThumbnail, decode_image};
 use crate::encoder::Pixels;
@@ -92,11 +93,13 @@ impl ScreenImage {
         }
     }
 
-    pub(crate) fn convert(self, source: &SourceColor, target: ColorTarget) -> Self {
+    pub(crate) fn convert(self, source: &SourceColor, target: ColorTarget, peak: Peak) -> Self {
         match self {
-            Self::Rgb(rgb) => Self::Rgb(color::convert_rgb(rgb, source, target)),
-            Self::Rgba(rgba) => Self::Rgba(color::convert(rgba, source, target)),
-            Self::Opaque(rgba) => Self::Opaque(color::convert(rgba, source, target)),
+            Self::Rgb(rgb) => Self::Rgb(color::convert_rgb_with_peak(rgb, source, target, peak)),
+            Self::Rgba(rgba) => Self::Rgba(color::convert_with_peak(rgba, source, target, peak)),
+            Self::Opaque(rgba) => {
+                Self::Opaque(color::convert_with_peak(rgba, source, target, peak))
+            }
         }
     }
 

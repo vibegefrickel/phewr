@@ -67,7 +67,13 @@ struct HdrSignal {
     /// `jxl-oxide` 0.12 clips XYB to the sRGB gamut before the primaries conversion, and a lossy
     /// file loses saturation there.
     encoding: Option<EnumColourEncoding>,
+    /// The mastering maximum of a PQ file whose encoder set `intensity_target`.
+    peak: Option<f64>,
 }
+
+/// The `intensity_target` values that carry no peak: 255 is the header default, and cjxl writes
+/// 10000 (the PQ ceiling) for each PQ file that has no `--intensity_target`.
+const UNSET_INTENSITY_TARGETS: [f32; 2] = [255.0, 10_000.0];
 
 impl HdrSignal {
     /// The signal of a file with a PQ or HLG curve. A gray file counts only with an enum encoding.
@@ -78,6 +84,13 @@ impl HdrSignal {
             return None;
         }
         let metadata = &image.image_header().metadata;
+        let target = metadata.tone_mapping.intensity_target;
+        let peak = |color: &SourceColor| {
+            let set = !UNSET_INTENSITY_TARGETS.contains(&target);
+            (hdr::is_pq(color) && set)
+                .then(|| hdr::hdr10_peak(None, Some(f64::from(target))))
+                .flatten()
+        };
         match &metadata.colour_encoding {
             ColourEncoding::Enum(encoding) => {
                 let transfer = match encoding.tf {
@@ -95,11 +108,13 @@ impl HdrSignal {
                     (Primaries::P3, WhitePoint::D65) => 12,
                     _ => return None,
                 };
+                let color = SourceColor::Cicp {
+                    primaries,
+                    transfer,
+                };
                 Some(Self {
-                    color: SourceColor::Cicp {
-                        primaries,
-                        transfer,
-                    },
+                    peak: peak(&color),
+                    color,
                     encoding: Some(EnumColourEncoding {
                         rendering_intent: RenderingIntent::Relative,
                         ..encoding.clone()
@@ -109,6 +124,7 @@ impl HdrSignal {
             ColourEncoding::IccProfile(_) if !metadata.xyb_encoded && !gray => {
                 let color = SourceColor::icc(image.original_icc()?.to_vec());
                 hdr::is_hdr(&color).then_some(Self {
+                    peak: peak(&color),
                     color,
                     encoding: None,
                 })
@@ -148,7 +164,7 @@ impl HdrSignal {
                 .ok_or_else(|| invalid(format!("HDR JPEG XL image with {channels} channels")))?,
             color: self.color,
             opaque: false,
-            peak: None,
+            peak: self.peak,
         })
     }
 }

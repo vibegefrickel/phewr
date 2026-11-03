@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Change it when the thumbnail output changes.
-const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v16";
+const THUMBNAIL_CACHE_VERSION: &str = "viewr-thumbnail-v17";
 
 /// QOI decodes twice as fast as PNG at the same file size.
 const CACHE_FORMAT: image::ImageFormat = image::ImageFormat::Qoi;

@@ -127,6 +127,10 @@ pub(crate) fn add_file_color(decoded: &mut Decoded, path: &Path, format: Option<
             if let Some(color) = color::png_color(path) {
                 decoded.color = color;
             }
+            // An `iCCP` profile with a PQ `cicp` tag is PQ too.
+            if decode::hdr::is_pq(&decoded.color) {
+                decoded.peak = color::png_peak(path);
+            }
         }
         Some(ImageFormat::Tiff) if decoded.color == SourceColor::Srgb => {
             if let Some(icc) = color::tiff_icc_profile(path) {

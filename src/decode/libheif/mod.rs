@@ -81,11 +81,14 @@ pub(super) fn decode_with_libheif(
     } else {
         heif_image_to_rgba(&image, target, layout).map(DynamicImage::ImageRgba8)?
     };
+    let peak = hdr::is_pq(&color)
+        .then(|| HeifItems::read(path).and_then(|items| items.primary_peak()))
+        .flatten();
     Ok(Decoded {
         image,
         color,
         opaque: layout != Layout::Rgba,
-        peak: None,
+        peak,
     })
 }
 
