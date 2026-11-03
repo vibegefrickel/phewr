@@ -4,7 +4,7 @@ phewr is a terminal image and video gallery for the [Kitty graphics protocol](ht
 
 phewr draws through the Kitty graphics protocol. It is tested in [Ghostty](https://ghostty.org/).
 
-phewr is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork had the name imgrrr before 2026-10-17 and viewr before 2026-11-03. The fork adds these features:
+phewr is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork adds these features:
 
 - **Zoomable grid:** `+` and `-` show fewer or more thumbnail rows, and `0` resets the zoom. phewr remembers the zoom level.
 - **Slideshow:** `s` starts a slideshow from the current image. `Space` pauses it, and `[` / `]` change the interval. The slideshow loops by default.
@@ -221,7 +221,7 @@ phewr uses the default foreground and background of the terminal and the 16 ANSI
 
 At start, phewr asks the terminal whether it reads image data from a temp file. If the terminal answers yes, phewr writes each picture to a file in `$TMPDIR` and sends only the path. Otherwise the pixels go through the terminal as text. The last row of the help popup (`?`) shows the result, for example `Kitty transfer: temp file (t=t)`. The environment variable `PHEWR_KITTY_TRANSFER=direct|png|file` skips the question and forces one medium. Over SSH, phewr sends PNG.
 
-In the same round trip, phewr asks the terminal whether it plays Kitty animations. If the terminal answers yes (Ghostty 1.4.0 and later), each grid loop goes to the terminal one time as one animation, and the terminal plays it. Otherwise phewr swaps the frames itself. `[gallery] loops` in the config, or the environment variable `PHEWR_KITTY_LOOPS=animation|ticks`, which wins over the config, fixes the path.
+In the same round trip, phewr asks the terminal whether it plays Kitty animations. If the terminal answers yes (Ghostty 1.4.0 and later), each grid loop goes to the terminal one time as one animation, and the terminal plays it. Otherwise phewr swaps the frames itself. `[gallery] loops` in the config, or the environment variable `PHEWR_KITTY_LOOPS=animation|ticks`, which wins over the config, fixes the path. In herdr, phewr swaps the frames itself, because herdr 0.9.5 answers the probe but plays no Kitty animation. `[gallery] loops` and `PHEWR_KITTY_LOOPS` win over this rule.
 
 ## Formats
 

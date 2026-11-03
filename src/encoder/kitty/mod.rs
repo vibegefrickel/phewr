@@ -16,7 +16,7 @@ mod probe;
 pub(crate) use probe::detect_transfer;
 pub(crate) use probe::{
     LOOPS_OVERRIDE, TRANSFER_OVERRIDE, chosen_loops, describe, describe_loops, detect_backend,
-    is_ssh,
+    is_herdr, is_ssh,
 };
 
 const CHUNK_SIZE: usize = 4096;

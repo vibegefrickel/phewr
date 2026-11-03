@@ -20,6 +20,13 @@ pub(crate) fn is_ssh() -> bool {
     std::env::var_os("SSH_CLIENT").is_some() || std::env::var_os("SSH_CONNECTION").is_some()
 }
 
+/// True inside a herdr pane. herdr 0.9.5 answers the animation probe itself but plays no
+/// Kitty animation, so the probe cannot pick the loop path there.
+pub(crate) fn is_herdr() -> bool {
+    std::env::var_os("HERDR_ENV").is_some()
+        || std::env::var_os("TERM_PROGRAM").is_some_and(|program| program == "herdr")
+}
+
 /// The query (`a=q`) whether the terminal reads a temp file.
 fn write_probe<W: Write + ?Sized>(out: &mut W, path: &Path) -> io::Result<()> {
     apc(
@@ -60,10 +67,17 @@ fn answer_for(response: &[u8], id: u32) -> Option<bool> {
     })
 }
 
-/// The loop path that `PHEWR_KITTY_LOOPS` or `[gallery] loops` fixes. `None` lets the probe
-/// decide.
-pub(crate) fn chosen_loops(override_value: Option<&str>, config: Option<Loops>) -> Option<Loops> {
-    override_value.and_then(Loops::parse).or(config)
+/// The loop path that `PHEWR_KITTY_LOOPS`, `[gallery] loops` or herdr fixes. herdr gets the
+/// ticks. `None` lets the probe decide.
+pub(crate) fn chosen_loops(
+    override_value: Option<&str>,
+    config: Option<Loops>,
+    herdr: bool,
+) -> Option<Loops> {
+    override_value
+        .and_then(Loops::parse)
+        .or(config)
+        .or(herdr.then_some(Loops::Ticks))
 }
 
 fn fixed_transfer(override_value: Option<&str>, ssh: bool) -> Option<Transfer> {
@@ -155,10 +169,12 @@ fn transfer_after_probe(answer: &[u8], path: &Path) -> Transfer {
     }
 }
 
-pub(crate) fn describe_loops(loops: Loops) -> &'static str {
+/// The loop path with its protocol key. `None` is a grid without loops.
+pub(crate) fn describe_loops(loops: Option<Loops>) -> &'static str {
     match loops {
-        Loops::Animation => "Kitty animation (a=f)",
-        Loops::Ticks => "ticks (a=p)",
+        Some(Loops::Animation) => "Kitty animation (a=f)",
+        Some(Loops::Ticks) => "ticks (a=p)",
+        None => "off",
     }
 }
 
@@ -188,6 +204,12 @@ mod tests {
         assert_eq!(super::describe(Transfer::Direct), "direct (t=d)");
         assert!(super::describe(Transfer::Png).contains("f=100"));
         assert!(super::describe(Transfer::TempFile).contains("t=t"));
+    }
+
+    #[test]
+    fn describe_loops_names_off() {
+        assert_eq!(super::describe_loops(None), "off");
+        assert_eq!(super::describe_loops(Some(Loops::Ticks)), "ticks (a=p)");
     }
 
     #[test]
@@ -324,19 +346,29 @@ mod tests {
 
     #[test]
     fn env_variable_beats_config_key() {
-        assert_eq!(chosen_loops(None, None), None, "the probe decides");
+        assert_eq!(chosen_loops(None, None, false), None, "the probe decides");
         assert_eq!(
-            chosen_loops(Some("ticks"), Some(Loops::Animation)),
+            chosen_loops(Some("ticks"), Some(Loops::Animation), false),
             Some(Loops::Ticks)
         );
         assert_eq!(
-            chosen_loops(Some(" Animation "), None),
+            chosen_loops(Some(" Animation "), None, false),
             Some(Loops::Animation)
         );
         assert_eq!(
-            chosen_loops(Some("auto"), Some(Loops::Ticks)),
+            chosen_loops(Some("auto"), Some(Loops::Ticks), false),
             Some(Loops::Ticks),
             "an unknown value keeps the config"
+        );
+        assert_eq!(
+            chosen_loops(None, None, true),
+            Some(Loops::Ticks),
+            "herdr gets the ticks without the probe"
+        );
+        assert_eq!(
+            chosen_loops(None, Some(Loops::Animation), true),
+            Some(Loops::Animation),
+            "the config wins over herdr"
         );
     }
 

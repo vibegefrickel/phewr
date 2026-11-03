@@ -104,7 +104,7 @@ fn help_lines<'a>(rows: impl IntoIterator<Item = &'a HelpRow>) -> Vec<Line<'stat
 pub(super) fn draw_help_popup(
     frame: &mut Frame<'_>,
     transfer: crate::encoder::Transfer,
-    loops: crate::encoder::Loops,
+    loops: Option<crate::encoder::Loops>,
 ) {
     let area = frame.area();
     let two_columns = area.width >= HELP_TWO_COLUMN_WIDTH;

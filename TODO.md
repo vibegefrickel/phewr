@@ -19,7 +19,7 @@ State of the main goal:
 
 ## Now
 
-Maintainer tests in Ghostty and in herdr: run the 13 steps in `~/Pictures/phewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders and placeholders). Steps 9 and 10 now include the grid loops: every video and animated cell must loop after its still. Measured on 2026-10-30: 30 looping cells cost about 3 % of one core in total (phewr 0.2 %, Ghostty 1.7 %, herdr 1.3 %). Open since the native animations (merged 2026-10-30): plain Ghostty 1.4.0 must pick the animation path (`?` shows it), and herdr 0.9.5 must pick the ticks. If herdr relays the `OK` of the host but does not play the animation, `PHEWR_KITTY_LOOPS=ticks` is the way out. Also make sure that `a=f` frames go through `t=t` in Ghostty, and that the start in herdr is not slower (the DA1 answer must end the read).
+Maintainer tests in Ghostty and in herdr: run the 13 steps in `~/Pictures/phewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders and placeholders). Steps 9 and 10 now include the grid loops: every video and animated cell must loop after its still. Measured on 2026-10-30: 30 looping cells cost about 3 % of one core in total (phewr 0.2 %, Ghostty 1.7 %, herdr 1.3 %). Open since the native animations (merged 2026-10-30): plain Ghostty 1.4.0 must pick the animation path (`?` shows it), and herdr 0.9.5 gets the ticks without the probe: herdr answers the animation probe but plays no Kitty animation, and the ticks play there (maintainer, 2026-11-03). Also make sure that `a=f` frames go through `t=t` in Ghostty, and that the start in herdr is not slower (the DA1 answer must end the read).
 
 Test run of 2026-10-24 (plain Ghostty): steps 1 and 2 passed. The run stopped at step 3a, and the fixes from it are in (see Done). Continue at step 3 with the current build.
 
@@ -116,7 +116,7 @@ Order: speed first, then formats, then the first release.
 - Camera RAW, PSD, JPEG 2000, PDF, SVG and other ImageIO formats through `sips` (TIFF output)
 - HEIC grid thumbnails: a safe ISOBMFF reader compares `irot` and `imir` with the primary image
 - No unsafe code: the `sips` route and the box reader replace ImageIO and libheif-sys
-- Fork of rview, first as imgrrr, then as viewr, now renamed to phewr
+- Fork of rview
 - Tooling from schnattr: justfile, lint table, cargo deny, nextest, Codeberg release flow
 - Configurable, zoomable thumbnail size (`+` / `-` / `0`, remembered in state file)
 - Slideshow with interval, pause and loop (`s`, `Space`, `[` / `]`, `--slideshow`)

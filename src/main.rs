@@ -255,6 +255,7 @@ fn main() -> io::Result<()> {
             .ok()
             .as_deref(),
         config.loops,
+        encoder::kitty::is_herdr(),
     );
     let probe = probe_terminal(
         std::env::var(encoder::kitty::TRANSFER_OVERRIDE)

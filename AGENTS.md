@@ -7,8 +7,7 @@ modules. Read the page of the module that you change.
 ## What this is
 
 phewr is a terminal image and video gallery for the Kitty graphics protocol, written in Rust.
-It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork had the name
-imgrrr before 2026-10-17 and viewr before 2026-11-03.
+It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT).
 
 - The main goal: phewr is a fast viewer for all common image and video formats in the terminal,
   with full mouse support. Each change makes opening, scrolling or switching files faster, or it
@@ -556,7 +555,11 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - **Grid loops:** every visible video and animated cell loops after its still, as a Kitty
   animation or through ticks (`Loops`), and `[gallery] animate = false` turns them off. The
   frames are in `docs/video.md` ("Grid loop frames"). The two paths, the ids, the jobs and the
-  loop cache are in `docs/app-state.md` ("Grid loops").
+  loop cache are in `docs/app-state.md` ("Grid loops"). In herdr (`HERDR_ENV` or
+  `TERM_PROGRAM=herdr`), the loops take the ticks without the animation probe
+  (`encoder::kitty::chosen_loops`). herdr 0.9.5 keeps its own Kitty image store with
+  animation frames and answers the probe itself, but it plays no Kitty animation. The ticks
+  play there (maintainer, 2026-11-03). `PHEWR_KITTY_LOOPS` and `[gallery] loops` win over herdr.
 - **Cell icons:** a grid cell without a thumbnail shows a large dim picture (image) or play
   triangle (video), a folder cell a folder, and `..` two dots without a name (`icons.rs`,
   `draw_cell_icon` in `ui/grid.rs`). The icons are octant blocks (2x4 dots per cell, drawn by Ghostty

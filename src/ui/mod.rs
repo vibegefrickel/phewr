@@ -36,7 +36,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
         draw_info_panel(frame, app, info);
     }
     if app.help_visible {
-        draw_help_popup(frame, app.graphics.transfer(), app.graphics.loops());
+        let loops = app.grid_loops.enabled.then(|| app.graphics.loops());
+        draw_help_popup(frame, app.graphics.transfer(), loops);
     }
 }
 

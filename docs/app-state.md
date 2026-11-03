@@ -126,7 +126,7 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
   - A grid redraw places the running animation again by its id.
   - A `d=A` (the help popup, the info panel, the fullscreen view, the zoom) makes the grid send
     the animation again with all frames.
-- Ticks path (the fallback for herdr 0.9.5 and older terminals):
+- Ticks path (herdr and older terminals):
   - Each frame goes out once with `a=t` and an id from 2^31.
   - A tick sends `a=d,d=i` for the old frame and `a=p` for the new one (`play_grid_loops`). This
     costs about 75 bytes per cell, in one synchronized update.
@@ -148,6 +148,10 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
 - A `ResultGuard` sends `Failed` for a job that panics.
 - The help popup, the info panel and the other views stop the loops.
 - `[gallery] animate = false` turns the loops off.
+- In herdr, the loops take the ticks, and the animation probe does not go out (`chosen_loops`
+  in `encoder/kitty/probe.rs`). herdr 0.9.5 answers the probe itself but plays no Kitty
+  animation. `PHEWR_KITTY_LOOPS` and `[gallery] loops` win over herdr.
+- With `[gallery] animate = false`, the help popup shows `loops: off`.
 - `App::drop_hidden_loops`: the render of the grid calls it, also after a cursor move without a
   scroll.
 - `App::loop_plays` and `App::pretend_loop_job` are test-only. The tests of the Kitty output read
