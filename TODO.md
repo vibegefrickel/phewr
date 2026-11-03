@@ -116,7 +116,7 @@ Order: speed first, then formats, then the delete removal, then the first releas
 - Two-phase HEIC grid thumbnails (batch 7): the embedded thumbnail shows at once, the sharp decode replaces it. libheif reads through a buffered stream.
 - Speed round (batch 6): the run loop polls every 10 ms while a decode, a prefetch, a filter or the scan runs.
 - Kitty transfer medium: a temp file (`t=t`) when the terminal answers the probe with `OK` and deletes the probe file, PNG over SSH, direct otherwise.
-- Benchmarks: `src/bench.rs` holds ignored benchmarks on `VIEWR_TEST_DIR`, `just bench [DIR]` runs them.
+- Benchmarks: `src/bench/` holds ignored benchmarks on `VIEWR_TEST_DIR`, `just bench [DIR]` runs them.
 - Theme system removed: `src/theme.rs`, the theme catalog, the `t` picker and the `-t` flag are gone. viewr uses the terminal default colors and the 16 ANSI colors (`src/styles.rs`).
 - Grid look: a border only around the selected and the marked cells, no spacer line, centered thumbnails, filenames hidden by default (`n` toggles them)
 - Grid zoom: `+`/`-` change the visible rows (default 4), the columns follow the terminal width (minimum 2), the state file saves the zoom level as `[gallery] visible_rows`

@@ -35,7 +35,7 @@ just test [FILTER]   # cargo nextest (falls back to cargo test)
 just test-real [FILTER]  # also the ignored tests that decode real files (VIEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
-just bench [DIR] [FILTER]  # the speed measurements of src/bench.rs on VIEWR_TEST_DIR (default ~/Pictures/viewr-test/01-mixed-big), FILTER selects a bench (default bench::)
+just bench [DIR] [FILTER]  # the speed measurements of src/bench/ on VIEWR_TEST_DIR (default ~/Pictures/viewr-test/01-mixed-big), FILTER selects a bench (default bench::)
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | outdated   # the single steps
@@ -154,7 +154,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - A test that writes files uses `tempfile::tempdir()` (`TempDir`) or `tempfile::NamedTempFile`.
   The directory goes away on drop, also when the test panics.
 - The app builders, the key press helpers and the synthetic file writers that tests of more than
-  one module share live in `test_support.rs`.
+  one module share live in `test_support/`. The fake Kitty terminal is `test_support::kitty`.
 - A test app writes the Kitty sequences to a buffer (`GraphicsOutput::Buffer`). Read them with
   `app.graphics_out.take_bytes()`. A test that needs a config uses `App::new_with_config`, never
   `App::with_config`.
@@ -332,16 +332,21 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `transmit` and `transmit_frame`. The writers without state are free functions of
   `encoder::kitty` (`delete_all_to`, `delete_image_to`, `place_by_id_to`, `animate_to`), and `apc`
   writes each command frame (`ESC _ G ... ESC \`).
-- `test_support.rs` (test only): the app builders, the key press helpers and the synthetic
-  file writers that the tests of more than one module share. `test_support::video` holds
-  `FakeRunner`, `FakeDecoder` and the app builders of the video tests.
-- `bench.rs` (test only): the ignored speed benchmarks. They drive the real loop steps without a
-  terminal and read `VIEWR_TEST_DIR`. `start_to_the_first_grid_picture` measures the process start
-  and the steps of `main`, `disk_cache_formats` the cache formats, `layout_bench` the pixel layouts of the
-  fullscreen path (the A/B table of the RGB and RGBA resizes). `grid_during_a_folder_prefetch` runs the cold grid
-  while a folder prefetch of `VIEWR_TEST_PREFETCH_DIR` runs. `measure_grid` stops the clock at
-  the end of the pass. Each bench lets its background work end before the next one starts (the
-  `Drop` of `Bench`, `settle`), so the numbers of the full `just bench` match a run of one bench.
+- `test_support/` (test only): the helpers that the tests of more than one module share.
+  `mod.rs` holds the app builders and the waits, `input.rs` the key and mouse helpers, `files.rs`
+  the JPEG, TIFF RAW, CR3, RAF and PSD writers (feature `sips` on macOS), `heif.rs` the HEIF
+  writers (feature `heic`), `kitty.rs` the fake terminal and `video.rs` `FakeRunner`,
+  `FakeDecoder` and the app builders of the video tests (feature `video`).
+- `bench/` (test only): the ignored speed benchmarks, one file per group. A bench path is
+  `bench::<file>::<name>`. They drive the real loop steps without a terminal and read
+  `VIEWR_TEST_DIR`. `mod.rs` holds the shared driver (`Bench`, `settle`, `measure_grid`).
+  `start::first_grid_picture` measures the process start and the steps of `main`,
+  `cache::formats` the cache formats, `layout_bench::layouts_against_rgba` the pixel layouts of
+  the fullscreen path (the A/B table of the RGB and RGBA resizes). `folders::grid_during_prefetch`
+  runs the cold grid while a folder prefetch of `VIEWR_TEST_PREFETCH_DIR` runs. `measure_grid`
+  stops the clock at the end of the pass. Each bench lets its background work end before the next
+  one starts (the `Drop` of `Bench`, `settle`), so the numbers of the full `just bench` match a
+  run of one bench. `docs/benchmarks.md` holds what each bench leaves out.
 
 ## Gotchas
 
