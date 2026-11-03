@@ -95,11 +95,9 @@ impl ScreenImage {
 
     pub(crate) fn convert(self, source: &SourceColor, target: ColorTarget, peak: Peak) -> Self {
         match self {
-            Self::Rgb(rgb) => Self::Rgb(color::convert_rgb_with_peak(rgb, source, target, peak)),
-            Self::Rgba(rgba) => Self::Rgba(color::convert_with_peak(rgba, source, target, peak)),
-            Self::Opaque(rgba) => {
-                Self::Opaque(color::convert_with_peak(rgba, source, target, peak))
-            }
+            Self::Rgb(rgb) => Self::Rgb(color::convert_rgb(rgb, source, target, peak)),
+            Self::Rgba(rgba) => Self::Rgba(color::convert(rgba, source, target, peak)),
+            Self::Opaque(rgba) => Self::Opaque(color::convert(rgba, source, target, peak)),
         }
     }
 

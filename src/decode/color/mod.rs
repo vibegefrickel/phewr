@@ -121,20 +121,9 @@ impl SourceColor {
     }
 }
 
-/// A source that `moxcms` cannot read converts as sRGB. A PQ or HLG source maps to SDR.
-#[cfg_attr(
-    not(any(test, feature = "video", feature = "heic")),
-    expect(
-        dead_code,
-        reason = "only the player and libheif convert without a peak"
-    )
-)]
-pub(crate) fn convert(image: RgbaImage, source: &SourceColor, target: ColorTarget) -> RgbaImage {
-    convert_with_peak(image, source, target, hdr::Peak::DEFAULT)
-}
-
-/// [`convert`] with the HDR10 peak of a PQ source.
-pub(crate) fn convert_with_peak(
+/// A source that `moxcms` cannot read converts as sRGB. A PQ or HLG source maps to SDR,
+/// a PQ source with its HDR10 peak.
+pub(crate) fn convert(
     mut image: RgbaImage,
     source: &SourceColor,
     target: ColorTarget,
@@ -146,7 +135,7 @@ pub(crate) fn convert_with_peak(
 }
 
 /// [`convert`] without an alpha channel. An opaque image keeps 3 bytes per pixel.
-pub(crate) fn convert_rgb_with_peak(
+pub(crate) fn convert_rgb(
     mut image: RgbImage,
     source: &SourceColor,
     target: ColorTarget,

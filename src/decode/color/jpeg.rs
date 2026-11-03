@@ -110,6 +110,7 @@ pub(crate) fn jpeg_icc_profile(data: &[u8]) -> Option<Vec<u8>> {
 pub(super) mod tests {
     use super::{exif_marks_adobe_rgb, jpeg_color, jpeg_exif_payload, jpeg_icc_profile};
     use crate::decode::color::{ColorTarget, SourceColor, convert};
+    use crate::decode::hdr::Peak;
     use crate::test_support::fixture;
     use image::{Rgba, RgbaImage};
 
@@ -196,12 +197,17 @@ pub(super) mod tests {
         // Adobe RGB green is more saturated than sRGB or P3 green. The conversion lowers its red.
         let tone = RgbaImage::from_pixel(1, 1, Rgba([60, 160, 60, 255]));
         for target in [ColorTarget::Srgb, ColorTarget::DisplayP3] {
-            let converted = convert(tone.clone(), &SourceColor::AdobeRgb, target);
+            let converted = convert(tone.clone(), &SourceColor::AdobeRgb, target, Peak::DEFAULT);
             let [red, green, _, _] = converted.get_pixel(0, 0).0;
             assert!(red < 40 && green > 150, "{target:?}: {red} {green}");
         }
         let gray = RgbaImage::from_pixel(1, 1, Rgba([128, 128, 128, 255]));
-        let converted = convert(gray, &SourceColor::AdobeRgb, ColorTarget::Srgb);
+        let converted = convert(
+            gray,
+            &SourceColor::AdobeRgb,
+            ColorTarget::Srgb,
+            Peak::DEFAULT,
+        );
         let [red, green, blue, _] = converted.get_pixel(0, 0).0;
         assert!(
             red.abs_diff(green) <= 1 && green.abs_diff(blue) <= 1,

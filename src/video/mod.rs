@@ -134,7 +134,12 @@ pub(crate) fn convert_first_frame(
     if info.hdr.is_some() {
         image
     } else {
-        color::convert(image, &info.primaries.source_color(), target)
+        color::convert(
+            image,
+            &info.primaries.source_color(),
+            target,
+            crate::decode::hdr::Peak::DEFAULT,
+        )
     }
 }
 

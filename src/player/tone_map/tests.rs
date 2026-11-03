@@ -57,7 +57,7 @@ fn levels(cube: Cube, signal: [u8; 3]) -> [f64; 3] {
 fn still(signal: [u8; 3], source: &SourceColor, target: ColorTarget) -> [f64; 3] {
     let [r, g, b] = signal;
     let image = RgbaImage::from_raw(1, 1, vec![r, g, b, 255]).unwrap();
-    let pixel = color::convert(image, source, target).into_raw();
+    let pixel = color::convert(image, source, target, Peak::DEFAULT).into_raw();
     [pixel[0], pixel[1], pixel[2]].map(f64::from)
 }
 

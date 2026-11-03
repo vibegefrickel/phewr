@@ -121,7 +121,12 @@ mod tests {
     fn largest_difference_to_the_still_conversion(plain: &[u8], cubed: &[u8]) -> u8 {
         let pixels = u32::try_from(plain.len() / 4).unwrap();
         let image = image::RgbaImage::from_raw(pixels, 1, plain.to_vec()).unwrap();
-        let converted = color::convert(image, &SourceColor::Srgb, ColorTarget::DisplayP3);
+        let converted = color::convert(
+            image,
+            &SourceColor::Srgb,
+            ColorTarget::DisplayP3,
+            crate::decode::hdr::Peak::DEFAULT,
+        );
         converted
             .as_raw()
             .iter()

@@ -102,7 +102,7 @@ impl Decoded {
         if !color::converts(&this.color, target) {
             return this.image;
         }
-        DynamicImage::ImageRgba8(color::convert_with_peak(
+        DynamicImage::ImageRgba8(color::convert(
             this.image.into_rgba8(),
             &this.color,
             target,
@@ -117,7 +117,7 @@ impl Decoded {
 
     /// A deep HDR image resized in 16 bit and tone-mapped into `target`. Each other image comes
     /// back unchanged. An 8-bit HDR image maps in
-    /// `color::convert_with_peak`, with the peak that `Decoded` keeps.
+    /// `color::convert`, with the peak that `Decoded` keeps.
     fn tone_mapped(self, box_px: Option<(u32, u32)>, target: ColorTarget) -> Self {
         let Some(map) = hdr::ToneMap::of_source(&self.color, target) else {
             return self;
@@ -158,7 +158,7 @@ impl Decoded {
             image if opaque => resize::fit_opaque_rgba_within(image.into_rgba8(), max_w, max_h),
             image => resize::fit_rgba_within(image.into_rgba8(), max_w, max_h),
         };
-        color::convert_with_peak(fitted, &this.color, target, peak)
+        color::convert(fitted, &this.color, target, peak)
     }
 
     /// The fullscreen image fitted into `max_w` x `max_h`, in the terminal color space.

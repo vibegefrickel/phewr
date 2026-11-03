@@ -3,6 +3,7 @@
 
 use super::transform::transform;
 use super::{ColorTarget, SourceColor, convert};
+use crate::decode::hdr::Peak;
 use crate::decode::{EmbeddedThumbnail, decode_image};
 use crate::test_support::fixture;
 use image::{Rgba, RgbaImage};
@@ -11,7 +12,9 @@ const P3_ICC: &str = "/System/Library/ColorSync/Profiles/Display P3.icc";
 
 fn pixel(rgba: [u8; 4], source: &SourceColor, target: ColorTarget) -> [u8; 4] {
     let image = RgbaImage::from_pixel(1, 1, Rgba(rgba));
-    convert(image, source, target).get_pixel(0, 0).0
+    convert(image, source, target, Peak::DEFAULT)
+        .get_pixel(0, 0)
+        .0
 }
 
 fn assert_near(actual: [u8; 4], expected: [u8; 4]) {
@@ -251,7 +254,12 @@ fn fixtures_match_colorsync() {
             let path = fixture(&format!("color/{name}"));
             let decoded = decode_image(&path, None, EmbeddedThumbnail::Deny).unwrap();
             let as_is = decoded.image.to_rgba8();
-            let converted = convert(decoded.image.into_rgba8(), &decoded.color, target);
+            let converted = convert(
+                decoded.image.into_rgba8(),
+                &decoded.color,
+                target,
+                Peak::DEFAULT,
+            );
             let reference = fixture(&format!("color/ref/{reference}-{suffix}.png"));
             let reference = image::open(reference).unwrap().to_rgba8();
             let (before_mean, before_max) = delta_e(&as_is, &reference, target);

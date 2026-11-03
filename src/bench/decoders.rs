@@ -3,6 +3,7 @@
 use super::{millis, report, test_dir};
 use crate::decode::color;
 use crate::decode::color::ColorTarget;
+use crate::decode::hdr::Peak;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -88,7 +89,7 @@ fn color_conversion() {
                 median(&|| {
                     let copy = fitted.clone();
                     let start = Instant::now();
-                    let converted = color::convert(copy, &source, target);
+                    let converted = color::convert(copy, &source, target, Peak::DEFAULT);
                     let elapsed = start.elapsed();
                     assert_eq!(converted.dimensions(), fitted.dimensions());
                     elapsed
@@ -114,7 +115,12 @@ fn color_conversion() {
     let full = median(&|| {
         let copy = frame.clone();
         let start = Instant::now();
-        let converted = color::convert(copy, &color::SourceColor::Srgb, ColorTarget::DisplayP3);
+        let converted = color::convert(
+            copy,
+            &color::SourceColor::Srgb,
+            ColorTarget::DisplayP3,
+            Peak::DEFAULT,
+        );
         let elapsed = start.elapsed();
         assert_eq!(converted.width(), w);
         elapsed

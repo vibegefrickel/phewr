@@ -84,7 +84,12 @@ pub(crate) fn decode_heif_preview(path: &Path, target: (u32, u32)) -> io::Result
         Layout::OpaqueRgba
     };
     let preview = heif_image_to_rgba(&image, Some(sharp_size), layout)?;
-    Ok(color::convert(preview, &color, color::target()))
+    Ok(color::convert(
+        preview,
+        &color,
+        color::target(),
+        decode::hdr::Peak::DEFAULT,
+    ))
 }
 
 /// A usable thumbnail covers the fitted primary image and has its portrait or landscape shape.

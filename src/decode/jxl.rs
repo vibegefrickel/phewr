@@ -633,7 +633,12 @@ mod tests {
         let p3 = decode(&path, ColorTarget::DisplayP3).unwrap();
         assert_eq!(p3.color, SourceColor::DisplayP3);
         let srgb = decode(&path, ColorTarget::Srgb).unwrap().image.to_rgba8();
-        let back = crate::decode::color::convert(p3.image.to_rgba8(), &p3.color, ColorTarget::Srgb);
+        let back = crate::decode::color::convert(
+            p3.image.to_rgba8(),
+            &p3.color,
+            ColorTarget::Srgb,
+            crate::decode::hdr::Peak::DEFAULT,
+        );
         let total: u64 = back
             .as_raw()
             .iter()

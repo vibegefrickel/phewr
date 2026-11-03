@@ -337,7 +337,7 @@ fn eight_bit_heic_uses_peak() {
     assert_eq!(image.peak, Some(4000.0));
 }
 
-/// An 8-bit PQ image maps in `color::convert_with_peak`, with the peak of its metadata.
+/// An 8-bit PQ image maps in `color::convert`, with the peak of its metadata.
 #[test]
 fn eight_bit_pq_uses_peak() {
     let decoded = |peak| Decoded {
@@ -475,7 +475,7 @@ fn eight_bit_hdr_maps_in_conversion() {
         .unwrap();
         for target in TARGETS {
             let eight = decoded.image.to_rgba8();
-            let mapped = convert(eight, &decoded.color, target);
+            let mapped = convert(eight, &decoded.color, target, Peak::DEFAULT);
             let label = format!("{name} {target:?} in 8 bit");
             assert_matches_cube(&mapped, &reference(name, target), 2.0, &label);
         }

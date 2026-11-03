@@ -39,7 +39,7 @@ fn wire(pixels: Pixels<'_>) -> (bool, Vec<u8>) {
 /// The fullscreen image of the RGBA reference path.
 fn rgba_fullscreen(decoded: Decoded, (w, h): (u32, u32), target: ColorTarget) -> RgbaImage {
     let fitted = fit_rgba_within(decoded.image.into_rgba8(), w, h);
-    color::convert(fitted, &decoded.color, target)
+    color::convert(fitted, &decoded.color, target, Peak::DEFAULT)
 }
 
 fn screen_fullscreen(decoded: Decoded, (w, h): (u32, u32), target: ColorTarget) -> ScreenImage {
@@ -61,6 +61,7 @@ fn rgba_zoom(
             decoded.image.into_rgba8(),
             &decoded.color,
             target,
+            Peak::DEFAULT,
         ))
     } else {
         decoded.image
