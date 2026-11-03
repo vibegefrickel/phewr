@@ -27,6 +27,19 @@ fn place_visible(app: &mut App, out: &mut Vec<u8>) {
 }
 
 #[test]
+fn delete_all_takes_stale_loop_ids() {
+    let mut app = thumbnail_app(1);
+    app.graphics_storage_dirty = true;
+    app.grid_loops.stale_ids.push(900);
+    let mut out = Vec::new();
+
+    place_visible(&mut app, &mut out);
+
+    assert!(app.grid_loops.stale_ids.is_empty());
+    assert!(!text(&out).contains("d=I,i=900"));
+}
+
+#[test]
 fn transmits_once_then_places_by_id() {
     let mut app = thumbnail_app(3);
     app.graphics_storage_dirty = true;

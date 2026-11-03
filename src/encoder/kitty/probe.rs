@@ -93,7 +93,8 @@ pub(crate) fn detect_transfer(
 ///
 /// `VIEWR_KITTY_TRANSFER` or SSH fixes the transfer. Else the probe decides: the temp file
 /// medium wins only if the answer is `OK` and the terminal deleted the probe file. A terminal
-/// with another `TMPDIR` reads the file but leaves it, 22 MB per frame.
+/// with another `TMPDIR` reads the file but leaves it: raw pixels, about 17 MB for a Retina RGB
+/// still and about 22 MB for an RGBA player or loop frame.
 ///
 /// Without `loops`, the animation probe goes out too. `query` sends the probes, waits for the
 /// answer count in its second argument and returns the answers. It runs only for a probe.

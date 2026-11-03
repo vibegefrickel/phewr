@@ -8,13 +8,16 @@ use ratatui::layout::Rect;
 use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::ops::Range;
-use std::path::PathBuf;
-use std::sync::mpsc;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 
 const CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 const PREFETCH_RADIUS: usize = 3;
 /// The nearest neighbors come first, and a decode that the user waits for keeps most cores.
 const MAX_PREFETCH_JOBS: usize = 2;
+
+type DecodeFn = Arc<dyn Fn(&Path, Option<(u32, u32)>) -> Option<Prefetched> + Send + Sync>;
 
 /// `image` is `None` when the decode failed.
 struct JobResult {
@@ -43,12 +46,42 @@ impl Prefetched {
     }
 }
 
+/// Counts a job from its spawn to its end, also when the decode panics.
+struct RunningJob(Arc<AtomicUsize>);
+
+impl RunningJob {
+    fn start(counter: &Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(counter))
+    }
+}
+
+impl Drop for RunningJob {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn decode_for_screen(path: &Path, hint: Option<(u32, u32)>) -> Option<Prefetched> {
+    let decoded = decode_image(path, hint, EmbeddedThumbnail::Deny).ok()?;
+    Some(Prefetched {
+        image: match hint {
+            Some((max_w, max_h)) => decoded.fit_for_screen(max_w, max_h),
+            None => decoded.into_screen(),
+        },
+        target: hint,
+    })
+}
+
 pub(crate) struct Prefetcher {
     cache: LruCache<usize, Prefetched>,
     rx: mpsc::Receiver<JobResult>,
     tx: mpsc::Sender<JobResult>,
     /// At most `MAX_PREFETCH_JOBS`.
     pending: HashSet<usize>,
+    /// The jobs on the rayon pool, also those that `invalidate` dropped.
+    running: Arc<AtomicUsize>,
+    decode: DecodeFn,
     /// Nearest first.
     queue: VecDeque<(usize, PathBuf)>,
     /// Skipped until the next `invalidate()`.
@@ -70,6 +103,8 @@ impl Prefetcher {
             rx,
             tx,
             pending: HashSet::new(),
+            running: Arc::new(AtomicUsize::new(0)),
+            decode: Arc::new(decode_for_screen),
             queue: VecDeque::new(),
             failed: HashSet::new(),
             generation: 0,
@@ -94,7 +129,7 @@ impl Prefetcher {
     }
 
     fn start_queued(&mut self) {
-        while self.pending.len() < MAX_PREFETCH_JOBS
+        while self.running.load(Ordering::SeqCst) < MAX_PREFETCH_JOBS
             && let Some((index, path)) = self.queue.pop_front()
         {
             self.start_decoding(index, path);
@@ -181,7 +216,7 @@ impl Prefetcher {
         {
             return;
         }
-        if self.pending.len() >= MAX_PREFETCH_JOBS {
+        if self.running.load(Ordering::SeqCst) >= MAX_PREFETCH_JOBS {
             self.queue.push_back((index, images[index].clone()));
             return;
         }
@@ -193,16 +228,11 @@ impl Prefetcher {
         let tx = self.tx.clone();
         let hint = self.target_hint;
         let generation = self.generation;
+        let decode = Arc::clone(&self.decode);
+        let running = RunningJob::start(&self.running);
         rayon::spawn(move || {
-            let image = decode_image(&path, hint, EmbeddedThumbnail::Deny)
-                .ok()
-                .map(|decoded| Prefetched {
-                    image: match hint {
-                        Some((max_w, max_h)) => decoded.fit_for_screen(max_w, max_h),
-                        None => decoded.into_screen(),
-                    },
-                    target: hint,
-                });
+            let image = decode(&path, hint);
+            drop(running);
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "a closed receiver means that nobody waits for the result"
@@ -225,7 +255,7 @@ impl Prefetcher {
     }
 
     #[cfg(test)]
-    fn running_count(&self) -> usize {
+    fn pending_jobs(&self) -> usize {
         self.pending.len()
     }
 

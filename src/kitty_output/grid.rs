@@ -188,6 +188,7 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
         app.graphics_delete_all_to(out)?;
         app.graphics_storage_dirty = false;
         app.stale_image_ids.clear();
+        app.grid_loops.stale_ids.clear();
         app.thumb_cache.take_evicted_ids();
     } else {
         // The terminal keeps the pixels. A stored thumbnail goes out again as an `a=p`.
@@ -195,9 +196,9 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
         app.grid_loops.forget_placements();
         delete_stale_images_to(app, out, |_| true)?;
         delete_evicted_images_to(app, out)?;
-    }
-    for id in std::mem::take(&mut app.grid_loops.stale_ids) {
-        delete_image_to(app, out, id)?;
+        for id in std::mem::take(&mut app.grid_loops.stale_ids) {
+            delete_image_to(app, out, id)?;
+        }
     }
 
     let shown = visible_image_ids(app);

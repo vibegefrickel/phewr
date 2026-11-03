@@ -308,7 +308,7 @@ impl IccToTarget {
                         let mut deep = vec![0u16; output.len()];
                         transform.transform(input, &mut deep)?;
                         for (value, sample) in output.iter_mut().zip(deep) {
-                            *value = to_8bit(sample);
+                            *value = hdr::to_8bit(sample);
                         }
                         Ok::<(), CmsError>(())
                     })
@@ -317,10 +317,6 @@ impl IccToTarget {
         }
         into_image(width, height, self.channels, pixels)
     }
-}
-
-fn to_8bit(sample: u16) -> u8 {
-    u8::try_from((u32::from(sample) * 255 + 32_767) / 65_535).unwrap_or(u8::MAX)
 }
 
 /// The upright size from the header.

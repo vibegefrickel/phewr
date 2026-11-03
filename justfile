@@ -22,10 +22,11 @@ fmt:
 fmt-check:
     cargo fmt --check
 
-# Clippy with all features and with none; every warning is an error, the lint table is in Cargo.toml.
+# Clippy with all features and with none, and a cargo check for each single feature; every warning is an error, the lint table is in Cargo.toml.
 lint:
     cargo clippy --release --all-targets -- -D warnings
     cargo clippy --release --all-targets --no-default-features -- -D warnings
+    for feature in turbo heic video sips; do RUSTFLAGS="-D warnings" cargo check --all-targets --no-default-features --features "$feature" || exit 1; done
 
 # Apply the lint and formatting fixes clippy and rustfmt can do on their own.
 fix:

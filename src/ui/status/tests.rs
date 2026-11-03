@@ -151,6 +151,14 @@ fn file_facts_show_until_note() {
 }
 
 #[test]
+fn facts_count_display_columns() {
+    // Two wide characters are 4 columns and 2 chars.
+    assert!(super::facts_fit(6, "\u{5199}\u{771f}", 10));
+    assert!(!super::facts_fit(7, "\u{5199}\u{771f}", 10));
+    assert!(super::facts_fit(6, "abcd", 10));
+}
+
+#[test]
 fn gallery_asks_before_delete() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
     app.pending_delete = Some(pending(&["a.jpg"], DeleteMode::Trash));

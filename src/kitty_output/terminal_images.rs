@@ -75,19 +75,22 @@ impl TerminalImages {
         self.bytes
     }
 
-    /// The oldest ids that must go to fit the budget. The ids in `keep` are the newest, and the
-    /// search stops at the first of them.
+    /// The oldest ids that must go to fit the budget. An id in `keep` stays, and the search goes
+    /// on past it, because a shown image can be older than a hidden one.
     fn over_budget(&mut self, keep: &HashSet<u32>) -> Vec<u32> {
+        let mut excess = self.bytes.saturating_sub(self.budget);
         let mut dropped = Vec::new();
-        while self.bytes > self.budget {
-            let Some((&id, _)) = self.stored.peek_lru() else {
-                break;
-            };
-            if keep.contains(&id) {
+        for (&id, &bytes) in self.stored.iter().rev() {
+            if excess == 0 {
                 break;
             }
+            if !keep.contains(&id) {
+                excess = excess.saturating_sub(bytes);
+                dropped.push(id);
+            }
+        }
+        for &id in &dropped {
             self.remove(id);
-            dropped.push(id);
         }
         dropped
     }
@@ -144,5 +147,18 @@ mod tests {
         images.remove(9);
         images.clear();
         assert!(images.is_empty() && images.bytes() == 0);
+    }
+
+    #[test]
+    fn trim_skips_older_shown_image() {
+        let mut images = TerminalImages::new();
+        images.budget = 10;
+        images.insert(1, 4);
+        images.insert(2, 4);
+        images.insert(3, 4);
+        let keep = std::collections::HashSet::from([1]);
+        assert_eq!(images.over_budget(&keep), vec![2]);
+        assert!(images.contains(1));
+        assert_eq!(images.bytes(), 8);
     }
 }

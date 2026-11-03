@@ -5,6 +5,8 @@ use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -254,7 +256,7 @@ fn step_forward_queues_next_first() {
 
     let mut prefetcher = Prefetcher::new();
     prefetcher.kick(4, 0, &paths);
-    assert_eq!(prefetcher.running_count(), 2, "5 and 3 run");
+    assert_eq!(prefetcher.pending_jobs(), 2, "5 and 3 run");
 
     // Only `poll` frees a job. The next kicks queue everything that does not run.
     prefetcher.kick(5, 0, &paths);
@@ -327,7 +329,7 @@ fn two_jobs_run_rest_wait() {
     let mut prefetcher = Prefetcher::new();
     prefetcher.kick(4, 0, &paths);
     assert_eq!(
-        prefetcher.running_count(),
+        prefetcher.pending_jobs(),
         2,
         "the two nearest neighbors decode"
     );
@@ -353,7 +355,7 @@ fn two_jobs_run_rest_wait() {
     prefetcher.kick_gallery(8, &paths);
     let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
     assert_eq!(waiting, vec![8]);
-    assert_eq!(prefetcher.running_count(), 2);
+    assert_eq!(prefetcher.pending_jobs(), 2);
     wait_until_idle(&mut prefetcher);
 }
 
@@ -381,4 +383,62 @@ fn smaller_box_decode_unused() {
         .take_resized(1, Rect::new(0, 0, 1, 1), (8, 8))
         .expect("a larger decode fits a smaller box");
     assert_eq!(img.dimensions(), (8, 4));
+}
+
+#[test]
+fn invalidated_jobs_count_to_limit() {
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let started = Arc::new(AtomicUsize::new(0));
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let mut prefetcher = Prefetcher::new();
+    prefetcher.decode = {
+        let (gate, started, active, peak) = (
+            Arc::clone(&gate),
+            Arc::clone(&started),
+            Arc::clone(&active),
+            Arc::clone(&peak),
+        );
+        Arc::new(move |_, _| {
+            started.fetch_add(1, Ordering::SeqCst);
+            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            let (open, signal) = &*gate;
+            let mut open = open.lock().unwrap();
+            while !*open {
+                open = signal.wait(open).unwrap();
+            }
+            active.fetch_sub(1, Ordering::SeqCst);
+            None
+        })
+    };
+    let paths: Vec<PathBuf> = (0..7).map(|i| PathBuf::from(format!("{i}.png"))).collect();
+
+    prefetcher.kick(3, 0, &paths);
+    for _ in 0..200 {
+        if started.load(Ordering::SeqCst) == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(started.load(Ordering::SeqCst), 2);
+
+    prefetcher.invalidate();
+    prefetcher.kick(3, 0, &paths);
+    prefetcher.poll();
+    assert_eq!(
+        prefetcher.queue.len(),
+        6,
+        "the old jobs still hold both slots"
+    );
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(started.load(Ordering::SeqCst), 2);
+
+    {
+        let (open, signal) = &*gate;
+        *open.lock().unwrap() = true;
+        signal.notify_all();
+    }
+    wait_until_idle(&mut prefetcher);
+    assert!(peak.load(Ordering::SeqCst) <= 2);
 }

@@ -125,14 +125,14 @@ fn with_opaque_as_rgb<T>(
     }
 }
 
-struct Keys<'a> {
+pub(crate) struct Keys<'a> {
     /// The keys of the first escape code, for the format key of the medium.
-    first: &'a dyn Fn(u32) -> String,
+    pub(crate) first: &'a dyn Fn(u32) -> String,
     /// The keys before `m=` in each further chunk. A frame repeats `a=f` there.
-    chunk: &'static str,
+    pub(crate) chunk: &'static str,
 }
 
-fn write_pixels<W: Write + ?Sized>(
+pub(crate) fn write_pixels<W: Write + ?Sized>(
     out: &mut W,
     pixels: Pixels<'_>,
     keys: &Keys<'_>,

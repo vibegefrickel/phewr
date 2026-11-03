@@ -31,7 +31,7 @@ pub(crate) fn reveal_in_yazi(
     Some(run(&ya, &args))
 }
 
-/// Run `program` without output and wait at most [`YA_TIMEOUT`] for its exit.
+/// Run `program` without output and wait at most [`YA_TIMEOUT`] for its exit. Then kill it.
 pub(crate) fn run_briefly(program: &Path, args: &[OsString]) -> io::Result<()> {
     let mut child = Command::new(program)
         .args(args)
@@ -40,7 +40,16 @@ pub(crate) fn run_briefly(program: &Path, args: &[OsString]) -> io::Result<()> {
         .stderr(Stdio::null())
         .spawn()?;
     let deadline = Instant::now() + YA_TIMEOUT;
-    while child.try_wait()?.is_none() && Instant::now() < deadline {
+    while child.try_wait()?.is_none() {
+        if Instant::now() >= deadline {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "the child can exit between the check and the kill"
+            )]
+            let _ = child.kill();
+            child.wait()?;
+            break;
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
     Ok(())
@@ -179,5 +188,25 @@ mod tests {
         let waited = start.elapsed();
         assert!(waited >= Duration::from_millis(900), "{waited:?}");
         assert!(waited < Duration::from_millis(1900), "{waited:?}");
+    }
+
+    #[test]
+    fn timeout_kills_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let script = format!("echo $$ > {}; exec sleep 30", pid_file.display());
+        run_briefly(
+            Path::new("/bin/sh"),
+            &[OsString::from("-c"), OsString::from(script)],
+        )
+        .unwrap();
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let alive = std::process::Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(!alive, "the child {pid} still runs");
     }
 }

@@ -34,7 +34,7 @@ pub(crate) fn spawn(paths: Vec<PathBuf>, list: SharedImageList) {
 /// The folders come before the first file. The list waits for the end of the read, then the
 /// files go out sorted in batches.
 fn scan_folder(dir: &Path, list: &SharedImageList) {
-    let listing = read_folder(dir, list, true);
+    let listing = read_folder(dir, list);
     list.push_folders(folder_entries(dir, listing.folder_names));
     let mut files = listing.files.into_iter();
     loop {
@@ -76,7 +76,7 @@ pub(crate) fn files_of(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
 /// them. The folder prefetch reads without a thread and without the errors.
 pub(crate) fn folder_listing(dir: &Path) -> (Vec<FolderEntry>, Vec<PathBuf>, Vec<String>) {
     let list = SharedImageList::new();
-    let listing = read_folder(dir, &list, true);
+    let listing = read_folder(dir, &list);
     list.push_batch(listing.files);
     let (files, names) = list.entries_since(0);
     (folder_entries(dir, listing.folder_names), files, names)
@@ -128,12 +128,12 @@ struct Listing {
 }
 
 /// The read errors go to `list`.
-fn read_folder(dir: &Path, list: &SharedImageList, want_files: bool) -> Listing {
+fn read_folder(dir: &Path, list: &SharedImageList) -> Listing {
     let mut listing = Listing {
         folder_names: Vec::new(),
         files: Vec::new(),
     };
-    walk(dir, list, want_files, |item| match item {
+    walk(dir, list, |item| match item {
         Item::Folder(name) => listing.folder_names.push(name),
         Item::File(path) => listing.files.push(path),
     });
@@ -142,7 +142,7 @@ fn read_folder(dir: &Path, list: &SharedImageList, want_files: bool) -> Listing 
 }
 
 fn scan_dir(dir: &Path, list: &SharedImageList, batch: &mut Vec<PathBuf>) {
-    walk(dir, list, true, |item| {
+    walk(dir, list, |item| {
         if let Item::File(path) = item {
             batch.push(path);
             if batch.len() >= BATCH_SIZE {
@@ -163,7 +163,7 @@ fn open_dir(dir: &Path) -> std::io::Result<std::fs::ReadDir> {
 }
 
 /// Folders without symlinks, and supported files. Hidden entries stay out.
-fn walk(dir: &Path, list: &SharedImageList, want_files: bool, mut visit: impl FnMut(Item)) {
+fn walk(dir: &Path, list: &SharedImageList, mut visit: impl FnMut(Item)) {
     let entries = match open_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
@@ -175,7 +175,7 @@ fn walk(dir: &Path, list: &SharedImageList, want_files: bool, mut visit: impl Fn
     for entry in entries {
         match entry {
             Ok(entry) => {
-                if let Some(item) = classify(&entry, list, want_files) {
+                if let Some(item) = classify(&entry, list) {
                     visit(item);
                 }
             }
@@ -184,7 +184,7 @@ fn walk(dir: &Path, list: &SharedImageList, want_files: bool, mut visit: impl Fn
     }
 }
 
-fn classify(entry: &DirEntry, list: &SharedImageList, want_files: bool) -> Option<Item> {
+fn classify(entry: &DirEntry, list: &SharedImageList) -> Option<Item> {
     let path = entry.path();
     let name = entry.file_name();
     // Hidden entries stay out before a file type check can push an error. That covers the
@@ -203,9 +203,6 @@ fn classify(entry: &DirEntry, list: &SharedImageList, want_files: bool) -> Optio
     // `..` from inside does not lead back here.
     if file_type.is_dir() {
         return Some(Item::Folder(name));
-    }
-    if !want_files {
-        return None;
     }
     // `file_type` does not follow symlinks, and a link to a file is neither a file nor a folder.
     // `metadata()` follows the link.

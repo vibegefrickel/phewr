@@ -114,7 +114,7 @@ fn draw_folder_cell(
     grid_rect: Rect,
 ) {
     let thumb = app.gallery.thumb_rect(vis_idx);
-    let icon = if app.filenames[img_idx] == ".." {
+    let icon = if is_parent(app, img_idx) {
         Icon::Parent
     } else {
         Icon::Folder
@@ -206,23 +206,31 @@ fn draw_centered_text(frame: &mut Frame<'_>, text: Cow<'_, str>, style: Style, a
     );
 }
 
+/// The longest head of `text` that fits `room` columns. The width of a prefix grows with its
+/// length, so a binary search over the char boundaries gives the same head as a left to right scan.
+fn head_within(text: &str, room: usize) -> &str {
+    let boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain([text.len()])
+        .collect();
+    let fitting =
+        boundaries.partition_point(|&end| text.get(..end).is_some_and(|head| head.width() <= room));
+    let end = boundaries
+        .get(fitting.saturating_sub(1))
+        .copied()
+        .unwrap_or(0);
+    text.get(..end).unwrap_or(text)
+}
+
 /// The label of `img_idx`, cut to `width` with a margin, with a dot for a mark.
 fn label_text(app: &App, img_idx: usize, is_marked: bool, width: u16) -> Cow<'_, str> {
     let raw_filename = app.filenames[img_idx].as_str();
     let prefix_len = 2 * usize::from(is_marked);
     let max_label = usize::from(width).saturating_sub(2 + prefix_len);
     let trimmed = if raw_filename.width() > max_label {
-        // The ellipsis takes one column. The head is measured as a whole string, like the full name. A
-        // wide character or an emoji sequence then counts the same in both.
         let room = max_label.saturating_sub(1);
-        let mut head = String::new();
-        for ch in raw_filename.chars() {
-            head.push(ch);
-            if head.width() > room {
-                head.pop();
-                break;
-            }
-        }
+        let head = head_within(raw_filename, room);
         Cow::Owned(format!("{head}\u{2026}"))
     } else {
         Cow::Borrowed(raw_filename)

@@ -194,7 +194,7 @@ fn read_exif(path: &Path) -> Option<exif::Exif> {
 }
 
 /// The orientation (1 to 8) of JPEG bytes in memory. libjpeg-turbo ignores it.
-#[cfg(feature = "turbo")]
+#[cfg(any(feature = "turbo", all(feature = "sips", target_os = "macos")))]
 pub(crate) fn orientation_from_bytes(data: &[u8]) -> Option<u8> {
     let exif = exif::Reader::new()
         .read_from_container(&mut std::io::Cursor::new(data))
@@ -441,7 +441,7 @@ mod tests {
         assert!(exif_rows(&dir.path().join("missing.jpg")).is_empty());
     }
 
-    #[cfg(feature = "turbo")]
+    #[cfg(any(feature = "turbo", all(feature = "sips", target_os = "macos")))]
     #[test]
     fn orientation_accepts_one_to_eight() {
         let jpeg = |orientation: Option<u16>| {

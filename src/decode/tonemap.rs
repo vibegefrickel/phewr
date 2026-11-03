@@ -21,8 +21,8 @@ pub(crate) fn to_display(image: DynamicImage) -> DynamicImage {
 
 fn map_pixels(samples: &[f32], channels: usize) -> Vec<u8> {
     let white = samples
-        .par_iter()
-        .copied()
+        .par_chunks(channels)
+        .flat_map_iter(|pixel| pixel.iter().take(3).copied())
         .filter(|sample| sample.is_finite())
         .reduce(|| 1.0, f32::max);
     let mut out = vec![0; samples.len() / channels * 4];
@@ -65,7 +65,7 @@ fn unit_to_byte(value: f64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{to_display, tone};
-    use image::{DynamicImage, Rgb32FImage, RgbaImage};
+    use image::{DynamicImage, Rgb32FImage, Rgba32FImage, RgbaImage};
 
     #[test]
     fn display_referred_keeps_values() {
@@ -93,5 +93,12 @@ mod tests {
 
         let bytes = DynamicImage::ImageRgba8(RgbaImage::new(2, 2));
         assert!(matches!(to_display(bytes), DynamicImage::ImageRgba8(_)));
+    }
+
+    #[test]
+    fn alpha_keeps_white_point() {
+        let float = Rgba32FImage::from_pixel(1, 1, image::Rgba([0.18, 0.18, 0.18, 8.0]));
+        let mapped = to_display(DynamicImage::ImageRgba32F(float)).to_rgba8();
+        assert_eq!(mapped.get_pixel(0, 0).0, [118, 118, 118, 255]);
     }
 }

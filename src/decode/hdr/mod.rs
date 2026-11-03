@@ -232,7 +232,7 @@ fn encode_table() -> &'static [u8] {
     })
 }
 
-fn to_8bit(sample: u16) -> u8 {
+pub(crate) fn to_8bit(sample: u16) -> u8 {
     u8::try_from((u32::from(sample) * 255 + 32_767) / 65_535).unwrap_or(u8::MAX)
 }
 

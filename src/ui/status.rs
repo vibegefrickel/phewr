@@ -4,6 +4,7 @@
 use super::STYLES;
 use crate::app::{App, DeleteMode};
 use ratatui::{prelude::*, widgets::Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 /// `line` at the left, the file facts at the right. A note, a question, an error or a long line
 /// hides the facts.
@@ -21,20 +22,24 @@ pub(super) fn draw_status_row(
         || app.delete_error.is_some()
         || app.gallery.search_active;
     let facts = (!busy).then(|| app.meta_line()).flatten();
-    let left_width = u16::try_from(line.width()).unwrap_or(u16::MAX);
+    let left_width = line.width();
     frame.render_widget(Paragraph::new(line), area);
     let Some(facts) = facts else {
         return;
     };
     let facts = format!(" {facts} ");
-    let facts_width = u16::try_from(facts.chars().count()).unwrap_or(u16::MAX);
-    if left_width.saturating_add(facts_width) > area.width {
+    if !facts_fit(left_width, &facts, area.width) {
         return;
     }
     frame.render_widget(
         Paragraph::new(Span::styled(facts, STYLES.dim)).alignment(Alignment::Right),
         area,
     );
+}
+
+/// Both sides count display columns, so a wide character in the facts cannot overlap the left part.
+fn facts_fit(left_width: usize, facts: &str, area_width: u16) -> bool {
+    left_width + facts.width() <= usize::from(area_width)
 }
 
 /// A delete question, an error, or the name, the position, the zoom, the slideshow and the note.
