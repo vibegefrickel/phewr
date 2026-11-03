@@ -136,6 +136,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `PHEWR_TEST_HEIC`, `PHEWR_TEST_AVIF`, `PHEWR_TEST_JXL`, `PHEWR_TEST_RAW`, `PHEWR_TEST_PSD`,
   `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. `real_flipped_copy_shows_upright` copies `PHEWR_TEST_RAW`
   (a RAF or ARW) into a temp dir and writes the orientations 2, 3 and 4 with exiftool.
+  `PHEWR_TEST_LIVE_DIR` is the folder of real Live Photo files
+  (`~/Pictures/phewr-test/12-live-photos/`, its `README.md` lists the cases).
+  `real_identifiers_match_exiftool`, `real_folder_cases`, `real_mismatch_note`,
+  `real_motion_plays_once` and `real_live_still_loops_its_motion` read it, the last two with the
+  real ffmpeg. `test_support::live` writes a JPEG still with the identifier in an Apple MakerNote
+  and a movie with the identifier in `moov/meta`.
   `real_orf_preview_turns_like_develop` copies `PHEWR_TEST_ORF`, writes the IFD0 orientation 1
   and 6 with exiftool, and compares the preview with the sips develop.
   `PHEWR_TEST_SDR_VIDEO` also feeds the first
@@ -236,7 +242,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   and the way back. `mod.rs` holds `VideoState` and `play_videos`. The ffprobe path lives in the
   decoder only (`Decoder::has_ffprobe`). `prestart/` holds the start of the player during a
   rest of the cursor (`VideoPrestart` in `App::video_prestart`, `tick_prestart`, `take_prestart`,
-  `prestart_timeout`). `window.rs` holds `poll_mpv_window`. `tests.rs` holds the start tests.
+  `prestart_timeout`). `window.rs` holds `poll_mpv_window`. `tests.rs` holds the start tests, and
+  `tests/live.rs` the tests of the Live Photo motion.
 - `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` with its `Run` and
   `Repeat`, the pacing, `catch_up` (the restart ahead of the clock) and `end_of_run` (the repeat,
   the software fallback, the failure). `tests.rs` holds the player tests. `decoder/` holds the
@@ -255,6 +262,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - `app/grid_loops/`: the loops of the grid. `mod.rs` holds `GridLoops`, `LoopFrames` and the loop
   state of `App`. `cell.rs` holds `CellLoop` and the loop clock (`TICKS_PER_SECOND`,
   `START_ALIGN`, `tick_ends`). `jobs.rs` holds the jobs, their cancel flags and `ResultGuard`.
+  `loop_source` gives the file of a loop: the motion of a Live Photo still, else the file itself.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields, its construction
   and `box_px` (the pixel box of a rect). One file per topic: `info_panel.rs` (`view_file`, the
@@ -324,7 +332,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `read_dir` of a folder argument for its folders and its files. `folder_listing` gives the
   subfolders (`..` first) and the sorted files of one folder from one read, without a thread and
   without the errors, for the folder prefetch. `subfolders` and `files_of` are its test-only
-  halves.
+  halves. `live/` holds the Live Photo pairs: `pair` takes the motion `.mov` of each HEIC or
+  JPEG still out of the sorted files of one folder (the 3 names before each `.mov`, HEIF before
+  JPEG), `LivePhotos` is the side table still -> motion, and `live/identifier.rs` (feature
+  `video`) reads the content identifiers of a pair.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
   `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
   `batch_since` gives the new entries and the list length from one lock, so the scan poll loses
@@ -371,7 +382,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `mod.rs` holds the app builders and the waits, `input.rs` the key and mouse helpers, `files.rs`
   the JPEG, TIFF RAW, CR3, RAF and PSD writers (feature `sips` on macOS), `heif.rs` the HEIF
   writers (feature `heic`, `write_heif_sized` with a thumbnail of any size), `kitty.rs` the fake terminal and `video.rs` `FakeRunner`,
-  `FakeDecoder` and the app builders of the video tests (feature `video`).
+  `FakeDecoder` and the app builders of the video tests (feature `video`), `live.rs` (feature
+  `video`) the synthetic Live Photo pairs, `scanned_app` and `real_live_dir`.
 - `bench/` (test only): the ignored speed benchmarks, one file per group. A bench path is
   `bench::<file>::<name>`. They drive the real loop steps without a terminal and read
   `PHEWR_TEST_DIR`. `mod.rs` holds the shared driver (`Bench`, `settle`, `measure_grid`).
@@ -463,7 +475,25 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a file in
   16 bit. A test compares the still map with each point of the player cubes, so a change of one
   copy fails it.
+- **Live Photos:** one folder scan hides the motion `.mov` of each Live Photo still
+  (`scanner::spawn_with`, `[gallery] live_photos`, on by default). The pass runs on the sorted
+  names before the first entry and reads no file. `SharedImageList::set_live_photos` comes
+  before the folders, and `App::live` takes the table with the first entry. A Live still carries
+  `◎ Live` in the gap above its cell, and its status facts start with `Live`. In the grid, it
+  loops its motion like a video cell (`App::loop_source`) and carries the play stamp while the
+  loops are on. `[gallery] animate = false` gives no loop and no stamp (maintainer,
+  2026-11-03). Enter or a left click on the middle of the fullscreen picture plays the motion
+  one time (`App::enter_motion_at`, `App::video_path`), and `current` stays on the still. The
+  same click plays a video placeholder and an animation, like Enter. The end of the motion, `q`,
+  `Esc` and a right click go back to the still. `p` opens the motion in the mpv window. At the
+  start of the motion, phewr reads both content identifiers on the UI thread (a `moov` above
+  1 MB counts as no Live Photo). If they differ, the motion plays with a note. The slideshow
+  shows the still only. A HEIC wins the motion over a JPEG twin, and the JPEG stays a plain cell.
+  Several path arguments pair nothing. One file argument that names a hidden `.mov` puts the
+  cursor on its still. The folder prefetch pairs with the same config. The design and the
+  measurements are in `docs/live-photos.md`.
 - **Entry kinds:** the first `App::folder_count` entries of `images` are folders, `..` first.
+  A folder scan lists no motion of a Live Photo still.
   The scanner pushes them before the first file batch, and the sort at the end of the scan sorts
   the files only. Every step of the fullscreen view starts at `App::first_file()`, the prefetch
   gets the first file index, and the thumbnail jobs, the marks, the cell shape and
@@ -599,7 +629,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   the new level. `0` writes only if the file holds an entry for the folder. The drop of `App`
   flushes the queue. A panic ends the process with `exit(101)` and loses the changes of the
   last 100 ms. A zoom test uses `StateWriter::with_delay` and `flush`, not a poll loop.
-- **Grid loops:** every visible video and animated cell loops after its still, as a Kitty
+- **Grid loops:** every visible video, animated and Live Photo cell loops after its still, as a Kitty
   animation or through ticks (`Loops`), and `[gallery] animate = false` turns them off. The
   frames are in `docs/video.md` ("Grid loop frames"). The two paths, the ids, the jobs and the
   loop cache are in `docs/app-state.md` ("Grid loops"). In herdr (`HERDR_ENV` or

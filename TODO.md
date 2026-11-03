@@ -60,7 +60,7 @@ Order: speed first, then formats, then the first release. The first release is p
 
 ## Later
 
-- Live Photo pairing: the design facts are in `docs/live-photos.md` (provisional). The 9 iPhone folders hold no Live Photo pair. Answer the 8 open questions there first, and add one real HEIC pair and one JPEG pair to `~/Pictures/phewr-test/`.
+- Live Photo pairing: done 2026-11-03 (`4e2d22b`, choices B and C, `docs/live-photos.md`). Open: a pair that a camera wrote as a pair (question 1). Follow-ups: the motion length in the status row, the prestart of the motion in the fullscreen view, a bench for the scan and the grid loops of a Live Photo folder, and the scan cost on an idle machine.
 
 
 ## Done

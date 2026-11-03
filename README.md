@@ -131,7 +131,7 @@ There is no search bar and no frame. A status row at the bottom shows the name a
 | `Space` | Pause / resume the slideshow |
 | `[` `]` | Shorter / longer interval (0.5 s steps) |
 | `i` | Toggle the info panel |
-| `Enter` | Play the video (on a video placeholder) |
+| `Enter`, click middle | Play the video, the animation or the motion of a Live Photo |
 | `p` | Play the video in the mpv window, with sound (on a video placeholder) |
 | `q` | Back to the gallery. In a running slideshow, `q` stops it and goes back in one press |
 | `Esc` | Stop the slideshow, or back to the gallery |
@@ -186,7 +186,8 @@ phewr reads `~/.config/phewr/config.toml`. If `XDG_CONFIG_HOME` is set, phewr re
 ```toml
 [gallery]
 mouse = true         # read the mouse; false keeps the terminal's own mouse
-animate = true       # video and animated cells play a short loop in the grid; false keeps the still with its play triangle
+animate = true       # video, animated and Live Photo cells play a short loop in the grid; false keeps the still
+live_photos = true   # hide the motion .mov of a Live Photo still, Enter plays it
 loops = "auto"       # how the loops play: "auto" (the terminal decides), "animation" (Kitty animation frames, Ghostty 1.4.0 and later), "ticks" (phewr swaps the frames)
 visible_rows = 4     # thumbnail rows in the grid (the zoom level, 2 to 12), the columns fill the width
 
@@ -232,6 +233,8 @@ In the same round trip, phewr asks the terminal whether it plays Kitty animation
 **Colors:** phewr converts the colors of each image into the color space of the terminal. Ghostty shows image pixels as Display P3, so that is the default. phewr reads ICC profiles (JPEG, PNG, WebP, TIFF, HEIC, AVIF), the nclx box of HEIC and AVIF, and the cICP, gAMA and cHRM chunks of PNG. A camera JPEG in Adobe RGB without a profile carries an EXIF mark, and phewr reads it too. An image without color information is sRGB. iPhone photos are already Display P3 and need no conversion.
 
 **Animated images:** animated GIF, WebP, APNG (`.png`, `.apng`) and AVIF image sequences (AVIS) play in the terminal player, in a loop. In the grid, every visible animated cell and video cell plays a short loop after its still thumbnail shows: a video shows 12 frames from the whole clip at 3 fps, an animation its own frames. `[gallery] animate = false` in the config turns the loops off, and the still keeps its play triangle. `Enter` plays the animation, and `p` opens it in the mpv window. In a slideshow, the terminal player plays an animation for at least the slideshow interval. Animated WebP needs FFmpeg 9 or later (the `webp_anim` decoder).
+
+**Live Photos:** phewr pairs an iPhone still (HEIC or JPEG) with the `.mov` of the same name and hides the `.mov`. The grid shows the still with a `◎ Live` mark and loops its motion. In the fullscreen view, `Enter` or a click on the middle of the picture plays the motion one time, and then the still comes back. `[gallery] live_photos = false` shows both files as cells.
 
 **JPEG XL:** phewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors into the color space of the terminal, also from ICC profiles and wide gamut, tone-maps PQ and HLG to SDR, and applies the orientation of the file. An animated JPEG XL shows its first frame.
 

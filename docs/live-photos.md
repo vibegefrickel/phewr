@@ -18,8 +18,15 @@ from this page.
 - The recommendation: pair by base name at the scan, hide the `.mov`, mark the still, and play
   the motion on Enter in the fullscreen view. When the motion plays, phewr reads the
   identifiers.
-- The recommendation is provisional. The probe read no real Live Photo. One real HEIC pair and one
-  real JPEG pair must make sure of the tag places first (open question 2).
+- Built on 2026-11-03 (`4e2d22b`): choice B and choice C. The maintainer decided the questions
+  3 to 8 with the recommended answers, then asked for the grid roll of choice C. The roll is on
+  whenever the grid loops are on (`[gallery] animate`), with no key of its own. A Live still
+  gets no play stamp with `animate = false`, a click on the middle of the picture plays like
+  Enter, and a JPEG twin of a HEIC pair stays a plain cell (maintainer, 2026-11-03).
+- Question 2, partly: `~/Pictures/phewr-test/12-live-photos/` holds real iPhone stills (HEIC
+  and one JPEG) and copies of one real iPhone 14 Pro Live Photo movie with the identifier of
+  each still. phewr reads all 11 identifiers like exiftool, so the tag places hold for HEIC and
+  for JPEG. No pair there comes from a camera as a pair. Question 1 stays open.
 
 ## The real folders
 
@@ -263,6 +270,23 @@ Choice B, provisional until open question 2 has an answer. These facts support i
 - The tag places and the read cost come from the exiftool tables, synthetic movies and the tag
   0x002b. A real pair can change them.
 - It follows the Photos app: the still shows, and a press plays the motion.
+
+## As built
+
+- The pair rule: the 3 names before each `.mov`, HEIC and HEIF before JPEG, the stems compare
+  without regard to ASCII case, one motion per still, and only `.mov` is a motion.
+- The cost: the pass with the side table takes about 0.4 ms for 3334 pairs and 0.01 ms to
+  0.03 ms for a folder without pairs. The design estimated 0.108 ms for the neighbor pass. The
+  numbers come from a machine under load: repeat `bench_live_pairs_scan` on an idle machine.
+- The identifier read runs on the UI thread at the start of the motion, not in the probe and not
+  on the meta thread. It costs 0.04 ms to 0.6 ms per real file. A `moov` box above 1 MB counts as
+  no Live Photo, and phewr reads only its header. The largest box below the cap (420 kB) takes
+  0.61 ms on the first read. A missing identifier counts as a match.
+- Choice C: the loop of the real 2.83 s motion takes 0.59 s (a constant-rate run, 12 frames).
+  Each Live cell costs one loop job, and the cell count stays halved.
+- The Live mark sits in the gap above the cell (`◎ Live`), not in the label row.
+- Not built: the length of the motion in the status row, the prestart of the motion in the
+  fullscreen view, choice D, the motion in the slideshow, and a key of its own for the roll.
 
 ## Open questions
 
