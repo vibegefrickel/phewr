@@ -2,7 +2,7 @@
 
 The benches live in `src/bench/`, one file per group. A bench path is `bench::<file>::<name>`.
 `just bench [DIR] [FILTER]` runs them on `~/Pictures/phewr-test/01-mixed-big` by default. The
-filter `bench::` finds all 23 benches.
+filter `bench::` finds all 26 benches. `just bench-live` runs only the group `bench::live`.
 
 ## The shared driver (`bench/mod.rs`)
 
@@ -79,6 +79,23 @@ filter `bench::` finds all 23 benches.
 ## Pixel layouts (`bench/layout_bench.rs`)
 
 - Each step runs both layouts in turn. Then machine load hits both in the same way.
+
+## Live Photos (`bench/live.rs`)
+
+- `scan_cost` scans a folder of 10 000 empty files and a folder of 3334 triples (HEIC, MOV,
+  `x.JPG`), each with `live_photos` on and off, and the real folder of `PHEWR_TEST_LIVE_DIR`. It
+  reports the median of 11 scans for the first entry and for the end of the scan.
+- The scan bench leaves out the file contents (the files are empty), the page cache of a cold
+  start, the header read for the cell shape and the identifier read.
+- With pairs on, the scan lists 6669 entries, not 10 002. So the share of the first entry is the
+  number for the 5 % limit of the design. The share of the end of the scan is lower.
+- `grid_animation` and `grid_ticks` measure the cold grid of a copy of `PHEWR_TEST_LIVE_DIR` with
+  the real ffmpeg, until every visible Live cell plays its loop. The copy keeps the probe cache
+  cold. They leave out the identifier read and the playback of the motion.
+- Each bench prints the load average of the minute. Run them only below a load of 4.
+- Result of 2026-11-04 (5 runs, load 3.02 to 3.41): the pairing takes 0.17 ms for 3334 pairs,
+  3.2 % of the first entry, and about 0 ms without pairs. Every Live cell of the real folder
+  loops after 1435 ms with Kitty animations and after 1595 ms with ticks.
 
 ## Test helpers (`src/test_support/`)
 

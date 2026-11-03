@@ -36,6 +36,7 @@ just test [FILTER]   # cargo nextest (falls back to cargo test)
 just test-real [FILTER]  # also the ignored tests that decode real files (PHEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
+just bench-live      # only the Live Photo benches (bench::live), on PHEWR_TEST_LIVE_DIR
 just bench [DIR] [FILTER]  # the speed measurements of src/bench/ on PHEWR_TEST_DIR (default ~/Pictures/phewr-test/01-mixed-big), FILTER selects a bench (default bench::)
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
@@ -390,7 +391,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `bench::<file>::<name>`. They drive the real loop steps without a terminal and read
   `PHEWR_TEST_DIR`. `mod.rs` holds the shared driver (`Bench`, `settle`, `measure_grid`).
   `start::first_grid_picture` measures the process start and the steps of `main`,
-  `cache::formats` the cache formats, `layout_bench::layouts_against_rgba` the pixel layouts of
+  `cache::formats` the cache formats, `live::scan_cost` the scan with and without the
+  Live Photo pairing, `live::grid_animation` and `live::grid_ticks` the cold grid of a copy of
+  `PHEWR_TEST_LIVE_DIR` until every Live cell loops, `layout_bench::layouts_against_rgba` the pixel layouts of
   the fullscreen path (the A/B table of the RGB and RGBA resizes). `folders::grid_during_prefetch`
   runs the cold grid while a folder prefetch of `PHEWR_TEST_PREFETCH_DIR` runs. `measure_grid`
   stops the clock at the end of the pass. Each bench lets its background work end before the next

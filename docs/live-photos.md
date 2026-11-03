@@ -275,9 +275,12 @@ Choice B, provisional until open question 2 has an answer. These facts support i
 
 - The pair rule: the 3 names before each `.mov`, HEIC and HEIF before JPEG, the stems compare
   without regard to ASCII case, one motion per still, and only `.mov` is a motion.
-- The cost: the pass with the side table takes about 0.4 ms for 3334 pairs and 0.01 ms to
-  0.03 ms for a folder without pairs. The design estimated 0.108 ms for the neighbor pass. The
-  numbers come from a machine under load: repeat `bench_live_pairs_scan` on an idle machine.
+- The cost (`just bench-live`, 2026-11-04, load below 4): the pairing takes 0.17 ms (0.12 ms to
+  0.20 ms) for 3334 pairs, 3.2 % of the first entry, below the 5 % limit. Without pairs, it
+  takes about 0 ms. The share of the end of the scan (1.7 %) is lower, because the scan pushes
+  6669 entries instead of 10 002. The design estimated 0.108 ms for the neighbor pass.
+- The cold grid of the real folder: every Live cell loops after 1435 ms with Kitty animations
+  and after 1595 ms with ticks.
 - The identifier read runs on the UI thread at the start of the motion, not in the probe and not
   on the meta thread. It costs 0.04 ms to 0.6 ms per real file. A `moov` box above 1 MB counts as
   no Live Photo, and phewr reads only its header. The largest box below the cap (420 kB) takes
