@@ -6,15 +6,15 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-/// One query for the filter thread: the names to search and where to send the ranked indices.
+/// One query: the names to search and the channel of the ranked indices.
 struct Request {
     query: String,
     names: Arc<Vec<String>>,
     reply: Sender<Vec<usize>>,
 }
 
-/// A long-lived filter thread. It keeps the one `Matcher` and takes queries through a channel. The
-/// worker holds the names as an `Arc` and copies the list only when it changed since the last query.
+/// A long-lived filter thread with one `Matcher`. The worker copies the names only when they
+/// change.
 #[derive(Default)]
 pub(crate) struct FilterWorker {
     requests: Option<Sender<Request>>,
@@ -22,9 +22,8 @@ pub(crate) struct FilterWorker {
 }
 
 impl FilterWorker {
-    /// Start a search of `filenames` for `query`. The reply is one `Vec` of indices, best first.
-    /// A new query replaces the receiver of the old one, so the late result of an old query goes
-    /// nowhere. The thread starts at the first query and ends when the worker drops.
+    /// The reply holds the indices, best first. A new query replaces the receiver of the old one,
+    /// and a late old result goes nowhere. The thread ends when the worker drops.
     pub(crate) fn submit(&mut self, query: &str, filenames: &[String]) -> Receiver<Vec<usize>> {
         if self.names.as_slice() != filenames {
             self.names = Arc::new(filenames.to_vec());
@@ -54,14 +53,13 @@ impl FilterWorker {
     }
 }
 
-/// Start the filter thread, so that one `Matcher` serves every query until the worker drops.
 fn spawn_thread() -> Sender<Request> {
     let (requests, queue) = mpsc::channel::<Request>();
     thread::spawn(move || {
         let mut matcher = Matcher::new(Config::DEFAULT);
         let mut buf = Vec::new();
         while let Ok(mut request) = queue.recv() {
-            // Queries that wait behind this one are stale: only the newest one runs.
+            // Waiting queries are stale. Only the newest one runs.
             while let Ok(newer) = queue.try_recv() {
                 request = newer;
             }
@@ -76,7 +74,7 @@ fn spawn_thread() -> Sender<Request> {
     requests
 }
 
-/// The indices of the names that match `query`, best score first. An empty query keeps the order.
+/// Best score first. An empty query keeps the order.
 fn rank(
     query: &str,
     filenames: &[String],
@@ -104,12 +102,12 @@ fn rank(
 
 #[cfg(test)]
 mod tests {
-    use super::{FilterWorker, rank};
+    use super::{FilterWorker, Request, rank, spawn_thread};
     use nucleo_matcher::{Config, Matcher};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    /// The ranking of one query with a new matcher, as the old thread per key press did it.
+    /// One query with a new matcher, as the old thread per key press did it.
     fn filter(query: &str, filenames: &[String]) -> Vec<usize> {
         rank(
             query,
@@ -119,7 +117,7 @@ mod tests {
         )
     }
 
-    /// Wait at most 2 s for the answer, so a hang fails the test.
+    /// Wait at most 2 s, and a hang fails the test.
     fn answer(results: &std::sync::mpsc::Receiver<Vec<usize>>) -> Vec<usize> {
         results.recv_timeout(Duration::from_secs(2)).unwrap()
     }
@@ -137,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn the_worker_answers_two_queries_with_one_copy_of_the_list() {
+    fn worker_copies_list_once() {
         let filenames: Vec<String> = vec!["vacation.jpg".into(), "report.png".into()];
         let mut worker = FilterWorker::default();
 
@@ -165,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn each_query_has_its_own_reply_channel() {
+    fn each_query_gets_own_reply() {
         let filenames: Vec<String> = vec!["vacation.jpg".into(), "report.png".into()];
         let mut worker = FilterWorker::default();
 
@@ -177,8 +175,51 @@ mod tests {
         drop(old);
     }
 
-    /// The time per key press of the old way (a copy of the list, a thread, a new matcher) and of
-    /// the worker, on 10 000 synthetic names: `cargo test --release -- --ignored search::`.
+    #[test]
+    fn restarts_dead_thread() {
+        let filenames: Vec<String> = vec!["vacation.jpg".into(), "report.png".into()];
+        let mut worker = FilterWorker::default();
+        let (requests, queue) = std::sync::mpsc::channel();
+        drop(queue);
+        worker.requests = Some(requests);
+
+        assert_eq!(answer(&worker.submit("rep", &filenames)), vec![1]);
+    }
+
+    #[test]
+    fn queued_queries_answer_or_drop() {
+        let names = Arc::new(vec!["vacation.jpg".to_owned(), "report.png".to_owned()]);
+        let requests = spawn_thread();
+        let replies = ["v", "va", "rep"].map(|query| {
+            let (reply, results) = std::sync::mpsc::channel();
+            let request = Request {
+                query: query.to_owned(),
+                names: Arc::clone(&names),
+                reply,
+            };
+            requests.send(request).unwrap();
+            results
+        });
+
+        assert_eq!(answer(&replies[2]), vec![1]);
+        // The thread runs the queries in order. Each older query has its answer or a closed
+        // channel.
+        for (results, expected) in replies[..2].iter().zip([vec![0], vec![0]]) {
+            match results.try_recv() {
+                Ok(ranked) => assert_eq!(ranked, expected),
+                Err(error) => assert_eq!(error, std::sync::mpsc::TryRecvError::Disconnected),
+            }
+        }
+    }
+
+    #[test]
+    fn better_match_ranks_first() {
+        let filenames = vec!["xrxexpx.png".into(), "report.png".into()];
+        assert_eq!(filter("rep", &filenames), vec![1, 0]);
+    }
+
+    /// The old way (a list copy, a thread, a new matcher) against the worker on 10 000 names:
+    /// `cargo test --release -- --ignored search::`.
     #[test]
     #[ignore = "timing"]
     fn time_per_key_press() {
@@ -190,8 +231,7 @@ mod tests {
         ];
         let rounds = 20_u32;
 
-        // The old way: a copy of the list, a thread and a new matcher per key press. `ui` is the
-        // part on the thread of the UI (the copy and the thread start).
+        // `ui` is the part on the UI thread: the copy and the thread start.
         let (mut total, mut ui) = (Duration::ZERO, Duration::ZERO);
         for _ in 0..rounds {
             for query in queries {

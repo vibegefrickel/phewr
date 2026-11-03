@@ -1,10 +1,6 @@
-//! The shape of the photos in a folder, from the file headers. The grid shapes its cells like
-//! the photos, so a folder of portraits gets narrow cells and a folder of landscapes wide ones.
-//!
-//! A header read costs a fraction of a millisecond: the `image` crate reads the size of a JPEG
-//! or PNG from its first bytes, the HEIF reader takes the `ispe` box from `meta`, and the EXIF
-//! reader stops at the first image data. A RAW or PSD file gives the size of its embedded JPEG,
-//! after the orientation. A file without a cheap header (PDF, video) counts as 3:2.
+//! The shape of the photos in a folder, from the file headers. A folder of portraits gets
+//! narrow cells, a folder of landscapes wide ones. A header read costs a fraction of a
+//! millisecond. A file without a cheap header (PDF, video) counts as 3:2.
 
 use crate::decode::Route;
 use crate::gallery::DEFAULT_IMAGE_ASPECT;
@@ -12,8 +8,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-/// The shapes that the grid can take: 9:16, 2:3, 3:4, 1:1, 4:3, 3:2 and 16:9. The median of a
-/// folder snaps to the nearest one, so a few odd crops do not move the columns.
+/// The median of a folder snaps to the nearest shape, and a few odd crops do not move the
+/// columns.
 const BUCKETS: [f64; 7] = [
     9.0 / 16.0,
     2.0 / 3.0,
@@ -24,8 +20,8 @@ const BUCKETS: [f64; 7] = [
     16.0 / 9.0,
 ];
 
-/// The shape of the folder: the median aspect ratio of `paths`, snapped to a bucket. Each file
-/// without a known size counts as 3:2.
+/// The median aspect ratio of `paths`, snapped to a bucket. A file without a known size counts
+/// as 3:2.
 pub(crate) fn folder_aspect(paths: &[impl AsRef<Path>]) -> f64 {
     let aspects: Vec<f64> = paths
         .iter()
@@ -34,8 +30,7 @@ pub(crate) fn folder_aspect(paths: &[impl AsRef<Path>]) -> f64 {
     bucket(median(&aspects).unwrap_or(DEFAULT_IMAGE_ASPECT))
 }
 
-/// The bucket nearest to `aspect` on a log scale, so that 3:4 and 4:3 are the same distance
-/// from 1:1.
+/// The nearest bucket on a log scale: 3:4 and 4:3 are the same distance from 1:1.
 pub(crate) fn bucket(aspect: f64) -> f64 {
     let distance = |bucket: f64| (bucket.ln() - aspect.ln()).abs();
     BUCKETS
@@ -44,7 +39,7 @@ pub(crate) fn bucket(aspect: f64) -> f64 {
         .unwrap_or(DEFAULT_IMAGE_ASPECT)
 }
 
-/// The middle value, or the lower of the two middle values.
+/// The lower of two middle values.
 fn median(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -54,8 +49,7 @@ fn median(values: &[f64]) -> Option<f64> {
     sorted.get((sorted.len() - 1) / 2).copied()
 }
 
-/// The width over the height of `path` as the viewer shows it, from the header. `None` for a
-/// file without a cheap header.
+/// The shown width over the height, from the header.
 pub(crate) fn aspect_of(path: &Path) -> Option<f64> {
     let (width, height) = shown_size(path)?;
     (width > 0 && height > 0).then(|| f64::from(width) / f64::from(height))
@@ -77,14 +71,14 @@ pub(crate) fn shown_size(path: &Path) -> Option<(u32, u32)> {
             }
         }
         Route::Jxl => crate::decode::jxl::dimensions(path),
-        // The embedded JPEG of a RAW or PSD file has the shape of the photo. PDF and SVG
-        // have none and count as 3:2.
+        // The embedded JPEG of a RAW or PSD file has the shape of the photo. PDF and SVG count as
+        // 3:2.
         #[cfg(all(feature = "sips", target_os = "macos"))]
         Route::Sips => crate::decode::embedded_jpeg::find(path).map(|jpeg| jpeg.shown_size()),
     }
 }
 
-/// True for the EXIF orientations 5 to 8, which turn the picture by a quarter.
+/// The EXIF orientations 5 to 8 turn the picture by a quarter.
 fn exif_swaps_axes(path: &Path) -> bool {
     let Ok(file) = File::open(path) else {
         return false;
@@ -113,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn the_median_is_the_lower_middle_value() {
+    fn median_is_lower_middle() {
         assert_eq!(median(&[]), None);
         assert_eq!(median(&[2.0]), Some(2.0));
         assert_eq!(median(&[3.0, 1.0, 2.0]), Some(2.0));
@@ -121,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bucket_is_the_nearest_shape() {
+    fn bucket_is_nearest_shape() {
         assert_eq!(bucket(1.49), 1.5);
         assert_eq!(bucket(4032.0 / 3024.0), 4.0 / 3.0);
         assert_eq!(bucket(3024.0 / 4032.0), 3.0 / 4.0);
@@ -131,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_shape_is_the_median_of_the_headers() {
+    fn folder_shape_is_header_median() {
         let dir = TempDir::new().unwrap();
         let portrait = png(dir.path(), "p.png", 30, 40);
         let landscape = png(dir.path(), "l.png", 40, 30);
@@ -153,7 +147,6 @@ mod tests {
         assert_eq!(folder_aspect(&none), DEFAULT_IMAGE_ASPECT);
     }
 
-    /// A black JPEG of `width` x `height` with the EXIF `orientation`.
     fn jpeg_with_orientation(path: &Path, width: u32, height: u32, orientation: u16) {
         use exif::experimental::Writer;
         use exif::{Field, In, Tag, Value};
@@ -179,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turned_jpeg_swaps_its_sides() {
+    fn turned_jpeg_swaps_sides() {
         let dir = TempDir::new().unwrap();
         let turned = dir.path().join("turned.jpg");
         jpeg_with_orientation(&turned, 40, 30, 6);
@@ -192,7 +185,7 @@ mod tests {
 
     #[test]
     #[cfg(all(feature = "sips", target_os = "macos"))]
-    fn a_raw_file_takes_the_shape_of_its_embedded_jpeg_after_the_orientation() {
+    fn raw_takes_embedded_jpeg_shape() {
         let dir = TempDir::new().unwrap();
         let turned = dir.path().join("turned.dng");
         crate::test_support::write_tiff_raw(&turned, 6);

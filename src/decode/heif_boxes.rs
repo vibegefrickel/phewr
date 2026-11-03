@@ -1,35 +1,27 @@
-//! A small reader for the HEIF boxes (ISO/IEC 23008-12 on ISOBMFF) that hold the transforms of
-//! the image items, in safe Rust.
+//! A reader for the HEIF boxes that hold the transforms of the image items, in safe Rust.
 //!
-//! libheif applies the `irot` (rotation) and `imir` (mirror) properties of each item itself, but
-//! libheif-rs does not show them. A camera can write a thumbnail without the transform of the
-//! primary image. A missing 90 or 270 degree rotation changes the shape, but a missing 180 degree
-//! rotation or mirror does not. This reader compares the transforms, so that the grid rejects such
-//! a thumbnail.
-//!
-//! The reader reads only the `meta` box: `pitm` (the primary item), `iref` with its `thmb`
-//! references, and `iprp` with `ipco` (the properties) and `ipma` (the property indices of each
-//! item). It does not read `iinf`, because libheif already lists the thumbnail items. The `ispe`
-//! property gives the size of the primary item without a decode, for the cell shape of the grid.
+//! libheif applies `irot` and `imir` itself, but libheif-rs does not show them. A thumbnail
+//! without the half turn or the mirror of the primary image has the right shape and the wrong
+//! picture. The grid compares the transforms before it takes a thumbnail. The reader reads only
+//! the `meta` box.
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-/// The largest `meta` box that the reader loads. An iPhone photo has about 4 KB.
+/// An iPhone photo has a `meta` box of about 4 KB.
 const MAX_META_BYTES: u64 = 16 * 1024 * 1024;
 
-/// A rotation and mirror as an integer 2x2 matrix. Two transforms with the same matrix give the
-/// same picture, also if the file writes them in other steps (180 degrees plus a mirror on one
-/// axis is the mirror on the other axis).
+/// A rotation and mirror as an integer 2x2 matrix. Equal matrices give the same picture: 180
+/// degrees plus a mirror on one axis is the mirror on the other axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Transform([[i8; 2]; 2]);
 
 impl Transform {
     const IDENTITY: Self = Self([[1, 0], [0, 1]]);
 
-    /// `irot`: `quarter_turns` times 90 degrees anti-clockwise.
+    /// `irot`: quarter turns anti-clockwise.
     fn rotation(quarter_turns: u8) -> Self {
         match quarter_turns % 4 {
             0 => Self::IDENTITY,
@@ -48,12 +40,10 @@ impl Transform {
         }
     }
 
-    /// True for a quarter turn: the width and the height change places.
     fn swaps_axes(self) -> bool {
         self.0[0][0] == 0
     }
 
-    /// This transform, then `next`.
     fn then(self, next: Self) -> Self {
         let (a, b) = (next.0, self.0);
         let cell = |row: usize, col: usize| a[row][0] * b[0][col] + a[row][1] * b[1][col];
@@ -61,26 +51,24 @@ impl Transform {
     }
 }
 
-/// The items of a HEIF file that the thumbnail check needs.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct HeifItems {
     primary: u32,
     /// `(thumbnail, master)` pairs from the `thmb` references.
     thumbnails: Vec<(u32, u32)>,
-    /// The transform of each item with an `irot` or `imir` property.
     transforms: HashMap<u32, Transform>,
-    /// The `ispe` size (width, height) of each item, before its transform.
+    /// The `ispe` size of each item, before its transform.
     sizes: HashMap<u32, (u32, u32)>,
 }
 
 impl HeifItems {
-    /// Read the `meta` box of `path`. `None` for a file without a readable `meta` box.
+    /// `None` for a file without a readable `meta` box.
     pub(crate) fn read(path: &Path) -> Option<Self> {
         let meta = read_meta(&mut BufReader::new(File::open(path).ok()?)).ok()??;
         Self::parse_meta(&meta)
     }
 
-    /// True if `thumbnail` is a thumbnail of the primary item and has its rotation and mirror.
+    /// True for a thumbnail of the primary item with its rotation and mirror.
     pub(crate) fn thumbnail_matches_primary(&self, thumbnail: u32) -> bool {
         self.thumbnails
             .iter()
@@ -88,8 +76,7 @@ impl HeifItems {
             && self.transform(thumbnail) == self.transform(self.primary)
     }
 
-    /// The size of the primary image as the viewer shows it: `ispe`, swapped by a 90 or 270
-    /// degree `irot`.
+    /// The `ispe` size, swapped by a quarter turn.
     pub(crate) fn primary_size(&self) -> Option<(u32, u32)> {
         let (width, height) = *self.sizes.get(&self.primary)?;
         if self.transform(self.primary).swaps_axes() {
@@ -106,7 +93,7 @@ impl HeifItems {
             .unwrap_or(Transform::IDENTITY)
     }
 
-    /// Parse the content of the `meta` box (a full box: version and flags come first).
+    /// `meta` is a full box: version and flags come first.
     fn parse_meta(meta: &[u8]) -> Option<Self> {
         let mut items = Self::default();
         let mut primary = None;
@@ -156,7 +143,6 @@ impl HeifItems {
     }
 }
 
-/// `ispe`: a full box with the width and the height as `u32`.
 fn parse_ispe(body: &[u8]) -> Option<(u32, u32)> {
     let mut bytes = Bytes(body);
     bytes.full_box_version()?;
@@ -165,7 +151,7 @@ fn parse_ispe(body: &[u8]) -> Option<(u32, u32)> {
     (width > 0 && height > 0).then_some((width, height))
 }
 
-/// Find the top-level `meta` box and load its content. `Ok(None)` if the file has none.
+/// The content of the top-level `meta` box, or `Ok(None)`.
 fn read_meta<R: Read + Seek>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
     loop {
         let mut header = [0u8; 8];
@@ -212,7 +198,7 @@ fn read_meta<R: Read + Seek>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
-/// The child boxes of `data` as `(type, content)`. A box with a wrong size stops the list.
+/// The child boxes as `(type, content)`. A box with a wrong size ends the list.
 fn boxes(data: &[u8]) -> impl Iterator<Item = ([u8; 4], &[u8])> {
     let mut rest = data;
     std::iter::from_fn(move || {
@@ -230,14 +216,12 @@ fn boxes(data: &[u8]) -> impl Iterator<Item = ([u8; 4], &[u8])> {
     })
 }
 
-/// `pitm`: the ID of the primary item.
 fn parse_pitm(body: &[u8]) -> Option<u32> {
     let mut bytes = Bytes(body);
     let version = bytes.full_box_version()?;
     bytes.item_id(version > 0)
 }
 
-/// `iref`: the `(thumbnail, master)` pairs of its `thmb` references.
 fn parse_thumbnail_references(body: &[u8]) -> Option<Vec<(u32, u32)>> {
     let mut bytes = Bytes(body);
     let large_ids = bytes.full_box_version()? > 0;
@@ -255,7 +239,7 @@ fn parse_thumbnail_references(body: &[u8]) -> Option<Vec<(u32, u32)>> {
     Some(pairs)
 }
 
-/// `ipma`: the property indices (1-based, in order) of each item.
+/// The 1-based property indices of each item.
 fn parse_ipma(body: &[u8]) -> Option<Vec<(u32, Vec<u16>)>> {
     let mut bytes = Bytes(body);
     let version = bytes.u8()?;
@@ -281,7 +265,7 @@ fn parse_ipma(body: &[u8]) -> Option<Vec<(u32, Vec<u16>)>> {
     Some(entries)
 }
 
-/// A cursor over big-endian box data. Each read returns `None` at the end of the data.
+/// A cursor over big-endian box data. Each read returns `None` at the end.
 struct Bytes<'a>(&'a [u8]);
 
 impl<'a> Bytes<'a> {
@@ -307,14 +291,13 @@ impl<'a> Bytes<'a> {
         Some(u64::from_be_bytes(self.take(8)?.try_into().ok()?))
     }
 
-    /// Read the version and flags of a full box, and return the version.
     fn full_box_version(&mut self) -> Option<u8> {
         let version = self.u8()?;
         self.take(3)?;
         Some(version)
     }
 
-    /// An item ID: 32 bits in the newer box versions, 16 bits in version 0.
+    /// 32 bits in the newer box versions, 16 bits in version 0.
     fn item_id(&mut self, large: bool) -> Option<u32> {
         if large {
             self.u32()
@@ -329,7 +312,6 @@ mod tests {
     use super::{HeifItems, Transform, read_meta};
     use std::io::Cursor;
 
-    /// A box of `kind` around `body`.
     fn bx(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
         let mut out = u32::try_from(body.len() + 8)
             .unwrap()
@@ -340,22 +322,19 @@ mod tests {
         out
     }
 
-    /// A full box (version 0, no flags) of `kind`.
+    /// A full box: version 0, no flags.
     fn full(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
         bx(kind, &[&[0, 0, 0, 0], body].concat())
     }
 
-    /// A `meta` body: primary item 1, thumbnail item 2. Property 1 is `irot` with
-    /// `primary_rotation`, property 2 is `ispe`. `thumbnail_properties` are the 1-based property
-    /// indices of the thumbnail, `extra` are more properties after the first two.
+    /// Primary item 1, thumbnail item 2. Property 1 is `irot` with `primary_rotation`, property 2
+    /// is `ispe`, and `extra` follows them.
     fn meta(primary_rotation: u8, extra: &[Vec<u8>], thumbnail_properties: &[u8]) -> Vec<u8> {
         let mut ipco = vec![bx(*b"irot", &[primary_rotation]), full(*b"ispe", &[0; 8])];
         ipco.extend_from_slice(extra);
         meta_items(&ipco, &[0x81, 2], thumbnail_properties)
     }
 
-    /// A `meta` body with the properties `ipco`: primary item 1 with the 1-based
-    /// `primary_properties`, thumbnail item 2 with `thumbnail_properties`.
     fn meta_items(
         ipco: &[Vec<u8>],
         primary_properties: &[u8],
@@ -382,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn transforms_compose_like_the_pictures() {
+    fn transforms_compose_like_pictures() {
         let half_turn = Transform::rotation(2);
         assert_eq!(
             Transform::rotation(1).then(Transform::rotation(1)),
@@ -398,21 +377,18 @@ mod tests {
     }
 
     #[test]
-    fn a_thumbnail_needs_the_transform_of_the_primary_item() {
-        // The thumbnail has the same `irot` (property 1) as the primary item.
+    fn thumbnail_matches_primary_transform() {
         let same = HeifItems::parse_meta(&meta(2, &[], &[1, 2])).unwrap();
         assert!(same.thumbnail_matches_primary(2));
-        // The thumbnail has only `ispe`: the 180 degree turn is missing.
+        // The thumbnail misses the 180 degree turn.
         let missing = HeifItems::parse_meta(&meta(2, &[], &[2])).unwrap();
         assert!(!missing.thumbnail_matches_primary(2));
-        // Item 1 is not a thumbnail of the primary item.
         assert!(!same.thumbnail_matches_primary(1));
     }
 
     #[test]
-    fn a_mirror_can_replace_a_half_turn_and_a_mirror() {
-        // Primary: no rotation. Thumbnail: 180 degrees (property 3), then a mirror on the
-        // vertical axis (property 4), which is a mirror on the horizontal axis (property 5).
+    fn mirror_replaces_half_turn_and_mirror() {
+        // Thumbnail: 180 degrees, then a vertical mirror. That equals the horizontal mirror.
         let extra = [bx(*b"irot", &[2]), bx(*b"imir", &[0]), bx(*b"imir", &[1])];
         let items = HeifItems::parse_meta(&meta(0, &extra, &[3, 4])).unwrap();
         let mirrored = HeifItems::parse_meta(&meta(0, &extra, &[5])).unwrap();
@@ -421,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn the_primary_size_follows_the_rotation() {
+    fn primary_size_follows_rotation() {
         let ispe = full(*b"ispe", &[0, 0, 0x0f, 0xc0, 0, 0, 0x0b, 0xd0]);
         let quarter_turn = bx(*b"irot", &[1]);
         let ipco = [ispe, quarter_turn.clone()];
@@ -446,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn the_meta_box_is_found_after_other_boxes() {
+    fn finds_meta_after_other_boxes() {
         let body = meta(1, &[], &[1]);
         let file = [
             bx(*b"ftyp", b"heic\0\0\0\0mif1heic"),

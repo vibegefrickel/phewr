@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-/// What an entry of the list is. The folders come first, so the decoders never see a folder.
+/// The folders come first, and the decoders never see a folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EntryKind {
     Folder,
@@ -21,7 +21,6 @@ pub(crate) struct FolderEntry {
 struct Inner {
     paths: Vec<PathBuf>,
     filenames: Vec<String>,
-    /// The first `folder_count` entries are folders.
     folder_count: usize,
     errors: Vec<String>,
 }
@@ -60,8 +59,7 @@ impl SharedImageList {
         self.len.store(inner.paths.len(), Ordering::Release);
     }
 
-    /// Put the folders at the front of the list. The scanner calls it before the first batch of
-    /// files, so that the folders stay a prefix of the list.
+    /// The scanner calls it before the first batch of files. The folders stay a prefix.
     pub(crate) fn push_folders(&self, folders: Vec<FolderEntry>) {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         debug_assert!(
@@ -80,7 +78,6 @@ impl SharedImageList {
         self.len.store(inner.paths.len(), Ordering::Release);
     }
 
-    /// The count of the folder entries at the front of the list.
     pub(crate) fn folder_count(&self) -> usize {
         self.inner
             .lock()
@@ -118,7 +115,7 @@ impl SharedImageList {
         self.len.load(Ordering::Acquire)
     }
 
-    /// Copies the entries from `known_len` on. The list keeps them.
+    /// A copy of the entries from `known_len` on.
     pub(crate) fn entries_since(&self, known_len: usize) -> (Vec<PathBuf>, Vec<String>) {
         let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let paths = inner.paths[known_len..].to_vec();
@@ -126,7 +123,7 @@ impl SharedImageList {
         (paths, filenames)
     }
 
-    /// Replace the list. The first `folder_count` entries of `paths` are folders.
+    /// The first `folder_count` entries of `paths` are folders.
     pub(crate) fn replace_all(
         &self,
         paths: Vec<PathBuf>,
@@ -164,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_push_updates_len_and_entries_since() {
+    fn batch_push_updates_len() {
         let list = SharedImageList::new();
         list.push_batch(vec![PathBuf::from("a.png"), PathBuf::from("b.png")]);
 
@@ -197,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn folders_go_to_the_front_and_count_as_a_prefix() {
+    fn folders_form_prefix() {
         let list = SharedImageList::new();
         list.push_folders(vec![FolderEntry {
             path: PathBuf::from("/x"),

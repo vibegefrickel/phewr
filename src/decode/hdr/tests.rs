@@ -1,0 +1,435 @@
+//! The tests of the HDR tone map: the curves, the tables and the renderings of the player cube.
+
+use super::{Curve, ENCODE_STEPS, Primaries, ToneMap, encode_table, is_hdr, rgb_to_xyz};
+use crate::decode::color::{ColorTarget, SourceColor, convert};
+use crate::decode::resize::load_and_resize_px;
+use crate::decode::screen::load_for_screen;
+use crate::decode::{Decoded, EmbeddedThumbnail, ScreenImage, decode_image};
+use crate::scanner;
+use crate::test_support::fixture;
+use image::{DynamicImage, Rgb, RgbImage, RgbaImage};
+
+const TARGETS: [ColorTarget; 2] = [ColorTarget::DisplayP3, ColorTarget::Srgb];
+
+/// The exact output from 0 to 1 for one signal value per channel.
+fn exact(map: &ToneMap, signal: [f64; 3]) -> [f64; 3] {
+    let light = signal.map(|value| map.curve.light(value) as f32);
+    map.linear(light)
+        .map(|value| f64::from(value).powf(1.0 / 2.4))
+}
+
+fn cicp(primaries: u8, transfer: u8) -> SourceColor {
+    SourceColor::Cicp {
+        primaries,
+        transfer,
+    }
+}
+
+#[test]
+fn only_pq_and_hlg_are_hdr() {
+    assert!(is_hdr(&cicp(9, 16)));
+    assert!(is_hdr(&cicp(9, 18)));
+    assert!(is_hdr(&cicp(2, 16)), "unknown primaries");
+    assert!(!is_hdr(&cicp(9, 13)));
+    assert!(!is_hdr(&SourceColor::Srgb));
+    assert!(ToneMap::of_source(&SourceColor::DisplayP3, ColorTarget::Srgb).is_none());
+}
+
+#[test]
+fn bt2020_luma_matches_bt2100() {
+    let luma = rgb_to_xyz(Primaries::Bt2020)[1];
+    for (computed, known) in luma.into_iter().zip([0.2627, 0.6780, 0.0593]) {
+        assert!((computed - known).abs() < 1e-4, "{luma:?}");
+    }
+}
+
+#[test]
+fn encode_table_rounds_like_curve() {
+    let encode = encode_table();
+    let mut worst = 0u8;
+    for step in 0..=100_000 {
+        let linear = f64::from(step) / 100_000.0;
+        let exact = (255.0 * linear.powf(1.0 / 2.4)).round() as u8;
+        let index = (linear.sqrt() * (ENCODE_STEPS - 1) as f64 + 0.5) as usize;
+        worst = worst.max(encode[index].abs_diff(exact));
+    }
+    assert!(worst <= 1, "the table differs by {worst} levels");
+    assert_eq!((encode[0], encode[ENCODE_STEPS - 1]), (0, 255));
+}
+
+#[test]
+fn gray_ramp_stays_neutral() {
+    for target in TARGETS {
+        for curve in [Curve::Pq, Curve::Hlg] {
+            let map = ToneMap::new(curve, Primaries::Bt2020, target);
+            let mut last = -1.0;
+            for step in 0..=64 {
+                let signal = f64::from(step) / 64.0;
+                let [r, g, b] = exact(&map, [signal; 3]);
+                assert!(
+                    (r - g).abs() < 1e-4 && (g - b).abs() < 1e-4,
+                    "{curve:?} {signal}"
+                );
+                assert!(g >= last - 1e-6, "{curve:?} {signal}: {g} after {last}");
+                last = g;
+            }
+            assert!(last > 0.99, "{curve:?}: signal 1 is white");
+        }
+    }
+}
+
+#[test]
+fn dci_p3_white_adapts_to_target() {
+    // Without the Bradford adaptation, DCI-P3 gray shows green-yellow in a D65 target.
+    for target in TARGETS {
+        let map = ToneMap::of_source(&cicp(11, 16), target).unwrap();
+        let [r, g, b] = exact(&map, [0.6; 3]);
+        assert!(
+            (r - g).abs() < 1e-3 && (g - b).abs() < 1e-3,
+            "{target:?}: {r} {g} {b}"
+        );
+    }
+}
+
+#[test]
+fn display_image_maps_8_bit_hdr() {
+    let decoded = Decoded {
+        image: DynamicImage::ImageRgb8(RgbImage::from_pixel(2, 2, Rgb([148, 148, 148]))),
+        color: cicp(9, 16),
+        opaque: true,
+    };
+    let pixel = decoded.into_display().to_rgba8().get_pixel(0, 0).0;
+    assert_eq!(pixel, [158, 158, 158, 255]);
+}
+
+#[test]
+fn eight_and_sixteen_bit_maps_agree() {
+    let map = ToneMap::of_source(&cicp(9, 16), ColorTarget::Srgb).unwrap();
+    let mut eight = vec![0, 0, 0, 128, 200, 120, 60, 7, 255, 255, 255, 0];
+    let deep: Vec<u16> = eight.iter().map(|&value| u16::from(value) * 257).collect();
+    let mapped = map.map_deep(&deep, 4);
+    map.map_in_place(&mut eight, 4);
+    assert_eq!(eight[..3], mapped[..3]);
+    assert_eq!(eight[4..7], mapped[4..7]);
+    assert_eq!(eight[8..11], mapped[8..11]);
+    assert_eq!((eight[3], mapped[3]), (128, 128), "the alpha stays");
+    assert_eq!((eight[11], mapped[11]), (0, 0));
+}
+
+/// AVIF and HEIC need libheif.
+fn fixtures() -> Vec<&'static str> {
+    let mut names = vec!["pq.jxl", "hlg.jxl", "pq-icc.jxl", "pq.png", "hlg.png"];
+    if cfg!(feature = "heic") {
+        names.extend(["pq.avif", "hlg.avif", "pq.heic", "hlg.heic"]);
+    }
+    names
+}
+
+/// The signal of `name` rendered through the player's HDR cube.
+fn reference(name: &str, target: ColorTarget) -> RgbaImage {
+    let curve = if name.starts_with("pq") { "pq" } else { "hlg" };
+    let suffix = match target {
+        ColorTarget::DisplayP3 => "p3",
+        ColorTarget::Srgb => "srgb",
+    };
+    image::open(fixture(&format!("hdr/ref/{curve}-{suffix}.png")))
+        .unwrap()
+        .to_rgba8()
+}
+
+/// The mean of each patch center of the 8x4 chart. The center skips the resize edges.
+fn patch_means(image: &RgbaImage) -> Vec<[f32; 3]> {
+    let (width, height) = image.dimensions();
+    let (patch_w, patch_h) = (width / 8, height / 4);
+    let mut means = Vec::new();
+    for row in 0..4 {
+        for column in 0..8 {
+            let (x0, y0) = (column * patch_w + patch_w / 4, row * patch_h + patch_h / 4);
+            let mut sum = [0.0f32; 3];
+            for y in y0..y0 + patch_h / 2 {
+                for x in x0..x0 + patch_w / 2 {
+                    for (total, value) in sum.iter_mut().zip(image.get_pixel(x, y).0) {
+                        *total += f32::from(value);
+                    }
+                }
+            }
+            means.push(sum.map(|total| total / (patch_w * patch_h / 4) as f32));
+        }
+    }
+    means
+}
+
+/// The largest channel difference in levels per patch.
+fn differences(image: &RgbaImage, reference: &RgbaImage) -> Vec<f32> {
+    patch_means(image)
+        .iter()
+        .zip(patch_means(reference))
+        .map(|(ours, theirs)| {
+            ours.iter()
+                .zip(theirs)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f32::max)
+        })
+        .collect()
+}
+
+/// The grid box (half size), the fullscreen box (twice the size) and the zoom source.
+const BOXES: [Option<(u32, u32)>; 3] = [Some((64, 32)), Some((256, 128)), None];
+
+/// The tolerance in 8-bit levels per patch and channel: the gray ramp within 1, the mean within
+/// 1.5, at most 3 patches above 2, none above 16. `lut3d` interpolates 33 cube points with their
+/// gamma. Where the gamut map sets a channel to 0, the cube gives up to 15 levels (the pale blue
+/// patch of row 1 into Display P3).
+#[test]
+fn fixtures_match_video_cube() {
+    for name in fixtures() {
+        let path = fixture(&format!("hdr/{name}"));
+        for target in TARGETS {
+            let reference = reference(name, target);
+            for box_px in BOXES {
+                let decoded = decode_image(&path, box_px, EmbeddedThumbnail::Allow).unwrap();
+                assert!(is_hdr(&decoded.color), "{name}: {:?}", decoded.color);
+                let mapped = decoded.tone_mapped(box_px, target);
+                assert_eq!(mapped.color, SourceColor::of_target(target));
+                let DynamicImage::ImageRgb8(rgb) = mapped.image else {
+                    panic!("{name}: an 8-bit RGB image");
+                };
+                let size = if box_px == Some((64, 32)) {
+                    (64, 32)
+                } else {
+                    (128, 64)
+                };
+                assert_eq!(rgb.dimensions(), size, "{name} {box_px:?}");
+                let rgba = DynamicImage::ImageRgb8(rgb).to_rgba8();
+                assert_matches_cube(
+                    &rgba,
+                    &reference,
+                    1.0,
+                    &format!("{name} {target:?} {box_px:?}"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn grid_and_fullscreen_show_tone_map() {
+    for name in fixtures() {
+        let path = fixture(&format!("hdr/{name}"));
+        let reference = reference(name, ColorTarget::Srgb);
+        let grid = load_and_resize_px(&path, (64, 32), EmbeddedThumbnail::Allow).unwrap();
+        assert_eq!(grid.dimensions(), (64, 32), "{name}");
+        assert_matches_cube(&grid, &reference, 1.0, name);
+        let screen = load_for_screen(&path, (256, 128)).unwrap();
+        assert!(matches!(screen, ScreenImage::Rgb(_)), "{name}: opaque RGB");
+        assert_matches_cube(&screen.into_rgba(), &reference, 1.0, name);
+        let zoom = decode_image(&path, None, EmbeddedThumbnail::Deny)
+            .unwrap()
+            .into_screen();
+        assert_matches_cube(&zoom.into_rgba(), &reference, 1.0, name);
+    }
+}
+
+/// The tolerance of `fixtures_match_video_cube`, with the gray ramp within `gray_levels`.
+fn assert_matches_cube(image: &RgbaImage, reference: &RgbaImage, gray_levels: f32, label: &str) {
+    let differences = differences(image, reference);
+    let gray = differences[..8].iter().copied().fold(0.0, f32::max);
+    let worst = differences.iter().copied().fold(0.0, f32::max);
+    let mean = differences.iter().sum::<f32>() / differences.len() as f32;
+    let above_two = differences
+        .iter()
+        .filter(|&&difference| difference > 2.0)
+        .count();
+    assert!(
+        gray <= gray_levels && mean <= 1.5 && above_two <= 3 && worst <= 16.0,
+        "{label}: gray {gray}, mean {mean}, {above_two} above 2, max {worst}: {differences:?}"
+    );
+}
+
+#[test]
+fn fixture_gray_ramps_stay_neutral() {
+    for name in fixtures() {
+        let path = fixture(&format!("hdr/{name}"));
+        let image = decode_image(&path, None, EmbeddedThumbnail::Deny).unwrap();
+        let ramp = &patch_means(&image.tone_mapped(None, ColorTarget::Srgb).image.to_rgba8())[..8];
+        for gray in ramp {
+            let spread = gray.iter().copied().fold(0.0, f32::max)
+                - gray.iter().copied().fold(255.0, f32::min);
+            assert!(spread <= 1.0, "{name}: gray {gray:?}");
+        }
+        assert!(
+            ramp.windows(2)
+                .all(|pair| pair[1][1] > pair[0][1] || pair[1][1] >= 254.5),
+            "{name}: {ramp:?}"
+        );
+        assert_eq!((ramp[0][1], ramp[7][1]), (0.0, 255.0), "{name}: {ramp:?}");
+    }
+}
+
+/// The signal of each chart patch, from the lossless PNG of `curve`.
+fn chart_signal(curve: &str) -> Vec<[f64; 3]> {
+    let path = fixture(&format!("hdr/{curve}.png"));
+    let signal = decode_image(&path, None, EmbeddedThumbnail::Deny).unwrap();
+    let signal = signal.image.to_rgb16();
+    (0..32)
+        .map(|patch| {
+            let pixel = signal.get_pixel(patch % 8 * 16 + 8, patch / 8 * 16 + 8).0;
+            pixel.map(|value| f64::from(value) / 65_535.0)
+        })
+        .collect()
+}
+
+/// Inside the sRGB gamut, a lossy file matches the cube within 4 levels per patch. `jxl-oxide`
+/// 0.12 clips the linear sRGB of XYB samples before the primaries conversion
+/// (`ColorTransformOp::Clip`). A BT.2020 color outside the sRGB gamut loses saturation, and
+/// libjxl keeps it. The last assert fails when `jxl-oxide` keeps it too.
+#[test]
+fn lossy_jxl_matches_cube_in_gamut() {
+    for curve in ["pq", "hlg"] {
+        let to_srgb = super::conversion(Primaries::Bt2020, Primaries::Bt709);
+        let curve_of = if curve == "pq" { Curve::Pq } else { Curve::Hlg };
+        // A patch is inside when no channel of its linear sRGB is below 0.1 % of its peak.
+        let inside: Vec<bool> = chart_signal(curve)
+            .into_iter()
+            .map(|signal| {
+                let light = signal.map(|value| curve_of.light(value));
+                let peak = light.into_iter().fold(0.0, f64::max);
+                super::apply(&to_srgb, light)
+                    .into_iter()
+                    .all(|value| value >= -1e-3 * peak)
+            })
+            .collect();
+        assert!(
+            inside.iter().filter(|&&inside| inside).count() >= 12,
+            "{inside:?}"
+        );
+        let path = fixture(&format!("hdr/{curve}-lossy.jxl"));
+        for target in TARGETS {
+            let decoded = decode_image(&path, None, EmbeddedThumbnail::Deny).unwrap();
+            let mapped = decoded.tone_mapped(None, target).image.to_rgba8();
+            let differences = differences(&mapped, &reference(curve, target));
+            for (patch, difference) in differences.iter().enumerate() {
+                assert!(
+                    !inside[patch] || *difference <= 4.0,
+                    "{curve} {target:?} patch {patch}: {differences:?}"
+                );
+            }
+        }
+        let decoded = decode_image(&path, None, EmbeddedThumbnail::Deny).unwrap();
+        let red = decoded.image.to_rgb16().get_pixel(8, 24).0;
+        assert!(
+            red[1] > 10_000,
+            "{curve}: BT.2020 red keeps its saturation: {red:?}"
+        );
+    }
+}
+
+/// 8 bits hold less of the signal: the gray ramp can differ by 2.
+#[test]
+fn eight_bit_hdr_maps_in_conversion() {
+    for name in ["pq.png", "hlg.png"] {
+        let decoded = decode_image(
+            &fixture(&format!("hdr/{name}")),
+            None,
+            EmbeddedThumbnail::Deny,
+        )
+        .unwrap();
+        for target in TARGETS {
+            let eight = decoded.image.to_rgba8();
+            let mapped = convert(eight, &decoded.color, target);
+            let label = format!("{name} {target:?} in 8 bit");
+            assert_matches_cube(&mapped, &reference(name, target), 2.0, &label);
+        }
+    }
+}
+
+#[test]
+fn sdr_fixtures_pass_unchanged() {
+    let mut checked = 0;
+    for dir in ["color", "png"] {
+        for entry in std::fs::read_dir(fixture(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            let libheif = scanner::has_extension(&path, &["avif", "heic"]);
+            if !path.is_file()
+                || path.extension().is_some_and(|e| e == "sh")
+                || (libheif && !cfg!(feature = "heic"))
+            {
+                continue;
+            }
+            for target in TARGETS {
+                for box_px in [Some((16, 16)), None] {
+                    let before = decode_image(&path, box_px, EmbeddedThumbnail::Allow).unwrap();
+                    let after = decode_image(&path, box_px, EmbeddedThumbnail::Allow)
+                        .unwrap()
+                        .tone_mapped(box_px, target);
+                    assert_eq!(after.image, before.image, "{path:?}");
+                    assert_eq!(after.color, before.color, "{path:?}");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    let least = if cfg!(feature = "heic") { 80 } else { 64 };
+    assert!(checked >= least, "{checked}");
+}
+
+/// The copied math matches the player cube at each point, within 1e-3 of the output range.
+#[cfg(feature = "video")]
+#[test]
+fn map_matches_player_cube() {
+    use crate::player::tone_map::{Cube, CubeSource, Hdr};
+    for target in TARGETS {
+        for (hdr, transfer) in [(Hdr::Pq, 16), (Hdr::Hlg, 18)] {
+            let map = ToneMap::of_source(&cicp(9, transfer), target).unwrap();
+            let cube = Cube {
+                source: CubeSource::Hdr(hdr),
+                target,
+            };
+            let text = cube.text();
+            let mut lines = text.lines();
+            let size: u32 = lines
+                .next()
+                .and_then(|line| line.strip_prefix("LUT_3D_SIZE "))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let last = f64::from(size - 1);
+            let mut worst = 0.0f64;
+            for (index, line) in lines.enumerate() {
+                let index = u32::try_from(index).unwrap();
+                let signal = [index % size, index / size % size, index / (size * size)]
+                    .map(|step| f64::from(step) / last);
+                let values: Vec<f64> = line.split(' ').map(|v| v.parse().unwrap()).collect();
+                for (ours, theirs) in exact(&map, signal).into_iter().zip(values) {
+                    worst = worst.max((ours - theirs).abs());
+                }
+            }
+            // Single precision near black: 1e-3 is a quarter of a level.
+            assert!(worst < 1e-3, "{hdr:?} {target:?}: {worst}");
+        }
+    }
+}
+
+/// Write the player's HDR cubes into `VIEWR_HDR_CUBE_DIR` for `tests/fixtures/hdr/make.sh`.
+#[cfg(feature = "video")]
+#[test]
+#[ignore = "writes the cubes for tests/fixtures/hdr/make.sh"]
+fn write_the_player_hdr_cubes() {
+    use crate::player::tone_map::{Cube, CubeSource, Hdr};
+    let Some(dir) = crate::decode::real_test_file("VIEWR_HDR_CUBE_DIR") else {
+        return;
+    };
+    for target in TARGETS {
+        for (hdr, name) in [(Hdr::Pq, "pq"), (Hdr::Hlg, "hlg")] {
+            let suffix = match target {
+                ColorTarget::DisplayP3 => "p3",
+                ColorTarget::Srgb => "srgb",
+            };
+            let cube = Cube {
+                source: CubeSource::Hdr(hdr),
+                target,
+            };
+            std::fs::write(dir.join(format!("{name}-{suffix}.cube")), cube.text()).unwrap();
+        }
+    }
+}

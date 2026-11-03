@@ -10,10 +10,8 @@ use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use std::io;
 use std::path::Path;
 
-/// Decode a JPEG that sits inside another file (a RAW preview, a PSD thumbnail). libjpeg-turbo
-/// scales it down to `target` during the decode. `container_orientation` is the EXIF
-/// orientation of the outer file. It wins over the orientation of the JPEG itself, the same
-/// rule as on the turbo path.
+/// A JPEG inside a RAW or PSD file, scaled down to `target`. `container_orientation` wins over
+/// the EXIF of the JPEG, as on the turbo path.
 #[cfg(all(feature = "sips", target_os = "macos"))]
 pub(crate) fn decode_jpeg_bytes(
     data: &[u8],
@@ -47,8 +45,8 @@ pub(crate) fn decode_jpeg_bytes(
     })
 }
 
-/// The stored size of a file of the `image` route, from the header. `open` takes the format from
-/// the extension first: TGA has no magic bytes.
+/// The stored size from the header. `open` takes the format from the extension first, because
+/// TGA has no magic bytes.
 pub(crate) fn header_dimensions(path: &Path) -> Option<(u32, u32)> {
     ImageReader::open(path)
         .ok()?
@@ -59,8 +57,8 @@ pub(crate) fn header_dimensions(path: &Path) -> Option<(u32, u32)> {
 }
 
 pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Result<Decoded> {
-    // libjpeg-turbo rejects some JPEG variants that the `image` crate accepts, so a turbo failure
-    // falls back to `image`. If the fallback fails too, the error reports both reasons.
+    // libjpeg-turbo rejects some JPEG variants that `image` accepts. When the fallback fails too,
+    // the error names both.
     #[cfg(not(feature = "turbo"))]
     let _ = target;
     #[cfg(feature = "turbo")]
@@ -99,9 +97,8 @@ pub(super) fn decode_raster(path: &Path, target: Option<(u32, u32)>) -> io::Resu
     }
 }
 
-/// Decode with `image` and apply the EXIF orientation that its decoder reads (JPEG, PNG,
-/// TIFF, WebP), so that phone photos show upright. A float image (EXR, HDR) is tone-mapped to
-/// 8 bit. The color is the ICC profile of the file.
+/// Decode with `image` and apply the EXIF orientation that its decoder reads. A float image
+/// (EXR, HDR) maps to 8 bit.
 pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
     reader: ImageReader<R>,
 ) -> image::ImageResult<Decoded> {
@@ -109,7 +106,7 @@ pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
     // A broken EXIF block must not stop the decode of the pixels.
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let color = icc_color(&mut decoder);
-    // The same allocation limit as `ImageReader::decode`.
+    // The allocation limit of `ImageReader::decode`.
     image::Limits::default().reserve(decoder.total_bytes())?;
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
@@ -120,8 +117,8 @@ pub(crate) fn decode_upright<R: io::BufRead + io::Seek>(
     })
 }
 
-/// Add the color information of the file at `path` that `image` does not read: the `cICP`,
-/// `sRGB`, `gAMA` and `cHRM` chunks of a PNG, and the ICC profile of a TIFF.
+/// The color data that `image` does not read: the PNG `cICP`, `sRGB`, `gAMA` and `cHRM`
+/// chunks, the TIFF ICC profile and the JPEG Adobe RGB mark.
 pub(crate) fn add_file_color(decoded: &mut Decoded, path: &Path, format: Option<ImageFormat>) {
     match format {
         Some(ImageFormat::Png) => {
@@ -144,8 +141,7 @@ pub(crate) fn add_file_color(decoded: &mut Decoded, path: &Path, format: Option<
     }
 }
 
-/// The first 128 KB of a JPEG file: the APP segments with the EXIF block come before the
-/// image data.
+/// The APP segments with the EXIF block come within the first 128 KB.
 fn jpeg_header(path: &Path) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut header = Vec::new();
@@ -157,8 +153,7 @@ fn jpeg_header(path: &Path) -> Option<Vec<u8>> {
     Some(header)
 }
 
-/// The ICC profile that the decoder reads (JPEG, PNG, TIFF, WebP, GIF). A broken profile
-/// block must not stop the decode either: the image is then sRGB.
+/// A broken profile block must not stop the decode. The image is then sRGB.
 fn icc_color(decoder: &mut impl ImageDecoder) -> SourceColor {
     decoder
         .icc_profile()
@@ -169,16 +164,18 @@ fn icc_color(decoder: &mut impl ImageDecoder) -> SourceColor {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_raster;
-    use crate::test_support::fixture;
+    use super::{add_file_color, decode_raster, decode_upright};
+    use crate::decode::color::{SourceColor, jpeg_with_color_space};
+    use crate::test_support::{fixture, test_dir};
+    use image::{ImageFormat, ImageReader};
+    use std::path::Path;
 
     const RED: [u8; 4] = [255, 0, 0, 255];
     const BLUE: [u8; 4] = [0, 0, 255, 255];
     const BLACK: [u8; 4] = [0, 0, 0, 255];
     const GRAY: [u8; 4] = [200, 200, 200, 255];
 
-    /// The RGBA pixels in the middle of the left half and of the right half of a 32x16 fixture
-    /// of `tests/fixtures/png`.
+    /// The middle pixels of the left and right halves of a 32x16 fixture of `tests/fixtures/png`.
     fn halves(name: &str) -> ([u8; 4], [u8; 4]) {
         let decoded = decode_raster(&fixture(&format!("png/{name}")), None)
             .unwrap()
@@ -189,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn every_opaque_png_layout_decodes_to_its_colors() {
+    fn opaque_png_layouts_keep_colors() {
         for name in ["rgb16.png", "palette.png", "interlaced.png"] {
             assert_eq!(halves(name), (RED, BLUE), "{name}");
         }
@@ -199,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn the_transparent_half_of_a_png_stays_transparent() {
+    fn png_transparent_half_stays() {
         for (name, left) in [
             ("rgba8.png", RED),
             ("rgba16.png", RED),
@@ -213,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn a_png_with_exif_orientation_6_decodes_upright() {
+    fn png_orientation_6_decodes_upright() {
         let decoded = decode_raster(&fixture("png/orientation-6.png"), None)
             .unwrap()
             .image
@@ -221,5 +218,50 @@ mod tests {
         assert_eq!(decoded.dimensions(), (16, 32));
         assert_eq!(decoded.get_pixel(8, 4).0, RED);
         assert_eq!(decoded.get_pixel(8, 27).0, BLUE);
+    }
+
+    #[test]
+    fn file_color_reads_tiff_and_jpeg_tags() {
+        let open = |path: &Path| {
+            let reader = ImageReader::open(path).unwrap().with_guessed_format();
+            decode_upright(reader.unwrap()).unwrap()
+        };
+        let dir = test_dir();
+        let jpeg = dir.path().join("adobe.jpg");
+        std::fs::write(&jpeg, jpeg_with_color_space(0xFFFF, "R03")).unwrap();
+        let mut decoded = open(&jpeg);
+        assert_eq!(decoded.color, SourceColor::Srgb);
+        add_file_color(&mut decoded, &jpeg, Some(ImageFormat::Jpeg));
+        assert_eq!(decoded.color, SourceColor::AdobeRgb);
+
+        let mut missing = open(&jpeg);
+        let gone = Path::new("/nonexistent/viewr/a.jpg");
+        add_file_color(&mut missing, gone, Some(ImageFormat::Jpeg));
+        assert_eq!(missing.color, SourceColor::Srgb);
+
+        let tiff = fixture("color/p3-icc.tiff");
+        let mut decoded = open(&tiff);
+        add_file_color(&mut decoded, &tiff, Some(ImageFormat::Tiff));
+        assert!(
+            matches!(decoded.color, SourceColor::Icc(_)),
+            "{:?}",
+            decoded.color
+        );
+    }
+
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    #[test]
+    fn jpeg_bytes_fall_back_to_image() {
+        use super::decode_jpeg_bytes;
+        let png = std::fs::read(fixture("png/orientation-6.png")).unwrap();
+        let own = decode_jpeg_bytes(&png, Some((8, 8)), None).unwrap().image;
+        assert_eq!((own.width(), own.height()), (16, 32), "the EXIF of the PNG");
+        let container = decode_jpeg_bytes(&png, None, Some(1)).unwrap().image;
+        assert_eq!(
+            (container.width(), container.height()),
+            (32, 16),
+            "the container wins"
+        );
+        assert!(decode_jpeg_bytes(b"no image", None, None).is_err());
     }
 }

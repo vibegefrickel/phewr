@@ -6,8 +6,7 @@ use image::{DynamicImage, EncodableLayout, ImageBuffer, RgbaImage};
 use std::io;
 use std::path::Path;
 
-/// Decode `path` with the size hint `target` in pixels and fit the image into it, in the color
-/// space of the terminal.
+/// Decode `path` for the box `target` and fit it, in the terminal color space.
 pub(crate) fn load_and_resize_px(
     path: &Path,
     (target_w, target_h): (u32, u32),
@@ -21,19 +20,16 @@ pub(crate) fn load_and_resize_px(
     Ok(decode_image(path, hint, embedded)?.fit_within(target_w, target_h))
 }
 
-/// Scale `rgba` down into `max_w` x `max_h` with its aspect ratio, and never up. An owned image
-/// needs no second copy.
+/// Scale `rgba` down into `max_w` x `max_h`, never up.
 pub(crate) fn fit_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
     fit_within_as(rgba, max_w, max_h, Layout::Rgba)
 }
 
-/// `fit_rgba_within` for an image whose alpha is 255 in every pixel: the resize skips the
-/// alpha multiply.
+/// `fit_rgba_within` without the alpha multiply, for an opaque image.
 pub(super) fn fit_opaque_rgba_within(rgba: RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
     fit_within_as(rgba, max_w, max_h, Layout::OpaqueRgba)
 }
 
-/// The fit of both RGBA layouts, so the alpha multiply is the only difference.
 fn fit_within_as(rgba: RgbaImage, max_w: u32, max_h: u32, layout: Layout) -> RgbaImage {
     let size = rgba.dimensions();
     scaled_down_size(size, (max_w, max_h))
@@ -42,8 +38,8 @@ fn fit_within_as(rgba: RgbaImage, max_w: u32, max_h: u32, layout: Layout) -> Rgb
         .unwrap_or(rgba)
 }
 
-/// Scale a 16-bit RGB or RGBA image down into `max_w` x `max_h` as `fit_rgba_within` does, for
-/// an HDR image before its tone map. Each other image comes back unchanged.
+/// `fit_rgba_within` for a 16-bit HDR image before its tone map. Each other image comes back
+/// unchanged.
 pub(super) fn fit_deep_within(image: DynamicImage, max_w: u32, max_h: u32) -> DynamicImage {
     let size = (image.width(), image.height());
     let Some(dst) = scaled_down_size(size, (max_w, max_h)) else {
@@ -70,15 +66,13 @@ pub(super) fn fit_deep_within(image: DynamicImage, max_w: u32, max_h: u32) -> Dy
     resized.unwrap_or(image)
 }
 
-/// The 16-bit samples of the bytes of a resize, in the byte order of the machine, as
-/// `fast_image_resize` writes them.
+/// `fast_image_resize` writes the samples in the byte order of the machine.
 fn native_samples(bytes: &[u8]) -> Vec<u16> {
     let (pairs, _) = bytes.as_chunks::<2>();
     pairs.iter().map(|&pair| u16::from_ne_bytes(pair)).collect()
 }
 
-/// The size of `size` scaled down into `max` with its aspect ratio, rounded down. `None` when
-/// no scale is necessary: an empty size or box, or an image that fits already.
+/// `size` scaled down to fit `max`, or `None` if it already fits or a side is zero.
 pub(crate) fn scaled_down_size(size: (u32, u32), max: (u32, u32)) -> Option<(u32, u32)> {
     let ((orig_w, orig_h), (max_w, max_h)) = (size, max);
     if max_w == 0 || max_h == 0 || orig_w == 0 || orig_h == 0 {
@@ -96,32 +90,26 @@ pub(crate) fn scaled_down_size(size: (u32, u32), max: (u32, u32)) -> Option<(u32
     Some((dst_w, dst_h))
 }
 
-/// The filter of every resize: thumbnails, previews, fullscreen and zoom. Catmull-Rom costs
-/// two thirds of Lanczos3 on a 24 MP frame and keeps the edges sharp.
+/// Catmull-Rom is faster than Lanczos3 and keeps the edges sharp.
 fn resize_options() -> fir::ResizeOptions {
     fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::CatmullRom))
 }
 
-/// The pixel layout of a resize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Layout {
-    /// 3 bytes per pixel.
     Rgb,
-    /// 4 bytes per pixel with transparent pixels: the resize multiplies the colors with the
-    /// alpha before and divides after, so a transparent pixel does not darken its neighbors.
+    /// The resize multiplies the colors with the alpha before and divides after. A transparent
+    /// pixel does not darken its neighbors.
     Rgba,
-    /// 4 bytes per pixel with the alpha at 255 in every pixel. The multiply changes no value,
-    /// so the resize skips it.
+    /// The alpha is 255 in every pixel, and the resize skips the multiply.
     OpaqueRgba,
-    /// 3 samples of 16 bits per pixel, in the byte order of the machine: an HDR image before
-    /// its tone map.
+    /// 16-bit samples in the byte order of the machine: an HDR image before its tone map.
     Rgb16,
-    /// 4 samples of 16 bits per pixel with the alpha multiply: an HDR image with alpha.
+    /// 16-bit samples with the alpha multiply.
     Rgba16,
 }
 
 impl Layout {
-    /// The pixel type of `fast_image_resize` for the layout.
     pub(super) fn pixel_type(self) -> fir::PixelType {
         match self {
             Self::Rgb => fir::PixelType::U8x3,
@@ -132,29 +120,22 @@ impl Layout {
     }
 }
 
-/// True when RGB is the fastest layout for a resize of `size` to `dst`, or for no resize
-/// (`None`).
-///
-/// Measured 2026-10-30 into a 3392x2052 box: RGBA without the alpha multiply is the fastest
-/// layout at every scale (17.6 ms at 0.75, 9.3 ms at 1.5), and RGB is 35.2 ms and 12.0 ms. Only
-/// from a scale of 1/2 down is RGB as fast, and then it needs no copy into RGB after.
+/// True when RGB is the fastest layout for a resize of `size` to `dst`, or for no resize. Above
+/// a scale of 1/2, RGBA without the alpha multiply is faster.
 pub(crate) fn rgb_resize_is_fastest(size: (u32, u32), dst: Option<(u32, u32)>) -> bool {
     dst.is_none_or(|(w, h)| {
         2 * u64::from(w) <= u64::from(size.0) && 2 * u64::from(h) <= u64::from(size.1)
     })
 }
 
-/// The packed pixels of a resize and their size.
 pub(super) struct Resized {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) data: Vec<u8>,
 }
 
-/// Resize the region `crop` (x, y, width, height) of the packed `pixels` of `size` to `dst`
-/// with `fast_image_resize`. The pixels stay borrowed, so a caller can pass a decoder buffer
-/// without a copy. A region smaller than the image is a view: the resize reads only its
-/// pixels, as from a copy, and the zoom pays no crop copy. `None` when the resize fails.
+/// Resize the region `crop` (x, y, width, height) of `pixels` to `dst`. The pixels stay
+/// borrowed. A smaller region is a view, and the zoom pays no crop copy.
 pub(super) fn resize_region(
     pixels: &[u8],
     size: (u32, u32),
@@ -188,20 +169,20 @@ mod tests {
     use crate::test_support::test_dir;
     use image::{DynamicImage, RgbaImage};
 
-    /// Fit `img` into the box without the color conversion of `Decoded::fit_within`.
+    /// `img` fitted without the color conversion of `Decoded::fit_within`.
     fn fit_decoded_within(img: &DynamicImage, max_w: u32, max_h: u32) -> RgbaImage {
         fit_rgba_within(img.to_rgba8(), max_w, max_h)
     }
 
     #[test]
-    fn resize_preserves_aspect_ratio_without_upscaling() {
+    fn resize_keeps_aspect_without_upscale() {
         let image = DynamicImage::new_rgba8(100, 50);
         assert_eq!(fit_decoded_within(&image, 20, 20).dimensions(), (20, 10));
         assert_eq!(fit_decoded_within(&image, 200, 200).dimensions(), (100, 50));
     }
 
     #[test]
-    fn load_and_resize_fits_the_box() {
+    fn load_and_resize_fits_box() {
         let dir = test_dir();
         let path = dir.path().join("wide.png");
         RgbaImage::new(64, 32).save(&path).unwrap();

@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-/// Rows shown in the info panel. An empty label marks a section heading.
+/// An empty label marks a section heading.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ImageInfo {
     pub(crate) rows: Vec<(String, String)>,
@@ -166,7 +166,7 @@ fn exif_rows(path: &Path) -> Vec<(String, String)> {
     rows
 }
 
-/// The EXIF date of the shot as `YYYY-MM-DD HH:MM`: `DateTimeOriginal`, else `DateTime`.
+/// `DateTimeOriginal`, else `DateTime`, as `YYYY-MM-DD HH:MM`.
 pub(crate) fn date_taken(path: &Path) -> Option<String> {
     let exif = read_exif(path)?;
     let field = exif
@@ -182,8 +182,7 @@ pub(crate) fn date_taken(path: &Path) -> Option<String> {
     ))
 }
 
-/// The EXIF block of JPEG, TIFF (also the TIFF-based camera RAW formats), HEIF, PNG, WebP and
-/// JPEG XL.
+/// JPEG, TIFF (with the TIFF-based RAW formats), HEIF, PNG, WebP and JPEG XL.
 fn read_exif(path: &Path) -> Option<exif::Exif> {
     if Route::for_path(path) == Route::Jxl {
         return exif::Reader::new().read_raw(decode::jxl::exif(path)?).ok();
@@ -194,8 +193,7 @@ fn read_exif(path: &Path) -> Option<exif::Exif> {
         .ok()
 }
 
-/// Read the EXIF orientation tag (1..=8) from JPEG bytes in memory, because libjpeg-turbo
-/// ignores it and the file is already read.
+/// The orientation (1 to 8) of JPEG bytes in memory. libjpeg-turbo ignores it.
 #[cfg(feature = "turbo")]
 pub(crate) fn orientation_from_bytes(data: &[u8]) -> Option<u8> {
     let exif = exif::Reader::new()
@@ -241,7 +239,6 @@ mod tests {
     use exif::{Field, Rational, Value};
     use image::{ExtendedColorType, ImageEncoder};
 
-    /// An EXIF field of the primary image.
     fn field(tag: Tag, value: Value) -> Field {
         Field {
             tag,
@@ -266,7 +263,7 @@ mod tests {
         field(tag, Value::Rational(parts))
     }
 
-    /// Encode `fields` as the little-endian TIFF block of an EXIF segment.
+    /// The little-endian TIFF block of an EXIF segment.
     fn exif_block(fields: &[Field]) -> Vec<u8> {
         let mut writer = Writer::new();
         for field in fields {
@@ -277,7 +274,7 @@ mod tests {
         out.into_inner()
     }
 
-    /// Write a black 16x8 JPEG that carries `fields` as EXIF.
+    /// A black 16x8 JPEG with `fields` as EXIF.
     fn jpeg_with_exif(path: &Path, fields: &[Field]) {
         let file = File::create(path).unwrap();
         let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 90);
@@ -287,7 +284,6 @@ mod tests {
             .unwrap();
     }
 
-    /// The EXIF rows of a JPEG with `fields`, in a directory of their own.
     fn exif_rows_for(fields: &[Field]) -> Vec<(String, String)> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("photo.jpg");
@@ -295,7 +291,6 @@ mod tests {
         exif_rows(&path)
     }
 
-    /// The value of the first row with `label`.
     fn row<'a>(rows: &'a [(String, String)], label: &str) -> Option<&'a str> {
         rows.iter()
             .find(|(candidate, _)| candidate == label)
@@ -313,14 +308,14 @@ mod tests {
     }
 
     #[test]
-    fn megapixels_drop_the_decimal_from_ten_up() {
+    fn megapixels_drop_decimal_from_ten() {
         assert_eq!(megapixels(1920, 1080), "2.1 MP");
         assert_eq!(megapixels(4000, 3000), "12 MP");
         assert_eq!(megapixels(16, 8), "0.0 MP");
     }
 
     #[test]
-    fn info_for_a_missing_file_has_name_folder_and_format_only() {
+    fn missing_file_has_name_folder_format() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing").join("gone.jpeg");
         let info = load(&path);
@@ -332,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn info_for_a_jpeg_with_exif_has_file_and_exif_rows() {
+    fn jpeg_has_file_and_exif_rows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("photo.jpg");
         jpeg_with_exif(
@@ -394,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn focal_length_shows_the_values_that_exist() {
+    fn focal_length_shows_existing_values() {
         let focal = exif_rows_for(&[rational(Tag::FocalLength, &[(35, 1)])]);
         let value = row(&focal, "Focal length").unwrap();
         assert!(!value.contains("eq."), "focal: {value}");
@@ -404,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn exif_rows_skip_an_empty_description_and_an_incomplete_gps() {
+    fn exif_rows_skip_empty_fields() {
         let rows = exif_rows_for(&[
             ascii(Tag::DateTime, "2023:01:02 03:04:05"),
             ascii(Tag::ImageDescription, " "),
@@ -438,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn exif_rows_of_a_file_without_exif_are_empty() {
+    fn no_exif_gives_no_rows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plain.jpg");
         image::DynamicImage::new_rgb8(4, 4).save(&path).unwrap();
@@ -448,7 +443,7 @@ mod tests {
 
     #[cfg(feature = "turbo")]
     #[test]
-    fn orientation_from_bytes_accepts_only_one_to_eight() {
+    fn orientation_accepts_one_to_eight() {
         let jpeg = |orientation: Option<u16>| {
             let mut bytes = Vec::new();
             let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut bytes);
@@ -469,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn info_for_a_png_without_exif_has_file_rows_only() {
+    fn png_without_exif_has_file_rows() {
         let file = tempfile::Builder::new().suffix(".png").tempfile().unwrap();
         image::DynamicImage::new_rgba8(12, 7)
             .save(file.path())
@@ -487,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn info_shows_the_dimensions_of_tga_and_exr() {
+    fn shows_tga_and_exr_dimensions() {
         let dir = tempfile::tempdir().unwrap();
         let tga = dir.path().join("a.tga");
         image::DynamicImage::new_rgb8(5, 3).save(&tga).unwrap();
@@ -500,7 +495,7 @@ mod tests {
 
     #[cfg(all(feature = "sips", target_os = "macos"))]
     #[test]
-    fn info_shows_the_dimensions_of_a_psd() {
+    fn shows_psd_dimensions() {
         let dir = tempfile::tempdir().unwrap();
         let png = dir.path().join("a.png");
         image::DynamicImage::new_rgb8(6, 4).save(&png).unwrap();

@@ -1,14 +1,9 @@
 //! JPEG XL through `jxl-oxide`, in pure Rust.
 //!
-//! `jxl-oxide` has no scaled decode, so the grid decodes the full image and resizes it. The
-//! thumbnail disk cache keeps the result. An animated JPEG XL shows its first frame.
-//!
-//! The decoder renders into the color space of the terminal (`ColorTarget`): sRGB or Display
-//! P3. `jxl-oxide` converts the enum color encodings and the XYB samples itself. Samples in the
-//! space of an ICC profile go through one `moxcms` transform (`IccToTarget`), 16-bit for a
-//! deeper file. A PQ or HLG file, by its enum encoding or by the `cicp` tag of its ICC profile,
-//! keeps its 16-bit signal (`HdrSignal`), and `Decoded` tone-maps it like the HDR cube of the
-//! terminal player (`decode::hdr`).
+//! `jxl-oxide` has no scaled decode: the grid decodes the full image, and the disk cache keeps
+//! the result. An animated file shows its first frame. `jxl-oxide` renders XYB and the enum
+//! encodings into the target itself. ICC samples go through `moxcms` (`IccToTarget`). A PQ or
+//! HLG file keeps its 16-bit signal for the tone map of `Decoded` (`HdrSignal`).
 
 use crate::decode::Decoded;
 use crate::decode::color::{ColorTarget, SourceColor};
@@ -27,16 +22,13 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
-/// The limit for the internal buffers of `jxl-oxide`. A larger header size fails with an error
-/// and does not abort the process. A 24 MP RGB image needs about 300 MB.
+/// A larger header fails with an error instead of an abort. A 24 MP RGB image needs 300 MB.
 const DECODER_MEMORY_LIMIT: usize = 2 * 1024 * 1024 * 1024;
 
-/// The rows of one task of the parallel ICC transform.
 const ROWS_PER_TASK: usize = 64;
 
-/// Decode the first frame of `path` in the color space `target`, upright: the stream applies
-/// the codestream orientation. The EXIF orientation does not apply, because the codestream wins.
-/// A PQ or HLG file keeps its signal for the tone map of `Decoded`.
+/// Decode the first frame of `path` into `target`. The codestream orientation applies, the EXIF
+/// orientation does not.
 pub(crate) fn decode(path: &Path, target: ColorTarget) -> io::Result<Decoded> {
     let image = open_for_render(path)?;
     let format = image.pixel_format();
@@ -60,18 +52,15 @@ pub(crate) fn decode(path: &Path, target: ColorTarget) -> io::Result<Decoded> {
 /// The 16-bit signal of a PQ or HLG file and its CICP code points.
 struct HdrSignal {
     color: SourceColor,
-    /// The enum encoding of the file, so that `jxl-oxide` turns XYB into the signal. `None` for
-    /// samples in the space of an ICC profile, which `jxl-oxide` renders as they are.
-    /// `jxl-oxide` 0.12 clips the linear sRGB of XYB samples to 0..1 before it converts the
-    /// primaries, so a lossy file loses the saturation of colors outside the sRGB gamut.
+    /// The enum encoding that turns XYB into the signal. `None` for ICC samples.
+    /// `jxl-oxide` 0.12 clips XYB to the sRGB gamut before the primaries conversion, and a lossy
+    /// file loses saturation there.
     encoding: Option<EnumColourEncoding>,
 }
 
 impl HdrSignal {
-    /// The signal of an RGB file with a PQ or HLG curve, or `None` for SDR. Gray, custom
-    /// primaries and a white point other than D65 (and DCI for P3) stay with `jxl-oxide`. An
-    /// XYB file with an ICC profile stays too, because `jxl-oxide` renders XYB into sRGB
-    /// without the profile.
+    /// The signal of an RGB file with a PQ or HLG curve. Gray, custom primaries, other white points
+    /// and XYB with an ICC profile stay with `jxl-oxide`.
     fn for_image(image: &JxlImage, format: PixelFormat) -> Option<Self> {
         if !matches!(format, PixelFormat::Rgb | PixelFormat::Rgba) {
             return None;
@@ -84,7 +73,6 @@ impl HdrSignal {
                     TransferFunction::Hlg => 18,
                     _ => return None,
                 };
-                // The P3 primaries with the DCI white point are DCI-P3, with D65 Display P3.
                 let primaries = match (&encoding.primaries, &encoding.white_point) {
                     (Primaries::Srgb, WhitePoint::D65) => 1,
                     (Primaries::Bt2100, WhitePoint::D65) => 9,
@@ -114,7 +102,6 @@ impl HdrSignal {
         }
     }
 
-    /// Render the first frame as 16-bit RGB or RGBA signal values.
     fn decode(self, mut image: JxlImage) -> io::Result<Decoded> {
         if let Some(encoding) = self.encoding {
             image.set_cms(Moxcms);
@@ -152,8 +139,7 @@ fn open_for_render(path: &Path) -> io::Result<JxlImage> {
     Ok(image)
 }
 
-/// Check the buffers of viewr against the allocation limit of the `image` route:
-/// `bytes_per_pixel` counts each buffer that exists at the same time.
+/// Check the buffers against the allocation limit of the `image` route.
 fn reserve(image: &JxlImage, bytes_per_pixel: usize) -> io::Result<()> {
     let bytes = u64::from(image.width())
         .checked_mul(u64::from(image.height()))
@@ -162,8 +148,7 @@ fn reserve(image: &JxlImage, bytes_per_pixel: usize) -> io::Result<()> {
     image::Limits::default().reserve(bytes).map_err(invalid)
 }
 
-/// Let `jxl-oxide` render into `target`: XYB, the enum encodings and the ICC fallback. Gray
-/// has the white point and the curve of sRGB in both targets.
+/// Gray keeps the white point and the curve of sRGB in both targets.
 fn decode_enum(mut image: JxlImage, target: ColorTarget) -> io::Result<DynamicImage> {
     let format = image.pixel_format();
     let intent = RenderingIntent::Relative;
@@ -182,8 +167,8 @@ fn decode_enum(mut image: JxlImage, target: ColorTarget) -> io::Result<DynamicIm
     into_image(width, height, channels, pixels)
 }
 
-/// Convert through `icc`. A transform error leaves the conversion to `jxl-oxide`, with a new
-/// decoder, because the first one keeps the render without a color request.
+/// A transform error falls back to `jxl-oxide` with a new decoder. The first decoder has
+/// rendered without a color request.
 fn decode_icc_or_enum(
     path: &Path,
     image: &JxlImage,
@@ -194,7 +179,6 @@ fn decode_icc_or_enum(
         .or_else(|_| decode_enum(open_for_render(path)?, target))
 }
 
-/// The `image` type for the channel count.
 fn into_image(
     width: u32,
     height: u32,
@@ -211,31 +195,25 @@ fn into_image(
     decoded.ok_or_else(|| invalid(format!("JPEG XL image with {channels} channels")))
 }
 
-/// The conversion of samples in the space of an ICC profile into the target.
+/// The conversion of ICC samples into the target.
 ///
-/// `jxl-oxide` 0.12 converts the samples of an ICC v2 profile wrong: Adobe RGB 1998 blue
-/// comes out as (39, 19, 255), not (0, 0, 255). One `moxcms` transform from the profile to
-/// sRGB gives the values of `djxl` and `magick`.
+/// `jxl-oxide` 0.12 converts ICC v2 samples wrong: Adobe RGB blue comes out as (39, 19, 255).
+/// `moxcms` gives the values of `djxl` and `magick`.
 struct IccToTarget {
     transform: IccTransform,
-    /// The channels of the rendered samples: gray or RGB, with or without alpha.
     input_channels: usize,
-    /// The output channels: RGB, or RGBA with alpha. A gray profile also gives RGB.
+    /// RGB or RGBA. A gray profile gives RGB.
     channels: usize,
 }
 
-/// The `moxcms` transform for the sample depth of the file.
 enum IccTransform {
-    /// A file with 8 bits per sample.
     Eight(Arc<Transform8BitExecutor>),
-    /// A deeper file. The samples stay 16-bit up to the output, so they round only one time.
+    /// Deeper files stay 16-bit up to the output and round only once.
     Sixteen(Arc<Transform16BitExecutor>),
 }
 
 impl IccToTarget {
-    /// The transform for a file whose samples are in the space of its ICC profile. An XYB
-    /// file has no such samples: `jxl-oxide` renders XYB into sRGB without the profile. A
-    /// profile that `moxcms` cannot read, and a PQ or HLG profile, stay with `jxl-oxide`.
+    /// `None` for XYB, for a profile that `moxcms` cannot read and for a PQ or HLG profile.
     fn for_image(image: &JxlImage, format: PixelFormat, target: ColorTarget) -> Option<Self> {
         let metadata = &image.image_header().metadata;
         if metadata.xyb_encoded
@@ -252,7 +230,7 @@ impl IccToTarget {
         };
         let profile = ColorProfile::new_from_slice(image.original_icc()?).ok()?;
         // moxcms does not tone-map. An RGB file with such a profile takes `HdrSignal` first.
-        // Gray and XYB stay with jxl-oxide 0.12, which does not tone-map these profiles either.
+        // jxl-oxide 0.12 does not tone-map gray or XYB with such a profile either.
         let hdr = profile.cicp.as_ref().is_some_and(|cicp| {
             matches!(
                 cicp.transfer_characteristics,
@@ -288,7 +266,7 @@ impl IccToTarget {
         })
     }
 
-    /// The bytes per pixel of the rendered samples and of the output, which exist at once.
+    /// The rendered samples and the output exist at the same time.
     fn bytes_per_pixel(&self) -> usize {
         let sample_bytes = match self.transform {
             IccTransform::Eight(_) => 1,
@@ -297,8 +275,7 @@ impl IccToTarget {
         self.input_channels * sample_bytes + self.channels
     }
 
-    /// Render the first frame without a color request, in the space of the profile, and
-    /// convert it to 8 bits in the target. The rows convert in parallel.
+    /// Render the first frame in the profile space and convert it to 8 bits in the target.
     fn decode(&self, image: &JxlImage) -> io::Result<DynamicImage> {
         let render = image.render_frame(0).map_err(invalid)?;
         let mut stream = render.stream();
@@ -342,18 +319,17 @@ impl IccToTarget {
     }
 }
 
-/// Round a 16-bit sample to 8 bits.
 fn to_8bit(sample: u16) -> u8 {
     u8::try_from((u32::from(sample) * 255 + 32_767) / 65_535).unwrap_or(u8::MAX)
 }
 
-/// The upright size for the info panel. The header is enough, no frame is decoded.
+/// The upright size from the header.
 pub(crate) fn dimensions(path: &Path) -> Option<(u32, u32)> {
     let image = open(path).ok()?;
     Some((image.width(), image.height()))
 }
 
-/// The TIFF bytes of the Exif box, for the EXIF rows of the info panel.
+/// The TIFF bytes of the Exif box.
 pub(crate) fn exif(path: &Path) -> Option<Vec<u8>> {
     let image = open(path).ok()?;
     let AuxBoxData::Data(exif) = image.aux_boxes().first_exif().ok()? else {
@@ -382,17 +358,15 @@ mod tests {
     use crate::test_support::{assert_close, fixture};
     use image::{DynamicImage, RgbaImage};
 
-    /// The largest difference in 8-bit levels between a patch of viewr and of djxl.
+    /// The largest difference in 8-bit levels from a djxl patch.
     const REFERENCE_TOLERANCE: f32 = 4.0;
 
-    /// Decode a fixture of `tests/fixtures/jxl/` through the route of the fullscreen view.
     fn decode_fixture(name: &str) -> DynamicImage {
         let path = fixture(&format!("jxl/{name}.jxl"));
         decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap()
     }
 
-    /// The mean of the 4x4 center pixels of each 8x8 patch, per channel, row by row. The
-    /// center skips the ringing of a lossy patch edge.
+    /// The mean of the 4x4 center of each 8x8 patch. The center skips the lossy edge ringing.
     fn patch_means(image: &RgbaImage) -> Vec<[f32; 4]> {
         let (width, height) = image.dimensions();
         let mut means = Vec::new();
@@ -413,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn each_fixture_matches_the_libjxl_reference() {
+    fn fixtures_match_libjxl() {
         let references = std::fs::read_dir(fixture("jxl/ref")).unwrap();
         let mut checked = 0;
         for entry in references {
@@ -437,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn an_icc_v2_profile_keeps_the_blue_primary_of_srgb() {
+    fn icc_v2_keeps_srgb_blue() {
         // Adobe RGB 1998 has the blue primary of sRGB. jxl-oxide alone gives (39, 19, 255).
         for name in ["adobe-rgb-icc", "adobe-rgb-icc-alpha"] {
             let blue = patch_means(&decode_fixture(name).to_rgba8())[2];
@@ -449,10 +423,10 @@ mod tests {
     }
 
     #[test]
-    fn a_16_bit_icc_file_rounds_one_time() {
-        // The gradient climbs 16 levels over 64 pixels, so most 16-bit samples lie between two
-        // 8-bit levels. A transform of 8-bit samples rounds two times and skips levels: the
-        // red ramp jumps from 94 to 96. djxl dithers, so it is no reference per pixel.
+    fn sixteen_bit_icc_rounds_once() {
+        // The gradient climbs 16 levels over 64 pixels. A transform of 8-bit samples rounds twice
+        // and skips levels (the red ramp jumps from 94 to 96). djxl dithers and is no reference per
+        // pixel.
         let decoded = decode_fixture("adobe-rgb-icc-16bit").to_rgba8();
         for channel in 0..3 {
             let ramp: Vec<u8> = (0..64)
@@ -467,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn an_hdr_file_keeps_its_signal_for_the_tone_map() {
+    fn hdr_keeps_signal_for_tone_map() {
         let open = |name: &str| open_for_render(&fixture(&format!("jxl/{name}.jxl"))).unwrap();
         for (name, transfer) in [("pq", 16), ("hlg", 18), ("pq-icc", 16), ("hlg-icc", 18)] {
             let image = open(name);
@@ -495,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_icc_transform_falls_back_to_jxl_oxide() {
+    fn failed_icc_uses_jxl_oxide() {
         let path = fixture("jxl/adobe-rgb-icc.jxl");
         let image = open_for_render(&path).unwrap();
         let mut icc =
@@ -508,9 +482,9 @@ mod tests {
     }
 
     #[test]
-    fn the_codestream_orientation_turns_the_image_upright() {
-        // The stored chart is 64x32. Orientation 6 turns it clockwise: the stored top row
-        // becomes the right column, and the stored bottom row becomes the left column.
+    fn codestream_orientation_applies() {
+        // Orientation 6 turns the 64x32 chart clockwise: the stored top row becomes the right
+        // column.
         for name in ["orientation-6", "jpeg-orientation-6"] {
             let path = fixture(&format!("jxl/{name}.jxl"));
             let decoded = decode(&path, ColorTarget::Srgb).unwrap().image.to_rgba8();
@@ -524,16 +498,15 @@ mod tests {
     }
 
     #[test]
-    fn pq_and_hlg_keep_the_gray_ramp_neutral_and_in_order() {
-        // viewr maps PQ and HLG like the HDR cube of the player, with SDR white at 500 nits.
-        // libjxl puts sRGB white at about 250 nits in pq, so pq white becomes about 170.
+    fn hdr_gray_ramps_stay_neutral() {
+        // viewr puts SDR white at 500 nits, like the player. libjxl puts it at about 250 nits in
+        // pq.
         for name in ["pq", "hlg", "pq-icc", "hlg-icc"] {
             assert_gray_ramp(name);
         }
     }
 
-    /// The gray ramp of the chart in row 1 is neutral and in order, and red stays red. The
-    /// lossy files have noise near black, where the output curve is steep.
+    /// The lossy files have noise near black, where the output curve is steep.
     fn assert_gray_ramp(name: &str) {
         let means = patch_means(&decode_fixture(name).to_rgba8());
         let ramp = &means[8..16];
@@ -559,13 +532,42 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_file_reports_an_error() {
+    fn broken_file_reports_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("broken.jxl");
         std::fs::write(&path, b"this is not a JPEG XL file").unwrap();
         assert!(decode(&path, ColorTarget::Srgb).is_err());
         assert!(dimensions(&path).is_none());
         assert!(decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).is_err());
+    }
+
+    #[test]
+    fn enum_file_renders_into_display_p3() {
+        let path = fixture("jxl/p3-enum.jxl");
+        let p3 = decode(&path, ColorTarget::DisplayP3).unwrap();
+        assert_eq!(p3.color, SourceColor::DisplayP3);
+        let srgb = decode(&path, ColorTarget::Srgb).unwrap().image.to_rgba8();
+        let back = crate::decode::color::convert(p3.image.to_rgba8(), &p3.color, ColorTarget::Srgb);
+        let total: u64 = back
+            .as_raw()
+            .iter()
+            .zip(srgb.as_raw())
+            .map(|(&a, &b)| u64::from(a.abs_diff(b)))
+            .sum();
+        let mean = total / back.as_raw().len() as u64;
+        assert!(mean <= 1, "mean difference {mean}");
+    }
+
+    #[test]
+    fn exif_box_reaches_info_panel() {
+        let data = super::exif(&fixture("jxl/jpeg-orientation-6.jxl")).unwrap();
+        let exif = exif::Reader::new().read_raw(data).unwrap();
+        let orientation = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY);
+        assert_eq!(
+            orientation.and_then(|field| field.value.get_uint(0)),
+            Some(6)
+        );
+        assert_eq!(super::exif(&fixture("jxl/srgb-lossless.jxl")), None);
     }
 
     /// Decode a real JPEG XL file: `VIEWR_TEST_JXL=/path/to/image.jxl`.

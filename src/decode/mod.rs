@@ -1,7 +1,5 @@
-//! The decoders and the decode routes: `image` with libjpeg-turbo, libheif, JPEG XL,
-//! macOS `sips`, the tone map of float images and of PQ and HLG stills, the HEIF box reader, the
-//! resize, the color conversion, the fullscreen image in the pixel layout of its decode and the folder shape
-//! from the file headers.
+//! The decoders and the decode routes. `Route::for_path` picks the route, and `decode_image`
+//! runs it. The pixels keep the color space of the file until `Decoded` resizes and converts.
 
 pub(crate) mod color;
 #[cfg(all(feature = "sips", target_os = "macos"))]
@@ -35,12 +33,10 @@ use std::io;
 use std::path::Path;
 use std::sync::mpsc;
 
-/// The decoder of a file outside libheif. libheif has its own check (`decodes_with_libheif`),
-/// because the info panel uses it too.
+/// The decoder of a file outside libheif. The info panel uses `decodes_with_libheif` too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route {
-    /// The `image` crate, with libjpeg-turbo for JPEG. Unknown extensions go here too, so that
-    /// the content decides.
+    /// Unknown extensions go here too, and the content decides.
     Raster,
     Jxl,
     #[cfg(all(feature = "sips", target_os = "macos"))]
@@ -48,8 +44,7 @@ pub(crate) enum Route {
 }
 
 impl Route {
-    /// Pick the decoder from the extension. The check compares without an allocation and tests
-    /// the `image` formats first, so the JPEG and PNG paths pay almost nothing.
+    /// Pick the decoder from the extension, with the `image` formats first.
     pub(crate) fn for_path(path: &Path) -> Self {
         let listed = |list: &[&str]| scanner::has_extension(path, list);
         if listed(scanner::IMAGE_EXTENSIONS) {
@@ -66,40 +61,36 @@ impl Route {
     }
 }
 
-/// The real file that the ignored test reads from `variable`. Without the variable the test
-/// skips with a note, so that `just test-real` runs with only some of the variables set.
+/// The file of an ignored test. Without the variable the test skips with a note.
 #[cfg(test)]
 pub(crate) fn real_test_file(variable: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os(variable).map(std::path::PathBuf::from);
     if path.is_none() {
-        // clippy.toml allows output in tests. `just test-real` shows it.
+        // clippy.toml allows output in tests.
         eprintln!("skipped: {variable} is not set");
     }
     path
 }
 
-/// Only grid thumbnails can use an embedded HEIF thumbnail. A camera preview can differ
-/// in color or crop from the primary image, so the fullscreen view does not use it.
+/// A camera preview can differ in color or crop from the primary image. Only grid thumbnails
+/// use it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmbeddedThumbnail {
     Allow,
     Deny,
 }
 
-/// A decoded image and the color space of its pixels. The conversion into the color space of
-/// the terminal waits for the resize, so that it runs on the small image.
+/// A decoded image and the color space of its pixels. The conversion waits for the resize.
 #[derive(Debug)]
 pub(crate) struct Decoded {
     pub(crate) image: DynamicImage,
     pub(crate) color: SourceColor,
-    /// True when the decoder knows that every pixel is opaque: the RGBA buffer of a JPEG or of
-    /// a HEIF image without alpha. Such a buffer resizes without the alpha multiply.
+    /// Every pixel is opaque: the RGBA buffer of a JPEG or of a HEIF image without alpha.
     pub(crate) opaque: bool,
 }
 
 impl Decoded {
-    /// The image at its decoded size in the color space of the terminal, for the tests and the
-    /// bench. An image that needs no conversion keeps its pixel type.
+    /// The image at its decoded size in the terminal color space, for the tests and the bench.
     #[cfg(test)]
     pub(crate) fn into_display(self) -> DynamicImage {
         let target = color::target();
@@ -110,9 +101,8 @@ impl Decoded {
         DynamicImage::ImageRgba8(color::convert(this.image.into_rgba8(), &this.color, target))
     }
 
-    /// An HDR image with more than 8 bits, resized in 16 bit into `box_px` and tone-mapped into
-    /// `target`, so that the steps after it see an SDR image in the target. Each other image
-    /// comes back unchanged: an 8-bit HDR image maps in `color::convert`.
+    /// A deep HDR image resized in 16 bit and tone-mapped into `target`. Each other image comes
+    /// back unchanged. An 8-bit HDR image maps in `color::convert`.
     fn tone_mapped(self, box_px: Option<(u32, u32)>, target: ColorTarget) -> Self {
         let Some(map) = hdr::ToneMap::of_source(&self.color, target) else {
             return self;
@@ -136,9 +126,7 @@ impl Decoded {
         }
     }
 
-    /// The grid picture fitted into `max_w` x `max_h`, in the color space of the terminal. An
-    /// opaque image resizes without the alpha multiply, and an RGB decode that resizes fastest
-    /// as RGB turns into RGBA after the resize, on the small image.
+    /// The grid picture fitted into `max_w` x `max_h`, in the terminal color space.
     pub(crate) fn fit_within(self, max_w: u32, max_h: u32) -> RgbaImage {
         let target = color::target();
         let this = self.tone_mapped(Some((max_w, max_h)), target);
@@ -155,8 +143,7 @@ impl Decoded {
         color::convert(fitted, &this.color, target)
     }
 
-    /// The fullscreen image fitted into `max_w` x `max_h`, in the color space of the terminal,
-    /// with RGB pixels when every pixel is opaque.
+    /// The fullscreen image fitted into `max_w` x `max_h`, in the terminal color space.
     pub(crate) fn fit_for_screen(self, max_w: u32, max_h: u32) -> ScreenImage {
         let target = color::target();
         let this = self.tone_mapped(Some((max_w, max_h)), target);
@@ -166,8 +153,7 @@ impl Decoded {
             .opaque_as_rgb()
     }
 
-    /// The zoom source and the prefetch without a box: the image at its decoded size, in the
-    /// color space of the terminal, in the layout of the fastest crop (`ScreenImage::for_crops`).
+    /// The zoom source and the unhinted prefetch, at the decoded size, in the crop layout.
     pub(crate) fn into_screen(self) -> ScreenImage {
         let target = color::target();
         let this = self.tone_mapped(None, target);
@@ -177,8 +163,7 @@ impl Decoded {
     }
 }
 
-/// Decode `path` in the color space of the terminal, at the decoded size, for the tests and
-/// the bench.
+/// Decode `path` at the decoded size in the terminal color space, for the tests and the bench.
 #[cfg(test)]
 pub(crate) fn decode_image_with_hint(
     path: &Path,
@@ -188,7 +173,7 @@ pub(crate) fn decode_image_with_hint(
     decode_image(path, target, embedded).map(Decoded::into_display)
 }
 
-/// Decode `path` with the size hint `target`. The pixels stay in the color space of the file.
+/// Decode `path` with the size hint `target`. The pixels keep the color space of the file.
 pub(crate) fn decode_image(
     path: &Path,
     target: Option<(u32, u32)>,
@@ -196,8 +181,7 @@ pub(crate) fn decode_image(
 ) -> io::Result<Decoded> {
     #[cfg(feature = "heic")]
     if decodes_with_libheif(path) {
-        // libheif applies the irot, imir and clap properties itself, so the EXIF
-        // orientation must not apply a second time.
+        // libheif applies irot, imir and clap itself. The EXIF orientation must not apply again.
         return decode_with_libheif(path, target, embedded);
     }
     #[cfg(not(feature = "heic"))]
@@ -206,9 +190,7 @@ pub(crate) fn decode_image(
     match Route::for_path(path) {
         Route::Raster => decode_raster(path, target),
         Route::Jxl => jxl::decode(path, color::target()),
-        // The grid and the fullscreen view take the embedded JPEG of a RAW or PSD file when
-        // it covers their box, else sips writes a copy at the size of the box. The zoom
-        // decodes without a target, so it gets the full image with all detail.
+        // A covering embedded JPEG wins. The zoom has no target and gets the full image from sips.
         #[cfg(all(feature = "sips", target_os = "macos"))]
         Route::Sips => match target.and_then(|box_px| embedded_jpeg::decode_covering(path, box_px))
         {
@@ -219,12 +201,10 @@ pub(crate) fn decode_image(
 }
 
 thread_local! {
-    /// True while the thread decodes the image that the user waits for.
     static FOREGROUND: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Run `work` as the decode that the user waits for: the fullscreen image or the zoom source.
-/// A libheif decode inside takes all cores. The thumbnails and the prefetch share them.
+/// Run `work` as the decode that the user waits for. A libheif decode inside takes all cores.
 pub(crate) fn foreground<T>(work: impl FnOnce() -> T) -> T {
     let before = FOREGROUND.replace(true);
     let result = work();
@@ -232,8 +212,7 @@ pub(crate) fn foreground<T>(work: impl FnOnce() -> T) -> T {
     result
 }
 
-/// Run `work` as a foreground decode on the thread pool. The receiver gets the result once. A
-/// dropped receiver means that the view moved on, and the result goes nowhere.
+/// Run `work` as a foreground decode on the thread pool. A dropped receiver drops the result.
 pub(crate) fn spawn_foreground<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> mpsc::Receiver<T> {
@@ -260,7 +239,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn the_extension_picks_the_route() {
+    fn extension_picks_route() {
         let route = |name: &str| Route::for_path(Path::new(name));
         assert_eq!(route("a.JPG"), Route::Raster);
         assert_eq!(route("a.exr"), Route::Raster);
@@ -272,18 +251,17 @@ mod tests {
         assert_eq!(route("a.CR2"), Route::Sips);
     }
 
-    /// A minimal little-endian TIFF block with one IFD entry: Orientation = 6 (rotate 90 CW).
+    /// A little-endian TIFF block with one IFD entry: Orientation = 6 (rotate 90 CW).
     const EXIF_ORIENTATION_6: [u8; 26] = [
         b'I', b'I', 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01,
         0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    /// A 32x16 image: the left half is red, the right half is blue.
     fn red_left_blue_right() -> RgbImage {
         RgbImage::from_fn(32, 16, |x, _| Rgb(if x < 16 { RED } else { BLUE }))
     }
 
-    /// Orientation 6 turns the stored 32x16 into 16x32 with red on top and blue below.
+    /// Orientation 6 turns the stored 32x16 into 16x32 with red on top.
     fn assert_upright(decoded: &DynamicImage) {
         let rgba = decoded.to_rgba8();
         assert_eq!(rgba.dimensions(), (16, 32));
@@ -293,10 +271,8 @@ mod tests {
 
     #[cfg(feature = "turbo")]
     #[test]
-    fn corrupt_jpeg_reports_both_decoder_errors() {
-        // A file with the JPEG SOI magic but no valid frame: both libjpeg-turbo
-        // and the pure-Rust fallback reject it. The error must mention both so a
-        // turbo-only diagnosis is not silently lost.
+    fn corrupt_jpeg_reports_both_errors() {
+        // The JPEG SOI magic without a valid frame: both decoders reject it.
         let dir = test_dir();
         let path = dir.path().join("corrupt.jpg");
         fs::write(&path, [0xFF, 0xD8, 0xFF, 0xD9]).unwrap();
@@ -307,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn webp_with_exif_orientation_6_decodes_upright() {
+    fn webp_orientation_6_decodes_upright() {
         let dir = test_dir();
         let path = dir.path().join("rotated.webp");
         let file = fs::File::create(&path).unwrap();
@@ -324,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_with_exif_orientation_6_decodes_upright() {
+    fn jpeg_orientation_6_decodes_upright() {
         let dir = test_dir();
         let path = dir.path().join("rotated.jpg");
         let file = fs::File::create(&path).unwrap();
@@ -345,8 +321,7 @@ mod tests {
         );
     }
 
-    /// Decode a real JPEG whose EXIF orientation is 6 or 8 (portrait stored sideways):
-    /// `VIEWR_TEST_JPEG=/path/to/photo.jpg cargo test -- --ignored`.
+    /// `VIEWR_TEST_JPEG=/path/to/photo.jpg`, orientation 6 or 8.
     #[test]
     #[ignore = "needs VIEWR_TEST_JPEG, a real photo"]
     fn decodes_jpeg_upright_from_env() {
@@ -373,13 +348,12 @@ mod tests {
             stored
         };
         assert_eq!((decoded.width(), decoded.height()), expected);
-        // Scaled decodes must be rotated the same way.
         let small = decode_image_with_hint(path, Some((300, 300)), EmbeddedThumbnail::Deny)
             .expect("scaled decode");
         assert_eq!(small.width() < small.height(), expected.0 < expected.1);
     }
 
-    /// Decode a real HEIC file: `VIEWR_TEST_HEIC=/path/to/photo.heic cargo test -- --ignored`.
+    /// `VIEWR_TEST_HEIC=/path/to/photo.heic`.
     #[cfg(feature = "heic")]
     #[test]
     #[ignore = "needs VIEWR_TEST_HEIC, a real photo"]
@@ -410,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn a_foreground_decode_marks_its_thread_for_the_duration() {
+    fn foreground_marks_thread() {
         use super::{FOREGROUND, foreground};
         assert!(!FOREGROUND.get());
         let inside = foreground(|| {
@@ -426,8 +400,28 @@ mod tests {
         assert!(!FOREGROUND.get(), "the flag goes back after the work");
     }
 
-    /// QOI, TGA, EXR and HDR: the `image` crate writes a synthetic file of each, and the grid
-    /// and the fullscreen decode open it.
+    #[test]
+    fn unset_variable_skips_real_test() {
+        assert_eq!(super::real_test_file("VIEWR_TEST_UNSET_IN_ANY_RUN"), None);
+    }
+
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    #[test]
+    fn sips_route_takes_covering_preview() {
+        let dir = test_dir();
+        let path = dir.path().join("design.psd");
+        crate::test_support::write_psd(&path, true);
+        let decoded = super::decode_image(&path, Some((32, 16)), EmbeddedThumbnail::Allow);
+        let image = decoded.unwrap().image;
+        assert_eq!(
+            (image.width(), image.height()),
+            (32, 16),
+            "the 64x32 preview, scaled"
+        );
+        assert_close(image.to_rgba8().get_pixel(4, 8).0, RED);
+    }
+
+    /// Synthetic QOI, TGA, EXR and HDR files in the grid and in fullscreen.
     mod formats {
         use super::red_left_blue_right;
         use crate::decode::resize::load_and_resize_px;
@@ -437,8 +431,7 @@ mod tests {
         use std::fs::File;
         use std::path::Path;
 
-        /// Decode `path` in fullscreen (no target) and in a grid cell of 16x16 px, and return
-        /// the left and right pixels of the full decode.
+        /// The left and right pixels of the full decode, after a check of the grid decode.
         fn open_both_ways(path: &Path) -> ([u8; 4], [u8; 4]) {
             let full = decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).unwrap();
             assert_eq!(
@@ -472,7 +465,7 @@ mod tests {
             }
         }
 
-        /// Linear light: 0.18 (middle gray) on the left, 4.0 (brighter than white) on the right.
+        /// 0.18 (middle gray) on the left, 4.0 (brighter than white) on the right.
         fn linear_samples() -> Vec<f32> {
             (0..16 * 32)
                 .flat_map(|i| {
@@ -485,8 +478,7 @@ mod tests {
                 .collect()
         }
 
-        /// After the tone map, middle gray is a mid tone, not black. 4.0 is the white point of
-        /// the image, so it becomes full red.
+        /// Middle gray stays a mid tone. 4.0 is the white point and becomes full red.
         fn assert_tone_mapped(path: &Path) {
             let (left, right) = open_both_ways(path);
             assert!(
@@ -498,7 +490,7 @@ mod tests {
         }
 
         #[test]
-        fn exr_and_hdr_are_tone_mapped_to_8_bit() {
+        fn exr_and_hdr_tone_map() {
             let dir = test_dir();
             let samples = linear_samples();
             let exr = dir.path().join("synthetic.exr");

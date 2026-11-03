@@ -1,6 +1,5 @@
-//! The facts about one file for the status row: the size on the screen, the file size, the
-//! format and the date. A video adds its length, its frame rate and its HDR curve from the
-//! probe cache. The run loop reads them on a thread, so a cursor move never waits.
+//! The facts of one file for the status row. A thread reads them, and a cursor move never
+//! waits.
 
 use crate::{decode, info};
 use chrono::{DateTime, Local};
@@ -8,26 +7,26 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct FileMeta {
-    /// Width and height as the viewer shows them, after the orientation.
+    /// The size after the orientation.
     pub(crate) size: Option<(u32, u32)>,
     pub(crate) bytes: Option<u64>,
     /// The extension in capitals.
     pub(crate) format: String,
-    /// The EXIF date of the shot, else the modified time of the file.
+    /// The EXIF date of the shot, else the modified time.
     pub(crate) date: Option<String>,
     pub(crate) video: Option<VideoMeta>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct VideoMeta {
-    /// The length in seconds, 0 when the container does not tell it.
+    /// 0 when the container does not tell it.
     pub(crate) duration: f64,
     pub(crate) fps: f64,
     /// `HLG` or `PQ`, `None` for SDR.
     pub(crate) hdr: Option<&'static str>,
 }
 
-/// Read the facts of `path`. A missing part stays `None`.
+/// A missing part stays `None`.
 pub(crate) fn read(path: &Path) -> FileMeta {
     let metadata = std::fs::metadata(path).ok();
     let modified = metadata
@@ -58,8 +57,7 @@ pub(crate) fn read(path: &Path) -> FileMeta {
     meta
 }
 
-/// Fill the video facts from the probe cache. False for a file that is not a video, or
-/// without `ffprobe`.
+/// True for every video, with or without `ffprobe` and a probe.
 #[cfg(feature = "video")]
 fn read_video(path: &Path, meta: &mut FileMeta) -> bool {
     use crate::player::tone_map::Hdr;
@@ -90,7 +88,7 @@ fn read_video(_path: &Path, _meta: &mut FileMeta) -> bool {
 }
 
 impl FileMeta {
-    /// One line for the status row, the parts split by a middle dot.
+    /// The parts split by a middle dot.
     pub(crate) fn describe(&self) -> String {
         let mut parts = Vec::new();
         if let Some(video) = &self.video {
@@ -119,12 +117,12 @@ impl FileMeta {
     }
 }
 
-/// Seconds as `mm:ss`, or `h:mm:ss` from one hour on.
+/// `mm:ss`, or `h:mm:ss` from one hour on.
 pub(crate) fn format_time(seconds: f64) -> String {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "a position is never negative, and a clip never runs for 2^64 seconds"
+        reason = "a clip length is never negative or near 2^64 seconds"
     )]
     let whole = seconds.max(0.0) as u64;
     let (hours, minutes, seconds) = (whole / 3600, whole / 60 % 60, whole % 60);
@@ -141,7 +139,7 @@ mod tests {
     use image::RgbImage;
 
     #[test]
-    fn an_image_has_its_size_bytes_format_and_date() {
+    fn image_has_size_bytes_format_date() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("photo.png");
         RgbImage::new(40, 30).save(&path).unwrap();
@@ -159,8 +157,8 @@ mod tests {
 
     #[cfg(feature = "video")]
     #[test]
-    fn a_video_without_the_tools_has_no_video_facts_and_no_size() {
-        // The tests never look up ffprobe, so the session has no tools.
+    fn video_without_tools_has_no_facts() {
+        // The tests never look up ffprobe.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("clip.mp4");
         std::fs::write(&path, b"synthetic").unwrap();
@@ -173,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_file_has_only_its_format() {
+    fn missing_file_has_only_format() {
         let meta = read(std::path::Path::new("/nonexistent/viewr/a.jpg"));
         assert_eq!(meta.size, None);
         assert_eq!(meta.bytes, None);
@@ -181,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn the_line_of_an_image_and_of_a_video() {
+    fn describes_image_and_video() {
         let image = FileMeta {
             size: Some((4032, 3024)),
             bytes: Some(2_200_000),
@@ -210,11 +208,10 @@ mod tests {
         );
     }
 
-    /// A real iPhone photo carries the date of the shot in its EXIF block:
     /// `VIEWR_TEST_HEIC=/path/to/photo.heic`.
     #[test]
     #[ignore = "needs VIEWR_TEST_HEIC, a real photo"]
-    fn a_real_heic_has_its_size_and_the_date_of_the_shot() {
+    fn real_heic_has_size_and_date() {
         let Some(path) = crate::decode::real_test_file("VIEWR_TEST_HEIC") else {
             return;
         };
@@ -226,9 +223,27 @@ mod tests {
     }
 
     #[test]
-    fn the_time_gets_hours_from_one_hour_on() {
+    fn time_gets_hours_from_one_hour() {
         assert_eq!(format_time(59.9), "00:59");
         assert_eq!(format_time(3725.0), "1:02:05");
         assert_eq!(format_time(-1.0), "00:00");
+    }
+
+    #[test]
+    fn sdr_video_line_without_size() {
+        let video = FileMeta {
+            bytes: Some(1024),
+            video: Some(VideoMeta {
+                duration: 3725.0,
+                fps: 25.0,
+                hdr: None,
+            }),
+            ..FileMeta::default()
+        };
+        assert_eq!(
+            video.describe(),
+            "1:02:05 \u{b7} 25 fps \u{b7} SDR \u{b7} 1.0 KB"
+        );
+        assert_eq!(FileMeta::default().describe(), "");
     }
 }
