@@ -572,3 +572,107 @@ fn cache_capacity_follows_grid() {
 
     assert_eq!(app.thumb_cache.capacity(), 2 * app.gallery.visible_cells());
 }
+
+/// Poll until the cell 0 gets a new thumbnail, for at most 2 s.
+#[cfg(feature = "heic")]
+fn wait_for_thumbnail(app: &mut App) {
+    crate::test_support::wait_until(|| app.poll_thumbnails() == vec![0]);
+}
+
+/// A grid app with one 256x128 HEIC whose embedded thumbnail has the aspect of `source`. The
+/// cell is 20x6 cells of 8x16 px, a box of 160x96 px, and the sharp image fits as 160x80 px.
+#[cfg(feature = "heic")]
+fn heic_app(dir: &std::path::Path, source: (u32, u32)) -> App {
+    use crate::test_support::write_heif_sized;
+    use libheif_rs::{CompressionFormat, ImageOrientation};
+    let path = dir.join("photo.heic");
+    let normal = ImageOrientation::Normal;
+    write_heif_sized(
+        &path,
+        CompressionFormat::Hevc,
+        normal,
+        Some((normal, source)),
+    );
+    let mut app = grid_app(1);
+    app.images = vec![path];
+    app.disk_cache_dir = dir.join("cache");
+    std::fs::create_dir(&app.disk_cache_dir).unwrap();
+    app.spawn_thumb_decode(0, app.gallery.thumb_rect(0));
+    app
+}
+
+/// The text of the emit pass of cell 0 and of the placement that follows it.
+#[cfg(feature = "heic")]
+fn emit_and_place(app: &mut App) -> (String, String) {
+    let mut out = Vec::new();
+    emit_new_thumbnails_to(app, &[0], &mut out).unwrap();
+    let emitted = text_of(&out);
+    out.clear();
+    place_visible(app, &mut out);
+    (emitted, text_of(&out))
+}
+
+/// The cursor move that puts a picture of `cells` in the middle of the cell 0.
+#[cfg(feature = "heic")]
+fn moved_to(app: &App, cells: (u16, u16)) -> String {
+    let rect = crate::gallery::centered(app.gallery.thumb_rect(0), cells.0, cells.1);
+    format!("\x1b[{};{}H", rect.y + 1, rect.x + 1)
+}
+
+#[cfg(feature = "heic")]
+#[test]
+fn square_preview_of_wide_photo_keeps_its_shape() {
+    use crate::test_support::{BLUE, RED, assert_close, test_dir};
+    let dir = test_dir();
+    let mut app = heic_app(dir.path(), (128, 128));
+    // The preview scales up to 96x96 px, 12x6 cells. Its canvas has that shape already.
+    wait_for_thumbnail(&mut app);
+    assert!(!app.thumb_cache.is_sharp(0));
+    let (preview, _) = app.thumb_cache.peek(0).unwrap();
+    assert_eq!(preview.cells, (12, 6));
+    assert_eq!(preview.image.dimensions(), (64, 64));
+    assert_close(preview.image.get_pixel(0, 0).0, BLUE);
+    assert_close(preview.image.get_pixel(63, 63).0, BLUE);
+    let (emitted, placed) = emit_and_place(&mut app);
+    assert!(emitted.contains(",s=64,v=64,i=1,c=12,r=6,"), "{emitted}");
+    assert!(emitted.contains(&moved_to(&app, (12, 6))), "{emitted}");
+    assert!(placed.contains("\x1b_Ga=p,q=2,C=1,i=1,c=12,r=6\x1b\\"));
+
+    // The sharp picture takes the cells of its own aspect in the same cell.
+    wait_for_thumbnail(&mut app);
+    assert!(app.thumb_cache.is_sharp(0));
+    let (sharp, _) = app.thumb_cache.peek(0).unwrap();
+    assert_eq!(sharp.cells, (20, 5));
+    assert_eq!(sharp.image.dimensions(), (160, 80));
+    assert_close(sharp.image.get_pixel(80, 40).0, RED);
+    let mut out = Vec::new();
+    emit_new_thumbnails_to(&mut app, &[0], &mut out).unwrap();
+    let emitted = text_of(&out);
+    assert!(emitted.contains(",s=160,v=80,i=2,c=20,r=5,"), "{emitted}");
+    assert!(emitted.contains(&moved_to(&app, (20, 5))), "{emitted}");
+}
+
+#[cfg(feature = "heic")]
+#[test]
+fn padded_preview_keeps_the_aspect_of_its_cells() {
+    use crate::test_support::{BLUE, assert_close, test_dir};
+    let dir = test_dir();
+    // A 16:9 thumbnail of 64x36 px scales up to 160x90 px, 20x6 cells. The cells have the shape
+    // 160x96, so the canvas needs 3 transparent rows: 64x39 px.
+    let mut app = heic_app(dir.path(), (128, 72));
+    wait_for_thumbnail(&mut app);
+    let (preview, _) = app.thumb_cache.peek(0).unwrap();
+    assert_eq!(preview.cells, (20, 6));
+    let image = &preview.image;
+    assert_eq!(image.dimensions(), (64, 39));
+    assert_eq!(image.get_pixel(32, 0).0[3], 0, "transparent top margin");
+    assert_eq!(image.get_pixel(32, 38).0[3], 0, "transparent bottom margin");
+    assert_close(image.get_pixel(32, 19).0, BLUE);
+    assert_close(image.get_pixel(0, 19).0, BLUE);
+    // The canvas has the shape of the cells in pixels, so the terminal scales it by one factor.
+    let canvas = f64::from(image.width()) / f64::from(image.height());
+    let cells = f64::from(preview.cells.0 * 8) / f64::from(preview.cells.1 * 16);
+    assert!((canvas - cells).abs() < 0.03, "{canvas} against {cells}");
+    let (emitted, _) = emit_and_place(&mut app);
+    assert!(emitted.contains(",s=64,v=39,i=1,c=20,r=6,"), "{emitted}");
+}

@@ -37,6 +37,18 @@ pub(crate) fn write_heif(
     orientation: ImageOrientation,
     thumbnail: Option<ImageOrientation>,
 ) {
+    let thumbnail = thumbnail.map(|thumbnail_orientation| (thumbnail_orientation, (256, 128)));
+    write_heif_sized(path, format, orientation, thumbnail);
+}
+
+/// Write a red 256x128 primary image and an optional blue thumbnail. The thumbnail has its own
+/// orientation, the aspect of its source size and 64 pixels on the longer side.
+pub(crate) fn write_heif_sized(
+    path: &Path,
+    format: CompressionFormat,
+    orientation: ImageOrientation,
+    thumbnail: Option<(ImageOrientation, (u32, u32))>,
+) {
     let lib_heif = LibHeif::new();
     let mut ctx = HeifContext::new().unwrap();
     let mut encoder = lib_heif.encoder_for_format(format).unwrap();
@@ -48,9 +60,9 @@ pub(crate) fn write_heif(
             Some(options(orientation)),
         )
         .unwrap();
-    if let Some(thumbnail_orientation) = thumbnail {
+    if let Some((thumbnail_orientation, (width, height))) = thumbnail {
         ctx.encode_thumbnail(
-            &solid_image(256, 128, BLUE),
+            &solid_image(width, height, BLUE),
             &primary,
             64,
             &mut encoder,
