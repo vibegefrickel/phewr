@@ -674,7 +674,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v20` (`THUMBNAIL_CACHE_VERSION`, v20 since the ORF maker note preview and the fit rule of `covers`), the
+- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v21` (`THUMBNAIL_CACHE_VERSION`, v21 since the DCT scale follows the fit), the
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
@@ -771,7 +771,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - **Embedded JPEG orientation:** the container orientation (IFD0 of a TIFF RAW or an ORF, `CMT1`
   of a CR3) wins over the EXIF of the embedded JPEG. Without a container orientation, the EXIF of
   the JPEG applies (RAF). The turbo path, the `image` fallback and the cell shape use this one
-  rule. The DCT scaling of a rotated JPEG compares against the turned box.
+  rule. The DCT scaling of a rotated JPEG compares against the turned box. libjpeg-turbo decodes
+  at the smallest of 1/8, 1/4, 1/2 and 1 that covers the fit of the image into the box, never
+  smaller than the fit (`pick_scaling_factor`, `52c9222`). The other eighths run in plain C
+  without NEON and take 1.1 to 1.6 times the full decode, so phewr never uses them.
 
 ## Workflow for agents
 
