@@ -1,7 +1,8 @@
 # AGENTS.md
 
 This file is the entry point for each person and coding agent that works on viewr. Read it
-first. Then read `TODO.md` for the open work.
+first. Then read `TODO.md` for the open work. The pages in `docs/` hold the design facts of the
+modules. Read the page of the module that you change.
 
 ## What this is
 
@@ -166,17 +167,25 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 
 ## Layout
 
+- `docs/`: the design notes by module. `video.md` holds the terminal player, the probe, the cubes,
+  the animations, the grid loop frames and the mpv window. `images-and-colors.md` holds the
+  decoders and the color conversion. `grid-and-kitty.md` holds the grid geometry, the Kitty
+  output and the run loop waits. `app-state.md` holds the thumbnail jobs, the disk cache, the
+  folder prefetch and the grid loop jobs. `docs/README.md` lists the pages.
 - `main.rs`: the module list and `main`: the lookup of ffmpeg and ffprobe
   (`video::find_session_tools`), the CLI checks, the terminal
-  session and the start of the run loop.
+  session and the start of the run loop. `main` is a thin shell. `check_paths`,
+  `apply_cli_overrides`, `probe_terminal` (the start probe and the cell size, `StartProbe`) and
+  `prepare_app` hold the logic with tests.
 - `cli.rs`: the clap arguments (`Cli`), the value parsers of `--threads` and `--interval`, and the
   start directory.
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
   `query_terminal`, `query_cell_size_and_probe` (`CSI 16 t`, the Kitty probes and the DA1 query
-  in one write, the DA1 answer ends the read) and the cell pixel size.
+  in one write, the DA1 answer ends the read) and the cell pixel size. `read_answer` is the poll
+  loop of the tty read, over any fd.
 - `run_loop.rs`: `LoopState` (the status note and, with the `video` feature, the `VideoState`),
   `run`, the background polls, `render_images` and `next_timeout`. The status note lives here, not
-  in `App`.
+  in `App`. `handle_input` takes one input event. The tests are in `run_loop/tests.rs`.
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
   `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `video.rs` (feature `video`).
@@ -191,23 +200,27 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   grid loops (`play_grid_loops`, `transmit_animation_to`, `swap_loop_frames_to`).
 - `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
   and the way back. `mod.rs` holds `VideoState` and `play_videos`. The ffprobe path lives in the
-  decoder only (`Decoder::has_ffprobe`). `prestart.rs` holds the start of the player during a
+  decoder only (`Decoder::has_ffprobe`). `prestart/` holds the start of the player during a
   rest of the cursor (`VideoPrestart` in `App::video_prestart`, `tick_prestart`, `take_prestart`,
-  `prestart_timeout`). `window.rs` holds `poll_mpv_window`.
+  `prestart_timeout`). `window.rs` holds `poll_mpv_window`. `tests.rs` holds the start tests.
 - `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` with its `Run` and
   `Repeat`, the pacing, `catch_up` (the restart ahead of the clock) and `end_of_run` (the repeat,
-  the software fallback, the failure). `decoder.rs` holds the ffmpeg command line (one `build`
-  with `Extras` and `Output`), the `Decoder` trait and the fallback order (`Pipeline::first`,
+  the software fallback, the failure). `tests.rs` holds the player tests. `decoder/` holds the
+  ffmpeg run: `mod.rs` the `Decoder` trait and the fallback order (`Pipeline::first`,
   `Pipeline::next`, `with_fallback`: an animation decodes in software only, also its first frame
-  and its loops). `probe.rs` holds `VideoInfo`, `layout.rs`
-  the frame box and the cell box, `tone_map.rs` the color cubes (the HDR tone mapping, the SDR
-  primaries conversion and the cube files), `animation.rs` the header check for animated GIF, WebP,
-  APNG and AVIS.
+  and its loops), `command/` the command line (one `build` with `Extras` and `Output`), and
+  `process.rs` `SystemDecoder`, `FrameStream`, the frame pool and the reap. `probe/` holds
+  `VideoInfo`, the ffprobe run, the probe cache and `output_within`. `probe/parse/` holds the JSON
+  and the pacing rates. `layout.rs` holds the frame box and the cell box. `tone_map/` holds the
+  color cubes (the HDR tone mapping, the SDR primaries conversion and the cube files), and
+  `tone_map/math.rs` holds the matrices, the curves and the tone map. `animation.rs` holds the
+  header check for animated GIF, WebP, APNG and AVIS.
 - `grid_loop.rs` (feature `video`): the frames of the grid loops: the ffmpeg runs and the frame
   choice (12 keyframes, the constant-rate run for a short clip, the 12 seeks for a long one, the
   caps of an animation).
-- `app/grid_loops.rs`: the loops of the grid: `GridLoops`, their jobs, their cancel flags and the
-  loop clock.
+- `app/grid_loops/`: the loops of the grid. `mod.rs` holds `GridLoops`, `LoopFrames` and the loop
+  state of `App`. `cell.rs` holds `CellLoop` and the loop clock (`TICKS_PER_SECOND`,
+  `START_ALIGN`, `tick_ends`). `jobs.rs` holds the jobs, their cancel flags and `ResultGuard`.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields, its construction
   and `box_px` (the pixel box of a rect). One file per topic: `info_panel.rs` (`view_file`, the
@@ -215,34 +228,42 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter), `cell_shape.rs`,
   `fullscreen.rs` (enter, leave, the steps and the decode, `FullscreenDecode`, the image as a
   `ScreenImage`), `zoom.rs` (zoom,
-  pan and the full-resolution source in `ZoomState`), `delete.rs` (the marks and the delete question), `directory.rs` (the
-  directory switch), `folder_prefetch.rs` (the decode of the first screen of the folder under the
-  cursor into the disk cache), `mouse.rs` (the mouse state and the screen layout of the last draw),
+  pan and the full-resolution source in `ZoomState`), `delete.rs` (the marks and the delete question, the tests in `delete/tests.rs`), `directory.rs`
+  (the directory switch), `folder_prefetch/` (the decode of the first screen of the folder under
+  the cursor into the disk cache: the state and the rest of the cursor in `mod.rs`, the thread
+  and the first screen in `worker.rs`), `mouse.rs` (the mouse state and the screen layout of the last draw),
   `meta.rs` (the facts of the file under the cursor, read on a thread), `folders.rs` (the folder
-  entries of the grid, `is_parent_entry`, `Enter` into a folder, `go_to_parent`), `video.rs` (the
-  terminal player state, the return after a video, the mpv window watch), `thumbnails.rs`
-  (`ThumbnailJobs`: the channel, the sharp, preview and cache read slots, the misses and the
-  generation, and `ThumbImage`, with `JobQueue` for the waiting jobs), `disk_cache.rs` (the
-  thumbnail disk cache, `CacheEntry`, `LazyEntry` and `FileStamp`).
+  entries of the grid, `is_parent_entry`, `Enter` into a folder, `go_to_parent`, the tests in
+  `folders/tests.rs`), `video.rs` (the terminal player state, the return after a video, the mpv
+  window watch), `thumbnails/` (`ThumbnailJobs` in `mod.rs`: the channel, the sharp, preview and
+  cache read slots, the misses and the generation, and `ThumbImage`. `queue.rs` holds `JobQueue`
+  and `JobSlots`, `padding.rs` the padding to whole cells (`pad_for_grid`, `pad_loop_frame`,
+  `thumb_target_px`), `decode.rs` the work of one job (`warm_disk_cache`, the embedded preview,
+  the animation flag)), `disk_cache/` (the thumbnail disk cache: `CacheEntry`, `LazyEntry` and
+  `FileStamp` in `mod.rs`, the loop files in `loop_file.rs`, the temp file write and the prune in
+  `write.rs`). `grid_loops/` is listed above.
 - `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the route by
   extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the user waits
   for. `raster.rs` (the `image` crate, the EXIF orientation and `header_dimensions`, the size from
   the header for `info::dimensions` and `shape::shown_size`), `turbo.rs` (libjpeg-turbo with DCT
-  scaling), `libheif.rs` (HEIC, HEIF, AVIF, the embedded thumbnails, `fitted_size` on
-  `scaled_down_size`, and the core share `LibheifSlot`), `resize.rs` (`load_and_resize`, Catmull-Rom,
-  `Layout`, `rgb_resize_is_fastest` and `resize_region`, a resize of a region through a view),
-  `screen.rs` (`ScreenImage` with `Rgb`, `Rgba` and `Opaque`, and `load_for_screen`, the
-  fullscreen decode), `jxl.rs` (JPEG XL, ICC profiles
-  through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and other ImageIO formats), `tonemap.rs`
-  (EXR and HDR to 8 bit), `hdr.rs` (the tone map of PQ and HLG stills: the math of the HDR cube of
-  the player, the map after the resize), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and `ispe`),
-  `shape.rs` (the image dimensions from the file headers, for the cell shape), `embedded_jpeg.rs`
-  (the safe reader for the JPEG inside camera RAW and PSD files), `color.rs` (the conversion into
-  the color space of the terminal: `ColorTarget`, `SourceColor`, the transform cache, the JPEG
-  segment walk `jpeg_segments`, and the ICC and CICP readers for JPEG APP2, the PNG chunks and the
-  TIFF tag). `decode_image` returns `Decoded`
-  (the pixels and their `SourceColor`). `Decoded::fit_within` resizes, then converts.
-  `decode_image_with_hint` converts at the decoded size.
+  scaling), `libheif/` (HEIC, HEIF, AVIF: `mod.rs` the decode and the core share `LibheifSlot`,
+  `thumbnails.rs` the embedded thumbnails and `fitted_size` on `scaled_down_size`, `plane.rs` the
+  interleaved plane), `resize.rs` (`load_and_resize`, Catmull-Rom, `Layout`,
+  `rgb_resize_is_fastest` and `resize_region`, a resize of a region through a view), `screen/`
+  (`ScreenImage` with `Rgb`, `Rgba` and `Opaque`, and `load_for_screen`, the fullscreen decode),
+  `jxl.rs` (JPEG XL, ICC profiles through `moxcms`), `sips.rs` (camera RAW, PSD, PDF, SVG and
+  other ImageIO formats), `tonemap.rs` (EXR and HDR to 8 bit), `hdr/` (the tone map of PQ and HLG
+  stills: `mod.rs` the math of the HDR cube of the player, `primaries.rs` the primaries and the
+  matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir` and `ispe`), `shape.rs`
+  (the image dimensions from the file headers, for the cell shape), `embedded_jpeg/` (the safe
+  reader for the JPEG inside camera RAW and PSD files: `mod.rs` with RAF, `tiff.rs`, `cr3.rs`,
+  `psd.rs`), `color/` (the conversion into the color space of the terminal: `mod.rs` with
+  `ColorTarget`, `SourceColor` and `convert`, `transform.rs` the transform cache, `jpeg.rs` the
+  JPEG segment walk `jpeg_segments`, the APP2 ICC profile and the Adobe RGB mark, `tags.rs` the
+  PNG chunks, the TIFF tag and the `cicp` tag of an ICC profile). `decode_image` returns
+  `Decoded` (the pixels and their `SourceColor`). `Decoded::fit_within` resizes, then converts.
+  `decode_image_with_hint` converts at the decoded size. A module directory keeps its long test
+  module in `tests.rs`.
 - `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
   `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
   view. `status.rs` holds the status row of each view (`draw_status_row`, `question_or_error`,
@@ -253,13 +274,15 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `HELP_FULLSCREEN_ROWS`), else one column that clips. The gallery, the fullscreen view and the
   video view have no frame. They use the full area minus 1 status row (`content_area`,
   `status_area`). The help popup and the info panel keep their borders.
-- `gallery.rs`: the grid geometry, the cursor and the in-memory thumbnail cache, and the two
-  geometry helpers `box_px` (the pixel box of a rect) and `centered` (a box centered in a rect).
+- `gallery/`: `mod.rs` holds the grid geometry, the cursor and the two geometry helpers `box_px`
+  (the pixel box of a rect) and `centered` (a box centered in a rect). `thumbnail_cache.rs` holds
+  the in-memory thumbnail cache (`ThumbnailCache`, `GridPicture`, `ParkKey`) with the parked
+  pictures.
   `update_grid` gives the remainder of the width and the height to the first columns and rows,
   so the grid reaches the edges. `set_cell_shape` picks the column count from the photo aspect
   and the pixel size of a terminal cell.
-- `scanner.rs`: the background directory scan and the lists of supported extensions.
-  `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `has_extension(path, list)` is the
+- `scanner/`: the background directory scan (`mod.rs`) and the lists of supported extensions
+  (`extensions.rs`). `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `has_extension(path, list)` is the
   extension test of the scanner and the decoders, without an allocation. `name_key` is the sort
   key of the batches and the folders (the lowercase name, then the path). `read_folder` is the one
   `read_dir` of a folder argument for its folders and its files. `folder_listing` gives the
@@ -268,7 +291,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   halves.
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
   `EntryKind`, `FolderEntry` and the folder prefix (`push_folders`, `folder_count`).
-- `prefetch.rs`: decodes the neighbors of the fullscreen image ahead of time. A job sends a
+- `prefetch/`: decodes the neighbors of the fullscreen image ahead of time (`mod.rs`, the tests in
+  `tests.rs`). A job sends a
   `JobResult` with its generation. `invalidate()` drops the jobs in flight and forgets the failed
   indices. Each result (`Prefetched`) keeps its decode box. `take_resized` fits the image into
   the requested box (`Prefetched::fit_within`). If the decode box is smaller, it returns `None`.
@@ -279,14 +303,18 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 - `file_meta.rs`: the facts of one file for the status row (`FileMeta`, `describe`).
 - `icons.rs`: the large octant icons of the grid cells.
 - `styles.rs`: `STYLES`, one style per role on the screen.
-- `config.rs`: `config.toml` and the state file. `Paths` (`from_env`, `from_vars`) holds the two
-  file paths, `load(&Paths)` reads the config, `load_at` takes the paths for the tests.
-- `video.rs` (feature `video`): `Tools`, the session lookup of ffmpeg and ffprobe, `cube_dirs` (the
+- `config/`: `mod.rs` holds `config.toml`. `Paths` (`from_env`, `from_vars`) holds the two file
+  paths, `load(&Paths)` reads the config, `load_at` takes the paths for the tests. `state.rs`
+  holds the state file: the zoom table, `save_visible_rows`, `clear_folder_zoom` and the save
+  through a temp file and a rename.
+- `video/` (feature `video`, `mod.rs` and `tests.rs`): `Tools`, the session lookup of ffmpeg and ffprobe, `cube_dirs` (the
   places of the cube files) and `session_decoder` (ffmpeg with a decoder that has ffprobe), the
   first-frame thumbnails and the video extensions.
 - `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
   and the `Runner` trait for the process start.
-- `encoder/`: the Kitty graphics protocol (`KittyBackend` in `kitty.rs`, the types in `mod.rs`).
+- `encoder/`: the Kitty graphics protocol (`KittyBackend` in `kitty/mod.rs`, the types in
+  `mod.rs`). `kitty/probe.rs` holds the start probes (`detect_backend`, `chosen_loops`,
+  `describe`, `describe_loops`, `is_ssh`).
   `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
   the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
@@ -313,7 +341,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
 
 - **Terminal player:** ffmpeg runs as a subprocess with VideoToolbox and writes raw frames to a
   pipe, one frame per temp file under the image id `u32::MAX - 1`. The command line, the rates,
-  the frame pool and the payload cap are in the module doc of `player/mod.rs`.
+  the frame pool and the payload cap are in `docs/video.md` ("Terminal player").
 - **Player real time (rule):** the terminal player never plays in slow motion. A 6 s clip
   plays for 6 s, and a slow decode or a slow terminal drops frames. The clock of a run never
   moves to a late frame. A frame more than one interval late drops when a newer frame waits,
@@ -337,7 +365,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   a video. `p` on the placeholder opens the mpv window.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
   video, and its still carries a play triangle until its loop starts. The probe, the routes and
-  the stamp are in the module doc of `player/animation.rs`.
+  the stamp are in `docs/video.md` ("Animated images" and "Probe").
 - **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
   terminal player stops playing (`playing()` is false), and the slideshow moves on. Outside a slideshow, the clip
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
@@ -365,7 +393,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   against 0.51 to 0.56), so HDR keeps 33 points. `SDR_WHITE_NITS = 500` matches the macOS SDR
   export on three iPhone clips. The PQ cube has no test on a real PQ file. A PQ or HLG still
   (AVIF, HEIC, JPEG XL, 16-bit PNG with `cICP`) maps with a copy of the same math in
-  `decode/hdr.rs`, per pixel and without a cube, after the resize: the primaries are BT.2020,
+  `decode/hdr/`, per pixel and without a cube, after the resize: the primaries are BT.2020,
   Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a file in
   16 bit. A test compares the still map with each point of the player cubes, so a change of one
   copy fails it.
@@ -386,24 +414,20 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   image: it never opens the fullscreen view or a slideshow by itself (only `--slideshow` does).
 - **Video programs:** viewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
   time, and the tests never do, so `session_first_frame` gives `NotFound` in a test. The probe
-  (`player/probe.rs`) is one `ffprobe -of json` process of about 32 ms with a 2 s timeout
+  (`player/probe/`) is one `ffprobe -of json` process of about 32 ms with a 2 s timeout
   (`output_within`). A probe cache keys each `VideoInfo` by path, mtime and length, so
   `Player::open` after a cold thumbnail starts no ffprobe. An animation reads 17 packets, an
   `.avif` file 34. The first frame runs the player GPU chain with `-frames:v 1`, with the
   rotation and, for HLG and PQ, the tone mapping cube, and waits at most 5 s. An SDR first frame
-  converts after the decode with `color::convert` (`convert_first_frame` in `video.rs`), so it
+  converts after the decode with `color::convert` (`convert_first_frame` in `video/mod.rs`), so it
   pays no cube parse. The player maps the probed stream with
   `-map 0:N` for every video. Without the programs, a video cell keeps its large play icon, and
   `Enter` opens the mpv window with a note. When the gallery cursor rests on a video or an
   animated image for 200 ms (`PRESTART_DELAY`) and `App::has_pending_work` is false,
-  `video_handoff/prestart.rs` opens its terminal player ahead of Enter. The run loop wakes at the
-  end of the delay (`prestart_timeout` in `next_timeout`). ffmpeg decodes the first frames and
-  blocks on the pipe. Enter takes the player (`Player::begin_at`), and its clock starts at the
-  first frame, so the clip plays in real time from Enter: after a rest of 500 ms or more the first
-  frame comes 1 ms to 2 ms after Enter, against about 240 ms without a rest. A cursor move, a new
-  frame box, an overlay, a slideshow, the mpv window and a wait of 10 s (`PRESTART_LIFETIME`)
-  drop the player. A waiting ffmpeg on a 4K HLG clip holds about 450 MB, so the limit is short.
-  The drop of a `FrameStream` reaps the killed ffmpeg on a thread, so a cursor move costs 0.1 ms.
+  `video_handoff/prestart/` opens its terminal player ahead of Enter. Enter takes it
+  (`Player::begin_at`), and the clip plays in real time from Enter. A cursor move, a new frame
+  box, an overlay, a slideshow, the mpv window and a wait of 10 s (`PRESTART_LIFETIME`) drop the
+  player. The timings and the reasons are in `docs/video.md` ("Start ahead of Enter").
 - **One file argument:** `cli::start_paths` turns one file argument into its canonical folder
   and a cursor target (`App::place_cursor_after_scan`, the `return_to` of `Backspace`). Several
   arguments stay a plain file list. yazi starts viewr with the hovered path (`viewr %h`).
@@ -437,19 +461,14 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   after the last loop job. Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
 - **Decodes share the cores.** `LibheifSlot` shares the tile threads, at most 4 thumbnail and 2
   prefetch decodes run at once, and a cache read never waits behind a cold decode. The queues,
-  the slots, the cache key and the header read are in the module doc of `app/thumbnails.rs`.
+  the slots, the cache key and the header read are in `docs/app-state.md` ("Thumbnail jobs").
 - **Kitty emits:** a pass writes the new thumbnails in grid order, in one synchronized update, up
-  to `EMIT_PASS_BYTES` (4 MB of the RGBA bytes of the cache, not the bytes on the wire). The rest
-  goes out in the next pass. One write of 36 cells takes about 11 ms.
+  to `EMIT_PASS_BYTES`. The rest goes out in the next pass. The numbers are in
+  `docs/grid-and-kitty.md` ("Emit passes").
 - **Kitty temp file medium:** the temp file medium wins only when the probe answer is `OK` and
-  the terminal deleted the probe file. A terminal with another `TMPDIR` reads the file but keeps
-  it, and viewr would leave a 17 MB file per frame. The file name contains
-  `tty-graphics-protocol`, as the protocol requires. A terminal that answers the probe later
-  than 300 ms sends the answer as key presses. Through this medium an animation frame of the
-  grid loops and of the terminal player goes out as RGBA as it is (`Pixels::keep_alpha`), with no
-  scan for a transparent pixel and no RGB copy, so an opaque frame is `f=32` and the temp file
-  is 18 % larger. The direct and PNG media keep the RGB conversion, and so does a grid picture.
-  An opaque fullscreen still arrives as RGB, so its transmit does no scan and no copy.
+  the terminal deleted the probe file. Otherwise a terminal with another `TMPDIR` keeps the
+  files. The file name contains `tty-graphics-protocol`, as the protocol requires. The frame
+  layouts per medium are in `docs/grid-and-kitty.md` ("Temp file medium").
 - **Kitty images are not ratatui widgets.** ratatui draws the frame and the borders. viewr then
   writes the pictures with Kitty escape sequences at the cell positions of the last draw. A
   popup must delete the pictures first (`graphics_delete_all`), because Kitty draws them above
@@ -458,23 +477,13 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   `mark_dirty`, and the grid write deletes the old pictures itself. A delete without a later
   draw leaves black cells.
 - **Grid gaps and borders:** the cells have 1-cell gaps, every picture is padded to whole cells
-  and placed centered with `c=` and `r=`, and the borders live in the gaps. The geometry is in
-  the module doc of `gallery.rs`.
+  and placed centered with `c=` and `r=`, and the borders live in the gaps. The geometry, the
+  padding and the borders are in `docs/grid-and-kitty.md` ("Grid gaps and borders") and in the
+  module doc of `gallery/mod.rs`.
 - **Terminal storage:** `TerminalImages` in `kitty_output/terminal_images.rs` tracks the images that the
-  terminal stores, with their bytes (4 bytes per pixel, also for a picture that went out as RGB,
-  so the count is an upper bound). The grid deletes evicted and replaced ids with `a=d,d=I`
-  and trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB). Ghostty evicts
-  unplaced images at 320 MB, and herdr stores each image twice. When the loops run as Kitty
-  animations (`Loops::Animation`), every video frame and every loop frame carries the usage hint
-  `N=1` (transient), so Ghostty 1.4.0 evicts them before the stills. With `Loops::Ticks` no `N`
-  key goes out, because the protocol does not say that a terminal ignores an unknown key. Stills
-  and the fullscreen image carry no hint. A trimmed cell sends its
-  picture again with `a=T`. The in-memory cache holds `max(200, 2 * visible cells)` entries
-  and at most `THUMB_CACHE_BYTE_LIMIT` (512 MB) of padded pixels. It never evicts a visible
-  cell. The cache also holds the parked sharp thumbnails of the folders that the grid left
-  (`ThumbnailCache::park`, `take_parked`), keyed by path and decode size, with the mtime and
-  the length of the file. A changed file decodes again. Parked pictures count against the limit
-  and go first. The grid writes run in a synchronized update.
+  terminal stores. The grid deletes evicted and replaced ids and trims the oldest unshown images
+  above `TERMINAL_IMAGE_BUDGET` (128 MB). The in-memory cache never evicts a visible cell. The
+  hints, the limits and the parked pictures are in `docs/grid-and-kitty.md` ("Terminal storage").
 - **Cell size:** `query_cell_pixel_size` asks with `CSI 16 t`, because TIOCGWINSZ includes the
   window padding of Ghostty (2258 px / 52 rows = 43.42 px). If the terminal answered at
   start, the run loop asks again after each resize. The read takes every byte of the tty, so
@@ -512,7 +521,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   recent folders.
 - **Grid loops:** every visible video and animated cell loops after its still, as a Kitty
   animation or through ticks (`Loops`), and `[gallery] animate = false` turns them off. The
-  frames, the ids, the jobs and the loop cache are in the module doc of `app/grid_loops.rs`.
+  frames are in `docs/video.md` ("Grid loop frames"). The two paths, the ids, the jobs and the
+  loop cache are in `docs/app-state.md` ("Grid loops").
 - **Cell icons:** a grid cell without a thumbnail shows a large dim picture (image) or play
   triangle (video), a folder cell a folder, and `..` two dots without a name (`icons.rs`,
   `draw_cell_icon` in `ui/grid.rs`). The icons are octant blocks (2x4 dots per cell, drawn by Ghostty
@@ -524,13 +534,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   next draw leaves it out once the thumbnail is in `thumb_cache`. A HEIC preview counts as a
   thumbnail.
 - **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64) files
-  by name (the sorted first batch, the same files that the folder prefetch samples)
-  on a thread, one time per scan (`decode/shape.rs`). JPEG and PNG swap for the EXIF orientation,
-  HEIC and AVIF read `ispe` and swap for `irot`. A RAW or PSD file gives the size of its embedded
-  JPEG after the orientation. PDF, SVG, the other ImageIO formats and video count as 3:2. The median
-  snaps to one of 7 buckets (9:16, 2:3, 3:4, 1:1, 4:3, 3:2, 16:9). The column count includes 1 gap
-  per column plus the edge gap. The first screen waits for the shape (2 ms to 4 ms), and the shape
-  stays until the next directory switch, so the columns never move while the user browses.
+  on a thread, once per scan (`decode/shape.rs`). The shape stays until the next directory switch,
+  so the columns never move while the user browses. The buckets and the per-format rules are in
+  `docs/grid-and-kitty.md` ("Cell shape").
 - **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `decode/resize.rs`). It is
   one third faster than Lanczos3, and the difference is not visible.
 - **Pixel layouts:** every resize picks the fastest layout of `fast_image_resize`
@@ -554,14 +560,14 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   path, the size, the mtime, the target size and the color target. Change the version string when
   the thumbnail output changes. If several workers change the thumbnail output at the same time,
   each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
-  in `app/disk_cache.rs` computes the key, and `CacheEntry` holds the file and the stamp (the
+  in `app/disk_cache/mod.rs` computes the key, and `CacheEntry` holds the file and the stamp (the
   length and the mtime). A job computes it at most one time, and the folder prefetch one time per
   file (`warm_disk_cache` calls `sharp_thumbnail` with the same key). A test rebuilds the hash from
   its inputs, so a change of the input or of its order fails the test. The prune removes temp
   files of the cache and partial cube files of the tone map that are older than 1 hour.
 - **Folder prefetch:** after the cursor rests on a folder cell for `FOLDER_PREFETCH_DELAY`
   (300 ms) and `App::has_pending_work` is false, one thread decodes the first screen of that
-  folder into the disk cache (`app/folder_prefetch.rs`). It computes what Enter computes, with
+  folder into the disk cache (`app/folder_prefetch/`). It computes what Enter computes, with
   the same functions (`scanner::folder_listing`, the shape sample, `folder_zoom_rows`,
   `GalleryState::for_folder`), and takes the union of both cursor orders. It pauses before each
   file while the grid has work, so one running decode can overlap the grid. A cursor move, a
@@ -571,12 +577,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   bench ticks the prefetch.
 - **Image colors:** viewr converts every image into Display P3 (`[terminal] colorspace`), because
   Ghostty copies the pixels of a Kitty image without a conversion. The sources, the transform
-  cache and the cubes of the player are in the module doc of `decode/color.rs`.
+  cache and the cubes of the player are in `docs/images-and-colors.md` ("Color conversion").
 - **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
   profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
   of 64 rows). A transform error, XYB and the SDR enum encodings stay with jxl-oxide. A PQ or HLG
   file (an enum encoding, or an ICC profile with a PQ or HLG `cicp` tag) keeps its 16-bit signal
-  for the tone map of `decode/hdr.rs`. jxl-oxide 0.12 clips XYB samples outside the sRGB gamut
+  for the tone map of `decode/hdr/`. jxl-oxide 0.12 clips XYB samples outside the sRGB gamut
   before the BT.2020 conversion, so a lossy HDR JPEG XL loses saturation there, and a test marks
   the limit. The codestream orientation applies, the EXIF orientation does not.
 - **`image` decoders:** the `image` crate has only the decoders that the scanner lists
@@ -601,7 +607,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: viewr runs without
   file. The grid and the fullscreen view ask for a copy at the size of their box (`-Z`), and the
   zoom gets the full image. A relative path gets `./` in front, because sips reads `-x` as a
   function name. JPEG, PNG and HEIC never take this route. RAW and PSD try the embedded JPEG
-  first (`decode/embedded_jpeg.rs`): the largest JPEG of the TIFF IFDs, the CR3 boxes, the RAF
+  first (`decode/embedded_jpeg/`): the largest JPEG of the TIFF IFDs, the CR3 boxes, the RAF
   header or PSD resource 1036. It is the grid preview. A JPEG that covers the box is the sharp
   thumbnail and goes into the disk cache, so sips does not run for the cell. The fullscreen view
   and the prefetch also take a JPEG that covers their box. The zoom keeps sips. ORF has no
