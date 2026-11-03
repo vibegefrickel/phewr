@@ -43,7 +43,7 @@ test *ARGS:
 test-real *FILTER:
     cargo test --release -- --include-ignored --show-output {{FILTER}}
 
-# The speed measurements of src/bench.rs on a real folder (grid, fullscreen open, prefetch,
+# The speed measurements of src/bench/ on a real folder (grid, fullscreen open, prefetch,
 # Kitty payload). DIR holds the test images, for example a copy of an iPhone folder.
 bench DIR=(env("HOME") / "Pictures/viewr-test/01-mixed-big") FILTER="bench::":
     VIEWR_TEST_DIR={{DIR}} cargo test --release {{FILTER}} -- --ignored --nocapture --test-threads=1 2>&1 | grep -E 'bench [a-z]|^error|panicked|test result' | sed -E 's/^test [^ ]+ \.\.\. //'
