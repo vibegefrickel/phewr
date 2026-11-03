@@ -158,7 +158,15 @@ fn open_window(
         state.status = Some(format!("{prefix}{MPV_MISSING_NOTE}"));
         return;
     };
-    match runner.spawn(program, &mpv::window_args(&path, playback)) {
+    // Only a slideshow needs the end reason: the socket tells the quit of the app from the end.
+    let socket = once
+        .then(|| mpv::socket_for_window(&app.disk_cache_dir))
+        .flatten();
+    match runner.spawn(
+        program,
+        &mpv::window_args(&path, playback, socket.as_deref()),
+        socket.as_deref(),
+    ) {
         Ok(exit) => {
             back_from_video(app);
             if !once {

@@ -30,6 +30,7 @@ impl mpv::Runner for FakeRunner {
         &mut self,
         program: &Path,
         args: &[OsString],
+        _socket: Option<&Path>,
     ) -> io::Result<mpsc::Receiver<Option<i32>>> {
         let args: Vec<String> = args
             .iter()

@@ -74,6 +74,37 @@ mod tests {
     }
 
     #[test]
+    fn slideshow_window_gets_socket() {
+        let mut app = slideshow_video_app();
+        let mut state = window_state();
+        let (log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
+        assert!(last_start(&log).contains(" --input-ipc-server="));
+
+        let mut app = video_app();
+        let (log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut window_state(), &mut runner);
+        assert!(!last_start(&log).contains("--input-ipc-server"));
+    }
+
+    #[test]
+    fn app_quit_reason_stops_slideshow() {
+        let mut app = slideshow_video_app();
+        let mut state = window_state();
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
+
+        // The runner folds the reason `quit` of an exit code 0 into the quit code.
+        let code = mpv::exit_with_reason(Some(0), Some("quit"));
+        runner.window.take().unwrap().send(code).unwrap();
+        poll_mpv_window(&mut app, &mut state);
+        app.slideshow_tick();
+
+        assert_eq!(app.current, 1);
+        assert!(!app.slideshow_running());
+    }
+
+    #[test]
     fn step_away_forgets_window() {
         let mut app = slideshow_video_app();
         let mut state = window_state();
