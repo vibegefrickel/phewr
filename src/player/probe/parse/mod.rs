@@ -1,6 +1,6 @@
 //! The parse of the `ffprobe` JSON, and the pacing rate from the stream rates or the packets.
 
-use super::{Rate, TIMING_PACKETS, VideoInfo, invalid};
+use super::{Chroma, Rate, Samples, TIMING_PACKETS, VideoInfo, invalid};
 use crate::decode::hdr::hdr10_peak;
 use crate::player::tone_map::{Hdr, Primaries};
 use serde::Deserialize;
@@ -14,6 +14,10 @@ const FALLBACK_FPS: f64 = 24.0;
 const MAX_ANIMATION_FPS: f64 = 50.0;
 
 const MAX_VARIABLE_FPS: f64 = 60.0;
+
+/// ffmpeg 9 gives `VideoToolbox` an HEVC or VP9 stream of up to 10 bits. Only `ProRes` decodes on
+/// it at 12 bits.
+const MAX_HARDWARE_DEPTH: u8 = 10;
 
 /// A base rate above this multiple of the average is a burst, not the clip rate.
 const BURST_RATIO: f64 = 1.5;
@@ -51,6 +55,7 @@ struct Frame {
 #[serde(default)]
 struct Stream {
     index: usize,
+    codec_name: String,
     width: u32,
     height: u32,
     pix_fmt: String,
@@ -137,7 +142,8 @@ pub(super) fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<Vide
     let hdr = Hdr::of_transfer(&stream.color_transfer);
     let hdr_peak = hdr.and_then(|_| peak_of(&stream.side_data_list));
     let primaries = Primaries::of_name(&stream.color_primaries);
-    let ten_bit = bit_depth(&stream.pix_fmt) == 10;
+    let samples = samples(&stream.pix_fmt);
+    let hardware = samples.depth <= MAX_HARDWARE_DEPTH || stream.codec_name == "prores";
     if let Some(limit) = packet_limit
         && let Some(timing) = animation_timing(&output.packets, stream, limit)
     {
@@ -155,7 +161,8 @@ pub(super) fn parse(json: &[u8], packet_limit: Option<usize>) -> io::Result<Vide
         hdr,
         hdr_peak,
         primaries,
-        ten_bit,
+        samples,
+        hardware,
         rate: if animation {
             Rate::Animation
         } else if variable {
@@ -185,6 +192,26 @@ fn peak_of(side_data: &[SideData]) -> Option<f64> {
     let mastering_max =
         of_type("Mastering display metadata").and_then(|data| fraction(&data.max_luminance));
     hdr10_peak(max_content, mastering_max)
+}
+
+/// The sample layout of an ffmpeg pixel format name.
+fn samples(pix_fmt: &str) -> Samples {
+    Samples {
+        depth: bit_depth(pix_fmt),
+        chroma: chroma(pix_fmt),
+        alpha: pix_fmt.starts_with("yuva"),
+    }
+}
+
+/// The chroma layout of a `yuv` pixel format name. Other names, as `nv12` and `p010le`, count
+/// as 4:2:0: a decoder names its planar output `yuv`.
+fn chroma(pix_fmt: &str) -> Chroma {
+    let layout = pix_fmt.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    match layout.get(..3) {
+        Some("444") => Chroma::Yuv444,
+        Some("422") => Chroma::Yuv422,
+        _ => Chroma::Yuv420,
+    }
 }
 
 /// The bits per sample of an ffmpeg pixel format name, 8 when the name holds no depth.

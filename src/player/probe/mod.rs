@@ -37,12 +37,42 @@ pub(crate) struct VideoInfo {
     pub hdr_peak: Option<f64>,
     /// An untagged stream is BT.709, as sRGB.
     pub primaries: Primaries,
-    /// The hardware decoder gives back `p010le` frames for a 10-bit stream.
-    pub ten_bit: bool,
+    /// The layout of the samples. It picks the frame format that `VideoToolbox` gives back.
+    pub samples: Samples,
+    /// `VideoToolbox` decodes the stream. ffmpeg 9 gives it no stream above 10 bits except
+    /// `ProRes`, so a 12-bit HEVC or VP9 clip starts in software.
+    pub hardware: bool,
     pub rate: Rate,
     /// The stream that ffmpeg maps. An AVIS file holds its still item first and its sequence
     /// second.
     pub stream: usize,
+}
+
+/// The sample layout of a stream, from its pixel format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Samples {
+    /// The bits per sample, 8 when the pixel format holds no depth.
+    pub depth: u8,
+    pub chroma: Chroma,
+    pub alpha: bool,
+}
+
+impl Samples {
+    /// The 8-bit 4:2:0 layout without alpha of most clips.
+    #[cfg(test)]
+    pub(crate) const NV12: Self = Self {
+        depth: 8,
+        chroma: Chroma::Yuv420,
+        alpha: false,
+    };
+}
+
+/// The chroma subsampling of a stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Chroma {
+    Yuv420,
+    Yuv422,
+    Yuv444,
 }
 
 /// How ffmpeg gets the output rate `fps`.
@@ -82,8 +112,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 const PROBE_CACHE_ENTRIES: usize = 1024;
 
-const STREAM_ENTRIES: &str = "stream=index,width,height,pix_fmt,color_transfer,color_primaries,\
-    r_frame_rate,avg_frame_rate,time_base,nb_frames:stream_disposition=default,attached_pic:\
+const STREAM_ENTRIES: &str = "stream=index,codec_name,width,height,pix_fmt,color_transfer,\
+    color_primaries,r_frame_rate,avg_frame_rate,time_base,nb_frames:\
+    stream_disposition=default,attached_pic:\
     stream_side_data=side_data_type,rotation,max_luminance,max_content:format=duration";
 
 /// `None` for a file without an animation extension.
@@ -334,10 +365,11 @@ fn invalid(text: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProbeCache, Rate, frame_peak_args, output_within, packet_limit, probe, probe_args,
+        Chroma, ProbeCache, Rate, Samples, frame_peak_args, output_within, packet_limit, probe,
+        probe_args,
     };
     use crate::decode::hdr::Peak;
-    use crate::player::tone_map::Hdr;
+    use crate::player::tone_map::{Hdr, Primaries};
     use crate::test_support::fixture;
     use crate::test_support::video::real_ffprobe;
     use std::cell::Cell;
@@ -589,6 +621,29 @@ mod tests {
             let output = output_within(command, Duration::from_secs(5)).unwrap();
             let info = super::parse::parse(&output.stdout, limit).unwrap();
             assert_eq!(info.hdr_peak, peak, "{name}: {info:?}");
+        }
+    }
+
+    /// The 12-bit fixtures: HEVC has no `VideoToolbox` path, `ProRes` 4444 has one.
+    #[test]
+    fn real_12_bit_layouts() {
+        let Some(ffprobe) = real_ffprobe() else {
+            return;
+        };
+        for (name, hdr, chroma, hardware) in [
+            ("video/pq12-hevc.mp4", Hdr::Pq, Chroma::Yuv420, false),
+            ("video/hlg12-prores.mov", Hdr::Hlg, Chroma::Yuv444, true),
+        ] {
+            let info = probe(&ffprobe, &fixture(name)).unwrap();
+            assert_eq!(info.hdr, Some(hdr), "{name}: {info:?}");
+            assert_eq!(info.primaries, Primaries::Bt2020, "{name}: {info:?}");
+            let expected = Samples {
+                depth: 12,
+                chroma,
+                alpha: false,
+            };
+            assert_eq!(info.samples, expected, "{name}: {info:?}");
+            assert_eq!(info.hardware, hardware, "{name}: {info:?}");
         }
     }
 

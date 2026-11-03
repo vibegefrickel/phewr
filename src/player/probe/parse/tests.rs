@@ -1,10 +1,10 @@
 //! Tests of the probe JSON, the stream choice and the pacing rates.
 
 use super::{
-    bit_depth, clockwise_rotation, fraction, gcd, pacing_fps, parse, parse_frame_peak,
+    bit_depth, chroma, clockwise_rotation, fraction, gcd, pacing_fps, parse, parse_frame_peak,
     sanitize_fps, timing_of, variable_fps,
 };
-use crate::player::probe::{Rate, VideoInfo};
+use crate::player::probe::{Chroma, Rate, Samples, VideoInfo};
 use crate::player::tone_map::{Hdr, Primaries};
 use std::time::Duration;
 
@@ -43,7 +43,8 @@ fn iphone_hlg_is_constant_10_bit() {
     assert_eq!((info.width, info.height, info.rotation), (3840, 2160, 0));
     assert_eq!(info.hdr, Some(Hdr::Hlg));
     assert_eq!(info.primaries, Primaries::Bt2020);
-    assert!(info.ten_bit && info.rate == Rate::Constant, "{info:?}");
+    assert_eq!(info.samples.depth, 10, "{info:?}");
+    assert!(info.hardware && info.rate == Rate::Constant, "{info:?}");
     assert!(
         (info.fps - 249_600.0 / 8323.0).abs() < 1e-9,
         "the average rate"
@@ -98,18 +99,64 @@ fn bit_depth_from_pixel_format() {
 }
 
 #[test]
-fn only_10_bit_sets_ten_bit() {
-    let probe = |pix_fmt: &str| {
+fn chroma_from_pixel_format() {
+    for (name, layout) in [
+        ("yuv420p", Chroma::Yuv420),
+        ("yuvj420p", Chroma::Yuv420),
+        ("yuv420p12le", Chroma::Yuv420),
+        ("nv12", Chroma::Yuv420),
+        ("p010le", Chroma::Yuv420),
+        ("yuv422p10le", Chroma::Yuv422),
+        ("yuvj422p", Chroma::Yuv422),
+        ("yuv444p12le", Chroma::Yuv444),
+        ("yuva444p12le", Chroma::Yuv444),
+    ] {
+        assert_eq!(chroma(name), layout, "{name}");
+    }
+}
+
+/// Above 10 bits, only `ProRes` decodes on `VideoToolbox`.
+#[test]
+fn pixel_format_gives_samples_and_hardware() {
+    let probe = |codec: &str, pix_fmt: &str| {
         let json = PORTRAIT.replace(
             r#""pix_fmt":"yuv420p""#,
-            &format!(r#""pix_fmt":"{pix_fmt}""#),
+            &format!(r#""codec_name":"{codec}","pix_fmt":"{pix_fmt}""#),
         );
         assert!(json.contains(pix_fmt), "the fixture names its pixel format");
-        parse(json.as_bytes(), None).unwrap().ten_bit
+        let info = parse(json.as_bytes(), None).unwrap();
+        (info.samples, info.hardware)
     };
-    assert!(!probe("yuv410p"));
-    assert!(probe("yuv420p10le"));
-    assert!(!probe("yuv420p12le"));
+    let samples = |depth, chroma, alpha| Samples {
+        depth,
+        chroma,
+        alpha,
+    };
+    assert_eq!(probe("h264", "yuv410p"), (Samples::NV12, true));
+    assert_eq!(
+        probe("hevc", "yuv420p10le"),
+        (samples(10, Chroma::Yuv420, false), true)
+    );
+    assert_eq!(
+        probe("hevc", "yuv420p12le"),
+        (samples(12, Chroma::Yuv420, false), false)
+    );
+    assert_eq!(
+        probe("vp9", "yuv420p12le"),
+        (samples(12, Chroma::Yuv420, false), false)
+    );
+    assert_eq!(
+        probe("prores", "yuv422p10le"),
+        (samples(10, Chroma::Yuv422, false), true)
+    );
+    assert_eq!(
+        probe("prores", "yuv444p12le"),
+        (samples(12, Chroma::Yuv444, false), true)
+    );
+    assert_eq!(
+        probe("prores", "yuva444p12le"),
+        (samples(12, Chroma::Yuv444, true), true)
+    );
 }
 
 #[test]
@@ -118,7 +165,7 @@ fn portrait_clip_swaps_size() {
     assert_eq!((info.width, info.height, info.rotation), (48, 64, 90));
     assert_eq!(info.hdr, None);
     assert_eq!(info.primaries, Primaries::Bt709, "untagged is BT.709");
-    assert!(!info.ten_bit);
+    assert_eq!((info.samples, info.hardware), (Samples::NV12, true));
     assert_eq!(info.fps, 10.0);
 }
 
@@ -236,7 +283,8 @@ fn invalid_rates_use_fallback() {
         hdr: None,
         hdr_peak: None,
         primaries: Primaries::Bt709,
-        ten_bit: false,
+        samples: Samples::NV12,
+        hardware: true,
         rate: Rate::Constant,
         stream: 0,
     };

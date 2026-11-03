@@ -23,6 +23,8 @@ pub(crate) use layout::{cell_box, frame_box, frame_limit};
 #[cfg(test)]
 pub(crate) use probe::Rate;
 #[cfg(test)]
+pub(crate) use probe::Samples;
+#[cfg(test)]
 pub(crate) use probe::probe as probe_file;
 pub(crate) use probe::{VideoInfo, probe_cached};
 

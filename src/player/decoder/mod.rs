@@ -23,9 +23,10 @@ pub(crate) enum Pipeline {
 }
 
 impl Pipeline {
-    /// An animation decodes in software only.
+    /// An animation, and a stream that `VideoToolbox` does not decode, run in software only.
+    /// A GPU run of such a stream fails after 160 ms to 190 ms.
     pub(crate) fn first(info: &VideoInfo) -> Self {
-        if info.is_animation() {
+        if info.is_animation() || !info.hardware {
             Self::Software
         } else {
             Self::Gpu
@@ -77,15 +78,17 @@ pub(crate) trait Decoder {
 mod tests {
     use super::{Decoder, Pipeline, SystemDecoder, args, cube_for, first_frame_args};
     use crate::decode::color::{self, ColorTarget, SourceColor};
+    use crate::player::probe::VideoInfo;
     use crate::player::tone_map::Primaries;
     use std::ffi::OsString;
     use std::path::Path;
     use std::sync::mpsc;
     use std::time::Duration;
 
-    fn has_decoder(program: &Path, name: &str) -> bool {
+    /// `list` is an ffmpeg list flag, such as `-decoders` or `-hwaccels`.
+    fn ffmpeg_lists(program: &Path, list: &str, name: &str) -> bool {
         std::process::Command::new(program)
-            .args(["-hide_banner", "-decoders"])
+            .args(["-hide_banner", list])
             .output()
             .is_ok_and(|output| {
                 String::from_utf8_lossy(&output.stdout)
@@ -153,7 +156,7 @@ mod tests {
             ("anim.png", 3),
             ("anim.avif", 3),
         ] {
-            if name == "anim.webp" && !has_decoder(&program, "webp_anim") {
+            if name == "anim.webp" && !ffmpeg_lists(&program, "-decoders", "webp_anim") {
                 println!("note: skipped {name}, because ffmpeg below 9.0 has no webp_anim decoder");
                 continue;
             }
@@ -184,6 +187,114 @@ mod tests {
             for (plain, cubed) in frames.iter().zip(&converted) {
                 let difference = largest_difference_to_the_still_conversion(plain, cubed);
                 assert!(difference <= 2, "{name}: {difference} levels off the still");
+            }
+        }
+    }
+
+    /// The 12-bit fixtures with their tone map cubes. The HEVC clip runs in software only. The
+    /// `ProRes` 4444 clip downloads from the GPU as `p416le` and matches the software chain.
+    #[test]
+    fn real_12_bit_clips_decode() {
+        use crate::test_support::fixture;
+        use crate::test_support::video::{real_ffmpeg, real_ffprobe};
+        let (Some(program), Some(ffprobe)) = (real_ffmpeg(), real_ffprobe()) else {
+            return;
+        };
+        let decoder = SystemDecoder::new(Some(ffprobe));
+        let dir = tempfile::tempdir().unwrap();
+        let frames = |path: &Path, info, pipeline| {
+            let cube = cube_for(info, ColorTarget::DisplayP3, &[dir.path()]);
+            assert!(
+                cube.is_some(),
+                "{}: an HDR clip gets a cube",
+                path.display()
+            );
+            let args = args(path, info, (64, 64), cube.as_deref(), 0.0, pipeline);
+            all_frames(&decoder, &program, &args, 64 * 64 * 3)
+        };
+        let hevc = fixture("video/pq12-hevc.mp4");
+        let info = decoder.probe(&hevc).unwrap();
+        assert_eq!(Pipeline::first(&info), Pipeline::Software, "{info:?}");
+        assert_eq!(frames(&hevc, &info, Pipeline::Software).len(), 3);
+
+        let prores = fixture("video/hlg12-prores.mov");
+        let info = decoder.probe(&prores).unwrap();
+        assert_eq!(Pipeline::first(&info), Pipeline::Gpu, "{info:?}");
+        let software = frames(&prores, &info, Pipeline::Software);
+        assert_eq!(software.len(), 3);
+        if !ffmpeg_lists(&program, "-hwaccels", "videotoolbox") {
+            println!("note: skipped the GPU chain, because ffmpeg has no videotoolbox hwaccel");
+            return;
+        }
+        // An empty run here is a wrong download format, not a missing GPU.
+        let gpu = frames(&prores, &info, Pipeline::Gpu);
+        assert_eq!(gpu.len(), 3, "the GPU chain gives every frame");
+        for (gpu, software) in gpu.iter().zip(&software) {
+            let difference = gpu
+                .iter()
+                .zip(software)
+                .map(|(gpu, software)| gpu.abs_diff(*software))
+                .max()
+                .unwrap_or(0);
+            assert!(
+                difference <= 2,
+                "{difference} levels off the software chain"
+            );
+        }
+    }
+
+    /// Each download format of a 4:2:2, 4:4:4 or alpha stream, also with `transpose_vt`. A
+    /// wrong format gives no frame on the GPU.
+    #[test]
+    fn real_layouts_download_on_gpu() {
+        use crate::test_support::video::{real_ffmpeg, real_ffprobe};
+        let (Some(program), Some(ffprobe)) = (real_ffmpeg(), real_ffprobe()) else {
+            return;
+        };
+        if !ffmpeg_lists(&program, "-hwaccels", "videotoolbox") {
+            println!("note: skipped, because ffmpeg has no videotoolbox hwaccel");
+            return;
+        }
+        let decoder = SystemDecoder::new(Some(ffprobe));
+        let dir = tempfile::tempdir().unwrap();
+        for (name, codec, pix_fmt) in [
+            ("hevc-422.mp4", "libx265", "yuv422p"),
+            ("hevc-422-10.mp4", "libx265", "yuv422p10le"),
+            ("hevc-444.mp4", "libx265", "yuv444p"),
+            ("hevc-444-10.mp4", "libx265", "yuv444p10le"),
+            ("prores-422.mov", "prores_ks", "yuv422p10le"),
+            ("prores-4444-alpha.mov", "prores_ks", "yuva444p10le"),
+        ] {
+            let clip = dir.path().join(name);
+            let made = std::process::Command::new(&program)
+                .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+                .arg(format!("testsrc2=size=64x48:rate=5,format={pix_fmt}"))
+                .args(["-frames:v", "1", "-pix_fmt", pix_fmt, "-c:v", codec])
+                .args(["-x265-params", "log-level=error"])
+                .arg(&clip)
+                .status()
+                .is_ok_and(|status| status.success());
+            if !made {
+                println!("note: skipped {name}, because ffmpeg cannot encode it with {codec}");
+                continue;
+            }
+            let info = decoder.probe(&clip).unwrap();
+            assert!(info.hardware, "{name}: {info:?}");
+            for rotation in [0, 90, 270] {
+                let (width, height) = if rotation == 0 { (64, 48) } else { (48, 64) };
+                let turned = VideoInfo {
+                    width,
+                    height,
+                    rotation,
+                    ..info.clone()
+                };
+                let args = first_frame_args(&clip, &turned, (width, height), None, Pipeline::Gpu);
+                let bytes = usize::try_from(width * height * 4).unwrap();
+                let frame = decoder
+                    .start(&program, &args, bytes)
+                    .unwrap()
+                    .wait_next(Duration::from_secs(10));
+                assert!(frame.is_ok(), "{name} at {rotation} degrees: no GPU frame");
             }
         }
     }

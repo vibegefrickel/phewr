@@ -2,7 +2,7 @@
 
 use super::Pipeline;
 use crate::decode::color::ColorTarget;
-use crate::player::probe::{Rate, VideoInfo};
+use crate::player::probe::{Chroma, Rate, Samples, VideoInfo};
 use crate::player::tone_map::{Cube, cube_file};
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -226,8 +226,10 @@ fn filter_graph(
                 270 => graph.push_str(",transpose_vt=dir=cclock"),
                 _ => {}
             }
-            let download = if info.ten_bit { "p010le" } else { "nv12" };
-            push(&mut graph, format_args!(",hwdownload,format={download}"));
+            push(
+                &mut graph,
+                format_args!(",hwdownload,format={}", download_format(info.samples)),
+            );
             if info.rotation == 180 {
                 graph.push_str(",hflip,vflip");
             }
@@ -255,6 +257,25 @@ fn filter_graph(
         );
     }
     graph
+}
+
+/// The format of the frames that `VideoToolbox` gives back, as ffmpeg 9 picks it
+/// (`videotoolbox_best_pixel_format`). `hwdownload` takes no other format: a 12-bit `ProRes`
+/// 4444 stream downloads only as `p416le`.
+fn download_format(samples: Samples) -> &'static str {
+    if samples.alpha {
+        return "ayuv64le";
+    }
+    match (samples.chroma, samples.depth) {
+        (Chroma::Yuv444, 11..) => "p416le",
+        (_, 11..) => "p216le",
+        (Chroma::Yuv444, ..=8) => "nv24",
+        (Chroma::Yuv444, _) => "p410le",
+        (Chroma::Yuv422, ..=8) => "nv16",
+        (Chroma::Yuv422, _) => "p210le",
+        (Chroma::Yuv420, ..=8) => "nv12",
+        (Chroma::Yuv420, _) => "p010le",
+    }
 }
 
 /// The pixel format of the cube run.

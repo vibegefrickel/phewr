@@ -5,9 +5,9 @@ use super::{
     is_video, session_first_frame,
 };
 use crate::decode::color::ColorTarget;
-use crate::player::SystemDecoder;
 use crate::player::tone_map::Hdr;
 use crate::player::tone_map::Primaries;
+use crate::player::{Samples, SystemDecoder};
 use crate::test_support::video::{
     animation_info, fake_decoder, info_of, real_ffmpeg, real_ffprobe,
 };
@@ -156,7 +156,10 @@ fn first_frame_matches_player_chain() {
     let decoder = fake_decoder(crate::player::VideoInfo {
         rotation: 90,
         hdr: Some(Hdr::Hlg),
-        ten_bit: true,
+        samples: Samples {
+            depth: 10,
+            ..Samples::NV12
+        },
         ..info_of(1080, 1920, 30.0)
     });
     decoder.queue_run(vec![vec![7; 18 * 32 * 4]]);
@@ -215,6 +218,40 @@ fn frameless_gpu_run_retries_in_software() {
     )
     .unwrap_err();
     assert_eq!(error.to_string(), "no frames decoded");
+}
+
+/// A 12-bit HEVC stream has no `VideoToolbox` path, so it pays no failed GPU run.
+#[test]
+fn stream_without_hardware_starts_in_software() {
+    let decoder = fake_decoder(crate::player::VideoInfo {
+        hdr: Some(Hdr::Pq),
+        samples: Samples {
+            depth: 12,
+            ..Samples::NV12
+        },
+        hardware: false,
+        ..info_of(640, 480, 25.0)
+    });
+    decoder.queue_run(vec![vec![1; 32 * 24 * 4]]);
+    let dir = test_dir();
+    let frame = decode_first_frame(
+        &*decoder,
+        Path::new("/bin/ffmpeg"),
+        Path::new("/v/clip.mp4"),
+        (32, 48),
+        &[dir.path()],
+        WAIT,
+    )
+    .unwrap();
+    assert_eq!(frame.dimensions(), (32, 24));
+    let starts = decoder.starts();
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert!(
+        starts[0].contains("scale=w=32:h=24:flags=bilinear,format=rgb48le,lut3d="),
+        "{}",
+        starts[0]
+    );
+    assert!(!starts[0].contains("hwdownload"), "{}", starts[0]);
 }
 
 #[test]
