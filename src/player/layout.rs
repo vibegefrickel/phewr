@@ -2,11 +2,11 @@
 
 use ratatui::layout::Rect;
 
-/// The largest frame that ffmpeg scales to. 1920x1080 plays at 30 fps in Ghostty with no
-/// dropped frame, and a larger frame costs more than the terminal shows.
+/// 1920x1080 plays at 30 fps in Ghostty with no dropped frame. A larger frame costs more than
+/// the terminal shows.
 pub(crate) const MAX_FRAME: (u32, u32) = (1920, 1080);
 
-/// The box in pixels that a frame may take: the cells of `rect`, capped at [`MAX_FRAME`].
+/// The cells of `rect` in pixels, capped at [`MAX_FRAME`].
 pub(crate) fn frame_limit(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
     let width = u32::from(rect.width) * cell_px.0;
     let height = u32::from(rect.height) * cell_px.1;
@@ -17,7 +17,6 @@ pub(crate) fn frame_limit(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
 }
 
 /// The largest even size with the aspect of `video` inside `limit`, never above the video size.
-///
 /// The hardware scaler and the 4:2:0 formats want even sizes.
 pub(crate) fn frame_box(video: (u32, u32), limit: (u32, u32)) -> (u32, u32) {
     let (width, height) = video;
@@ -39,8 +38,8 @@ pub(crate) fn frame_box(video: (u32, u32), limit: (u32, u32)) -> (u32, u32) {
     (even(width), even(height))
 }
 
-/// The whole cells in the middle of `rect` that show a frame of `frame` pixels with its
-/// aspect. The terminal scales the frame to this box with `c=` and `r=`.
+/// The centered whole cells that show `frame` with its aspect. The terminal scales the frame
+/// to them with `c=` and `r=`.
 pub(crate) fn cell_box(frame: (u32, u32), rect: Rect, cell_px: (u32, u32)) -> Rect {
     if rect.width == 0 || rect.height == 0 || frame.1 == 0 || cell_px.0 == 0 || cell_px.1 == 0 {
         return Rect {
@@ -80,7 +79,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     #[test]
-    fn the_frame_limit_is_the_window_capped_at_full_hd() {
+    fn frame_limit_caps_at_full_hd() {
         assert_eq!(
             frame_limit(Rect::new(0, 0, 200, 47), (18, 43)),
             (1920, 1080)
@@ -90,7 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_box_keeps_the_aspect_and_even_sides() {
+    fn frame_box_keeps_aspect_and_even_sides() {
         assert_eq!(frame_box((3840, 2160), (1920, 1080)), (1920, 1080));
         assert_eq!(frame_box((3840, 2160), (1280, 720)), (1280, 720));
         assert_eq!(frame_box((2160, 3840), (1920, 1080)), (606, 1080));
@@ -105,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cell_box_fills_the_width_or_the_height_and_sits_in_the_middle() {
+    fn cell_box_fits_and_centers() {
         let area = Rect::new(0, 0, 200, 46);
         let wide = cell_box((1920, 1080), area, (18, 43));
         assert_eq!(

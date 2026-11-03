@@ -1,27 +1,9 @@
 //! The header check for animated images: GIF, WebP, APNG and AVIS.
 //!
-//! A still file of these formats stays an image. An animated file opens in the terminal player,
-//! which decodes it with ffmpeg. The check reads the file headers only: the chunk list of a
-//! PNG or a WebP, the `ftyp` box of an AVIF, and the block list of a GIF up to its second
-//! image descriptor. The thumbnail job runs the check off the UI thread, and the grid reads
-//! the stored answer (`App::animated`), so the draw reads no file.
-//!
-//! # From the AGENTS.md gotcha "Animated images"
-//!
-//! an animated GIF, WebP, APNG or AVIS plays in the terminal player like a video. The thumbnail
-//! job reads the animation flag into `App::animated`, so the draw reads no file. The job stamps
-//! the large play triangle into the still of a video or an animated image (`icons::stamp_play`,
-//! white with a dark edge, 30 % of the height), after the disk cache read, so the cache keeps the
-//! still without the stamp. The loop frames replace the stamped still, so the stamp means "not
-//! playing yet". There is no small `▶` marker in the label or in the gap. The route
-//! (`App::opens_in_player`) reads the header of the one file after a key press. `App::is_video`
-//! still drives the placeholder and the loading icon. The probe reads at most 16 packets: the rate
-//! is the GCD of the frame delays, or the mean rate above 50 fps, and the length comes from the
-//! container. An AVIS file holds two video streams, and the probe maps the one with the most
-//! frames. ffmpeg gets no `-hwaccel` for an animation, because the AV1 decoder stops with it. Esc
-//! from an animation returns to its still frame in the fullscreen view. In a running slideshow,
-//! the terminal player holds an animation for at least the slideshow interval
-//! (`Player::play_at_least`). The mpv window has no such hold.
+//! A still file of these formats stays an image. An animated file opens in the terminal
+//! player. The check reads the file headers only: the chunk list of a PNG or a WebP, the
+//! `ftyp` box of an AVIF, and the block list of a GIF up to its second image descriptor. The
+//! thumbnail job runs the check off the UI thread and stores the answer in `App::animated`.
 
 use super::tone_map::Primaries;
 use crate::decode::color::SourceColor;
@@ -29,22 +11,18 @@ use std::fs::File;
 use std::io::{self, BufReader, Read, Seek};
 use std::path::Path;
 
-/// The extensions of the formats that can hold an animation.
 const ANIMATION_EXTENSIONS: &[&str] = &["gif", "webp", "png", "apng", "avif"];
 
-/// The largest box or chunk that the check follows. A larger one is a broken file.
+/// A larger box or chunk is a broken file.
 const MAX_CHUNK: u64 = 1 << 31;
 
-/// True when `path` has the extension of a format that can hold an animation. The player
-/// decodes such a file in software at a constant rate, see [`super::probe`].
+/// The player decodes such a file in software at a constant rate.
 pub(crate) fn has_animation_extension(path: &Path) -> bool {
     crate::scanner::has_extension(path, ANIMATION_EXTENSIONS)
 }
 
-/// The primaries of the ICC profile or the cICP chunk of a WebP or PNG file. ffprobe reports
-/// no profile for an animated WebP or APNG, so the player reads it here, as the grid thumbnail
-/// does. `None` without a profile, or for a profile without a cube (see
-/// [`Primaries::of_source_color`]).
+/// The ICC profile or cICP primaries of a WebP or PNG file. ffprobe does not report them.
+/// `None` for a profile without a cube.
 pub(crate) fn embedded_primaries(path: &Path) -> Option<Primaries> {
     use image::{ImageDecoder, ImageFormat};
     let reader = image::ImageReader::open(path)
@@ -66,14 +44,12 @@ pub(crate) fn embedded_primaries(path: &Path) -> Option<Primaries> {
     Primaries::of_source_color(&source)
 }
 
-/// True when `path` is an animated GIF, WebP, APNG or AVIS. A file that does not open, or a
-/// broken file, is not animated. Each call reads the file header, so the UI thread calls it
-/// only for one file after a key press.
+/// A broken file is not animated. Each call reads the file header: the UI thread calls it for
+/// one file after a key press only.
 pub(crate) fn is_animated(path: &Path) -> bool {
     has_animation_extension(path) && read_is_animated(path).unwrap_or(false)
 }
 
-/// Read the header of `path` and tell whether it holds more than one frame.
 fn read_is_animated(path: &Path) -> io::Result<bool> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -95,29 +71,26 @@ fn read_is_animated(path: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
-/// Read a big endian `u32` at the position of `reader`.
 fn read_u32_be(reader: &mut impl Read) -> io::Result<u32> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
     Ok(u32::from_be_bytes(bytes))
 }
 
-/// Read a little endian `u32` at the position of `reader`.
 fn read_u32_le(reader: &mut impl Read) -> io::Result<u32> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
     Ok(u32::from_le_bytes(bytes))
 }
 
-/// Read one byte at the position of `reader`.
 fn read_u8(reader: &mut impl Read) -> io::Result<u8> {
     let mut byte = [0_u8; 1];
     reader.read_exact(&mut byte)?;
     Ok(byte[0])
 }
 
-/// Move `reader` past `count` bytes. A short skip stays inside the buffer, because a plain
-/// seek drops it and a GIF has one skip per sub-block of at most 255 bytes.
+/// A short skip stays inside the buffer. A plain seek drops it, and a GIF has one skip per
+/// sub-block of at most 255 bytes.
 fn skip<R: Read + Seek>(reader: &mut BufReader<R>, count: u64) -> io::Result<()> {
     if count > MAX_CHUNK {
         return Err(io::Error::new(
@@ -147,9 +120,8 @@ fn png_has_actl_chunk<R: Read + Seek>(mut reader: BufReader<R>) -> io::Result<bo
     }
 }
 
-/// A WebP is animated when the animation flag of its `VP8X` chunk is set, or when its chunk
-/// list holds an `ANIM` chunk. The `VP8X` chunk comes first, so the walk stops there in most
-/// files. A simple file starts with `VP8 ` or `VP8L` and holds one frame.
+/// A WebP is animated when its `VP8X` chunk sets the animation flag, or when it holds an
+/// `ANIM` chunk. A simple file starts with `VP8 ` or `VP8L` and holds one frame.
 fn webp_has_anim_chunk<R: Read + Seek>(mut reader: BufReader<R>) -> io::Result<bool> {
     reader.seek_relative(12)?;
     loop {
@@ -213,7 +185,6 @@ fn gif_has_two_frames<R: Read + Seek>(mut reader: BufReader<R>) -> io::Result<bo
     }
 }
 
-/// Skip the color table that the `packed` byte of a GIF descriptor announces.
 fn skip_color_table<R: Read + Seek>(reader: &mut BufReader<R>, packed: u8) -> io::Result<()> {
     if packed & 0x80 != 0 {
         let entries = 2_u64 << (packed & 0x07);
@@ -222,7 +193,7 @@ fn skip_color_table<R: Read + Seek>(reader: &mut BufReader<R>, packed: u8) -> io
     Ok(())
 }
 
-/// Skip the sub-blocks of a GIF block, up to and including the block terminator.
+/// Up to and including the block terminator.
 fn skip_sub_blocks<R: Read + Seek>(reader: &mut BufReader<R>) -> io::Result<()> {
     loop {
         let size = read_u8(reader)?;
@@ -242,7 +213,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn the_animated_fixtures_are_animated_and_the_stills_are_not() {
+    fn fixtures_detect_animation() {
         for name in ["anim.gif", "anim.webp", "anim.png", "anim.avif"] {
             assert!(is_animated(&fixture(name)), "{name}");
         }
@@ -252,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn an_apng_file_is_listed_animated_and_its_first_frame_decodes_as_a_png() {
+    fn apng_first_frame_decodes_as_png() {
         use crate::decode::resize::load_and_resize_px;
         use crate::decode::{EmbeddedThumbnail, Route};
         let dir = tempfile::tempdir().unwrap();
@@ -266,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn other_extensions_and_missing_files_are_not_animated() {
+    fn other_or_missing_files_are_still() {
         assert!(!has_animation_extension(Path::new("clip.mp4")));
         assert!(has_animation_extension(Path::new("a.GIF")));
         assert!(!is_animated(Path::new("/nowhere/clip.mp4")));
@@ -274,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn a_second_image_descriptor_makes_a_gif_animated_and_a_loop_block_alone_does_not() {
+    fn gif_needs_second_descriptor() {
         let dir = tempfile::tempdir().unwrap();
         // The header, a 2 entry global color table, one 1x1 frame and the trailer.
         let mut still = b"GIF89a\x01\x00\x01\x00\x80\x00\x00".to_vec();
@@ -314,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn the_webp_flags_byte_and_the_png_chunk_list_decide() {
+    fn webp_flag_and_png_chunks_decide() {
         let mut vp8x_still = b"RIFF\x1a\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00".to_vec();
         vp8x_still.extend_from_slice(&[0x00; 10]);
         assert!(!super::webp_has_anim_chunk(BufReader::new(Cursor::new(&vp8x_still))).unwrap());
@@ -337,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn the_player_reads_the_profile_that_ffprobe_does_not_report() {
+    fn reads_embedded_profile() {
         assert_eq!(
             embedded_primaries(&fixture("color/p3-icc.png")),
             Some(Primaries::DisplayP3)

@@ -7,13 +7,10 @@ use crate::video_handoff::focus_gallery_on_current;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::io;
 
-/// Keys of the player: the steps through the list, the slideshow, the mpv window.
+/// The player has no pause and no seek: `p` opens the video in the mpv window.
 ///
-/// The player plays like an animated image: no pause and no seek. `p` opens the video in the
-/// mpv window, with sound and all controls. `h` / `j`, `k` / `l`, the arrows, `N` and `n` step
-/// to the previous and next file, as in the fullscreen view. Space pauses a running slideshow. `q`
-/// and Esc stop a running slideshow and go back: the user wants out. A step to another file
-/// keeps the slideshow and gives that file the full interval, like in the fullscreen view.
+/// `q` and Esc stop a running slideshow and go back. A step keeps the slideshow and gives the
+/// new file the full interval, as in the fullscreen view.
 pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     match key.code {
         KeyCode::Char(' ') => app.slideshow_toggle_pause(),
@@ -37,19 +34,17 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
     Ok(false)
 }
 
-/// Back to the grid, with the cursor on the file. A running slideshow stops.
+/// A running slideshow stops.
 pub(super) fn leave_player(app: &mut App) -> io::Result<()> {
     app.graphics_delete_all()?;
     app.stop_slideshow();
-    // The player has no controls, so the fullscreen placeholder of a video is no step back:
-    // the player always goes back to the grid.
+    // The player has no controls. The fullscreen placeholder is no step back.
     app.exit_video();
     focus_gallery_on_current(app);
     Ok(())
 }
 
-/// Step to the neighbor in the list, as `n` and `N` do in mpv. The end of the list keeps the
-/// video, and the slideshow countdown starts again for the new file.
+/// The end of the list keeps the video.
 pub(super) fn step(app: &mut App, step: Step) -> io::Result<()> {
     app.graphics_delete_all()?;
     if !app.step_from_video(step) {
@@ -83,7 +78,6 @@ mod tests {
         app
     }
 
-    /// Give `app` a player with a fake decoder on the current video.
     fn with_player(app: &mut App) -> Rc<FakeDecoder> {
         let decoder = fake_decoder(clip_info());
         app.video = Some(
@@ -101,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn n_and_shift_n_step_between_the_files_and_home_and_end_jump() {
+    fn n_steps_and_home_end_jump() {
         let mut app = video_app();
         let decoder = with_player(&mut app);
 
@@ -131,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn a_step_past_the_end_of_the_list_keeps_the_video() {
+    fn step_past_end_keeps_video() {
         let mut app = video_app();
         app.enter_video(3);
         app.images[3] = PathBuf::from("/videos/last.mp4");
@@ -147,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_and_hl_step_between_the_files_and_space_does_not_pause() {
+    fn arrows_step_space_ignored() {
         let mut app = video_app();
         let decoder = with_player(&mut app);
         char_key(&mut app, ' ');
@@ -175,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn p_stops_the_player_and_asks_for_the_mpv_window() {
+    fn p_opens_mpv_window() {
         let mut app = video_app();
         let decoder = with_player(&mut app);
 
@@ -192,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_s_on_a_video_starts_the_slideshow_with_the_video() {
+    fn s_starts_slideshow_on_video() {
         let mut app = video_app();
         app.enter_gallery();
         app.gallery.cursor = 1;
@@ -205,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn the_player_has_no_delete_keys_and_q_goes_back() {
+    fn no_delete_keys_q_goes_back() {
         let mut app = video_app();
         let decoder = with_player(&mut app);
 
@@ -224,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn q_and_esc_in_the_player_during_a_slideshow_stop_it() {
+    fn q_and_esc_stop_slideshow() {
         let mut esc_app = crate::test_support::video::slideshow_video_app();
         press(&mut esc_app, KeyCode::Esc);
         let mut q_app = crate::test_support::video::slideshow_video_app();
@@ -241,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn one_q_leaves_a_video_that_a_step_in_the_fullscreen_view_opened() {
+    fn one_q_leaves_stepped_video() {
         let mut app =
             crate::test_support::video::fullscreen_app_on_video(&["a.jpg", "clip.mp4"], false);
         assert!(!char_key(&mut app, 'q'));

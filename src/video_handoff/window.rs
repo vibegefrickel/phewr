@@ -4,7 +4,7 @@ use super::mpv_note;
 use crate::app::App;
 use crate::run_loop::LoopState;
 
-/// Act on the exit of an mpv window, and show the note of a failed playback.
+/// Show the note of a failed playback after an mpv window exits.
 pub(crate) fn poll_mpv_window(app: &mut App, state: &mut LoopState) {
     if let Some(exit) = app.poll_video_window()
         && let Some(note) = mpv_note(app, exit.code, &exit.path)
@@ -25,7 +25,7 @@ mod tests {
     use crate::video_handoff::play_videos;
 
     #[test]
-    fn a_window_holds_the_slideshow_until_the_end_of_the_clip() {
+    fn window_holds_slideshow() {
         let mut app = slideshow_video_app();
         let mut state = window_state();
         let (log, mut runner) = fake_runner();
@@ -51,7 +51,7 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_or_quit_window_stops_the_slideshow() {
+    fn quit_window_stops_slideshow() {
         for close in [Some(Some(mpv::USER_QUIT)), Some(None), None] {
             let mut app = slideshow_video_app();
             let mut state = window_state();
@@ -74,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    fn a_step_away_from_the_window_forgets_it() {
+    fn step_away_forgets_window() {
         let mut app = slideshow_video_app();
         let mut state = window_state();
         let (_log, mut runner) = fake_runner();
@@ -93,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn window_player_starts_mpv_without_the_terminal() {
+    fn window_player_skips_terminal() {
         let mut app = video_app();
         let mut state = window_state();
         let (log, mut runner) = fake_runner();
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn n_and_shift_n_in_a_window_open_the_neighbor_video_in_a_new_window() {
+    fn n_steps_to_neighbor_video() {
         let mut app = gallery_app_on_video(&["clip.mp4", "next.mov", "b.jpg"], 0);
         let mut state = window_state();
         let (log, mut runner) = fake_runner();
@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn a_step_in_a_window_onto_an_image_opens_the_fullscreen_view() {
+    fn step_onto_image_opens_fullscreen() {
         let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], false);
         let mut state = window_state();
         let (_log, mut runner) = fake_runner();
@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn a_window_that_fails_shows_the_exit_code() {
+    fn failed_window_shows_exit_code() {
         let mut app = video_app();
         let mut state = window_state();
         let (_log, mut runner) = fake_runner();
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn a_window_step_behind_an_overlay_does_nothing() {
+    fn step_behind_overlay_is_ignored() {
         let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], false);
         let mut state = window_state();
         let (_log, mut runner) = fake_runner();
@@ -212,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn the_loop_looks_for_the_window_exit_every_100_ms() {
+    fn loop_polls_window_every_100_ms() {
         let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4"], false);
         let mut state = window_state();
         let (_log, mut runner) = fake_runner();
