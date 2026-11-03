@@ -139,8 +139,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   `PHEWR_TEST_LIVE_DIR` is the folder of real Live Photo files
   (`~/Pictures/phewr-test/12-live-photos/`, its `README.md` lists the cases).
   `real_identifiers_match_exiftool`, `real_folder_cases`, `real_mismatch_note`,
-  `real_motion_plays_once` and `real_live_still_loops_its_motion` read it, the last two with the
-  real ffmpeg. `test_support::live` writes a JPEG still with the identifier in an Apple MakerNote
+  `real_motion_plays_once`, `real_live_still_loops_its_motion` and
+  `real_motion_length_rounds_to_2_8` read it, the last three with the real ffmpeg or ffprobe. `test_support::live` writes a JPEG still with the identifier in an Apple MakerNote
   and a movie with the identifier in `moov/meta`.
   `real_orf_preview_turns_like_develop` copies `PHEWR_TEST_ORF`, writes the IFD0 orientation 1
   and 6 with exiftool, and compares the preview with the sips develop.
@@ -479,7 +479,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   (`scanner::spawn_with`, `[gallery] live_photos`, on by default). The pass runs on the sorted
   names before the first entry and reads no file. `SharedImageList::set_live_photos` comes
   before the folders, and `App::live` takes the table with the first entry. A Live still carries
-  `◎ Live` in the gap above its cell, and its status facts start with `Live`. In the grid, it
+  `◎ Live` in the gap above its cell, and its status facts start with `Live 2.8 s` (the motion length, one
+  decimal). The meta thread reads the length from the probe cache, else a second thread runs one
+  ffprobe that does not count as pending work. Without a length, the row shows `Live`, and a
+  failed probe gets no retry in the session. In the grid, it
   loops its motion like a video cell (`App::loop_source`) and carries the play stamp while the
   loops are on. `[gallery] animate = false` gives no loop and no stamp (maintainer,
   2026-11-03). Enter or a left click on the middle of the fullscreen picture plays the motion

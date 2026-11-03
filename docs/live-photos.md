@@ -285,8 +285,10 @@ Choice B, provisional until open question 2 has an answer. These facts support i
 - Choice C: the loop of the real 2.83 s motion takes 0.59 s (a constant-rate run, 12 frames).
   Each Live cell costs one loop job, and the cell count stays halved.
 - The Live mark sits in the gap above the cell (`◎ Live`), not in the label row.
-- Not built: the length of the motion in the status row, the prestart of the motion in the
-  fullscreen view, choice D, the motion in the slideshow, and a key of its own for the roll.
+- The status row shows the motion length (`Live 2.8 s`, `7a62965`). The meta thread takes it
+  from the probe cache, else a second thread runs one ffprobe. A failed probe gets no retry.
+- Not built: the prestart of the motion in the fullscreen view, choice D, the motion in the
+  slideshow, and a key of its own for the roll.
 
 ## Open questions
 
