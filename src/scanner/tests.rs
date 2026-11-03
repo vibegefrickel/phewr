@@ -1,7 +1,8 @@
 //! The tests of the directory scan on temp folders.
 
 use super::{
-    BATCH_SIZE, files_of, is_sorted_by_name, name_key, parent_entry, scan_dir, spawn, subfolders,
+    BATCH_SIZE, Item, classify, files_of, is_sorted_by_name, name_key, parent_entry, scan_dir,
+    spawn, subfolders, walk_with,
 };
 use crate::image_list::{Batch, SharedImageList};
 use std::fs;
@@ -69,6 +70,61 @@ fn reports_broken_symlink() {
     let errors = list.drain_errors();
     assert_eq!(errors.len(), 1);
     assert!(errors[0].contains("gone.png"), "{errors:?}");
+}
+
+/// One entry fails with `kind`; the other two entries must reach the list.
+fn scan_with_file_type_error(kind: std::io::ErrorKind) -> (Vec<String>, Vec<String>) {
+    let root = tempfile::tempdir().unwrap();
+    let gone = root.path().join("gone.png");
+    for name in ["a.png", "gone.png", "z.png"] {
+        fs::write(root.path().join(name), b"synthetic").unwrap();
+    }
+
+    let list = SharedImageList::new();
+    let mut files = Vec::new();
+    walk_with(
+        root.path(),
+        &list,
+        |item| {
+            if let Item::File(path) = item {
+                files.push(path);
+            }
+        },
+        |entry, list| {
+            if entry.path() == gone {
+                classify(entry, list, || {
+                    Err(std::io::Error::new(kind, "injected file-type error"))
+                })
+            } else {
+                classify(entry, list, || entry.file_type())
+            }
+        },
+    );
+
+    let mut names: Vec<String> = files
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    (names, list.drain_errors())
+}
+
+#[test]
+fn vanished_file_is_skipped_without_error() {
+    let (files, errors) = scan_with_file_type_error(std::io::ErrorKind::NotFound);
+
+    assert_eq!(files, ["a.png", "z.png"]);
+    assert!(errors.is_empty());
+}
+
+#[test]
+fn file_type_error_is_reported_and_scan_continues() {
+    let (files, errors) = scan_with_file_type_error(std::io::ErrorKind::PermissionDenied);
+
+    assert_eq!(files, ["a.png", "z.png"]);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("gone.png"), "{errors:?}");
+    assert!(errors[0].contains("injected file-type error"), "{errors:?}");
 }
 
 #[test]

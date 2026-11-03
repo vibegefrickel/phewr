@@ -167,7 +167,19 @@ fn open_dir(dir: &Path) -> std::io::Result<std::fs::ReadDir> {
 }
 
 /// Folders without symlinks, and supported files. Hidden entries stay out.
-fn walk(dir: &Path, list: &SharedImageList, mut visit: impl FnMut(Item)) {
+fn walk(dir: &Path, list: &SharedImageList, visit: impl FnMut(Item)) {
+    walk_with(dir, list, visit, |entry, list| {
+        classify(entry, list, || entry.file_type())
+    });
+}
+
+/// The injected classifier lets a test fail one entry without a file-system race.
+fn walk_with(
+    dir: &Path,
+    list: &SharedImageList,
+    mut visit: impl FnMut(Item),
+    mut classify_entry: impl FnMut(&DirEntry, &SharedImageList) -> Option<Item>,
+) {
     let entries = match open_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
@@ -179,7 +191,7 @@ fn walk(dir: &Path, list: &SharedImageList, mut visit: impl FnMut(Item)) {
     for entry in entries {
         match entry {
             Ok(entry) => {
-                if let Some(item) = classify(&entry, list) {
+                if let Some(item) = classify_entry(&entry, list) {
                     visit(item);
                 }
             }
@@ -188,7 +200,12 @@ fn walk(dir: &Path, list: &SharedImageList, mut visit: impl FnMut(Item)) {
     }
 }
 
-fn classify(entry: &DirEntry, list: &SharedImageList) -> Option<Item> {
+/// The lazy file type keeps hidden entries free of system calls and models a vanished file.
+fn classify(
+    entry: &DirEntry,
+    list: &SharedImageList,
+    file_type: impl FnOnce() -> std::io::Result<std::fs::FileType>,
+) -> Option<Item> {
     let path = entry.path();
     let name = entry.file_name();
     // Hidden entries stay out before a file type check can push an error. That covers the
@@ -196,8 +213,9 @@ fn classify(entry: &DirEntry, list: &SharedImageList) -> Option<Item> {
     if name.to_string_lossy().starts_with('.') {
         return None;
     }
-    let file_type = match entry.file_type() {
+    let file_type = match file_type() {
         Ok(file_type) => file_type,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
         Err(error) => {
             list.push_error(format!("{}: {error}", path.display()));
             return None;
