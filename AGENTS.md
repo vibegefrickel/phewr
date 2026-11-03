@@ -368,7 +368,7 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - `test_support/` (test only): the helpers that the tests of more than one module share.
   `mod.rs` holds the app builders and the waits, `input.rs` the key and mouse helpers, `files.rs`
   the JPEG, TIFF RAW, CR3, RAF and PSD writers (feature `sips` on macOS), `heif.rs` the HEIF
-  writers (feature `heic`), `kitty.rs` the fake terminal and `video.rs` `FakeRunner`,
+  writers (feature `heic`, `write_heif_sized` with a thumbnail of any size), `kitty.rs` the fake terminal and `video.rs` `FakeRunner`,
   `FakeDecoder` and the app builders of the video tests (feature `video`).
 - `bench/` (test only): the ignored speed benchmarks, one file per group. A bench path is
   `bench::<file>::<name>`. They drive the real loop steps without a terminal and read
@@ -688,7 +688,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   embedded thumbnail (iPhone: 320x240) and shows it as a preview (`start_preview_decode`, at most
   `MAX_PREVIEW_JOBS`). The thumbnail must have the same `irot` and `imir` as the primary image.
   `decode/heif_boxes.rs` reads them. The preview goes out at its own resolution, padded to the
-  shape of the box, and the terminal scales it to the box of the sharp picture with `c=` / `r=`.
+  whole cells of its own aspect, and the terminal scales it to those cells with `c=` / `r=`. A
+  preview of another aspect than the primary image shows other margins than the sharp picture,
+  never a stretch (`kitty_output::grid::tests::square_preview_of_wide_photo_keeps_its_shape`).
   Phase 2 is the sharp decode through `MAX_THUMB_JOBS`. The sharp jobs of libheif files wait
   until every preview is out (`sharp_job_waits`). Other formats start at once. A preview never
   goes into the disk cache, and a disk cache hit skips the preview. The sharp image gets a new
