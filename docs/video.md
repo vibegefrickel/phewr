@@ -121,6 +121,23 @@ rules. This page holds the reasons and the numbers.
   packets of all video streams.
 - The code is in `player/probe/mod.rs` and `player/probe/parse/mod.rs`.
 
+### The software mark
+
+- When the GPU run of a file gives no frame and the software run gives one, the decoder calls
+  `Decoder::remember_software`. `probe::remember_software` clears `hardware` in the probe cache
+  entry of the file, so `Pipeline::first` starts in software at the next probe.
+- The callers are `with_fallback` (the first frame and the grid loops) and `Player::poll_at`.
+  `with_fallback` takes the decoder and the path. One loop job keeps the result in
+  `Run::software`, so a long clip with 12 seeks pays the failed GPU run once.
+- A changed mtime or length drops the entry, and the next probe starts on the GPU again.
+- A cancel, a timeout and a software failure set no flag. The flag lives in memory for the
+  session only.
+- A player that is already open keeps its pipeline, also a prestart player.
+- A short GPU failure under load also marks the file for the session. The cost is the software
+  speed for that file until phewr quits.
+- Real case on an M5: VideoToolbox rejects VP8. The first start of a VP8 WebM takes about
+  110 ms, the second 32 ms. AV1 on M1 and M2 takes the same path, untested.
+
 ## Color cubes
 
 - `CUBE_VERSION` is 3. Version 3 added the target space to the cube names.

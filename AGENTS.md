@@ -486,7 +486,12 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   rotation and, for HLG and PQ, the tone mapping cube, and waits at most 5 s. An SDR first frame
   converts after the decode with `color::convert` (`convert_first_frame` in `video/mod.rs`), so it
   pays no cube parse. The player maps the probed stream with
-  `-map 0:N` for every video. Without the programs, a video cell keeps its large play icon, and
+  `-map 0:N` for every video. A file whose GPU run gave no frame, and whose software run gave
+  one, starts in software for the rest of the session (`probe::remember_software` clears
+  `hardware` in its probe cache entry). A changed mtime or length drops the entry. A cancel, a
+  timeout and a software failure set no flag, and the flag is not on disk. An open player keeps
+  its pipeline. A VP8 WebM is the real case: the first start takes about 110 ms, the second
+  32 ms. Without the programs, a video cell keeps its large play icon, and
   `Enter` opens the mpv window with a note. When the gallery cursor rests on a video or an
   animated image for 200 ms (`PRESTART_DELAY`) and `App::has_pending_work` is false,
   `video_handoff/prestart/` opens its terminal player ahead of Enter. Enter takes it
