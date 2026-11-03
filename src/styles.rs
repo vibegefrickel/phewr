@@ -1,34 +1,27 @@
-//! The styles of the TUI. viewr uses the default colors of the terminal and the 16 ANSI colors
-//! only, so the color scheme of the terminal decides the look.
+//! The styles of the TUI: the terminal default colors and the 16 ANSI colors only. The color
+//! scheme of the terminal decides the look.
 
 use ratatui::style::{Color, Modifier, Style};
 
-/// One style per role on the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Styles {
-    /// Normal text: the terminal foreground on the terminal background. The explicit `Reset`
-    /// keeps the text in a block title or a bottom line out of the dim border color.
+    /// The explicit `Reset` keeps the text in a title or a bottom line out of the border color.
     pub text: Style,
-    /// Block titles.
     pub title: Style,
-    /// The borders of the views.
     pub border: Style,
-    /// The border of the help popup, so the popup stands out from the view borders.
     pub popup_border: Style,
-    /// The thick border and the label of the grid cell under the cursor. The border sits in the
-    /// gaps around the cell.
+    /// The thick border and the label of the cell under the cursor.
     pub cursor_cell: Style,
     /// The plain border, the label and the selection count of a marked image.
     pub marked: Style,
     /// Errors and the delete question.
     pub error: Style,
-    /// Secondary text: counts, notes and the labels of the info panel.
+    /// Counts, notes and the info panel labels.
     pub dim: Style,
-    /// Key hints and the key column of the help popup.
+    /// Key hints and the help key column.
     pub key: Style,
 }
 
-/// The styles that every view draws with.
 pub(crate) const STYLES: Styles = Styles {
     text: Style::new().fg(Color::Reset),
     title: Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),

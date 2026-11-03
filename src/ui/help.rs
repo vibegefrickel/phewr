@@ -7,20 +7,17 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-/// One row of the help popup: a key and its description. An empty key makes a heading, and both
-/// empty make a blank line.
+/// A key and its description. An empty key makes a heading, and both empty make a blank line.
 type HelpRow = (&'static str, &'static str);
 
-/// The smallest terminal width that shows the help popup in two columns.
 const HELP_TWO_COLUMN_WIDTH: u16 = 100;
 
-/// The width of the key part of a help row, the longest key being `Enter, double-click`.
+/// The width of the longest key, `Enter, double-click`.
 const HELP_KEY_WIDTH: usize = 19;
 
-/// The width of the popup in one column, for a narrow terminal.
 const HELP_SINGLE_WIDTH: u16 = 56;
 
-/// The left column of the help popup: the gallery and its search line.
+/// The left column: the gallery and its search line.
 const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("", "Gallery"),
     ("h/j/k/l, click", "Move in the grid"),
@@ -48,7 +45,7 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("Enter / Esc", "Confirm / cancel"),
 ];
 
-/// The right column of the help popup: the fullscreen view, the video player and the mouse.
+/// The right column: the fullscreen view, the video player and the mouse.
 const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
     ("", "Fullscreen"),
     ("\u{2190} / \u{2192}, h j / k l", "Previous / next image"),
@@ -89,7 +86,6 @@ const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
     ("Shift+drag", "Select terminal text"),
 ];
 
-/// The help rows as styled lines: headings in the title style, keys in the key style.
 fn help_lines<'a>(rows: impl IntoIterator<Item = &'a HelpRow>) -> Vec<Line<'static>> {
     rows.into_iter()
         .map(|&(key, description)| {
@@ -105,9 +101,8 @@ fn help_lines<'a>(rows: impl IntoIterator<Item = &'a HelpRow>) -> Vec<Line<'stat
         .collect()
 }
 
-/// The help popup. A terminal of 100 columns or more gets two columns, so that it fits into 40
-/// rows. A narrower one gets one column that the popup clips. The last row names the Kitty
-/// medium and the loop path that the start probe found.
+/// The help popup. From 100 columns on it has two columns and fits into 40 rows. A narrower
+/// terminal gets one column that the popup clips. The last row names the Kitty medium.
 pub(super) fn draw_help_popup(
     frame: &mut Frame<'_>,
     transfer: crate::encoder::Transfer,
@@ -119,7 +114,6 @@ pub(super) fn draw_help_popup(
     let content_rows = if two_columns {
         left.len().max(right.len())
     } else {
-        // One column puts a blank row between the two lists.
         left.len() + 1 + right.len()
     };
 
@@ -176,7 +170,7 @@ mod tests {
     use ratatui::style::{Color, Modifier};
 
     #[test]
-    fn help_popup_lists_the_keys_of_each_view_in_two_columns() {
+    fn lists_keys_in_two_columns() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let screen = render(&mut app, None, 120, 52);
@@ -228,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn help_popup_falls_back_to_one_column_in_a_narrow_terminal() {
+    fn narrow_terminal_gets_one_column() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let rows = screen_rows(&render_buffer(&mut app, None, 80, 120));
@@ -251,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn help_popup_clips_inside_a_narrow_and_short_terminal() {
+    fn clips_in_small_terminal() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let rows = screen_rows(&render_buffer(&mut app, None, 80, 30));
@@ -269,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn help_popup_takes_two_columns_from_exactly_100_columns_on() {
+    fn two_columns_from_100_columns() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let mut two_columns = |width| {

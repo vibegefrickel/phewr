@@ -31,7 +31,7 @@ pub(crate) struct Cli {
     pub(crate) info: bool,
 }
 
-/// A thread count of zero is an error, because the pool needs one thread at least.
+/// The pool needs one thread at least.
 fn parse_threads(value: &str) -> Result<usize, String> {
     match value.parse::<usize>() {
         Ok(0) => Err("must be greater than zero".to_owned()),
@@ -40,7 +40,7 @@ fn parse_threads(value: &str) -> Result<usize, String> {
     }
 }
 
-/// A slide interval must be a positive, finite number of seconds.
+/// A slide interval is a positive, finite number of seconds.
 fn parse_interval(value: &str) -> Result<f64, String> {
     match value.parse::<f64>() {
         Ok(seconds) if seconds.is_finite() && seconds > 0.0 => Ok(seconds),
@@ -49,8 +49,8 @@ fn parse_interval(value: &str) -> Result<f64, String> {
     }
 }
 
-/// One file argument opens its folder with the cursor on that file, so a file manager can start
-/// viewr on the hovered file. The second value is the path that the cursor goes to.
+/// One file argument opens its folder with the cursor on that file. A file manager starts
+/// viewr on the hovered file. The second value is the cursor target.
 pub(crate) fn start_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Option<PathBuf>) {
     let [file] = paths.as_slice() else {
         return (paths, None);
@@ -63,12 +63,13 @@ pub(crate) fn start_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Option<PathBuf>
     } else {
         parent
     };
-    // The scanner lists the folder by its canonical path, so the cursor target uses it too.
+    // The scanner lists the folder by its canonical path, and the cursor target uses it too.
     let folder = canonicalize_or_self(parent);
     let target = folder.join(name);
     (vec![folder], Some(target))
 }
 
+/// The first directory argument, else the parent of the first file.
 pub(crate) fn initial_dir_from_paths(paths: &[PathBuf]) -> PathBuf {
     for p in paths {
         if p.is_dir() {
@@ -92,7 +93,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn parses_files_and_all_options() {
+    fn parses_files_and_options() {
         let cli = Cli::try_parse_from([
             "viewr", "-j", "4", "-s", "-n", "2.5", "-i", "a.jpg", "photos",
         ])
@@ -106,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_long_options() {
+    fn parses_long_options() {
         let cli = Cli::try_parse_from([
             "viewr",
             "--threads",
@@ -143,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_threads_and_a_zero_interval_are_errors() {
+    fn zero_threads_or_interval_fail() {
         assert!(Cli::try_parse_from(["viewr", "-j", "0"]).is_err());
         assert!(Cli::try_parse_from(["viewr", "-n", "0"]).is_err());
         assert!(Cli::try_parse_from(["viewr", "-n", "-1"]).is_err());
@@ -153,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_argument_is_the_start_directory() {
+    fn directory_argument_is_start() {
         let (_temp, root, child) = synthetic_tree();
 
         let paths = [root.join("missing.jpg"), child.clone()];
@@ -161,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_argument_starts_in_its_parent_directory() {
+    fn file_argument_starts_in_parent() {
         assert_eq!(
             initial_dir_from_paths(&[PathBuf::from("/photos/a.jpg")]),
             PathBuf::from("/photos")
@@ -174,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn one_file_argument_opens_its_folder_at_the_file() {
+    fn one_file_opens_folder_at_file() {
         let (_temp, root, child) = synthetic_tree();
         let file = child.join("a.png");
         std::fs::write(&file, b"").unwrap();

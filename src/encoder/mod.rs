@@ -1,3 +1,4 @@
+//! The Kitty graphics output: the writer, the transfer medium, the loop path and the pixels.
 pub(crate) mod kitty;
 
 use image::{RgbImage, RgbaImage};
@@ -5,10 +6,8 @@ use std::io::{self, Write};
 #[cfg(test)]
 use std::sync::{Arc, Mutex, PoisonError};
 
-/// The terminal output for the Kitty sequences of `App`.
-///
-/// The program writes to stdout. A test app writes to a shared buffer, so that no test deletes
-/// the images of the real terminal, also with `cargo test -- --nocapture`.
+/// The terminal output for the Kitty sequences of `App`. A test app writes to a buffer and
+/// never touches the images of the real terminal.
 #[derive(Debug, Clone)]
 pub(crate) enum GraphicsOutput {
     Stdout,
@@ -17,13 +16,12 @@ pub(crate) enum GraphicsOutput {
 }
 
 impl GraphicsOutput {
-    /// An empty buffer for a test app.
     #[cfg(test)]
     pub(crate) fn buffer() -> Self {
         Self::Buffer(Arc::default())
     }
 
-    /// Take the bytes that the buffer holds, so that a test can read the sequences of one step.
+    /// Take the bytes that the buffer holds.
     #[cfg(test)]
     pub(crate) fn take_bytes(&self) -> Vec<u8> {
         match self {
@@ -59,61 +57,51 @@ impl Write for GraphicsOutput {
     }
 }
 
-/// The default sends the picture and places it at the cursor, without an id and at its pixel
-/// size.
+/// The default sends the picture and places it at the cursor, without an id, at pixel size.
 ///
-/// There is no pixel offset (`X=`, `Y=`): a relaying multiplexer such as herdr turns an offset
-/// into a stretched picture, so every picture starts at a cell border.
+/// There is no pixel offset (`X=`, `Y=`): herdr turns an offset into a stretched picture.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct DisplayOptions {
     pub id: Option<u32>,
-    /// The cell box (`c=`, `r=`) that the terminal scales the picture to. `None` keeps the
-    /// pixel size.
+    /// The cell box (`c=`, `r=`) that the terminal scales the picture to.
     pub cell_box: Option<(u16, u16)>,
-    /// Scale the picture to this many columns (`c=`) and let the terminal take the rows from the
-    /// aspect ratio. `cell_box` wins when both are set.
+    /// Scale to this many columns (`c=`), and the terminal takes the rows from the aspect ratio.
+    /// `cell_box` wins.
     pub columns: Option<u16>,
-    /// Send the picture without a placement (`a=t`). A later `a=p` places it by its id. The
-    /// frames of a grid loop go out this way, one time each.
+    /// Send without a placement (`a=t`). A later `a=p` places the image by its id.
     pub transmit_only: bool,
-    /// Mark the image as transient (`N=1`): the terminal may evict it before other images when
-    /// its storage is full. The frames of the terminal player and of the grid loops ask for it,
-    /// and [`KittyBackend`] sends the key only for [`Loops::Animation`].
+    /// The usage hint `N=1`: the terminal can evict the image first. [`KittyBackend`] sends it only
+    /// for [`Loops::Animation`].
     pub transient: bool,
 }
 
-/// The largest raw payload of one transmission in bytes. Ghostty 1.4.0 refuses a Kitty payload
-/// above 65 MiB, so this cap keeps 1 MiB of room.
+/// The largest raw payload of one transmission. Ghostty 1.4.0 refuses a payload above 65 MiB.
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 64 << 20;
 
-/// `size` as it is, or the largest box of the same aspect ratio whose RGB payload fits
-/// [`MAX_PAYLOAD_BYTES`], so that a decode never needs the shrink of the writer on the UI thread.
+/// `size`, or the largest box of its aspect ratio whose RGB payload fits [`MAX_PAYLOAD_BYTES`].
 pub(crate) fn capped_box(size: (u32, u32)) -> (u32, u32) {
     let (width, height) = size;
     let bytes = u64::from(width) * u64::from(height) * 3;
     if bytes <= MAX_PAYLOAD_BYTES as u64 {
         return size;
     }
-    // The area scales with the square of the side, so the side scales with the square root.
+    // The side scales with the square root of the area.
     let scale = (MAX_PAYLOAD_BYTES as f64 / bytes as f64).sqrt();
     let side = |value: u32| ((f64::from(value) * scale) as u32).max(1);
     (side(width), side(height))
 }
 
-/// The pixels per step of [`Pixels::opaque_rgb`]: 16 KB of RGBA, which stays in the L1 cache
-/// between the check and the copy.
+/// The pixels per step of [`Pixels::opaque_rgb`]: 16 KB of RGBA stay in the L1 cache.
 const OPACITY_CHUNK: usize = 4096;
 
-/// Raw pixels for one transmission: 3 bytes per pixel (RGB, `f=24`) or 4 (RGBA, `f=32`).
+/// Raw pixels: RGB (`f=24`) or RGBA (`f=32`).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Pixels<'a> {
     pub width: u32,
     pub height: u32,
-    /// True for 4 bytes per pixel.
     pub alpha: bool,
     pub data: &'a [u8],
-    /// Send RGBA as it is through the temp file medium: no scan and no RGB copy. The frames of
-    /// an animation set it, because most of them hold a transparent pixel or the next one does.
+    /// Send RGBA as it is through the temp file medium, without the scan and the RGB copy.
     pub keep_alpha: bool,
 }
 
@@ -122,11 +110,10 @@ impl Pixels<'_> {
         (self.width, self.height)
     }
 
-    /// The same pixels with 3 bytes each, when every pixel is opaque. The terminal then reads
-    /// a quarter fewer bytes. `None` for RGB pixels and for an image with a transparent pixel.
+    /// The pixels as RGB when every pixel is opaque, else `None`.
     ///
-    /// The check and the copy go in chunks of [`OPACITY_CHUNK`] pixels, so the first chunk with
-    /// a transparent pixel stops the work: a padded grid picture stops in its first rows.
+    /// The scan stops at the first chunk with a transparent pixel: a padded grid picture stops in
+    /// its first rows.
     pub(crate) fn opaque_rgb(&self) -> Option<Vec<u8>> {
         if !self.alpha {
             return None;
@@ -140,8 +127,8 @@ impl Pixels<'_> {
             if source.iter().fold(u8::MAX, |all, pixel| all & pixel[3]) != u8::MAX {
                 return None;
             }
-            // The array stores let the compiler turn the loop into vector code: 1 ms for a
-            // 2736x2052 frame, four times faster than a `copy_from_slice` of 3 bytes per pixel.
+            // The array stores let the compiler vectorize the loop. A `copy_from_slice` of 3 bytes per
+            // pixel is four times slower.
             for (&[red, green, blue, _], pixel) in source.iter().zip(target.as_chunks_mut::<3>().0)
             {
                 *pixel = [red, green, blue];
@@ -177,37 +164,30 @@ impl<'a> From<&'a RgbImage> for Pixels<'a> {
 
 /// How the pixels reach the terminal.
 ///
-/// A Retina fullscreen frame is about 17 MB of RGB. As base64 through the pty, that is 22 MB
-/// of text that the terminal parses and decodes. A temp file on the same machine carries the
-/// pixels with a sequence of about 100 bytes.
+/// A Retina fullscreen frame is 17 MB of RGB and 22 MB of base64 text. A temp file carries it
+/// with a sequence of about 100 bytes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Transfer {
-    /// Raw RGB or RGBA as base64 through the pty (`t=d`, `f=24` or `f=32`). Every Kitty
-    /// terminal reads it.
+    /// Raw pixels as base64 through the pty (`t=d`). Every Kitty terminal reads it.
     #[default]
     Direct,
-    /// A PNG as base64 through the pty (`f=100`): the smallest payload for a connection over SSH.
+    /// A PNG as base64 through the pty (`f=100`): the smallest payload over SSH.
     Png,
-    /// Raw RGB or RGBA in a temp file that the terminal reads and deletes (`t=t`). The terminal
-    /// must run on this machine, and `kitty::detect_transfer` must have found its support.
+    /// Raw pixels in a temp file that the terminal reads and deletes (`t=t`). Local terminals only.
     TempFile,
 }
 
-/// How the grid plays the loops of its video and animated cells.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Loops {
-    /// viewr swaps the placement of each frame on the ticks of its loop clock. Every terminal
-    /// with the Kitty graphics protocol can show it.
+    /// viewr swaps the frame placements on the ticks of its loop clock.
     #[default]
     Ticks,
-    /// The terminal plays each loop as a Kitty animation (`a=f`, `a=a`), and viewr sends
-    /// nothing per tick.
+    /// The terminal plays each loop as a Kitty animation (`a=f`, `a=a`).
     Animation,
 }
 
 impl Loops {
-    /// Read `animation` or `ticks`, the values of `VIEWR_KITTY_LOOPS` and `[gallery] loops`.
-    /// Any other value returns `None`, and the probe decides.
+    /// Read `animation` or `ticks`. Any other value returns `None`, and the probe decides.
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "animation" => Some(Self::Animation),
@@ -231,31 +211,26 @@ impl KittyBackend {
         }
     }
 
-    /// The same backend with the loop path `loops`.
     pub(crate) fn with_loops(self, loops: Loops) -> Self {
         Self { loops, ..self }
     }
 
-    /// The medium of the pixels. The terminal player needs [`Transfer::TempFile`], and the
-    /// help popup names it.
+    /// The terminal player needs [`Transfer::TempFile`].
     pub(crate) fn transfer(self) -> Transfer {
         self.transfer
     }
 
-    /// The loop path of the grid, from the probe or the override.
     pub(crate) fn loops(self) -> Loops {
         self.loops
     }
 
-    /// True when the terminal answered the animation frame probe. Such a terminal is a Ghostty
-    /// 1.4.0 class terminal, which knows the usage hint key `N`. Older terminals and herdr
-    /// 0.9.5 play the loops on the ticks and get no `N` key, because the protocol does not say
-    /// that a terminal ignores an unknown key.
+    /// True when the terminal answered the animation frame probe. Only such a terminal (Ghostty
+    /// 1.4.0) gets the key `N`: the protocol does not say that a terminal ignores an unknown key.
     fn knows_usage_hints(self) -> bool {
         self.loops == Loops::Animation
     }
 
-    /// Send `pixels` and show them. An RGBA image without a transparent pixel goes out as RGB.
+    /// Send `pixels` and show them.
     pub(crate) fn transmit(
         self,
         out: &mut dyn Write,
@@ -298,7 +273,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn a_4k_box_stays_and_an_8k_box_shrinks_below_the_payload_cap() {
+    fn large_box_shrinks_below_payload_cap() {
         assert_eq!(capped_box((3840, 2160)), (3840, 2160));
         assert_eq!(capped_box((6016, 3384)), (6016, 3384));
         let (width, height) = capped_box((7680, 4320));
@@ -308,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn the_usage_hint_goes_out_only_for_a_terminal_that_plays_animations() {
+    fn usage_hint_needs_animations() {
         use super::Loops;
 
         let image = RgbaImage::from_pixel(4, 2, Rgba([1, 2, 3, 255]));
@@ -336,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn the_test_buffer_collects_the_bytes_until_a_take() {
+    fn buffer_collects_bytes_until_take() {
         let mut out = GraphicsOutput::buffer();
         let mut copy = out.clone();
         kitty::delete_all_to(&mut out).unwrap();
@@ -349,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn the_opaque_check_looks_at_every_chunk() {
+    fn opaque_check_reads_every_chunk() {
         let mut image = RgbaImage::from_pixel(OPACITY_CHUNK as u32 + 1, 2, Rgba([1, 2, 3, 255]));
         let rgb = Pixels::from(&image).opaque_rgb().unwrap();
         assert_eq!(rgb.len(), image.as_raw().len() / 4 * 3);
@@ -368,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn kitty_backend_delegates_to_the_kitty_writers() {
+    fn backend_delegates_to_writers() {
         let backend = KittyBackend::default();
         assert_eq!(backend.transfer(), Transfer::Direct);
         let image = RgbaImage::new(2, 2);
@@ -400,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn a_backend_keeps_its_transfer() {
+    fn backend_keeps_its_transfer() {
         let backend = KittyBackend::new(Transfer::TempFile);
         assert_eq!(backend.transfer(), Transfer::TempFile);
         assert_eq!(KittyBackend::new(Transfer::Png).transfer(), Transfer::Png);

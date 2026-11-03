@@ -7,13 +7,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// How long viewr waits for `ya` when it quits. A yazi that does not answer must not hold viewr.
+/// A yazi that does not answer must not hold viewr.
 const YA_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Move the cursor of the yazi that started viewr to `path`, so that yazi shows the last file.
+/// Move the cursor of the yazi that started viewr to `path`.
 ///
 /// yazi sets `YAZI_ID` for each program that it starts. Without it, or without `ya` on PATH,
-/// nothing happens. `run` starts `ya emit reveal <path>`. The tests pass a fake.
+/// nothing happens. `run` starts `ya emit reveal <path>`.
 pub(crate) fn reveal_in_yazi(
     path: Option<&Path>,
     yazi_id: Option<&OsStr>,
@@ -31,7 +31,7 @@ pub(crate) fn reveal_in_yazi(
     Some(run(&ya, &args))
 }
 
-/// Run `program` without output after the TUI, and wait at most [`YA_TIMEOUT`] for its exit.
+/// Run `program` without output and wait at most [`YA_TIMEOUT`] for its exit.
 pub(crate) fn run_briefly(program: &Path, args: &[OsString]) -> io::Result<()> {
     let mut child = Command::new(program)
         .args(args)
@@ -46,7 +46,7 @@ pub(crate) fn run_briefly(program: &Path, args: &[OsString]) -> io::Result<()> {
     Ok(())
 }
 
-/// The first executable `program` in the directories of `path`, like the lookup of a shell.
+/// The first executable `program` in `path`, like a shell lookup.
 pub(crate) fn find_on_path(program: &str, path: Option<&OsStr>) -> Option<PathBuf> {
     std::env::split_paths(path?)
         .filter(|directory| !directory.as_os_str().is_empty())
@@ -66,7 +66,6 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
-    /// A PATH with an executable `ya` in a temp directory.
     fn path_with_ya() -> (tempfile::TempDir, OsString) {
         let dir = tempfile::tempdir().unwrap();
         let ya = dir.path().join("ya");
@@ -76,7 +75,6 @@ mod tests {
         (dir, path)
     }
 
-    /// The calls that `reveal_in_yazi` makes, and its result.
     fn reveal(
         path: Option<&Path>,
         yazi_id: Option<&str>,
@@ -96,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn with_yazi_id_viewr_asks_ya_to_reveal_the_file() {
+    fn yazi_id_asks_ya_to_reveal() {
         let (dir, path) = path_with_ya();
         let (result, calls) = reveal(Some(Path::new("/photos/a.jpg")), Some("4711"), &path);
         assert_eq!(result, Some(true));
@@ -112,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn a_relative_path_goes_to_yazi_as_an_absolute_path() {
+    fn relative_path_becomes_absolute() {
         let (_dir, path) = path_with_ya();
         let (_result, calls) = reveal(Some(Path::new("./photos/a.jpg")), Some("1"), &path);
         let revealed = PathBuf::from(&calls[0].1[2]);
@@ -124,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn without_yazi_id_or_ya_or_a_file_nothing_runs() {
+    fn missing_yazi_runs_nothing() {
         let (_dir, path) = path_with_ya();
         let file = Some(Path::new("/photos/a.jpg"));
         let empty = tempfile::tempdir().unwrap();
@@ -142,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn find_on_path_takes_the_first_executable_file() {
+    fn find_on_path_takes_first_executable() {
         let root = tempfile::tempdir().unwrap();
         let plain = root.path().join("plain");
         let executable = root.path().join("executable");
@@ -168,14 +166,14 @@ mod tests {
     }
 
     #[test]
-    fn run_briefly_returns_when_the_program_exits() {
+    fn run_briefly_returns_on_exit() {
         let start = Instant::now();
         run_briefly(Path::new("/usr/bin/true"), &[]).unwrap();
         assert!(start.elapsed() < Duration::from_millis(900));
     }
 
     #[test]
-    fn run_briefly_stops_waiting_after_the_timeout() {
+    fn run_briefly_stops_at_timeout() {
         let start = Instant::now();
         run_briefly(Path::new("/bin/sleep"), &[OsString::from("2")]).unwrap();
         let waited = start.elapsed();

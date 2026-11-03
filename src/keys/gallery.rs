@@ -5,7 +5,6 @@ use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io;
 
-/// Keys while the gallery search line takes input.
 pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
@@ -33,7 +32,6 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Keys of the thumbnail grid.
 pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     let prev_offset = app.gallery.scroll_offset;
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -46,7 +44,7 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
         KeyCode::Char('/') => {
             app.gallery.search_active = true;
         }
-        // A folder cell opens the folder. The next grid write deletes the old pictures.
+        // The next grid write deletes the old pictures.
         KeyCode::Enter if app.selected_is_folder() => {
             app.enter_selected_folder();
         }
@@ -75,8 +73,7 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             app.graphics_delete_all()?;
             app.toggle_info();
         }
-        // A zoom change marks the grid dirty, and the next grid write deletes the old
-        // pictures. A key at a limit changes nothing, so it deletes nothing.
+        // A zoom marks the grid dirty, and the next grid write deletes the old pictures.
         KeyCode::Char('+' | '=') => {
             app.thumb_zoom_in();
         }
@@ -111,7 +108,7 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
     Ok(false)
 }
 
-/// Moves the grid cursor for a movement key and tells if the key was one.
+/// Move the grid cursor. Returns `false` for a key that moves nothing.
 fn move_cursor(app: &mut App, code: KeyCode, ctrl: bool) -> bool {
     match code {
         KeyCode::Left | KeyCode::Char('h') => app.gallery.move_left(),
@@ -140,11 +137,11 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn enter_and_backspace_walk_the_folders_and_the_marks_skip_them() {
+    fn enter_and_backspace_walk_folders() {
         let temp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(temp.path()).unwrap();
         fs::create_dir(root.join("sub")).unwrap();
-        // Two photos, so that the one-image rule does not open the fullscreen view.
+        // Two photos: one image opens the fullscreen view.
         fs::write(root.join("sub").join("photo.png"), b"synthetic").unwrap();
         fs::write(root.join("sub").join("other.png"), b"synthetic").unwrap();
         let mut app = gallery_app(0);
@@ -188,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_a_file_of_a_folder_list_opens_the_fullscreen_view() {
+    fn enter_on_file_opens_fullscreen() {
         let mut app = folder_app(&["..", "sub"], &["a.jpg", "b.jpg"]);
         press(&mut app, KeyCode::Enter);
         assert_eq!(
@@ -211,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_arrows_move_the_cursor_in_the_grid() {
+    fn arrows_move_cursor() {
         let mut app = gallery_app(9);
 
         press(&mut app, KeyCode::Right);
@@ -234,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_jumps_by_page_and_to_the_ends() {
+    fn jumps_by_page_and_to_ends() {
         let mut app = gallery_app(9);
 
         press(&mut app, KeyCode::PageDown);
@@ -261,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_selection_keys_and_a_delete_of_the_selection() {
+    fn selection_keys_and_delete() {
         let mut app = gallery_app(4);
 
         char_key(&mut app, ' ');
@@ -285,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_enter_and_s_open_the_fullscreen_view() {
+    fn enter_and_s_open_fullscreen() {
         let mut app = gallery_app(4);
         press(&mut app, KeyCode::Right);
 
@@ -302,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_s_without_a_photo_starts_no_slideshow() {
+    fn s_without_photo_starts_nothing() {
         let mut app = gallery_app(0);
 
         char_key(&mut app, 's');
@@ -312,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_info_help_quit_and_other_keys() {
+    fn info_help_quit_and_other_keys() {
         let mut app = gallery_app(2);
         let info = app.info_visible;
 
@@ -330,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_n_toggles_the_filename_labels() {
+    fn n_toggles_filename_labels() {
         let mut app = gallery_app(2);
         let compact_thumbs = app.gallery.thumb_rows;
         assert!(!app.gallery.show_filenames);
@@ -348,7 +345,7 @@ mod tests {
 
     /// The zoom keys stop at two rows and at the most rows that fit the terminal.
     #[test]
-    fn gallery_zoom_keys_stop_at_the_limits() {
+    fn zoom_keys_stop_at_limits() {
         let mut app = gallery_app(2);
         for _ in 0..40 {
             char_key(&mut app, '+');
@@ -369,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn control_and_alt_keys_do_not_type_into_the_search() {
+    fn modifier_keys_do_not_type() {
         let mut app = gallery_app(3);
         char_key(&mut app, '/');
         char_key(&mut app, 'q');
@@ -380,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn gallery_search_keys_edit_the_query() {
+    fn search_keys_edit_query() {
         let mut app = gallery_app(3);
 
         char_key(&mut app, '/');

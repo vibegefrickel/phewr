@@ -16,21 +16,19 @@ use std::time::Instant;
 #[cfg(feature = "video")]
 use video::handle_video_key;
 
-/// Drops the answer to the Kitty probe of `detect_transfer` when it comes after the timeout.
+/// Drops a Kitty probe answer that comes after the timeout.
 ///
-/// A late answer reaches crossterm, which reads `ESC _ G i=31 ; OK ESC \\` as the keys Alt+`_`,
-/// `G`, `i`, `=`, ... and Alt+`\\`. Those keys would zoom, jump and open the info panel. The
-/// filter swallows the keys from Alt+`_` to Alt+`\\`, when the probe got no answer in time.
-/// Nothing in viewr uses Alt+`_`, and a key that does not fit an answer ends the swallow.
+/// crossterm reads a late `ESC _ G i=31 ; OK ESC \\` as the keys Alt+`_`, `G`, `i`, `=`, ...
+/// and Alt+`\\`. Unfiltered, those keys zoom, jump and open the info panel. Nothing in viewr
+/// uses Alt+`_`, and a key that fits no answer ends the swallow.
 #[derive(Debug, Default)]
 pub(crate) struct LateAnswerFilter {
-    /// The Kitty answers that can still come late. Each one ends with Alt+`\\`.
+    /// The answers that can still come late. Each one ends with Alt+`\\`.
     owed: usize,
     inside: bool,
 }
 
 impl LateAnswerFilter {
-    /// `owed` is the count of Kitty answers that the start probe did not get in time.
     pub(crate) fn new(owed: usize) -> Self {
         Self {
             owed,
@@ -38,7 +36,7 @@ impl LateAnswerFilter {
         }
     }
 
-    /// True when `event` belongs to a late answer and the loop must drop it.
+    /// True when `event` belongs to a late answer.
     pub(crate) fn swallows(&mut self, event: &Event) -> bool {
         if self.owed == 0 {
             return false;
@@ -72,7 +70,7 @@ pub(crate) fn handle_event(app: &mut App, event: &Event) -> io::Result<bool> {
     handle_event_at(app, event, Instant::now())
 }
 
-/// `handle_event` with the clock of the double-click, so that a test needs no sleep.
+/// `handle_event` with the double-click clock. A test needs no sleep.
 pub(crate) fn handle_event_at(app: &mut App, event: &Event, now: Instant) -> io::Result<bool> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => handle_key(app, *key),
@@ -85,7 +83,7 @@ pub(crate) fn handle_event_at(app: &mut App, event: &Event, now: Instant) -> io:
     }
 }
 
-/// Route a key press: overlays (help, delete question) win over the view mode.
+/// Route a key press. The overlays win over the view mode.
 fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     if app.help_visible {
         app.help_visible = false;
@@ -119,11 +117,11 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     Ok(false)
 }
 
-/// The steps through the list that the fullscreen view and the video player share. A step
-/// restarts the slideshow countdown, so that the new file gets the full interval.
+/// The steps that the fullscreen view and the player share. A step restarts the slideshow
+/// countdown.
 fn step_key(app: &mut App, code: KeyCode) {
     match code {
-        // `h` and `j` step back, `k` and `l` forward, so either hand position works.
+        // `h` and `j` step back, `k` and `l` forward, for either hand position.
         KeyCode::Left | KeyCode::Char('h' | 'j') => app.prev(),
         KeyCode::Right | KeyCode::Char('k' | 'l') => app.next(),
         KeyCode::Home => app.first(),
@@ -153,7 +151,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn resize_marks_the_pictures_dirty() {
+    fn resize_marks_pictures_dirty() {
         let mut app = gallery_app(3);
         app.graphics_storage_dirty = false;
 
@@ -163,7 +161,6 @@ mod tests {
         assert!(app.needs_render);
     }
 
-    /// The key events that crossterm makes of a late probe answer.
     fn late_answer_keys(answer: &str) -> Vec<Event> {
         let mut keys = Vec::new();
         let mut alt = false;
@@ -187,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn an_armed_filter_drops_the_late_probe_answer_and_keeps_the_keys_around_it() {
+    fn armed_filter_drops_late_answer() {
         let mut filter = LateAnswerFilter::new(1);
         let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert!(!filter.swallows(&j), "a key before the answer");
@@ -203,9 +200,9 @@ mod tests {
         );
     }
 
-    /// A start that owed two Kitty answers and got none in time drops both late answers.
+    /// A start that owed two answers and got none in time drops both late answers.
     #[test]
-    fn a_filter_for_two_late_answers_drops_both_and_then_passes_the_keys() {
+    fn filter_drops_two_late_answers() {
         let mut filter = LateAnswerFilter::new(2);
         for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\") {
             assert!(filter.swallows(&key), "{key:?}");
@@ -215,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn an_error_answer_with_a_message_is_dropped_too() {
+    fn filter_drops_error_answer() {
         let mut filter = LateAnswerFilter::new(1);
         for key in late_answer_keys("\x1b_Gi=31;EBADF:could not open file\x1b\\") {
             assert!(filter.swallows(&key), "{key:?}");
@@ -223,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_that_fits_no_answer_ends_the_swallow() {
+    fn foreign_key_ends_swallow() {
         let mut filter = LateAnswerFilter::new(1);
         let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
         assert!(filter.swallows(&alt_underscore));
@@ -235,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn a_filter_without_a_late_answer_passes_every_key() {
+    fn idle_filter_passes_every_key() {
         let mut filter = LateAnswerFilter::default();
         for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\") {
             assert!(!filter.swallows(&key), "{key:?}");
@@ -246,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn key_releases_and_other_events_change_nothing() {
+    fn releases_and_other_events_change_nothing() {
         let mut app = gallery_app(3);
         let release = KeyEvent::new_with_kind(
             KeyCode::Char('q'),
@@ -260,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn key_handlers_write_the_kitty_sequences_to_the_app_output() {
+    fn handlers_write_to_app_output() {
         const DELETE_ALL: &[u8] = b"\x1b_Ga=d,d=A,q=2\x1b\\";
         let mut app = gallery_app(3);
         app.terminal_images.insert(5, 16);
@@ -279,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn any_key_closes_the_help_and_does_nothing_else() {
+    fn any_key_only_closes_help() {
         let mut app = gallery_app(3);
 
         assert!(!char_key(&mut app, '?'));
@@ -291,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn t_is_text_in_the_gallery_search() {
+    fn t_is_text_in_search() {
         let mut app = gallery_app(2);
         char_key(&mut app, '/');
 
@@ -301,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn t_is_no_key_in_the_gallery_and_the_fullscreen_view() {
+    fn t_is_no_key_outside_search() {
         for mut app in [gallery_app(2), fullscreen_app(2, 0)] {
             let mode = app.mode;
             app.graphics_out.take_bytes();
@@ -314,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_delete_asks_and_n_or_esc_cancel() {
+    fn n_or_esc_cancel_delete() {
         let mut app = fullscreen_app(3, 1);
 
         char_key(&mut app, 'd');
@@ -347,7 +344,6 @@ mod tests {
         assert_eq!(app.images.len(), 3);
     }
 
-    /// A temp directory with small files that the test can delete.
     fn deletable_files(names: &[&str]) -> (TempDir, Vec<PathBuf>) {
         let dir = tempfile::tempdir().unwrap();
         let paths = names
@@ -362,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn y_deletes_permanently_and_the_last_delete_quits() {
+    fn y_deletes_and_last_delete_quits() {
         let (_dir, paths) = deletable_files(&["a.jpg", "b.jpg"]);
         let mut app = gallery_app(0);
         app.images.clone_from(&paths);
@@ -382,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn y_in_the_trash_question_calls_the_trash_path_for_a_missing_file() {
+    fn y_in_trash_question_calls_trash() {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("kept.jpg");
         fs::write(&real, b"not an image").unwrap();

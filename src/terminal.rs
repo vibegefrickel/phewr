@@ -12,14 +12,13 @@ use std::time::{Duration, Instant};
 pub(crate) struct TerminalSession {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     restored: bool,
-    /// True when the session captured the mouse at the start. The restore releases it, also
-    /// when the run loop released it in between: a second release changes nothing.
+    /// True when the session captured the mouse at the start. A second release changes nothing.
     mouse: bool,
 }
 
 impl TerminalSession {
     /// Enter raw mode and the alternate screen. With `mouse`, the terminal reports clicks, drags
-    /// and the wheel as events. Without it, the terminal keeps its own selection and scrolling.
+    /// and the wheel.
     pub(crate) fn enter(mouse: bool) -> io::Result<Self> {
         enable_raw_mode()?;
         let mut output = stdout();
@@ -83,21 +82,18 @@ impl TerminalSession {
     }
 }
 
-/// The mouse modes that viewr needs: 1000 (press and release), 1002 (motion only while a button
-/// is held, for the drag) and 1006 (SGR coordinates, which crossterm parses). viewr leaves out
-/// 1003 (any motion), so a plain pointer move does not wake the run loop.
+/// 1000 (press and release), 1002 (motion while a button is held) and 1006 (SGR coordinates).
+/// Without 1003 (any motion), a plain pointer move does not wake the run loop.
 const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 
 /// The same modes off, in the reverse order.
 const MOUSE_OFF: &[u8] = b"\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
-/// Let the terminal report clicks, drags and the wheel, but not a plain pointer move.
 pub(crate) fn enable_mouse(out: &mut impl Write) -> io::Result<()> {
     out.write_all(MOUSE_ON)?;
     out.flush()
 }
 
-/// Give the mouse back to the terminal: its own selection and scrolling.
 pub(crate) fn disable_mouse(out: &mut impl Write) -> io::Result<()> {
     out.write_all(MOUSE_OFF)?;
     out.flush()
@@ -119,58 +115,57 @@ fn leave_terminal(output: &mut io::Stdout, mouse: bool) {
 impl Drop for TerminalSession {
     #[expect(
         clippy::let_underscore_must_use,
-        reason = "a panic or an early return is already on its way; restore is best effort"
+        reason = "restore is best effort during a panic or an early return"
     )]
     fn drop(&mut self) {
         let _ = self.restore();
     }
 }
 
-/// How long the start waits for the answer of the terminal to the Kitty probe.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// The answers of the terminal at the start: the cell size and the answers to the Kitty
-/// probes. `None` for an answer that did not come in time.
+/// The answers at the start. `None` for an answer that did not come in time.
 pub(crate) struct StartAnswers {
     pub(crate) cell_px: Option<(u32, u32)>,
     /// The bytes up to the end of the last Kitty answer that came in time.
     pub(crate) probe: Option<Vec<u8>>,
-    /// The Kitty answers that can still come late, as key presses: the owed answers that did
-    /// not come in time. Zero when every owed answer came, or when the answer to the device
-    /// attributes query came after them.
+    /// The owed Kitty answers that can still come late, as key presses. Zero when a later device
+    /// attributes answer came.
     pub(crate) late_answers: usize,
 }
 
-/// The primary device attributes query (DA1). Every terminal answers it, after the answers to
-/// the queries before it.
+/// The primary device attributes query (DA1). Every terminal answers it after the queries
+/// before it.
 const DEVICE_ATTRIBUTES_QUERY: &[u8] = b"\x1b[c";
 
-/// Send the cell size query, the Kitty `probe` and the device attributes query in one write,
-/// and wait for the cell size and for `answers` Kitty answers, so the start waits for one
-/// round trip instead of two.
+/// Send the cell size query, the Kitty `probe` and DA1 in one write, and wait for the cell size
+/// and for `answers` Kitty answers.
 ///
-/// A terminal answers in order, so the answer to the device attributes query ends the wait
-/// also when the terminal skips a Kitty answer, for example the answer to an animation frame
-/// that it does not know. Only a terminal that answers neither costs `PROBE_TIMEOUT` one time.
+/// A terminal answers in order. The DA1 answer ends the wait even when the terminal skips a
+/// Kitty answer. Only a terminal that answers neither costs `PROBE_TIMEOUT`.
 ///
-/// The answers must not reach crossterm, which would read them as key presses. The function
-/// runs before the first `event::poll` and reads the tty itself. A device attributes answer
-/// that comes after the read is no key press: crossterm keeps it as an internal event.
+/// The answers must not reach crossterm. It reads them as key presses. The function runs
+/// before the first `event::poll` and reads the tty itself.
 pub(crate) fn query_cell_size_and_probe(probe: &[u8], answers: usize) -> StartAnswers {
-    let mut sequence = CELL_SIZE_QUERY.to_vec();
-    sequence.extend_from_slice(probe);
-    sequence.extend_from_slice(DEVICE_ATTRIBUTES_QUERY);
+    let sequence = start_sequence(probe);
     let mut answer = Vec::new();
-    // After a timeout, the answers that came in time are in `answer`.
+    // After a timeout, `answer` holds the answers that came in time.
     query_terminal_into(&sequence, &mut answer, |answer| {
         start_answers_end(answer, answers)
     });
     start_answers(&answer, answers)
 }
 
-/// The length of the start answers in `answer`: the cell size and `answers` Kitty answers,
-/// once all are complete, in any order. The answer to the device attributes query ends them
-/// too, with every answer that came before it.
+/// The cell size query, the Kitty `probe` and DA1, in the order of the answers.
+fn start_sequence(probe: &[u8]) -> Vec<u8> {
+    let mut sequence = CELL_SIZE_QUERY.to_vec();
+    sequence.extend_from_slice(probe);
+    sequence.extend_from_slice(DEVICE_ATTRIBUTES_QUERY);
+    sequence
+}
+
+/// The length of the start answers once all are complete, in any order. The DA1 answer ends
+/// them early.
 fn start_answers_end(answer: &[u8], answers: usize) -> Option<usize> {
     if let Some(attributes) = device_attributes_end(answer) {
         let others = [
@@ -182,8 +177,6 @@ fn start_answers_end(answer: &[u8], answers: usize) -> Option<usize> {
     Some(cell_size_report_end(answer)?.max(string_terminators_end(answer, answers)?))
 }
 
-/// The answers in the bytes that the terminal sent at the start, when it owes `answers`
-/// Kitty answers.
 fn start_answers(answer: &[u8], answers: usize) -> StartAnswers {
     let received = string_terminator_ends(answer).count();
     let last_end = string_terminator_ends(answer).last();
@@ -200,7 +193,7 @@ fn start_answers(answer: &[u8], answers: usize) -> StartAnswers {
     }
 }
 
-/// The end of the answer to the device attributes query, `CSI ? <numbers> c`.
+/// The end of the DA1 answer, `CSI ? <numbers> c`.
 fn device_attributes_end(answer: &[u8]) -> Option<usize> {
     answer.windows(3).enumerate().find_map(|(start, head)| {
         if head != b"\x1b[?" {
@@ -214,8 +207,7 @@ fn device_attributes_end(answer: &[u8]) -> Option<usize> {
     })
 }
 
-/// The end of each answer that ends with the string terminator `ESC \`, such as the answer
-/// to a Kitty query.
+/// The end of each answer with the string terminator `ESC \`.
 fn string_terminator_ends(answer: &[u8]) -> impl Iterator<Item = usize> + '_ {
     answer
         .windows(2)
@@ -224,8 +216,7 @@ fn string_terminator_ends(answer: &[u8]) -> impl Iterator<Item = usize> + '_ {
         .map(|(start, _)| start + 2)
 }
 
-/// The length of the first `count` answers that end with the string terminator, once they are
-/// all there.
+/// The length of the first `count` answers with the string terminator, once all are there.
 fn string_terminators_end(answer: &[u8], count: usize) -> Option<usize> {
     match count.checked_sub(1) {
         Some(last) => string_terminator_ends(answer).nth(last),
@@ -233,28 +224,21 @@ fn string_terminators_end(answer: &[u8], count: usize) -> Option<usize> {
     }
 }
 
-/// Send `sequence` to the terminal and read until `end` finds the length of the complete
-/// answer, or `None` after `PROBE_TIMEOUT`.
 fn query_terminal_until(sequence: &[u8], end: impl Fn(&[u8]) -> Option<usize>) -> Option<Vec<u8>> {
     let mut answer = Vec::new();
     query_terminal_into(sequence, &mut answer, end)?;
     Some(answer)
 }
 
-/// Send `sequence` to the terminal and read into `answer` until `end` finds the length of the
-/// complete answer. `None` after `PROBE_TIMEOUT`, and `answer` keeps the bytes that came.
+/// Send `sequence` to the tty and read the answer into `answer`. `None` after `PROBE_TIMEOUT`.
 ///
-/// The read takes every byte that the tty holds, so a key pressed before the answer is lost.
-/// The caller asks only when the user does not type: at start, and after a resize when the
-/// terminal answered at start, so no timeout can block the loop.
+/// The read takes every byte of the tty, and a key typed before the answer is lost. The caller
+/// asks only at the start, and after a resize when the terminal answered at the start.
 fn query_terminal_into(
     sequence: &[u8],
     answer: &mut Vec<u8>,
     end: impl Fn(&[u8]) -> Option<usize>,
 ) -> Option<()> {
-    use rustix::event::{PollFd, PollFlags};
-    use std::io::Read;
-
     let mut tty = std::fs::File::options()
         .read(true)
         .write(true)
@@ -262,17 +246,28 @@ fn query_terminal_into(
         .ok()?;
     tty.write_all(sequence).ok()?;
     tty.flush().ok()?;
+    read_answer(&mut tty, answer, Instant::now() + PROBE_TIMEOUT, end)
+}
 
-    let deadline = Instant::now() + PROBE_TIMEOUT;
+/// Read into `answer` until `end` finds the complete answer. `None` at `deadline` or at the end
+/// of the input, and `answer` keeps the bytes that came.
+fn read_answer(
+    source: &mut (impl io::Read + std::os::fd::AsFd),
+    answer: &mut Vec<u8>,
+    deadline: Instant,
+    end: impl Fn(&[u8]) -> Option<usize>,
+) -> Option<()> {
+    use rustix::event::{PollFd, PollFlags};
+
     loop {
         let remaining = deadline.checked_duration_since(Instant::now())?;
         let timeout = rustix::event::Timespec::try_from(remaining).ok()?;
-        let mut fds = [PollFd::new(&tty, PollFlags::IN)];
+        let mut fds = [PollFd::new(source, PollFlags::IN)];
         if rustix::event::poll(&mut fds, Some(&timeout)).ok()? == 0 {
             return None;
         }
         let mut buf = [0_u8; 256];
-        let count = tty.read(&mut buf).ok()?;
+        let count = source.read(&mut buf).ok()?;
         if count == 0 {
             return None;
         }
@@ -284,28 +279,24 @@ fn query_terminal_into(
     }
 }
 
-/// The pixel size of one cell, as the terminal answers `CSI 16 t`. `None` when the terminal
-/// does not answer in time, or with something else.
+/// The cell size that the terminal answers to `CSI 16 t`.
 ///
-/// The window size (TIOCGWINSZ) includes the window padding of Ghostty, so its division gives
-/// a cell that is a fraction too tall, and a grid of 50 rows drifts by a cell. The terminal
-/// answers the query with its real cell size.
+/// The window size (TIOCGWINSZ) includes the Ghostty window padding. Its division gives a cell
+/// that is a fraction too tall, and a grid of 50 rows drifts by a cell.
 pub(crate) fn query_cell_pixel_size() -> Option<(u32, u32)> {
     query_terminal_until(CELL_SIZE_QUERY, cell_size_report_end)
         .as_deref()
         .and_then(parse_cell_size_report)
 }
 
-/// The cell size from the window size divided by the cell count, when the terminal does not
-/// answer the query.
+/// The cell size from the window size, when the terminal does not answer the query.
 pub(crate) fn window_cell_pixel_size() -> (u32, u32) {
     crossterm::terminal::window_size().map_or((8, 16), |ws| cell_pixel_size(&ws))
 }
 
-/// `CSI 16 t` asks for the pixel size of a cell. The answer is `CSI 6 ; height ; width t`.
+/// `CSI 16 t` asks for the cell size. The answer is `CSI 6 ; height ; width t`.
 const CELL_SIZE_QUERY: &[u8] = b"\x1b[16t";
 
-/// The length of the answer to `CELL_SIZE_QUERY` in `answer`, once its final `t` is there.
 fn cell_size_report_end(answer: &[u8]) -> Option<usize> {
     let start = answer.windows(3).position(|bytes| bytes == b"\x1b[6")?;
     let length = answer[start..].iter().position(|&byte| byte == b't')?;
@@ -322,11 +313,9 @@ fn parse_cell_size_report(answer: &[u8]) -> Option<(u32, u32)> {
     (width > 0 && height > 0).then_some((width, height))
 }
 
-/// The pixel size of one cell from a window size report, so that the tests need no terminal.
 fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
-    // A terminal under a multiplexer (tmux) or SSH can report 0 pixels with valid columns and
-    // rows. A zero report counts as unknown and gets conventional cell metrics. Else the
-    // division collapses to 1x1 and the thumbnails are a few pixels tall.
+    // tmux and SSH can report 0 pixels with valid columns and rows. A zero report gets the
+    // conventional cell metrics, not a 1x1 cell.
     let w = if ws.columns > 0 && ws.width > 0 {
         u32::from(ws.width) / u32::from(ws.columns)
     } else {
@@ -343,13 +332,17 @@ fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CELL_SIZE_QUERY, cell_pixel_size, cell_size_report_end, disable_mouse, enable_mouse,
-        parse_cell_size_report, start_answers, start_answers_end,
+        CELL_SIZE_QUERY, DEVICE_ATTRIBUTES_QUERY, cell_pixel_size, cell_size_report_end,
+        disable_mouse, enable_mouse, parse_cell_size_report, read_answer, start_answers,
+        start_answers_end, start_sequence,
     };
     use crossterm::terminal::WindowSize;
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
 
     #[test]
-    fn the_mouse_modes_are_press_drag_and_sgr_without_any_motion() {
+    fn mouse_modes_skip_motion() {
         let mut on = Vec::new();
         enable_mouse(&mut on).unwrap();
         assert_eq!(on, b"\x1b[?1000h\x1b[?1002h\x1b[?1006h");
@@ -362,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cell_size_query_and_its_answer_follow_xterm() {
+    fn cell_size_query_follows_xterm() {
         assert_eq!(CELL_SIZE_QUERY, b"\x1b[16t");
         // Ghostty and herdr answer 18x43 px cells like this.
         assert_eq!(parse_cell_size_report(b"\x1b[6;43;18t"), Some((18, 43)));
@@ -374,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn a_strange_or_empty_answer_gives_no_cell_size() {
+    fn bad_answer_gives_no_cell_size() {
         assert_eq!(parse_cell_size_report(b""), None);
         assert_eq!(parse_cell_size_report(b"\x1b[0n"), None);
         assert_eq!(parse_cell_size_report(b"\x1b[6;0;18t"), None);
@@ -383,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn the_read_stops_at_the_final_t_of_the_report() {
+    fn read_stops_at_final_t() {
         assert_eq!(cell_size_report_end(b"\x1b[6;43;18t"), Some(10));
         assert_eq!(cell_size_report_end(b"\x1b[6;43;18tj"), Some(10));
         assert_eq!(cell_size_report_end(b"\x1b[6;43;1"), None);
@@ -391,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn the_start_read_waits_for_both_answers_in_any_order() {
+    fn start_read_takes_any_order() {
         let cell = b"\x1b[6;43;18t".as_slice();
         let probe = b"\x1b_Gi=31;OK\x1b\\".as_slice();
         for answer in [[cell, probe].concat(), [probe, cell].concat()] {
@@ -417,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn the_start_read_waits_for_every_kitty_answer() {
+    fn start_read_waits_for_kitty_answers() {
         let cell = b"\x1b[6;43;18t".as_slice();
         let transfer = b"\x1b_Gi=31;OK\x1b\\".as_slice();
         let animation = b"\x1b_Gi=32;OK\x1b\\".as_slice();
@@ -440,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn the_device_attributes_answer_ends_the_read_without_a_missing_kitty_answer() {
+    fn da1_answer_ends_read() {
         let cell = b"\x1b[6;43;18t".as_slice();
         let transfer = b"\x1b_Gi=31;OK\x1b\\".as_slice();
         let attributes = b"\x1b[?62;22;52c".as_slice();
@@ -470,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn a_timeout_keeps_the_answer_that_came_in_time() {
+    fn timeout_keeps_early_answer() {
         let only_cell = start_answers(b"\x1b[6;43;18t", 1);
         assert_eq!(only_cell.cell_px, Some((18, 43)));
         assert_eq!(only_cell.probe, None);
@@ -495,19 +488,68 @@ mod tests {
     }
 
     #[test]
-    fn the_cell_size_divides_the_pixels_by_the_cells() {
+    fn cell_size_divides_pixels_by_cells() {
         assert_eq!(cell_pixel_size(&window(100, 50, 1000, 1100)), (10, 22));
     }
 
     #[test]
-    fn a_missing_pixel_report_gives_the_default_cell_size() {
+    fn missing_report_gives_default_size() {
         assert_eq!(cell_pixel_size(&window(100, 50, 0, 0)), (8, 16));
         assert_eq!(cell_pixel_size(&window(0, 0, 1000, 1100)), (8, 16));
         assert_eq!(cell_pixel_size(&window(100, 50, 0, 1100)), (8, 22));
     }
 
     #[test]
-    fn a_tiny_pixel_report_gives_at_least_one_pixel() {
+    fn tiny_report_gives_one_pixel() {
         assert_eq!(cell_pixel_size(&window(100, 50, 10, 10)), (1, 1));
+    }
+
+    #[test]
+    fn start_sequence_keeps_answer_order() {
+        let sequence = start_sequence(b"PROBE");
+        let probe_at = CELL_SIZE_QUERY.len();
+        assert!(sequence.starts_with(CELL_SIZE_QUERY));
+        assert_eq!(&sequence[probe_at..probe_at + 5], b"PROBE");
+        assert!(sequence.ends_with(DEVICE_ATTRIBUTES_QUERY));
+    }
+
+    #[test]
+    fn read_stops_at_answer_end() {
+        let (mut terminal, mut tty) = UnixStream::pair().unwrap();
+        terminal.write_all(b"\x1b[6;16;8tkey").unwrap();
+        let mut answer = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let read = read_answer(&mut tty, &mut answer, deadline, cell_size_report_end);
+        assert_eq!(read, Some(()));
+        assert_eq!(answer, b"\x1b[6;16;8t");
+    }
+
+    #[test]
+    fn read_keeps_partial_answer() {
+        let (mut terminal, mut tty) = UnixStream::pair().unwrap();
+        terminal.write_all(b"\x1b[6;16").unwrap();
+        drop(terminal);
+        let mut answer = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let read = read_answer(&mut tty, &mut answer, deadline, cell_size_report_end);
+        assert_eq!(read, None);
+        assert_eq!(answer, b"\x1b[6;16");
+    }
+
+    #[test]
+    fn read_gives_up_at_deadline() {
+        let (_terminal, mut tty) = UnixStream::pair().unwrap();
+        let mut answer = Vec::new();
+        let soon = Instant::now() + Duration::from_millis(5);
+        assert_eq!(
+            read_answer(&mut tty, &mut answer, soon, cell_size_report_end),
+            None
+        );
+        assert!(answer.is_empty());
+        let past = Instant::now();
+        assert_eq!(
+            read_answer(&mut tty, &mut answer, past, cell_size_report_end),
+            None
+        );
     }
 }

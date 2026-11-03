@@ -16,13 +16,12 @@ use ratatui::{
 use status::video_status_line;
 use status::{draw_status_row, fullscreen_status_line, gallery_status_line};
 
-/// Preferred width of the info panel, including its border.
+/// The preferred info panel width, with its border.
 const INFO_PANEL_WIDTH: u16 = 42;
 
-/// The status row at the bottom of the gallery, the fullscreen view and the video view.
 const STATUS_ROWS: u16 = 1;
 
-/// Draw the whole frame. `status` is a one-line note of the run loop, in place of the file facts.
+/// Draw the whole frame. `status` is a note of the run loop in place of the file facts.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     let area = frame.area();
     app.layout.screen = area;
@@ -41,8 +40,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     }
 }
 
-/// Reserve the right-hand column for the info panel when it is open.
-/// Very narrow terminals keep the full width.
+/// The right column for the open info panel. A very narrow terminal keeps the full width.
 pub(crate) fn split_info(area: Rect, app: &App) -> (Rect, Option<Rect>) {
     if !app.info_visible {
         return (area, None);
@@ -138,7 +136,7 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
     draw_thumbnail_cells(frame, app, grid_rect);
 }
 
-/// The rows above the status row. The grid and the image use all of them, without a frame.
+/// The rows above the status row.
 pub(crate) fn content_area(area: Rect) -> Rect {
     Rect {
         height: area.height.saturating_sub(STATUS_ROWS),
@@ -146,7 +144,6 @@ pub(crate) fn content_area(area: Rect) -> Rect {
     }
 }
 
-/// The status row at the bottom of `area`.
 pub(crate) fn status_area(area: Rect) -> Rect {
     Rect {
         y: area.y + content_area(area).height,
@@ -166,7 +163,7 @@ mod tests {
     use ratatui::style::{Color, Modifier};
     use std::path::PathBuf;
 
-    /// An app with `names` below `/photos`, as if a finished scan had listed them.
+    /// An app with `names` below `/photos`, as after a finished scan.
     pub(super) fn app_with(names: &[&str]) -> App {
         let mut app = App::new((8, 16), SharedImageList::new());
         app.images = names
@@ -179,7 +176,6 @@ mod tests {
         app
     }
 
-    /// Draw one frame and return the screen buffer with the symbols and the styles.
     pub(super) fn render_buffer(
         app: &mut App,
         status: Option<&str>,
@@ -191,7 +187,6 @@ mod tests {
         terminal.backend().buffer().clone()
     }
 
-    /// The rows of `buffer` as text.
     pub(super) fn screen_rows(buffer: &Buffer) -> Vec<String> {
         let area = buffer.area;
         (0..area.height)
@@ -203,7 +198,6 @@ mod tests {
             .collect()
     }
 
-    /// Draw one frame and return the screen as text, one line per row.
     pub(super) fn render(app: &mut App, status: Option<&str>, width: u16, height: u16) -> String {
         screen_rows(&render_buffer(app, status, width, height)).join("\n")
     }
@@ -222,7 +216,7 @@ mod tests {
         &buffer[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())]
     }
 
-    /// Fail when a cell sets a background, so the terminal background shows everywhere.
+    /// Fail when a cell sets a background.
     pub(super) fn assert_terminal_background(buffer: &Buffer) {
         let area = buffer.area;
         for y in area.y..area.bottom() {
@@ -233,8 +227,6 @@ mod tests {
         }
     }
 
-    /// Fail when the cell at `(x, y)` does not show `symbol` in the ANSI color `fg` with
-    /// `modifier`.
     pub(super) fn assert_symbol(
         buffer: &Buffer,
         (x, y): (u16, u16),
@@ -250,27 +242,22 @@ mod tests {
         );
     }
 
-    /// The last row of the screen: the status row.
     pub(super) fn status_row(screen: &str) -> &str {
         screen.lines().last().unwrap_or_default()
     }
 
-    /// Fail when the cell does not carry the terminal foreground and `modifier`.
     pub(super) fn assert_default_fg(cell: &Cell, modifier: Modifier) {
         assert_eq!((cell.fg, cell.modifier), (Color::Reset, modifier));
     }
 
-    /// Fail when the cell does not carry the ANSI color `fg` without a modifier.
     pub(super) fn assert_ansi(cell: &Cell, fg: Color) {
         assert_eq!((cell.fg, cell.modifier), (fg, Modifier::empty()));
     }
 
-    /// Fail with the whole screen when `screen` does not contain `needle`.
     pub(super) fn assert_shows(screen: &str, needle: &str) {
         assert!(screen.contains(needle), "missing {needle:?} in:\n{screen}");
     }
 
-    /// Fail with the whole screen when `screen` contains `needle`.
     pub(super) fn assert_hides(screen: &str, needle: &str) {
         assert!(
             !screen.contains(needle),
@@ -279,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn info_panel_lists_the_file_rows_of_the_hovered_image() {
+    fn info_panel_lists_file_rows() {
         let mut app = app_with(&["a.jpg"]);
         app.info_visible = true;
         let screen = render(&mut app, None, 120, 30);
@@ -299,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn info_panel_without_an_image_says_so() {
+    fn info_panel_without_image_says_so() {
         let mut app = app_with(&[]);
         app.info_visible = true;
         let screen = render(&mut app, None, 120, 30);
@@ -307,10 +294,29 @@ mod tests {
     }
 
     #[test]
-    fn info_panel_stays_closed_in_a_narrow_terminal() {
+    fn info_panel_closed_when_narrow() {
         let mut app = app_with(&["a.jpg"]);
         app.info_visible = true;
         let screen = render(&mut app, None, 50, 30);
         assert_hides(&screen, " Info ");
+    }
+
+    #[test]
+    fn info_panel_separates_sections() {
+        let mut app = app_with(&["orientation-6.png"]);
+        app.images = vec![crate::test_support::fixture("png/orientation-6.png")];
+        app.info_visible = true;
+        let screen = render(&mut app, None, 120, 30);
+        assert_shows(&screen, "File");
+        assert_shows(&screen, "EXIF");
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn fullscreen_video_shows_placeholder() {
+        let mut app = app_with(&["clip.mp4"]);
+        app.mode = crate::app::ViewMode::Fullscreen;
+        let screen = render(&mut app, None, 80, 24);
+        assert_shows(&screen, "video: Enter plays, p opens the mpv window");
     }
 }

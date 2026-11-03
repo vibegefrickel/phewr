@@ -1,5 +1,4 @@
-//! The images that the terminal stores for viewr, with their bytes, and the deletes that keep
-//! them below the budget.
+//! The images that the terminal stores for viewr, and the deletes that keep them in budget.
 
 use crate::app::App;
 use crate::encoder::kitty;
@@ -7,17 +6,16 @@ use lru::LruCache;
 use std::collections::HashSet;
 use std::io::{self, Write};
 
-/// The bytes of RGBA pixels that viewr leaves in the storage of the terminal, at most. Ghostty
-/// evicts images at 320 MB, and herdr stores each image twice, so the budget stays well below
-/// half of that. Above the budget, the grid deletes its oldest images that no cell shows.
+/// The RGBA bytes that viewr leaves in the terminal at most. Ghostty evicts at 320 MB, and herdr
+/// stores each image twice.
 pub(crate) const TERMINAL_IMAGE_BUDGET: usize = 128 * 1024 * 1024;
 
-/// The images that viewr transmitted and the terminal still stores, newest last, with their
-/// pixel bytes. A stored image can be placed again by its id (`a=p`) instead of a transmit.
+/// The images that the terminal stores, newest last, with their pixel bytes. A stored image
+/// can be placed again by its id (`a=p`).
 pub(crate) struct TerminalImages {
     stored: LruCache<u32, usize>,
     bytes: usize,
-    /// The bytes that the stored images may take. A test sets a small one.
+    /// A test sets a small budget.
     pub(crate) budget: usize,
 }
 
@@ -30,7 +28,7 @@ impl TerminalImages {
         }
     }
 
-    /// Record a transmitted image of `bytes` pixel bytes as the newest one.
+    /// Record a transmitted image as the newest one.
     pub(crate) fn insert(&mut self, id: u32, bytes: usize) {
         self.remove(id);
         self.stored.put(id, bytes);
@@ -47,12 +45,12 @@ impl TerminalImages {
         self.stored.contains(&id)
     }
 
-    /// The pixel bytes of the stored image `id`, 0 for an image that the terminal does not store.
+    /// The pixel bytes of the stored image `id`, or 0.
     pub(crate) fn bytes_of(&self, id: u32) -> usize {
         self.stored.peek(&id).copied().unwrap_or(0)
     }
 
-    /// Make `id` the newest image, because a cell shows it again.
+    /// Make `id` the newest image.
     pub(crate) fn touch(&mut self, id: u32) {
         self.stored.promote(&id);
     }
@@ -77,8 +75,8 @@ impl TerminalImages {
         self.bytes
     }
 
-    /// The oldest ids that must go so that the rest fits the budget. The ids in `keep` stay,
-    /// because a cell shows them. They are the newest ones, so the search stops at the first.
+    /// The oldest ids that must go to fit the budget. The ids in `keep` are the newest, and the
+    /// search stops at the first of them.
     fn over_budget(&mut self, keep: &HashSet<u32>) -> Vec<u32> {
         let mut dropped = Vec::new();
         while self.bytes > self.budget {
@@ -95,7 +93,7 @@ impl TerminalImages {
     }
 }
 
-/// Delete the image `id` in the terminal, if viewr transmitted it, and forget it.
+/// Delete the image `id` if the terminal stores it.
 pub(super) fn delete_image_to(app: &mut App, out: &mut impl Write, id: u32) -> io::Result<()> {
     if app.terminal_images.contains(id) {
         kitty::delete_image_to(out, id)?;
@@ -104,8 +102,7 @@ pub(super) fn delete_image_to(app: &mut App, out: &mut impl Write, id: u32) -> i
     Ok(())
 }
 
-/// Delete the oldest images that no visible cell shows, until the stored bytes fit the budget.
-/// A cell that shows one of them later transmits its thumbnail again from the cache.
+/// Delete the oldest hidden images until the stored bytes fit the budget.
 pub(super) fn trim_to_budget(
     app: &mut App,
     out: &mut impl Write,
@@ -122,7 +119,7 @@ mod tests {
     use super::TerminalImages;
 
     #[test]
-    fn the_terminal_images_count_their_bytes_newest_last() {
+    fn counts_bytes_newest_last() {
         let mut images = TerminalImages::new();
         assert_eq!(images.budget, super::TERMINAL_IMAGE_BUDGET);
         images.budget = 10;

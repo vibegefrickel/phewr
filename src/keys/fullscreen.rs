@@ -5,15 +5,14 @@ use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::io;
 
-/// Keys of the fullscreen view: navigation, zoom and pan, slideshow, info, delete.
 pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     match key.code {
         KeyCode::Char('?') => {
             app.graphics_delete_all()?;
             app.help_visible = true;
         }
-        // `Esc` stops a running slideshow first.
-        // `q` goes back in one press, because `enter_gallery` ends the slideshow.
+        // `Esc` stops a running slideshow first. `q` goes back in one press: `enter_gallery` ends
+        // the slideshow.
         KeyCode::Esc if app.slideshow_running() => app.stop_slideshow(),
         KeyCode::Char('q') | KeyCode::Esc => {
             app.graphics_delete_all()?;
@@ -59,13 +58,12 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
     Ok(false)
 }
 
-/// Tells if the fullscreen view shows an animated image, which needs the `video` feature.
+/// An animation plays only with the `video` feature.
 #[cfg(feature = "video")]
 fn on_animation(app: &App) -> bool {
     app.fullscreen_on_animation()
 }
 
-/// Without the `video` feature, no animation plays in the fullscreen view.
 #[cfg(not(feature = "video"))]
 fn on_animation(_app: &App) -> bool {
     false
@@ -78,7 +76,7 @@ mod tests {
     use crossterm::event::KeyCode;
 
     #[test]
-    fn h_and_j_step_back_and_k_and_l_step_forward() {
+    fn hj_step_back_and_kl_forward() {
         let mut app = fullscreen_app(4, 1);
         char_key(&mut app, 'k');
         assert_eq!(app.current, 2);
@@ -96,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_arrows_step_through_the_photos() {
+    fn arrows_step_through_photos() {
         let mut app = fullscreen_app(4, 1);
 
         press(&mut app, KeyCode::Right);
@@ -117,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_zoom_keys_and_pan_keys() {
+    fn zoom_and_pan_keys() {
         let mut app = fullscreen_app(3, 1);
 
         char_key(&mut app, '+');
@@ -156,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_slideshow_keys() {
+    fn slideshow_keys() {
         let mut app = fullscreen_app(3, 0);
 
         char_key(&mut app, 's');
@@ -193,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_info_help_quit_and_other_keys() {
+    fn info_help_quit_and_other_keys() {
         let mut app = fullscreen_app(2, 0);
         let info = app.info_visible;
 
@@ -211,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn q_goes_back_to_the_gallery_and_quits_only_from_there() {
+    fn q_returns_to_gallery_then_quits() {
         let mut app = fullscreen_app(2, 1);
         app.graphics_out.take_bytes();
 
@@ -228,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn q_stops_a_running_slideshow_and_goes_back_in_one_press() {
+    fn q_stops_slideshow_and_returns() {
         let mut app = fullscreen_app(2, 0);
         char_key(&mut app, 's');
         assert!(app.slideshow_running());

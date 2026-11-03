@@ -1,3 +1,5 @@
+//! viewr: a terminal image and video gallery for the Kitty graphics protocol.
+
 mod app;
 #[cfg(test)]
 mod bench;
@@ -36,23 +38,25 @@ mod yazi;
 use app::App;
 use clap::Parser;
 use cli::{Cli, initial_dir_from_paths, start_paths};
+use config::Config;
 use crossterm::{
     cursor, execute,
     terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
+use encoder::{KittyBackend, Loops};
 use image_list::SharedImageList;
 use run_loop::{LoopState, run};
 use scanner::canonicalize_or_self;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use terminal::{
-    TerminalSession, query_cell_pixel_size, query_cell_size_and_probe, window_cell_pixel_size,
+    StartAnswers, TerminalSession, query_cell_pixel_size, query_cell_size_and_probe,
+    window_cell_pixel_size,
 };
 use yazi::{reveal_in_yazi, run_briefly};
 
-/// Give the terminal back in the order of `TerminalSession::restore`. `disable_raw` runs
-/// between the mouse release and the screen leave. Every step runs, and the first error
-/// returns, so that a failed picture delete cannot leave the shell in raw mode.
+/// Give the terminal back in the order of `TerminalSession::restore`. Every step runs, and the
+/// first error returns. A failed picture delete cannot leave the shell in raw mode.
 fn release_terminal_to(
     out: &mut impl Write,
     mouse: bool,
@@ -85,11 +89,11 @@ fn release_terminal_to(
     first_error.map_or(Ok(()), Err)
 }
 
-/// Leave the alternate screen before the panic message prints, because the restore at the end
-/// of the session would discard text that the default hook writes to the alternate screen. Only
-/// a panic of the main thread releases the terminal: viewr survives a panic of a worker thread.
-/// A main thread panic ends the process after the message, so that the unwind does not restore
-/// the terminal a second time on the normal screen, where `CSI ?1049l` moves the cursor.
+/// Leave the alternate screen before the panic message prints. Otherwise the restore discards
+/// the message. A worker panic does not release the terminal.
+///
+/// A main thread panic ends the process after the message. The unwind must not restore the
+/// terminal again on the normal screen, where `CSI ?1049l` moves the cursor.
 fn install_panic_hook(mouse: bool) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -111,50 +115,130 @@ fn install_panic_hook(mouse: bool) {
     }));
 }
 
-fn main() -> io::Result<()> {
-    let cli = Cli::parse();
-    // The thumbnails and the terminal player start ffmpeg and ffprobe when PATH has them.
-    #[cfg(feature = "video")]
-    video::find_session_tools();
-    let paths = if cli.files.is_empty() {
+/// The paths of the command line, or the working directory.
+fn default_paths(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    if files.is_empty() {
         vec![PathBuf::from(".")]
     } else {
-        cli.files
-    };
-
-    if let Some(n) = cli.threads {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(n)
-            .build_global()
-            .map_err(|error| {
-                io::Error::other(format!("failed to configure thread pool: {error}"))
-            })?;
+        files
     }
+}
 
-    #[expect(
-        clippy::print_stderr,
-        reason = "the CLI reports a bad path before the TUI starts"
-    )]
-    for p in &paths {
+/// Without `--threads`, rayon takes one thread per core.
+fn configure_threads(threads: Option<usize>) -> io::Result<()> {
+    let Some(n) = threads else {
+        return Ok(());
+    };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .build_global()
+        .map_err(|error| io::Error::other(format!("failed to configure thread pool: {error}")))
+}
+
+/// The CLI error for the first missing path or unsupported file.
+fn check_paths(paths: &[PathBuf]) -> Result<(), String> {
+    for p in paths {
         let Ok(metadata) = std::fs::metadata(p) else {
-            eprintln!("{}: file not found", p.display());
-            std::process::exit(1);
+            return Err(format!("{}: file not found", p.display()));
         };
         if metadata.is_file() && !scanner::is_supported(p) {
-            eprintln!("{}: unsupported media format", p.display());
-            std::process::exit(1);
+            return Err(format!("{}: unsupported media format", p.display()));
         }
+    }
+    Ok(())
+}
+
+/// Print a CLI error before the TUI starts and end the process.
+#[expect(
+    clippy::print_stderr,
+    clippy::exit,
+    reason = "the CLI reports a bad path before the TUI starts"
+)]
+fn exit_with(message: &str) -> ! {
+    eprintln!("{message}");
+    std::process::exit(1);
+}
+
+fn apply_cli_overrides(config: &mut Config, interval: Option<f64>, info: bool) {
+    if let Some(interval) = interval {
+        config.slideshow_interval = interval;
+    }
+    if info {
+        config.info_panel = true;
+    }
+}
+
+struct StartProbe {
+    graphics: KittyBackend,
+    cell_px: Option<(u32, u32)>,
+    /// The Kitty answers that can still come late, as key presses.
+    late_answers: usize,
+}
+
+/// Probe the transfer, the loop path and the cell size in one round trip. Without a probe, the
+/// cell size query goes out alone.
+fn probe_terminal(
+    transfer_override: Option<&str>,
+    loops: Option<Loops>,
+    ssh: bool,
+    query_start: impl FnOnce(&[u8], usize) -> StartAnswers,
+    query_cell: impl FnOnce() -> Option<(u32, u32)>,
+) -> StartProbe {
+    let mut cell_px = None;
+    let mut asked_cell_size = false;
+    let mut late_answers = 0;
+    let graphics =
+        encoder::kitty::detect_backend(transfer_override, loops, ssh, |sequence, answers| {
+            let start = query_start(sequence, answers);
+            asked_cell_size = true;
+            cell_px = start.cell_px;
+            late_answers = start.late_answers;
+            start.probe
+        });
+    if !asked_cell_size {
+        cell_px = query_cell();
+    }
+    StartProbe {
+        graphics,
+        cell_px,
+        late_answers,
+    }
+}
+
+/// Point the app at the start folder: its zoom level, the cursor target and the slideshow.
+fn prepare_app(
+    app: &mut App,
+    graphics: KittyBackend,
+    initial_dir: &Path,
+    cursor_target: Option<PathBuf>,
+    slideshow: bool,
+) {
+    app.graphics = graphics;
+    let initial_dir = canonicalize_or_self(initial_dir);
+    app.initial_dir = Some(initial_dir.clone());
+    app.current_dir = Some(initial_dir.clone());
+    app.apply_folder_zoom(&initial_dir);
+    if let Some(target) = cursor_target {
+        app.place_cursor_after_scan(target);
+    }
+    app.slideshow_autostart = slideshow;
+}
+
+fn main() -> io::Result<()> {
+    let cli = Cli::parse();
+    // The thumbnails and the player start ffmpeg and ffprobe from PATH.
+    #[cfg(feature = "video")]
+    video::find_session_tools();
+    let paths = default_paths(cli.files);
+    configure_threads(cli.threads)?;
+    if let Err(message) = check_paths(&paths) {
+        exit_with(&message);
     }
 
     let config_paths = config::Paths::from_env();
     let mut config = config::load(&config_paths);
     decode::color::set_target(config.colorspace);
-    if let Some(interval) = cli.interval {
-        config.slideshow_interval = interval;
-    }
-    if cli.info {
-        config.info_panel = true;
-    }
+    apply_cli_overrides(&mut config, cli.interval, cli.info);
     let mut state = LoopState::new(&config);
 
     let (paths, cursor_target) = start_paths(paths);
@@ -166,53 +250,37 @@ fn main() -> io::Result<()> {
     install_panic_hook(config.mouse);
     let mut session = TerminalSession::enter(config.mouse)?;
 
-    // The cell size query goes out with the probe, in one round trip. Without a probe, it goes
-    // out alone.
-    let mut cell_size_answer = None;
-    let mut asked_cell_size = false;
-    // A probe without an answer in time can still get one: it then arrives as key presses.
-    let mut late_answers = 0;
     let loops = encoder::kitty::chosen_loops(
         std::env::var(encoder::kitty::LOOPS_OVERRIDE)
             .ok()
             .as_deref(),
         config.loops,
     );
-    let graphics = encoder::kitty::detect_backend(
+    let probe = probe_terminal(
         std::env::var(encoder::kitty::TRANSFER_OVERRIDE)
             .ok()
             .as_deref(),
         loops,
         encoder::kitty::is_ssh(),
-        |sequence, answers| {
-            let start = query_cell_size_and_probe(sequence, answers);
-            asked_cell_size = true;
-            cell_size_answer = start.cell_px;
-            late_answers = start.late_answers;
-            start.probe
-        },
+        query_cell_size_and_probe,
+        query_cell_pixel_size,
     );
-    if !asked_cell_size {
-        cell_size_answer = query_cell_pixel_size();
-    }
-    // A terminal that answers the cell size query at start gets it again after each resize.
-    state.cell_size_from_terminal = cell_size_answer.is_some();
-    let cell_px = cell_size_answer.unwrap_or_else(window_cell_pixel_size);
-    state.late_answers = keys::LateAnswerFilter::new(late_answers);
+    // A terminal that answers the cell size query gets it again after each resize.
+    state.cell_size_from_terminal = probe.cell_px.is_some();
+    let cell_px = probe.cell_px.unwrap_or_else(window_cell_pixel_size);
+    state.late_answers = keys::LateAnswerFilter::new(probe.late_answers);
     let mut app = App::with_config(cell_px, shared_list, &config, config_paths.state);
-    app.graphics = graphics;
-    let initial_dir = canonicalize_or_self(&initial_dir);
-    app.initial_dir = Some(initial_dir.clone());
-    app.current_dir = Some(initial_dir.clone());
-    app.apply_folder_zoom(&initial_dir);
-    if let Some(target) = cursor_target {
-        app.place_cursor_after_scan(target);
-    }
-    app.slideshow_autostart = cli.slideshow;
+    prepare_app(
+        &mut app,
+        probe.graphics,
+        &initial_dir,
+        cursor_target,
+        cli.slideshow,
+    );
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();
     let reveal_path = app.reveal_path();
-    // The drop cancels the loop jobs, so their ffmpeg runs end before the process does.
+    // The drop cancels the loop jobs. Their ffmpeg runs end before the process.
     drop(app);
     if run_result.is_ok() && restore_result.is_ok() {
         // viewr quits anyway. A yazi that does not answer keeps its old cursor.
@@ -228,10 +296,17 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::release_terminal_to;
+    use super::{
+        apply_cli_overrides, check_paths, default_paths, prepare_app, probe_terminal,
+        release_terminal_to,
+    };
+    use crate::config::Config;
+    use crate::encoder::{KittyBackend, Loops, Transfer};
+    use crate::terminal::StartAnswers;
+    use std::path::PathBuf;
 
     #[test]
-    fn the_release_deletes_pictures_then_leaves_the_alternate_screen() {
+    fn release_deletes_pictures_first() {
         let mut out = Vec::new();
         let mut raw_calls = 0;
         release_terminal_to(&mut out, true, || {
@@ -250,5 +325,100 @@ mod tests {
         let mut without_mouse = Vec::new();
         release_terminal_to(&mut without_mouse, false, || Ok(())).unwrap();
         assert!(!String::from_utf8_lossy(&without_mouse).contains("\x1b[?1006l"));
+    }
+
+    #[test]
+    fn no_files_mean_working_directory() {
+        assert_eq!(default_paths(Vec::new()), vec![PathBuf::from(".")]);
+        let files = vec![PathBuf::from("a.jpg"), PathBuf::from("b")];
+        assert_eq!(default_paths(files.clone()), files);
+    }
+
+    #[test]
+    fn check_paths_names_first_bad_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let photo = dir.path().join("photo.jpg");
+        let text = dir.path().join("notes.txt");
+        std::fs::write(&photo, b"").unwrap();
+        std::fs::write(&text, b"").unwrap();
+        let missing = dir.path().join("gone.jpg");
+        assert_eq!(
+            check_paths(&[dir.path().to_path_buf(), photo.clone()]),
+            Ok(())
+        );
+        assert_eq!(
+            check_paths(&[photo, missing.clone(), text.clone()]),
+            Err(format!("{}: file not found", missing.display()))
+        );
+        assert_eq!(
+            check_paths(&[text.clone(), missing]),
+            Err(format!("{}: unsupported media format", text.display()))
+        );
+    }
+
+    #[test]
+    fn flags_override_config() {
+        let mut config = Config::default();
+        apply_cli_overrides(&mut config, None, false);
+        assert_eq!(config, Config::default());
+        apply_cli_overrides(&mut config, Some(1.5), true);
+        assert_eq!(config.slideshow_interval, 1.5);
+        assert!(config.info_panel);
+    }
+
+    #[test]
+    fn probe_brings_cell_size() {
+        let probe = probe_terminal(
+            Some("direct"),
+            None,
+            false,
+            |sequence, answers| {
+                assert!(!sequence.is_empty());
+                assert_eq!(answers, 1, "only the animation probe goes out");
+                StartAnswers {
+                    cell_px: Some((10, 20)),
+                    probe: None,
+                    late_answers: 1,
+                }
+            },
+            || panic!("the cell size goes out with the probe"),
+        );
+        assert_eq!(probe.cell_px, Some((10, 20)));
+        assert_eq!(probe.late_answers, 1);
+        assert_eq!(probe.graphics.transfer(), Transfer::Direct);
+        assert_eq!(probe.graphics.loops(), Loops::Ticks);
+    }
+
+    #[test]
+    fn fixed_backend_asks_cell_size_alone() {
+        let probe = probe_terminal(
+            Some("png"),
+            Some(Loops::Animation),
+            false,
+            |_, _| panic!("a fixed backend sends no probe"),
+            || Some((7, 14)),
+        );
+        assert_eq!(probe.cell_px, Some((7, 14)));
+        assert_eq!(probe.late_answers, 0);
+        assert_eq!(probe.graphics.transfer(), Transfer::Png);
+        assert_eq!(probe.graphics.loops(), Loops::Animation);
+    }
+
+    #[test]
+    fn prepare_points_app_at_start_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = crate::test_support::gallery_app(3);
+        prepare_app(
+            &mut app,
+            KittyBackend::new(Transfer::TempFile),
+            dir.path(),
+            Some(dir.path().join("photo.jpg")),
+            true,
+        );
+        let canonical = dir.path().canonicalize().unwrap();
+        assert_eq!(app.graphics.transfer(), Transfer::TempFile);
+        assert_eq!(app.initial_dir.as_deref(), Some(canonical.as_path()));
+        assert_eq!(app.current_dir.as_deref(), Some(canonical.as_path()));
+        assert!(app.slideshow_autostart);
     }
 }

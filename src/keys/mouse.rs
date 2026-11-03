@@ -1,5 +1,5 @@
 //! The mouse: the clicks, the wheel and the drag, routed like the keys. An overlay wins over the
-//! view mode. A click on the status row opens the help, a click on the info panel closes it.
+//! view mode.
 
 use crate::app::{App, Drag, ViewMode};
 use crate::ui;
@@ -8,11 +8,10 @@ use ratatui::layout::{Position, Rect};
 use std::io;
 use std::time::Instant;
 
-/// The part of the fullscreen width at each side where a click steps to the neighbor.
+/// The share of the fullscreen width at each side where a click steps to the neighbor.
 const EDGE_SHARE: u16 = 6;
 
-/// Route a mouse event: the overlays (help, delete question) win over the view mode. `now` is
-/// the clock of the double-click.
+/// Route a mouse event. `now` is the double-click clock.
 pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent, now: Instant) -> io::Result<bool> {
     let at = Position::new(mouse.column, mouse.row);
     if app.help_visible {
@@ -41,7 +40,7 @@ fn is_press(kind: MouseEventKind) -> bool {
     matches!(kind, MouseEventKind::Down(_))
 }
 
-/// The areas of the view in the last draw: the content, the status row and the info panel.
+/// The areas of the last draw.
 struct Regions {
     content: Rect,
     status: Rect,
@@ -57,8 +56,8 @@ fn regions(app: &App) -> Regions {
     }
 }
 
-/// A left click on the status row or the info panel, which every view shares. True when the
-/// click was one of those.
+/// A left click on the status row opens the help, on the info panel it closes the panel.
+/// Returns `true` for such a click.
 fn shared_click(app: &mut App, regions: &Regions, at: Position) -> io::Result<bool> {
     if regions.status.contains(at) {
         app.graphics_delete_all()?;
@@ -91,9 +90,8 @@ fn gallery_mouse(app: &mut App, mouse: MouseEvent, at: Position, now: Instant) -
         }
         MouseEventKind::ScrollUp if shift => app.thumb_zoom_in(),
         MouseEventKind::ScrollDown if shift => app.thumb_zoom_out(),
-        // macOS can send Shift+wheel as a horizontal wheel without the SHIFT flag. The side
-        // depends on the natural scrolling setting. A sideways trackpad swipe sends the same
-        // events and also changes the size.
+        // macOS can send Shift+wheel as a horizontal wheel without the SHIFT flag. The side depends on
+        // the natural scrolling setting. A sideways trackpad swipe changes the size too.
         MouseEventKind::ScrollRight => app.thumb_zoom_in(),
         MouseEventKind::ScrollLeft => app.thumb_zoom_out(),
         MouseEventKind::ScrollUp => scroll_grid(app, -1),
@@ -103,7 +101,6 @@ fn gallery_mouse(app: &mut App, mouse: MouseEvent, at: Position, now: Instant) -
     Ok(false)
 }
 
-/// The wheel scrolls the grid by one row. A scroll redraws the pictures.
 fn scroll_grid(app: &mut App, rows: isize) {
     let before = app.gallery.scroll_offset;
     app.gallery.scroll_rows(rows);
@@ -113,8 +110,8 @@ fn scroll_grid(app: &mut App, rows: isize) {
     }
 }
 
-/// A click puts the cursor on the cell. A double-click opens it: a folder switches the grid,
-/// a file opens the fullscreen view or the player. A click on a gap breaks a double-click.
+/// A click puts the cursor on the cell, and a double-click opens it. A click on a gap breaks a
+/// double-click.
 fn gallery_click(app: &mut App, at: Position, now: Instant) -> io::Result<()> {
     let Some(position) = select_cell(app, at) else {
         app.mouse.last_click = None;
@@ -132,7 +129,7 @@ fn gallery_click(app: &mut App, at: Position, now: Instant) -> io::Result<()> {
     Ok(())
 }
 
-/// A right click on a cell shows its info panel. The panel stays open and follows the cursor.
+/// A right click on a cell opens the info panel. The panel follows the cursor.
 fn gallery_right_click(app: &mut App, at: Position) -> io::Result<()> {
     if select_cell(app, at).is_some() && !app.info_visible {
         app.graphics_delete_all()?;
@@ -141,8 +138,8 @@ fn gallery_right_click(app: &mut App, at: Position) -> io::Result<()> {
     Ok(())
 }
 
-/// Put the cursor on the cell under `at`. A click ends the typing of a search and keeps the
-/// filter, like Enter. The position in the filtered list, or `None` on a gap.
+/// Put the cursor on the cell under `at`. A click ends the search typing and keeps the filter.
+/// `None` on a gap.
 fn select_cell(app: &mut App, at: Position) -> Option<usize> {
     let position = app.gallery.cell_at(at.x, at.y)?;
     app.gallery.search_active = false;
@@ -183,8 +180,7 @@ fn fullscreen_mouse(app: &mut App, mouse: MouseEvent, at: Position) -> io::Resul
     Ok(false)
 }
 
-/// Move the zoomed image with the mouse: the picture follows the pointer, one cell of drag
-/// moves it by one cell. The pan fraction is the drag in pixels over the pan range.
+/// Move the zoomed image with the pointer: one cell of drag moves it by one cell.
 fn drag_pan(app: &mut App, at: Position) {
     let Some(drag) = app.mouse.drag.as_mut() else {
         return;
@@ -202,12 +198,11 @@ fn drag_pan(app: &mut App, at: Position) {
     app.pan_fraction(fx, fy);
 }
 
-/// A move in pixels as a share of the pan range. No range, no pan.
 fn share(pixels: f64, range: f64) -> f64 {
     if range > 0.0 { pixels / range } else { 0.0 }
 }
 
-/// A click near the left edge steps back, near the right edge forward. The middle does nothing.
+/// A click near the left edge steps back, near the right edge forward.
 fn edge_step(app: &mut App, content: Rect, at: Position) {
     let edge = (content.width / EDGE_SHARE).max(1);
     if at.x < content.x + edge {
@@ -220,10 +215,8 @@ fn edge_step(app: &mut App, content: Rect, at: Position) {
     app.slideshow_touch();
 }
 
-/// The player: a click on the picture does nothing, a click beside it or a right click goes
-/// back like `q`. The wheel does nothing: the player has no seek, and a trackpad swipe would
-/// start ffmpeg again for each step. The status row and the info panel act as in the other
-/// views.
+/// A click on the picture does nothing. A click beside it or a right click goes back like `q`.
+/// The wheel does nothing: the player has no seek.
 #[cfg(feature = "video")]
 fn video_mouse(app: &mut App, mouse: MouseEvent, at: Position) -> io::Result<bool> {
     use super::video::leave_player;
@@ -238,8 +231,7 @@ fn video_mouse(app: &mut App, mouse: MouseEvent, at: Position) -> io::Result<boo
     Ok(false)
 }
 
-/// The cells of the video frame, as `render_video_frame_to` places it. Before the first frame,
-/// the whole box counts as the picture, so an early click does not leave.
+/// The cells of the video frame. Before the first frame, the whole box counts.
 #[cfg(feature = "video")]
 fn video_picture(app: &App) -> Rect {
     let frame = app
@@ -254,389 +246,4 @@ fn video_picture(app: &App) -> Rect {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::app::ViewMode;
-    use crate::app::mouse::DOUBLE_CLICK;
-    use crate::config::Config;
-    use crate::run_loop::LoopState;
-    use crate::test_support::{
-        char_key, click, click_at, click_cell, draw_frame, fullscreen_app, gallery_app,
-        gallery_app_with, mouse, mouse_at, mouse_cell, text, wait_until,
-    };
-    use crate::ui;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
-    use std::fs;
-    use std::time::{Duration, Instant};
-
-    const LEFT: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
-    const RIGHT: MouseEventKind = MouseEventKind::Down(MouseButton::Right);
-
-    #[test]
-    fn a_click_selects_the_cell_and_a_double_click_opens_it() {
-        let mut app = gallery_app(9);
-        let start = Instant::now();
-
-        assert!(!click_cell(&mut app, 4, start));
-        assert_eq!(app.gallery.cursor, 4);
-        assert_eq!(app.mode, ViewMode::Gallery);
-
-        let late = start + DOUBLE_CLICK + Duration::from_millis(1);
-        click_cell(&mut app, 4, late);
-        assert_eq!(
-            app.mode,
-            ViewMode::Gallery,
-            "a slow second click only selects"
-        );
-
-        click_cell(&mut app, 4, late + Duration::from_millis(100));
-        assert_eq!(app.mode, ViewMode::Fullscreen);
-        assert_eq!(app.current, 4);
-        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
-    }
-
-    #[test]
-    fn a_double_click_on_another_cell_only_selects_and_a_gap_does_nothing() {
-        let mut app = gallery_app(9);
-        let start = Instant::now();
-        click_cell(&mut app, 1, start);
-        click_cell(&mut app, 2, start + Duration::from_millis(50));
-        assert_eq!(app.gallery.cursor, 2);
-        assert_eq!(app.mode, ViewMode::Gallery);
-
-        click(&mut app, (0, 0));
-        assert_eq!(app.gallery.cursor, 2, "the gap at the edge");
-
-        click_cell(&mut app, 4, start + Duration::from_millis(100));
-        click_at(&mut app, (0, 0), start + Duration::from_millis(150));
-        click_cell(&mut app, 4, start + Duration::from_millis(200));
-        assert_eq!(
-            app.mode,
-            ViewMode::Gallery,
-            "a gap between two clicks breaks the pair"
-        );
-        assert!(!mouse(&mut app, MouseEventKind::Moved, (5, 5)));
-        assert!(!app.needs_render);
-    }
-
-    #[test]
-    fn a_click_ends_the_search_typing_and_keeps_the_filter() {
-        let mut app = gallery_app(9);
-        char_key(&mut app, '/');
-        char_key(&mut app, '0');
-        wait_until(|| {
-            app.poll_filter();
-            !app.has_pending_work()
-        });
-        assert!(app.gallery.search_active);
-
-        click_cell(&mut app, 0, Instant::now());
-        assert!(!app.gallery.search_active);
-        assert_eq!(app.gallery.search_query, "0");
-    }
-
-    #[test]
-    fn a_double_click_walks_into_a_folder_and_back_through_the_parent_entry() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(temp.path()).unwrap();
-        fs::create_dir(root.join("sub")).unwrap();
-        fs::write(root.join("sub").join("photo.png"), b"synthetic").unwrap();
-        fs::write(root.join("sub").join("other.png"), b"synthetic").unwrap();
-        let mut app = gallery_app(0);
-        app.switch_to_dir(&root);
-        wait_until(|| {
-            app.refresh_from_scanner();
-            !app.is_scanning()
-        });
-        assert_eq!(app.filenames, ["..", "sub"]);
-        let start = Instant::now();
-
-        click_cell(&mut app, 1, start);
-        assert_eq!(app.mode, ViewMode::Gallery);
-        click_cell(&mut app, 1, start + Duration::from_millis(10));
-        assert_eq!(app.current_dir.as_deref(), Some(root.join("sub").as_path()));
-        wait_until(|| {
-            app.refresh_from_scanner();
-            !app.is_scanning()
-        });
-        assert_eq!(app.mode, ViewMode::Gallery);
-        assert_eq!(app.filenames, ["..", "other.png", "photo.png"]);
-
-        let again = start + Duration::from_secs(1);
-        click_cell(&mut app, 0, again);
-        assert_eq!(app.gallery.cursor, 0);
-        click_cell(&mut app, 0, again + Duration::from_millis(10));
-        assert_eq!(app.current_dir.as_deref(), Some(root.as_path()));
-        wait_until(|| {
-            app.refresh_from_scanner();
-            !app.is_scanning()
-        });
-        assert_eq!(app.current_dir.as_deref(), Some(root.as_path()));
-        assert_eq!(app.gallery.cursor, 1, "the cursor is on sub");
-    }
-
-    #[test]
-    fn the_wheel_scrolls_one_row_and_shift_or_sideways_zooms_the_grid() {
-        let mut app = gallery_app(9);
-        assert_eq!(app.gallery.visible_rows, 2);
-
-        mouse(&mut app, MouseEventKind::ScrollDown, (10, 5));
-        assert_eq!(app.gallery.scroll_offset, 1);
-        assert_eq!(app.gallery.cursor, 3, "the cursor follows into the screen");
-        assert!(app.needs_render);
-        app.needs_render = false;
-        mouse(&mut app, MouseEventKind::ScrollDown, (10, 5));
-        assert_eq!(
-            app.gallery.scroll_offset, 1,
-            "the last row stays at the bottom"
-        );
-        assert!(!app.needs_render);
-        mouse(&mut app, MouseEventKind::ScrollUp, (10, 5));
-        assert_eq!(app.gallery.scroll_offset, 0);
-        assert_eq!(app.gallery.cursor, 3, "still on the screen, so it stays");
-
-        let rows = app.gallery.zoom_rows;
-        let now = Instant::now();
-        mouse_at(
-            &mut app,
-            MouseEventKind::ScrollDown,
-            (10, 5),
-            KeyModifiers::SHIFT,
-            now,
-        );
-        assert_eq!(
-            app.gallery.zoom_rows,
-            rows + 1,
-            "Shift+wheel down: smaller cells"
-        );
-        mouse_at(
-            &mut app,
-            MouseEventKind::ScrollUp,
-            (10, 5),
-            KeyModifiers::SHIFT,
-            now,
-        );
-        assert_eq!(app.gallery.zoom_rows, rows);
-        mouse(&mut app, MouseEventKind::ScrollLeft, (10, 5));
-        assert_eq!(app.gallery.zoom_rows, rows + 1);
-        mouse(&mut app, MouseEventKind::ScrollRight, (10, 5));
-        assert_eq!(app.gallery.zoom_rows, rows);
-        assert_eq!(app.gallery.scroll_offset, 0, "a zoom does not scroll");
-    }
-
-    #[test]
-    fn a_right_click_shows_the_info_panel_of_the_cell_and_keeps_it_open() {
-        let mut app = gallery_app(9);
-        mouse_cell(&mut app, RIGHT, 5);
-        assert_eq!(app.gallery.cursor, 5);
-        assert!(app.info_visible);
-        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
-
-        mouse_cell(&mut app, RIGHT, 2);
-        assert_eq!(app.gallery.cursor, 2);
-        assert!(app.info_visible);
-        assert!(app.graphics_out.take_bytes().is_empty());
-
-        mouse(&mut app, RIGHT, (0, 0));
-        assert_eq!(app.gallery.cursor, 2, "a right click on a gap does nothing");
-    }
-
-    #[test]
-    fn a_click_on_the_status_row_opens_the_help_and_any_click_closes_it() {
-        let mut app = gallery_app(9);
-        draw_frame(&mut app, 120, 24);
-        let status = ui::status_area(app.layout.screen);
-
-        click(&mut app, (status.x + 3, status.y));
-        assert!(app.help_visible);
-        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
-
-        mouse(&mut app, MouseEventKind::ScrollDown, (10, 5));
-        assert!(app.help_visible, "the wheel keeps the help");
-        mouse(&mut app, RIGHT, (10, 5));
-        assert!(!app.help_visible);
-        assert!(app.needs_render);
-    }
-
-    #[test]
-    fn a_click_on_the_info_panel_closes_it() {
-        let mut app = gallery_app(9);
-        app.info_visible = true;
-        draw_frame(&mut app, 120, 24);
-        let (_, info) = ui::split_info(app.layout.screen, &app);
-        let info = info.unwrap();
-
-        click(&mut app, (info.x + 2, info.y + 2));
-        assert!(!app.info_visible);
-        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
-    }
-
-    #[test]
-    fn a_click_cancels_the_delete_question_and_never_deletes() {
-        let mut app = fullscreen_app(3, 1);
-        char_key(&mut app, 'd');
-        assert!(app.pending_delete.is_some());
-
-        mouse(&mut app, MouseEventKind::ScrollUp, (10, 5));
-        assert!(app.pending_delete.is_some(), "the wheel keeps the question");
-        click(&mut app, (10, 5));
-        assert!(app.pending_delete.is_none());
-        assert_eq!(app.images.len(), 3);
-        assert_eq!(app.mode, ViewMode::Fullscreen);
-    }
-
-    #[test]
-    fn the_fullscreen_wheel_zooms_and_a_drag_pans() {
-        let mut app = fullscreen_app(3, 1);
-        draw_frame(&mut app, 120, 24);
-        app.loaded = Some(image::RgbaImage::new(4000, 1000).into());
-        app.needs_render = false;
-
-        mouse(&mut app, MouseEventKind::ScrollUp, (60, 10));
-        assert!(app.zoom > 1.0);
-        app.needs_render = false;
-
-        mouse(&mut app, LEFT, (60, 10));
-        assert!(app.mouse.drag.is_some());
-        mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), (50, 12));
-        assert!(app.needs_render, "the drag pans");
-        assert!(
-            app.pan_position().0 > 0.5,
-            "a drag to the left shows more of the right side"
-        );
-        mouse(&mut app, MouseEventKind::Up(MouseButton::Left), (115, 12));
-        assert_eq!(app.current, 1, "a release after a drag is no edge click");
-        assert!(app.mouse.drag.is_none());
-
-        mouse(&mut app, MouseEventKind::ScrollDown, (60, 10));
-        assert!((app.zoom - 1.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn an_edge_click_steps_and_the_middle_or_a_zoomed_view_does_not() {
-        let mut app = fullscreen_app(4, 1);
-        draw_frame(&mut app, 120, 24);
-
-        click(&mut app, (5, 10));
-        assert_eq!(app.current, 0);
-        click(&mut app, (115, 10));
-        assert_eq!(app.current, 1);
-        click(&mut app, (60, 10));
-        assert_eq!(app.current, 1);
-
-        mouse(&mut app, MouseEventKind::ScrollUp, (60, 10));
-        click(&mut app, (115, 10));
-        assert_eq!(app.current, 1, "a zoomed view pans, it does not step");
-    }
-
-    #[test]
-    fn a_right_click_in_the_fullscreen_view_toggles_the_info_panel() {
-        let mut app = fullscreen_app(3, 1);
-        mouse(&mut app, RIGHT, (10, 10));
-        assert!(app.info_visible);
-        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
-        mouse(&mut app, RIGHT, (10, 10));
-        assert!(!app.info_visible);
-    }
-
-    #[cfg(feature = "video")]
-    #[test]
-    fn the_player_ignores_a_click_and_the_wheel_and_leaves_on_a_right_click() {
-        use crate::player::Player;
-        use crate::test_support::video::{clip_info, fake_decoder, shared, video_app};
-        use std::path::Path;
-
-        let mut app = video_app();
-        draw_frame(&mut app, 120, 24);
-        let content = ui::content_area(app.layout.screen);
-        let mut info = clip_info();
-        info.duration = 60.0;
-        let decoder = fake_decoder(info);
-        app.video = Some(
-            Player::open(
-                shared(&decoder),
-                Path::new("/bin/ffmpeg"),
-                Path::new("/videos/clip.mp4"),
-                (64, 48),
-                &[],
-                true,
-            )
-            .unwrap(),
-        );
-
-        click(&mut app, (content.width / 2, content.height / 2));
-        assert!(app.video.as_ref().unwrap().playing(), "no pause");
-        mouse(&mut app, MouseEventKind::ScrollDown, (10, 10));
-        mouse(&mut app, MouseEventKind::ScrollUp, (10, 10));
-        assert_eq!(decoder.starts().len(), 1, "no seek");
-        assert_eq!(app.mode, ViewMode::Video);
-        assert!(app.video.is_some());
-
-        mouse(&mut app, RIGHT, (10, 10));
-        assert_eq!(app.mode, ViewMode::Gallery);
-        assert!(app.video.is_none());
-        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
-    }
-
-    #[cfg(feature = "video")]
-    #[test]
-    fn a_click_on_the_status_row_of_the_player_opens_the_help() {
-        use crate::test_support::video::video_app;
-
-        let mut app = video_app();
-        draw_frame(&mut app, 120, 24);
-        let status = ui::status_area(app.layout.screen);
-        click(&mut app, (3, status.y));
-        assert_eq!(app.mode, ViewMode::Video);
-        assert!(app.help_visible);
-    }
-
-    #[cfg(feature = "video")]
-    #[test]
-    fn a_click_beside_the_video_frame_goes_back_like_q() {
-        use crate::player::Player;
-        use crate::test_support::video::{clip_info, fake_decoder, shared, video_app};
-        use std::path::Path;
-
-        let mut app = video_app();
-        draw_frame(&mut app, 120, 24);
-        let decoder = fake_decoder(clip_info());
-        let mut player = Player::open(
-            shared(&decoder),
-            Path::new("/bin/ffmpeg"),
-            Path::new("/videos/clip.mp4"),
-            (64, 48),
-            &[],
-            true,
-        )
-        .unwrap();
-        // A portrait frame leaves wide bars at both sides.
-        player.current_frame = crate::player::Frame::new((9, 16), false, vec![0; 9 * 16 * 3]);
-        app.video = Some(player);
-        let rect = app.image_rect;
-        let middle = (rect.x + rect.width / 2, rect.y + rect.height / 2);
-
-        click(&mut app, middle);
-        assert!(
-            app.video.as_ref().unwrap().playing(),
-            "a click on the picture does nothing"
-        );
-        assert_eq!(app.mode, ViewMode::Video);
-        click(&mut app, (rect.x + 1, middle.1));
-        assert_eq!(app.mode, ViewMode::Gallery);
-        assert!(app.video.is_none());
-    }
-
-    #[test]
-    fn without_the_mouse_key_the_loop_never_captures() {
-        let config = Config {
-            mouse: false,
-            ..Config::default()
-        };
-        let state = LoopState::new(&config);
-        assert!(!state.mouse);
-        assert!(!state.mouse_captured);
-        let mut app = gallery_app_with(9, &config);
-        click_cell(&mut app, 4, Instant::now());
-        assert_eq!(app.gallery.cursor, 4, "the handler itself still works");
-    }
-}
+mod tests;

@@ -1,8 +1,6 @@
-//! The large icons of the grid cells: a picture for an image that loads, a play triangle for
-//! a video, a folder, and two dots for the parent folder. They are octant blocks (2x4 dots per
-//! cell), which Ghostty draws itself, in a terminal color. A cell too small for an icon of two
-//! rows gets the old one-cell symbol. `stamp_play` draws the play triangle into the pixels of
-//! the still thumbnail of a video or an animation, because Kitty draws a picture above text.
+//! The large icons of the grid cells, in octant blocks (2x4 dots per cell) that Ghostty draws
+//! itself. A cell too small for an icon of two rows gets a one-cell symbol. `stamp_play` draws
+//! the play triangle into the pixels of a still: Kitty draws a picture above the text.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -11,11 +9,10 @@ use ratatui::symbols::Marker;
 use ratatui::widgets::Widget;
 use ratatui::widgets::canvas::{Canvas, Painter, Shape};
 
-/// The share of the cell height that an icon takes.
 const ICON_HEIGHT_SHARE: f64 = 0.3;
-/// The smallest icon in rows. A smaller cell gets the one-cell symbol.
+/// A smaller cell gets the one-cell symbol.
 const MIN_ICON_ROWS: u16 = 2;
-/// The dots of one octant cell: 2 across, 4 down.
+/// The dots of one octant cell.
 const DOTS: (u16, u16) = (2, 4);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +27,6 @@ pub(crate) enum Icon {
 }
 
 impl Icon {
-    /// The one-cell symbol for a cell too small for the shape.
     pub(crate) const fn symbol(self) -> &'static str {
         match self {
             Self::Loading => "\u{25cc}",
@@ -41,7 +37,7 @@ impl Icon {
     }
 
     /// True when the point `(u, v)` of the square from -1 to 1 belongs to the shape. `v` grows
-    /// downward, like the rows.
+    /// downward.
     pub(crate) fn covers(self, u: f64, v: f64) -> bool {
         match self {
             Self::Loading => picture_covers(u, v),
@@ -57,7 +53,7 @@ impl Icon {
     }
 }
 
-/// A landscape photo: a frame, a sun at the top right and two mountains.
+/// A landscape photo: a frame, a sun and two mountains.
 fn picture_covers(u: f64, v: f64) -> bool {
     let outer = u.abs() <= 0.95 && v.abs() <= 0.75;
     let inner = u.abs() <= 0.78 && v.abs() <= 0.58;
@@ -73,9 +69,8 @@ fn picture_covers(u: f64, v: f64) -> bool {
     sun || big_mountain || small_mountain
 }
 
-/// Draw the play triangle into the middle of `image`: white with a dark edge, so it shows on a
-/// light and on a dark picture. The box is a square of `ICON_HEIGHT_SHARE` of the image height.
-/// The loop frames of the cell replace the stamped still, so the stamp means "not playing yet".
+/// Draw a white play triangle with a dark edge into the middle of `image`. The loop frames
+/// replace the still, and the stamp means "not playing yet".
 pub(crate) fn stamp_play(image: &mut image::RgbaImage) {
     const FILL: [u8; 4] = [255, 255, 255, 230];
     const EDGE: [u8; 4] = [0, 0, 0, 140];
@@ -117,9 +112,8 @@ fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
     ]
 }
 
-/// The box of the icon in the thumbnail area `thumb`: a square in pixels, about 30 % of the
-/// height of `thumb`, centered. `None` when `thumb` is too small for two rows, or the box would
-/// not fit.
+/// The icon box in `thumb`: a square in pixels, 30 % of the height, centered. `None` when it
+/// does not fit or has fewer than two rows.
 pub(crate) fn icon_rect(thumb: Rect, cell_px: (u32, u32)) -> Option<Rect> {
     let rows = (f64::from(thumb.height) * ICON_HEIGHT_SHARE).round() as u16;
     if rows < MIN_ICON_ROWS || cell_px.0 == 0 {
@@ -133,7 +127,7 @@ pub(crate) fn icon_rect(thumb: Rect, cell_px: (u32, u32)) -> Option<Rect> {
     Some(crate::gallery::centered(thumb, cols, rows))
 }
 
-/// Draw `icon` into `area` of `buf` in the foreground color of `style`.
+/// Draw `icon` into `area` in the foreground color of `style`.
 pub(crate) fn draw_icon(buf: &mut Buffer, area: Rect, icon: Icon, style: Style) {
     let color = style.fg.unwrap_or(Color::Reset);
     let shape = IconShape {
@@ -149,7 +143,6 @@ pub(crate) fn draw_icon(buf: &mut Buffer, area: Rect, icon: Icon, style: Style) 
         .render(area, buf);
 }
 
-/// One icon on the dot grid of its area.
 struct IconShape {
     icon: Icon,
     dots: (u16, u16),
@@ -183,7 +176,7 @@ mod tests {
     const CELL_PX: (u32, u32) = (18, 43);
 
     #[test]
-    fn the_icon_box_is_square_in_pixels_and_centered() {
+    fn icon_box_is_square_and_centered() {
         let cell = Rect::new(10, 5, 30, 10);
         let icon = icon_rect(cell, CELL_PX).unwrap();
         assert_eq!(icon.height, 3);
@@ -193,14 +186,14 @@ mod tests {
     }
 
     #[test]
-    fn a_small_cell_has_no_icon_box() {
+    fn small_cell_has_no_icon_box() {
         assert_eq!(icon_rect(Rect::new(0, 0, 30, 4), CELL_PX), None);
         assert_eq!(icon_rect(Rect::new(0, 0, 4, 10), CELL_PX), None);
         assert_eq!(icon_rect(Rect::new(0, 0, 30, 10), (0, 0)), None);
     }
 
     #[test]
-    fn each_icon_draws_dots_in_the_style_color() {
+    fn icons_draw_dots_in_style_color() {
         for icon in [Icon::Loading, Icon::Video, Icon::Folder, Icon::Parent] {
             let area = Rect::new(0, 0, 10, 4);
             let mut buf = Buffer::empty(area);
@@ -216,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shapes_have_their_parts() {
+    fn shapes_have_their_parts() {
         assert!(Icon::Loading.covers(0.9, 0.0), "the frame");
         assert!(Icon::Loading.covers(0.42, -0.25), "the sun");
         assert!(Icon::Loading.covers(-0.25, 0.3), "the mountain");
@@ -229,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn the_stamp_puts_a_white_triangle_with_a_dark_edge_into_the_middle() {
+    fn stamp_draws_edged_white_triangle() {
         let mut image = image::RgbaImage::from_pixel(200, 100, image::Rgba([40, 40, 40, 255]));
         stamp_play(&mut image);
         let center = image.get_pixel(100, 50).0;
