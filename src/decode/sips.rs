@@ -327,8 +327,9 @@ fn run(args: &[&OsStr]) -> io::Result<Output> {
 #[cfg(test)]
 mod tests {
     use super::{
-        SIPS, VECTOR_ZOOM_SIDE, argument_path, corrected, covering_side, decode, dimensions,
-        enlarged_side, flip_gap, is_all_black, misses_turn, parse_size, preview_turns,
+        FLIP_MARGIN, SIPS, VECTOR_ZOOM_SIDE, argument_path, corrected, covering_side, decode,
+        dimensions, enlarged_side, flip_gap, gray_thumbnail, is_all_black, mean_difference,
+        misses_turn, parse_size, preview_turns,
     };
     use crate::decode::color::SourceColor;
     use crate::decode::embedded_jpeg::find;
@@ -841,6 +842,60 @@ mod tests {
             eprintln!(
                 "{} orientation {orientation}: gap {gap:.2} (unoriented develop), {kept:.2} (oriented develop), {spent:?}",
                 copy.file_name().unwrap().to_string_lossy()
+            );
+        }
+    }
+
+    /// `PHEWR_TEST_ORF=/path/to/photo.orf`. Copies with the IFD0 orientation 1 and 6, written by
+    /// exiftool, give the maker note preview, turned like the sips develop.
+    #[test]
+    #[ignore = "needs PHEWR_TEST_ORF, a real ORF file, and exiftool"]
+    fn real_orf_preview_turns_like_develop() {
+        let Some(path) = crate::decode::real_test_file("PHEWR_TEST_ORF") else {
+            return;
+        };
+        let dir = test_dir();
+        let grid_box = (624, 468);
+        for orientation in [1_u8, 6] {
+            let copy = dir.path().join(format!("orientation-{orientation}.orf"));
+            std::fs::copy(&path, &copy).unwrap();
+            let status = Command::new("exiftool")
+                .arg(format!("-IFD0:Orientation#={orientation}"))
+                .arg("-overwrite_original")
+                .arg(&copy)
+                .output()
+                .expect("exiftool")
+                .status;
+            assert!(status.success(), "exiftool cannot write the orientation");
+            let start = std::time::Instant::now();
+            let jpeg = find(&copy).expect("the maker note preview");
+            let spent = start.elapsed();
+            assert_eq!(jpeg.orientation, Some(orientation));
+            assert!(jpeg.width.max(jpeg.height) >= 1024, "{jpeg:?}");
+            let turned = orientation == 6;
+            let (width, height) = jpeg.shown_size();
+            assert_eq!(width < height, turned, "shown size {width}x{height}");
+            let preview = crate::decode::embedded_jpeg::decode(&copy, &jpeg, Some(grid_box))
+                .expect("preview decode")
+                .image;
+            assert_eq!(preview.width() < preview.height(), turned);
+            let develop = decode(&copy, Some(grid_box)).expect("sips develop").image;
+            let reference = gray_thumbnail(&develop);
+            let mut upside_down = preview.clone();
+            upside_down.apply_orientation(Orientation::Rotate180);
+            let same = mean_difference(&gray_thumbnail(&preview), &reference);
+            let flipped = mean_difference(&gray_thumbnail(&upside_down), &reference);
+            assert!(
+                same + FLIP_MARGIN < flipped,
+                "{same:.1} against {flipped:.1}"
+            );
+            eprintln!(
+                "orientation {orientation}: preview {}x{} found in {spent:?}, grid decode {}x{}, \
+                 gray difference to the develop {same:.1}, upside down {flipped:.1}",
+                jpeg.width,
+                jpeg.height,
+                preview.width(),
+                preview.height()
             );
         }
     }

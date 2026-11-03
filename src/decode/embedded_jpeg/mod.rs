@@ -1,10 +1,11 @@
 //! The JPEG previews inside camera RAW and Photoshop files, in safe Rust.
 //!
 //! A RAW file often holds a full-size JPEG of the photo. It decodes in milliseconds, where sips
-//! takes up to a second. A JPEG that covers the box is the sharp thumbnail, and sips never runs.
-//! The container orientation wins over the EXIF of the JPEG.
+//! takes up to a second. A JPEG that covers the fit into the box is the sharp thumbnail, and sips
+//! never runs. The container orientation wins over the EXIF of the JPEG.
 
 mod cr3;
+mod orf;
 mod psd;
 mod tiff;
 
@@ -13,6 +14,7 @@ use crate::decode::raster::decode_jpeg_bytes;
 use crate::info;
 use crate::scanner;
 use cr3::find_in_cr3;
+use orf::find_in_orf;
 use psd::find_in_psd;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -34,7 +36,8 @@ pub(crate) struct EmbeddedJpeg {
     pub(crate) length: u64,
     pub(crate) width: u32,
     pub(crate) height: u32,
-    /// The container orientation (IFD0 of a TIFF RAW, `CMT1` of a CR3), else the EXIF of the JPEG.
+    /// The container orientation (IFD0 of a TIFF RAW or an ORF, `CMT1` of a CR3), else the EXIF of
+    /// the JPEG.
     /// exiftool and the RAW developers read the container first too.
     pub(crate) orientation: Option<u8>,
 }
@@ -48,10 +51,12 @@ impl EmbeddedJpeg {
         }
     }
 
-    /// True when the picture fits `box_px` without an upscale.
+    /// True when the fit into `box_px` needs no upscale. The fit keeps the aspect, so one side
+    /// that reaches the box is enough: a 3200x2400 preview serves the 2736x2052 fit of a
+    /// 3392x2052 box.
     pub(crate) fn covers(&self, box_px: (u32, u32)) -> bool {
         let (width, height) = self.shown_size();
-        width >= box_px.0 && height >= box_px.1
+        width >= box_px.0 || height >= box_px.1
     }
 
     fn pixels(&self) -> u64 {
@@ -75,11 +80,12 @@ pub(crate) fn find(path: &Path) -> Option<EmbeddedJpeg> {
         "psd" => find_in_psd(&mut source),
         "cr3" => find_in_cr3(&mut source),
         "raf" => find_in_raf(&mut source),
+        "orf" => find_in_orf(&mut source).or_else(|| find_in_tiff(&mut source, 0)),
         _ => find_in_tiff(&mut source, 0),
     }
 }
 
-/// The IFD0 orientation of a TIFF-based RAW. It also reads an ORF, whose preview is out of reach.
+/// The IFD0 orientation of a TIFF-based RAW, for a file without a found preview.
 pub(crate) fn container_orientation(path: &Path) -> Option<u8> {
     let tiff_based =
         may_have_embedded_jpeg(path) && !scanner::has_extension(path, &["psd", "cr3", "raf"]);
@@ -137,7 +143,8 @@ pub(crate) fn decode_reference(
     decode_jpeg_bytes(&data, Some(target), jpeg.orientation).ok()
 }
 
-/// `None` when `jpeg` does not cover `box_px`. The caller then decodes the primary image.
+/// `None` when `jpeg` does not cover the fit into `box_px`. The caller then decodes the primary
+/// image.
 pub(crate) fn decode_covering(
     path: &Path,
     jpeg: &EmbeddedJpeg,
@@ -297,7 +304,7 @@ mod tests {
     use crate::decode::raster::decode_jpeg_bytes;
     use crate::test_support::{
         BLUE, RED, assert_close, red_left_blue_right_jpeg, test_dir, with_exif_orientation,
-        write_cr3, write_psd, write_raf, write_tiff_raw,
+        write_cr3, write_psd, write_raf, write_tiff_raw, write_tiff_raw_with_preview,
     };
     use std::fs;
     use std::path::Path;
@@ -348,7 +355,8 @@ mod tests {
         assert_eq!((jpeg.width, jpeg.height), (64, 32));
         assert_eq!(jpeg.orientation, Some(6));
         assert_eq!(jpeg.shown_size(), (32, 64));
-        assert!(jpeg.covers((32, 64)) && !jpeg.covers((33, 10)) && !jpeg.covers((10, 65)));
+        assert!(jpeg.covers((32, 64)) && jpeg.covers((33, 64)) && jpeg.covers((32, 65)));
+        assert!(!jpeg.covers((33, 65)));
 
         // Red was left and is now at the top.
         let image = decode(&path, &jpeg, None).unwrap().image;
@@ -374,8 +382,8 @@ mod tests {
         assert_close(right, BLUE);
         assert!(decode_covering(&path, &jpeg, (64, 32)).is_some());
         assert!(
-            decode_covering(&path, &jpeg, (65, 32)).is_none(),
-            "too small for the box"
+            decode_covering(&path, &jpeg, (65, 33)).is_none(),
+            "too small for the fit"
         );
     }
 
@@ -388,6 +396,20 @@ mod tests {
         let psd = dir.path().join("photo.psd");
         write_psd(&psd, true);
         assert_eq!(container_orientation(&psd), None);
+    }
+
+    #[test]
+    fn preview_covers_the_fit_of_a_wider_box() {
+        let dir = test_dir();
+        let path = dir.path().join("photo.dng");
+        write_tiff_raw_with_preview(&path, (64, 48));
+        let jpeg = find(&path).unwrap();
+        // The fit of 64x48 into 100x48 is 64x48, into 64x60 it is 64x48 too.
+        assert!(jpeg.covers((100, 48)) && jpeg.covers((64, 60)));
+        assert!(!jpeg.covers((100, 49)), "the fit is 65x49");
+        let image = decode_covering(&path, &jpeg, (100, 48)).unwrap().image;
+        assert_eq!((image.width(), image.height()), (64, 48));
+        assert!(decode_covering(&path, &jpeg, (100, 49)).is_none());
     }
 
     #[test]
@@ -429,7 +451,7 @@ mod tests {
         let jpeg = find(&portrait).unwrap();
         assert_eq!(jpeg.orientation, Some(6));
         assert_eq!(jpeg.shown_size(), (32, 64));
-        assert!(jpeg.covers((32, 64)) && !jpeg.covers((64, 32)));
+        assert!(jpeg.covers((32, 64)) && !jpeg.covers((33, 65)));
         let image = decode(&portrait, &jpeg, None).unwrap().image;
         assert_eq!((image.width(), image.height()), (32, 64));
     }

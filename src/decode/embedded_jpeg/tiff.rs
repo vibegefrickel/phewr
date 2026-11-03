@@ -12,20 +12,21 @@ const MAX_IFDS: usize = 32;
 const MAX_IFD_ENTRIES: u16 = 1024;
 
 #[derive(Debug, Clone, Copy)]
-struct Entry {
+pub(super) struct Entry {
     tag: u16,
-    kind: u16,
-    count: u32,
+    pub(super) kind: u16,
+    pub(super) count: u32,
     value: [u8; 4],
 }
 
 impl Entry {
     const SHORT: u16 = 3;
-    const LONG: u16 = 4;
-    const IFD: u16 = 13;
+    pub(super) const LONG: u16 = 4;
+    pub(super) const UNDEFINED: u16 = 7;
+    pub(super) const IFD: u16 = 13;
 
     /// The value of a SHORT or LONG entry with count 1.
-    fn scalar(&self, order: ByteOrder) -> Option<u32> {
+    pub(super) fn scalar(&self, order: ByteOrder) -> Option<u32> {
         if self.count != 1 {
             return None;
         }
@@ -37,29 +38,39 @@ impl Entry {
     }
 
     /// The data offset of an entry larger than its 4 value bytes.
-    fn data_offset(&self, order: ByteOrder) -> Option<u32> {
+    pub(super) fn data_offset(&self, order: ByteOrder) -> Option<u32> {
         order.u32(&self.value)
     }
 }
 
-struct Ifd {
+pub(super) struct Ifd {
     entries: Vec<Entry>,
     next: u32,
 }
 
 impl Ifd {
-    fn get(&self, tag: u16) -> Option<&Entry> {
+    pub(super) fn get(&self, tag: u16) -> Option<&Entry> {
         self.entries.iter().find(|entry| entry.tag == tag)
     }
 
-    fn scalar(&self, tag: u16, order: ByteOrder) -> Option<u32> {
+    pub(super) fn scalar(&self, tag: u16, order: ByteOrder) -> Option<u32> {
         self.get(tag)?.scalar(order)
+    }
+
+    /// The Orientation tag (0x112), only a valid EXIF value.
+    pub(super) fn orientation(&self, order: ByteOrder) -> Option<u8> {
+        self.scalar(0x112, order)
+            .and_then(|o| u8::try_from(o).ok())
+            .filter(|o| (1..=8).contains(o))
     }
 }
 
 /// The byte order and the IFD0 offset. The magic is 42 for TIFF and DNG, `RO` and `RS` for
 /// Olympus ORF and 85 for Panasonic RW2.
-fn tiff_order<R: Read + Seek>(source: &mut Source<R>, base: u64) -> Option<(ByteOrder, u32)> {
+pub(super) fn tiff_order<R: Read + Seek>(
+    source: &mut Source<R>,
+    base: u64,
+) -> Option<(ByteOrder, u32)> {
     let header = source.read_at(base, 8).ok()?;
     let order = match &header[0..2] {
         b"II" => ByteOrder::Little,
@@ -73,7 +84,7 @@ fn tiff_order<R: Read + Seek>(source: &mut Source<R>, base: u64) -> Option<(Byte
     Some((order, order.u32(&header[4..8])?))
 }
 
-fn read_ifd<R: Read + Seek>(
+pub(super) fn read_ifd<R: Read + Seek>(
     source: &mut Source<R>,
     base: u64,
     offset: u32,
@@ -180,10 +191,7 @@ pub(super) fn find_in_tiff_by<R: Read + Seek>(
             continue;
         };
         if offset == first {
-            orientation = ifd
-                .scalar(0x112, order)
-                .and_then(|o| u8::try_from(o).ok())
-                .filter(|o| (1..=8).contains(o));
+            orientation = ifd.orientation(order);
         }
         for (start, length) in ifd_jpeg_ranges(&ifd, order) {
             let found = source.jpeg_at(base + u64::from(start), u64::from(length));
@@ -210,8 +218,5 @@ pub(super) fn tiff_orientation(data: &[u8]) -> Option<u8> {
 /// The IFD0 orientation of a TIFF that starts at the start of `source`.
 pub(super) fn ifd0_orientation<R: Read + Seek>(source: &mut Source<R>) -> Option<u8> {
     let (order, first) = tiff_order(source, 0)?;
-    let ifd = read_ifd(source, 0, first, order)?;
-    ifd.scalar(0x112, order)
-        .and_then(|o| u8::try_from(o).ok())
-        .filter(|o| (1..=8).contains(o))
+    read_ifd(source, 0, first, order)?.orientation(order)
 }

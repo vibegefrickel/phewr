@@ -1,4 +1,4 @@
-//! Synthetic JPEG, TIFF RAW, CR3, RAF and PSD files.
+//! Synthetic JPEG, TIFF RAW, ORF, CR3, RAF and PSD files.
 
 use super::{BLUE, RED};
 use std::fs;
@@ -159,6 +159,58 @@ pub(crate) fn write_tiff_raw(path: &Path, orientation: u32) {
         0,
     ));
     fs::write(path, file).unwrap();
+}
+
+/// The maker note headers of an ORF: the current Olympus form, the OM System form and the old
+/// form, whose offsets count from the TIFF header.
+pub(crate) const ORF_OLYMPUS: &[u8] = b"OLYMPUS\0II\x03\0";
+pub(crate) const ORF_OM_SYSTEM: &[u8] = b"OM SYSTEM\0\0\0II\x04\0";
+pub(crate) const ORF_OLD: &[u8] = b"OLYMP\0\x01\0";
+
+/// An ORF as an Olympus camera writes it: IFD0 holds the orientation and the EXIF IFD, the EXIF
+/// IFD the maker note with `header`, and its `CameraSettings` IFD (0x2020) names `jpeg`. The old
+/// form stores `CameraSettings` inline, as undefined data.
+pub(crate) fn orf_bytes(header: &[u8], jpeg: &[u8], orientation: u32) -> Vec<u8> {
+    // IFD0 (2 entries) is 30 bytes and starts at 8, the EXIF IFD (1 entry) is 18 bytes.
+    let (exif, note) = (8 + 30, 8 + 30 + 18);
+    let header_len = u32::try_from(header.len()).unwrap();
+    let base = if header.starts_with(b"OLYMP\0") {
+        note
+    } else {
+        0
+    };
+    // The maker note IFD (1 entry) is 18 bytes, the CameraSettings IFD (3 entries) 42 bytes.
+    let settings = base + header_len + 18;
+    let preview = settings + 42;
+    let length = u32::try_from(jpeg.len()).unwrap();
+    let mut file = b"IIRO".to_vec();
+    file.extend_from_slice(&8_u32.to_le_bytes());
+    file.extend(tiff_ifd(
+        &[(0x112, 3, 1, orientation), (0x8769, 4, 1, exif)],
+        0,
+    ));
+    file.extend(tiff_ifd(
+        &[(0x927C, 7, header_len + 18 + 42 + length, note)],
+        0,
+    ));
+    file.extend_from_slice(header);
+    let pointer = if base == 0 { (13, 1) } else { (7, 42) };
+    file.extend(tiff_ifd(&[(0x2020, pointer.0, pointer.1, settings)], 0));
+    file.extend(tiff_ifd(
+        &[
+            (0x100, 4, 1, 1),
+            (0x101, 4, 1, preview),
+            (0x102, 4, 1, length),
+        ],
+        0,
+    ));
+    file.extend_from_slice(jpeg);
+    file
+}
+
+/// `orf_bytes` with the current Olympus header, written to `path`.
+pub(crate) fn write_orf(path: &Path, jpeg: &[u8], orientation: u32) {
+    fs::write(path, orf_bytes(ORF_OLYMPUS, jpeg, orientation)).unwrap();
 }
 
 fn isobmff_box(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
