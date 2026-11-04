@@ -28,6 +28,18 @@ AGENTS.md holds the rules and the layout of the files.
 - The RGB copy of an opaque RGBA resize happens after the resize, at the size of the screen.
 - The tests of `decode/screen/` compare the RGB layouts with the RGBA reference path. This is the
   path that phewr used before the RGB layouts.
+- libjpeg-turbo decodes at the smallest DCT scale of 1/8, 1/4, 1/2 and 1 that covers the fit of
+  the image into the box (`turbo::pick_scaling_factor`, the rule of `EmbeddedJpeg::covers`). The
+  decode is never smaller than the fit. The RGB or RGBA choice then follows the decoded size.
+- Decode time per scale, 12 MP iPhone JPEG, one thread, RGBA, median of 10 runs (2026-11-03):
+
+  | Scale | 1/8 | 1/4 | 3/8 | 1/2 | 5/8 | 3/4 | 7/8 | 1/1 |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | Time | 15 ms | 16 ms | 18 ms | 17 ms | 24 ms | 28 ms | 33 ms | 22 ms |
+
+- Only the 8x8, 4x4 and 2x2 IDCTs have NEON code. The other eighths run in plain C, so phewr
+  never picks them. On 24 iPhone JPEGs, the fit rule makes the cold grid about 8 % faster
+  (139 ms to 128 ms). The fullscreen open and the prefetch do not change.
 
 ## libheif
 
@@ -274,4 +286,7 @@ The code is in `decode/hdr/`.
   largest cost: about 70 ms for 12 MP lossy and 280 ms for 12 MP lossless under load.
 - The update rule of the exact pins of `jxl-oxide` and `jxl-render` is in AGENTS.md (gotcha "JPEG
   XL sample copy").
-- Not tested: a camera or app file (Apple ProRAW, Samsung), a real HLG photo, a P3 PQ file.
+- Tested on 2026-11-03: two linear sRGB Lumix photos (within 1 level), a Samsung DNG 1.7 with
+  JPEG XL tiles (through sips), and three lossy PQ photos (the XYB clip, max 104 to 166 levels).
+- Not tested: a real HLG photo (Sony HLG `.HIF`), an iPhone 16 Pro ProRAW with JPEG XL, a plain
+  camera or app `.jxl`, a P3 PQ file.
