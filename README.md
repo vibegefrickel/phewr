@@ -1,75 +1,54 @@
 # phewr
 
-phewr is a terminal image and video gallery for the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/), in the spirit of Phoenix Slides. It shows a directory as a thumbnail grid. It opens images fullscreen, runs slideshows, plays videos and shows EXIF data inside the terminal.
+phewr is a terminal image and video gallery, in the spirit of Phoenix Slides. It shows a folder
+as a thumbnail grid, opens images fullscreen, runs slideshows, plays videos and shows EXIF data,
+all inside the terminal.
 
-phewr draws through the Kitty graphics protocol. It is tested in [Ghostty](https://ghostty.org/).
+phewr draws through the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+It is tested in [Ghostty](https://ghostty.org/).
 
-phewr is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT). The fork adds these features:
+phewr is a fork of [rview](https://github.com/jrf/rview) by jrf. The fork adds a zoomable grid,
+slideshows, an info panel with EXIF data, video playback, Live Photos, HEIC and many more formats.
 
-- **Zoomable grid:** `+` and `-` show fewer or more thumbnail rows, and `0` resets the zoom. phewr remembers the zoom level.
-- **Slideshow:** `s` starts a slideshow from the current image. `Space` pauses it, and `[` / `]` change the interval. The slideshow loops by default.
-- **Info panel:** `i` shows file data and EXIF next to the grid or the fullscreen image. EXIF data includes the camera, lens, exposure, aperture, ISO, focal length and GPS position.
-- **HEIC / HEIF:** phewr decodes iPhone photos through libheif and applies their rotation.
-- **Upright JPEGs:** phewr applies the EXIF orientation, so portrait photos show upright.
-- **More formats:** JPEG XL, EXR, HDR, QOI and TGA. On macOS, phewr also opens camera RAW, PSD, PDF and SVG through `sips`.
+**Status:** phewr is in development and has no release yet. The maintainer tests it until the end
+of 2026. The first release comes in Q1 2027 at the earliest.
 
 ## Install
 
-There is no release yet. Build phewr from source (see "From source" below). The maintainer tests phewr until the end of 2026. The first release comes in Q1 2027 at the earliest. The Homebrew tap and the installer script below work only after that release.
+You need macOS on Apple Silicon, Rust (through rustup), just, libjpeg-turbo and libheif. ffmpeg
+and mpv are optional. Without ffmpeg, videos have no thumbnails and play only in an mpv window.
 
-phewr is for macOS on Apple Silicon. The binary links the Homebrew library libheif. phewr starts `ffmpeg`, `ffprobe` and `mpv` when they are installed: they are optional, and without them videos have no thumbnails and play only in the mpv window, or not at all.
-
-### Homebrew (after the first release)
-
-```bash
-brew tap webgefrickel/tap https://codeberg.org/webgefrickel/homebrew-tap.git
-brew install webgefrickel/tap/phewr
-```
-
-The formula installs libheif as a dependency. ffmpeg and mpv are recommended dependencies: `brew install` adds them by default, and `--without-ffmpeg` or `--without-mpv` leaves them out.
-
-### Installer script (after the first release)
-
-```bash
-brew install libheif ffmpeg mpv   # ffmpeg and mpv are optional
-curl -fsSL https://codeberg.org/webgefrickel/phewr/releases/latest/download/install.sh | sh
-```
-
-The script installs `phewr` into `~/.local/bin`. Set `PREFIX` to use a different prefix.
-
-### From source
-
-```bash
-brew install rustup just jpeg-turbo libheif ffmpeg mpv pkgconf
+```sh
+brew install rustup just pkgconf jpeg-turbo libheif ffmpeg mpv
+git clone https://codeberg.org/webgefrickel/phewr.git
+cd phewr
 just install
 ```
 
-`just install` builds a release binary and copies it to `~/.local/bin/phewr`.
+`just install` builds a release binary and copies it to `~/.local/bin/phewr`. Set `PREFIX` to
+install into another prefix. `just uninstall` removes the binary again.
 
-Feature flags:
+All features are on by default. To build without some of them, use cargo directly, for example
+`cargo install --path . --no-default-features --features turbo`.
 
-| Feature | Default | Needs |
-|---------|---------|-------|
-| `turbo` | on | libjpeg-turbo, fast JPEG decoding with downscaling |
-| `heic` | on | libheif >= 1.19 |
-| `video` | on | plays MP4/MOV/MKV/AVI/WebM/M4V; needs `ffmpeg` and `ffprobe` 7 or later on PATH at run time, not at build time |
-| `sips` | on | macOS `/usr/bin/sips`, opens camera RAW, PSD, PDF, SVG and other ImageIO formats |
-
-```bash
-cargo install --path . --no-default-features --features turbo   # without HEIC and video
-```
+| Feature | Needs |
+|---------|-------|
+| `turbo` | libjpeg-turbo, for fast JPEG decoding |
+| `heic` | libheif 1.19 or later, for HEIC, HEIF and AVIF |
+| `video` | `ffmpeg` and `ffprobe` 7 or later on `PATH` at run time |
+| `sips` | macOS `/usr/bin/sips`, for camera RAW, PSD, PDF, SVG and other formats |
 
 ## Usage
 
-```bash
-phewr                                      # current directory
+```sh
+phewr                              # the current folder
 phewr ~/Pictures
-phewr image.png                            # its folder, with the cursor on image.png
-phewr a.png b.png                          # only these files
-phewr -s ~/Pictures/holiday                # start a slideshow at once
-phewr -s -n 5 ~/Pictures/holiday           # ... with 5 seconds per slide
-phewr -i ~/Pictures                        # open with the info panel
-phewr -j 4 ~/Pictures                      # decode threads (default: all cores)
+phewr image.png                    # its folder, with the cursor on image.png
+phewr a.png b.png                  # only these files
+phewr -s ~/Pictures/holiday        # start a slideshow at once
+phewr -s -n 5 ~/Pictures/holiday   # ... with 5 seconds per slide
+phewr -i ~/Pictures                # open with the info panel
+phewr -j 4 ~/Pictures              # decode threads (default: all cores)
 ```
 
 ### From yazi
@@ -82,15 +61,18 @@ run  = "shell --block -- phewr %h"
 desc = "Image grid of the hovered folder, or at the hovered file (phewr)"
 ```
 
-On a folder, `g v` opens that folder. On a file, it opens the folder of the file with the cursor on the file. When phewr quits, yazi moves its cursor to the last file of phewr. phewr runs `ya emit reveal <path>` for this. If `YAZI_ID` is not set or `ya` is not on PATH, nothing happens.
+On a folder, `g v` opens that folder. On a file, it opens the folder of the file, with the cursor
+on the file. When you quit phewr, yazi moves its cursor to the last file that you looked at.
 
-Inside a multiplexer that relays Kitty graphics slowly, open phewr in a new Ghostty window instead. `YAZI_ID` goes along, so the reveal still works:
+If your multiplexer relays Kitty graphics slowly, open phewr in a new Ghostty window instead:
 
 ```toml
 run  = 'shell -- open -na Ghostty.app --args -e sh -c "YAZI_ID=$YAZI_ID exec $HOME/.local/bin/phewr %h"'
 ```
 
 ## Controls
+
+`?` shows all keys. `q` goes back one step in every view. Only `q` in the grid quits phewr.
 
 ### Gallery
 
@@ -99,46 +81,47 @@ run  = 'shell -- open -na Ghostty.app --args -e sh -c "YAZI_ID=$YAZI_ID exec $HO
 | `h` `j` `k` `l`, arrows | Move |
 | `g` `G`, `Home` `End` | First / last |
 | `Ctrl-b` `Ctrl-f`, `PgUp` `PgDn` | Page up / down |
-| `Enter` | Open fullscreen, play a video, or open a folder |
-| `Backspace` | Go to the parent folder. The way back takes the thumbnails from memory |
-| `p` | Play the video under the cursor in the mpv window, with sound |
+| `Enter` | Open an image fullscreen, play a video, or open a folder |
+| `Backspace` | Go to the parent folder |
+| `p` | Play the video in an mpv window, with sound |
 | `s` | Start a slideshow from the cursor |
-| `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows, remembered per folder, `Enter` opens the larger view) |
-| `n` | Show or hide filename labels |
-| `i` | Toggle the info panel |
-| `/` | Search. `Enter` applies, `Esc` clears, `Backspace` deletes |
-| `Space` | Toggle selection |
-| `a` `A` | Select all / clear selection |
+| `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows) |
+| `n` | Show or hide file names |
+| `i` | Show or hide the info panel |
+| `/` | Search. `Enter` applies, `Esc` clears. |
+| `Space` | Select or unselect |
+| `a` `A` | Select all / clear the selection |
 | `q` | Quit |
-| `?` | Full help |
 
-The grid lists the subfolders of the folder first, with `..` for the parent. A folder cell shows a large folder icon and its name, and `..` shows two dots. Hidden folders and symlinks to folders stay out. Folders take no mark and no delete, and the fullscreen view and the slideshow skip them. The search matches folder names. phewr always starts in the grid, also in a folder with one image. When the cursor rests on a folder, phewr prepares the thumbnails of that folder in the background, so `Enter` shows them at once.
+The grid shows the subfolders first, with `..` for the parent folder. The cell shape follows the
+photos: a folder of portrait photos gets narrow cells. phewr remembers the zoom level of each
+folder. Videos, animations and Live Photos play a short loop in the grid.
 
-The grid fills the terminal. The cells have the shape of the photos in the folder: a folder of portrait photos gets narrow cells and more columns. The grid separates the thumbnails with 1-cell gaps. A thick blue border marks the thumbnail under the cursor. A thin yellow border marks each selected image (`Space`). A cell shows a large dim picture (image) or play triangle (video) while its thumbnail loads. The still of a video or an animated image carries a play triangle until its loop starts.
-
-The grid also works under a multiplexer that relays Kitty graphics, such as herdr. The filename toggle and a font size change decode the thumbnails again.
-
-There is no search bar and no frame. A status row at the bottom shows the name and the position of the selected entry, the folder and image count when the grid has folders, the search query and the match count while you search with `/`, the number of selected images and `scanning…` while the scan runs. At the right, it shows the facts of the selected file: the size in pixels and megapixels, the file size, the format and the date of the shot (the EXIF date, else the modified time). A video shows its length, its size, its frame rate and `SDR`, `HLG` or `PQ`. The status row shows no key hints: `?` opens the help. In the fullscreen view, the image uses the whole terminal above the status row, and the status row shows the same facts for the open file.
+The status row at the bottom shows the selected file: its name, size in pixels, file size, format
+and date. For a video, it shows the length, the frame rate and `SDR`, `HLG` or `PQ`.
 
 ### Fullscreen
 
 | Key | Action |
 |-----|--------|
-| `h` `j` / `k` `l`, `←` `→` | Previous / next image (`hjkl` pan when zoomed) |
+| `h` `j` / `k` `l`, `←` `→` | Previous / next image (pan when zoomed) |
 | `Home` `End` | First / last |
-| `+` `-` `0` | Zoom in, out, fit. `hjkl` pans when zoomed |
+| `+` `-` `0` | Zoom in / out / fit |
 | `s` | Start / stop the slideshow |
 | `Space` | Pause / resume the slideshow |
-| `[` `]` | Shorter / longer interval (0.5 s steps) |
-| `i` | Toggle the info panel |
-| `Enter`, click middle | Play the video, the animation or the motion of a Live Photo |
-| `p` | Play the video in the mpv window, with sound (on a video placeholder) |
-| `q` | Back to the gallery. In a running slideshow, `q` stops it and goes back in one press |
-| `Esc` | Stop the slideshow, or back to the gallery |
+| `[` `]` | Shorter / longer slideshow interval (0.5 s steps) |
+| `i` | Show or hide the info panel |
+| `Enter`, click in the middle | Play the video, the animation or the motion of a Live Photo |
+| `p` | Play the video in an mpv window, with sound |
+| `q` | Back to the gallery. In a slideshow, `q` stops it too. |
+| `Esc` | Stop the slideshow, or go back to the gallery |
 
 ### Video
 
-phewr plays a video in the terminal with its own player. ffmpeg from Homebrew decodes on the media engine of the Mac, scales the frame on the GPU and maps HLG and PQ (iPhone HDR, Dolby Vision 8.4, HDR10) to SDR with a tone mapping cube. Every video and animation converts into the color space of the terminal, like the still images. phewr sends each frame through the Kitty temp file medium, and the terminal scales it to the window. A 1080p video plays at 30 fps without dropped frames in Ghostty. Opaque images and video frames go to the terminal as RGB, with a quarter fewer bytes than RGBA. Videos with a variable frame rate, for example screen recordings and phone clips, play at their real speed. The terminal player has no sound, no pause and no seek: it plays like an animated image, and it always keeps real time. If the decode or the terminal is too slow, it drops frames and never plays in slow motion. `p` opens the mpv window for sound and all controls.
+phewr plays videos in the terminal with its own player. The player has no sound, no pause and no
+seek. It plays like an animated image and always keeps real time: if the decode or the terminal
+is too slow, it drops frames. `p` opens the video in a fullscreen mpv window with sound and all
+mpv controls. HDR videos (HLG, PQ, Dolby Vision 8.4, HDR10) play tone-mapped to SDR.
 
 | Key | Action |
 |-----|--------|
@@ -149,125 +132,109 @@ phewr plays a video in the terminal with its own player. ffmpeg from Homebrew de
 | `q` `Esc` | Back to the gallery |
 | `?` | Help |
 
-`q` or `Esc` in the player goes back to the gallery in one press, with the cursor on the video, also when a step in the fullscreen view opened the video. After the mpv window, phewr goes back to the view that opened the window. In the fullscreen view, the video then shows "video: Enter plays, p opens the mpv window".
+In the mpv window, `n` and `N` play the next and the previous file (mpv 0.38 or later). When the
+window closes, phewr goes back to the view that opened it.
 
-`p` opens the video in a fullscreen mpv window with sound, from the grid, the fullscreen view and the player. The window gets `--fs --native-fs=no`, so macOS does not move it to its own Space, and `--hwdec=auto-safe`. mpv does its own HDR tone mapping on the GPU. All mpv keys work. In mpv, `n` plays the next file of the list and `N` (Shift-n) the previous file (mpv 0.38 or later). After the window closes, phewr returns to the view that opened it.
-
-Over SSH, or when the Kitty probe found no temp file medium, a video opens in the mpv window, with a note. Without mpv, a note shows and the view stays. The terminal player needs `ffmpeg` on PATH.
-
-In a slideshow, a video plays one time and the slideshow continues. Outside a slideshow, the video loops. In the mpv window, the slideshow waits until the window closes. Use `q` or the close button to stop it, because `Cmd-q` counts as the end of the clip. A paused slideshow plays the video in a loop.
-
-A status note (for example "clip.mp4 plays in an mpv window") replaces the file facts until the next key press.
-
-`q` goes back one step in every view. Only `q` in the grid quits phewr. An empty folder shows a note in the status row. `Backspace` goes up, and `q` quits.
+In a slideshow, a video plays once and the slideshow continues. Outside a slideshow, a video
+loops. Over SSH, videos always open in the mpv window.
 
 ### Mouse
 
-phewr reads the mouse in every view. `[gallery] mouse = false` turns this off, and the terminal keeps its own mouse. Shift+click and Shift+drag still select text in Ghostty while phewr runs.
-
 | Where | Mouse | Action |
 |-------|-------|--------|
-| Grid | Click / double-click | Select / open the image, video or folder |
+| Grid | Click / double-click | Select / open |
 | Grid | Right click | Info panel |
-| Grid | Wheel / Shift+wheel | Scroll / change the thumbnail size (a sideways trackpad swipe also changes the size) |
+| Grid | Wheel / Shift+wheel | Scroll / change the thumbnail size |
 | Fullscreen | Wheel | Zoom |
 | Fullscreen | Drag | Pan the zoomed image |
 | Fullscreen | Click near the left or right edge | Previous / next image |
 | Fullscreen | Right click | Info panel |
-| Player | Click beside the video or right click | Back |
+| Player | Click beside the video, or right click | Back |
 | Every view | Click on the status row | Help |
 
-A click closes the help and the info panel. While an mpv window plays, phewr releases the mouse.
+To select text, hold Shift. `[gallery] mouse = false` turns the mouse off.
 
 ## Configuration
 
-phewr reads `~/.config/phewr/config.toml`. If `XDG_CONFIG_HOME` is set, phewr reads `$XDG_CONFIG_HOME/phewr/config.toml`.
+phewr reads `~/.config/phewr/config.toml`, or `$XDG_CONFIG_HOME/phewr/config.toml`. These are the
+defaults:
 
 ```toml
 [gallery]
-mouse = true         # read the mouse; false keeps the terminal's own mouse
-animate = true       # video, animated and Live Photo cells play a short loop in the grid; false keeps the still
-live_photos = true   # hide the motion .mov of a Live Photo still, Enter plays it
-loops = "auto"       # how the loops play: "auto" (the terminal decides), "animation" (Kitty animation frames, Ghostty 1.4.0 and later), "ticks" (phewr swaps the frames)
-visible_rows = 4     # thumbnail rows in the grid (the zoom level, 2 to 12), the columns fill the width
+mouse = true          # false leaves the mouse to the terminal
+animate = true        # play short loops of videos, animations and Live Photos in the grid
+live_photos = true    # hide the .mov of a Live Photo, Enter plays it
+loops = "auto"        # "auto", "animation" (Kitty animation, Ghostty 1.4.0 or later) or "ticks"
+visible_rows = 4      # thumbnail rows in the grid, 2 to 12
 
 [slideshow]
-interval = 3.0       # seconds per slide
-loop = true          # start over after the last image
+interval = 3.0        # seconds per slide
+loop = true           # start over after the last image
 
 [info]
 show_on_start = false
 
 [video]
-# "terminal" (default): the terminal player of phewr, no sound. p opens the mpv window.
-# "window": mpv plays every video in a fullscreen window of its own, with sound.
-# "builtin" from older versions means "terminal".
-player = "terminal"
+player = "terminal"   # "terminal" (no sound) or "window" (mpv with sound)
 
 [terminal]
-# "display-p3" (default): the terminal shows image pixels as Display P3, as Ghostty on macOS does.
-# "srgb": the terminal shows image pixels as sRGB.
-colorspace = "display-p3"
+colorspace = "display-p3"   # "display-p3" (Ghostty on macOS) or "srgb"
 ```
 
-The terminal player and the video thumbnails need `ffmpeg` and `ffprobe` on PATH. Without them, a video cell shows the large play icon, and a video opens in the mpv window. Without the temp file medium, a video also opens in the mpv window. Without mpv, a note shows.
+phewr uses the colors of your terminal theme. It has no color settings.
 
-When you zoom the grid with `+` / `-`, phewr remembers the size for the current folder and as the last size in `~/.local/state/phewr/state.toml`. A folder opens with its own size. A folder without one opens with the last size, or with `[gallery] visible_rows`. `0` returns the current folder to the configured size and erases its entry. phewr keeps the sizes of the last 200 folders.
+| Path | Content |
+|------|---------|
+| `~/.local/state/phewr/state.toml` | the zoom level of the last 200 folders |
+| `~/Library/Caches/phewr/` | the thumbnail cache, at most 512 MB |
 
-phewr caches thumbnails in the OS cache directory: `~/Library/Caches/phewr` on macOS, `~/.cache/phewr` on Linux. The cache stays below 512 MB.
-
-### Colors
-
-phewr uses the default foreground and background of the terminal and the 16 ANSI colors. The color scheme of the terminal sets the look of phewr. phewr has no settings for these colors.
-
-### Kitty transfer
-
-At start, phewr asks the terminal whether it reads image data from a temp file. If the terminal answers yes, phewr writes each picture to a file in `$TMPDIR` and sends only the path. Otherwise the pixels go through the terminal as text. The last row of the help popup (`?`) shows the result, for example `Kitty transfer: temp file (t=t)`. The environment variable `PHEWR_KITTY_TRANSFER=direct|png|file` skips the question and forces one medium. Over SSH, phewr sends PNG.
-
-In the same round trip, phewr asks the terminal whether it plays Kitty animations. If the terminal answers yes (Ghostty 1.4.0 and later), each grid loop goes to the terminal one time as one animation, and the terminal plays it. Otherwise phewr swaps the frames itself. `[gallery] loops` in the config, or the environment variable `PHEWR_KITTY_LOOPS=animation|ticks`, which wins over the config, fixes the path. In herdr, phewr swaps the frames itself, because herdr 0.9.5 answers the probe but plays no Kitty animation. `[gallery] loops` and `PHEWR_KITTY_LOOPS` win over this rule.
+At start, phewr asks the terminal how it accepts images. If the terminal reads temp files, phewr
+sends only a file path, which is the fastest way. The last row of the help (`?`) shows the result.
+`PHEWR_KITTY_TRANSFER=direct|png|file` forces one way, and `PHEWR_KITTY_LOOPS=animation|ticks`
+forces the way that the grid loops play.
 
 ## Formats
 
-**Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, TGA.
+- **Images:** JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI and TGA.
+- **HEIC, HEIF and AVIF** (feature `heic`): through libheif.
+- **JPEG XL:** in Rust, with wide gamut and HDR.
+- **EXR and HDR:** tone-mapped to 8 bit.
+- **Camera RAW, PSD, PDF, SVG, JPEG 2000, ICNS, SGI, DDS and PICT** (feature `sips`): through the
+  macOS tool `sips`. RAW and PSD files show their embedded preview first. A PDF shows its first
+  page.
+- **Animated images:** GIF, WebP, APNG and AVIF sequences. Animated WebP needs FFmpeg 9 or later.
+- **Live Photos:** phewr pairs an iPhone still with its `.mov`. The grid marks the still with
+  `◎ Live` and loops the motion. `Enter` plays it once.
+- **Video** (feature `video`): MP4, MOV, MKV, AVI, WebM and M4V.
 
-**Colors:** phewr converts the colors of each image into the color space of the terminal. Ghostty shows image pixels as Display P3, so that is the default. phewr reads ICC profiles (JPEG, PNG, WebP, TIFF, HEIC, AVIF), the nclx box of HEIC and AVIF, and the cICP, gAMA and cHRM chunks of PNG. A camera JPEG in Adobe RGB without a profile carries an EXIF mark, and phewr reads it too. An image without color information is sRGB. iPhone photos are already Display P3 and need no conversion.
-
-**Animated images:** animated GIF, WebP, APNG (`.png`, `.apng`) and AVIF image sequences (AVIS) play in the terminal player, in a loop. In the grid, every visible animated cell and video cell plays a short loop after its still thumbnail shows: a video shows 12 frames from the whole clip at 3 fps, an animation its own frames. `[gallery] animate = false` in the config turns the loops off, and the still keeps its play triangle. `Enter` plays the animation, and `p` opens it in the mpv window. In a slideshow, the terminal player plays an animation for at least the slideshow interval. Animated WebP needs FFmpeg 9 or later (the `webp_anim` decoder).
-
-**Live Photos:** phewr pairs an iPhone still (HEIC or JPEG) with the `.mov` of the same name and hides the `.mov`. The grid shows the still with a `◎ Live` mark and loops its motion. In the fullscreen view, `Enter` or a click on the middle of the picture plays the motion one time, and then the still comes back. `[gallery] live_photos = false` shows both files as cells.
-
-**JPEG XL:** phewr decodes JPEG XL in Rust (jxl-oxide). It converts the colors into the color space of the terminal, also from ICC profiles and wide gamut, tone-maps PQ and HLG to SDR, and applies the orientation of the file. An animated JPEG XL shows its first frame.
-
-**EXR and HDR:** phewr maps the float values to 8 bit with an extended Reinhard tone map. The white point is the brightest value of the image.
-
-**Camera RAW, PSD, JPEG 2000, PDF, SVG, ICNS, SGI, DDS and PICT** (feature `sips`, macOS only): phewr converts these files with the built-in macOS tool `sips`. The grid and the fullscreen view get a copy at the size of their box. The zoom gets the full image. A PDF shows its first page. Camera RAW and PSD files show the JPEG preview that they carry at once in the grid. If that preview is large enough, phewr uses it instead of `sips` for the grid and the fullscreen view.
-
-**HEIC, HEIF and AVIF** (feature `heic`): phewr decodes these files through libheif. Without `heic`, phewr does not open AVIF. A cold HEIC grid shows the thumbnails that the files hold at once, then replaces them with sharp thumbnails. phewr uses such a thumbnail only if it has the rotation and the mirror of the main image.
-
-phewr applies the EXIF orientation of JPEG, TIFF, WebP and PNG files, so portrait photos show upright.
-
-**Video** (feature `video`): MP4, MOV, MKV, AVI, WebM, M4V. The terminal player plays the video in a loop. Gallery thumbnails use the first frame, which `ffmpeg` decodes with the rotation and the HDR tone mapping.
+phewr shows photos upright (EXIF orientation). It converts the colors of each image into the
+color space of the terminal. It reads ICC profiles, and an image without color data counts as
+sRGB.
 
 ## Development
 
-AGENTS.md holds the rules for the code and the workflow.
-
-```bash
-just              # = just check: fmt --check, clippy -D warnings, nextest, rustdoc, cargo deny
-just fix          # clippy --fix + cargo fmt
-just test         # cargo nextest (falls back to cargo test)
-just coverage     # line coverage summary (cargo-llvm-cov)
-just bench DIR    # speed measurements on a folder of your photos (ignored tests)
-just run          # release build, then the gallery
-just hooks        # install the pre-commit hook (fmt + clippy)
-
-# decode real files from your library
-PHEWR_TEST_HEIC=~/Pictures/IMG_0001.HEIC \
-PHEWR_TEST_JPEG=~/Pictures/IMG_0002.JPG \
-just test-real          # a test without its variable skips with a note
-just test-real heic     # only the tests that match the filter
+```sh
+brew install cargo-nextest cargo-deny cargo-llvm-cov
+just          # format check, clippy, tests, rustdoc and cargo deny
+just run      # build and start the gallery
+just --list   # all recipes
 ```
+
+Some tests decode real files from your library. A test without its variable skips:
+
+```sh
+PHEWR_TEST_HEIC=~/Pictures/IMG_0001.HEIC PHEWR_TEST_JPEG=~/Pictures/IMG_0002.JPG just test-real
+```
+
+`AGENTS.md` has the code layout, the rules and the workflow for contributors. `docs/` has the
+design notes.
+
+## AI assistance
+
+phewr is written with the help of Claude by Anthropic, mainly the models Claude Opus and Claude
+Fable. The maintainer reviews and tests each change.
 
 ## License
 
-MIT, the same license as rview. See LICENSE.
+MIT. See `LICENSE`. phewr is a fork of [rview](https://github.com/jrf/rview) by jrf, which is MIT
+too.
