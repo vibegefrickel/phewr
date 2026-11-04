@@ -87,7 +87,7 @@ run  = 'shell -- open -na Ghostty.app --args -e sh -c "YAZI_ID=$YAZI_ID exec $HO
 | `s` | Start a slideshow from the cursor |
 | `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows) |
 | `n` | Show or hide file names |
-| `i` | Show or hide the info panel |
+| `Tab` | Show or hide the info panel |
 | `/` | Search. `Enter` applies, `Esc` clears. |
 | `Space` | Select or unselect |
 | `a` `A` | Select all / clear the selection |
@@ -110,7 +110,7 @@ and date. For a video, it shows the length, the frame rate and `SDR`, `HLG` or `
 | `s` | Start / stop the slideshow |
 | `Space` | Pause / resume the slideshow |
 | `[` `]` | Shorter / longer slideshow interval (0.5 s steps) |
-| `i` | Show or hide the info panel |
+| `Tab` | Show or hide the info panel |
 | `Enter`, click in the middle | Play the video, the animation or the motion of a Live Photo |
 | `p` | Play the video in an mpv window, with sound |
 | `q` | Back to the gallery. In a slideshow, `q` stops it too. |

@@ -9,10 +9,11 @@ use crate::encoder::kitty;
 use crate::encoder::{KittyBackend, Loops};
 use crate::image_list::SharedImageList;
 use crate::kitty_output::render_gallery_images;
-use crate::test_support::char_key;
 use crate::test_support::kitty::Animation;
 use crate::test_support::kitty::FakeTerminal;
 use crate::test_support::text;
+use crate::test_support::{char_key, press};
+use crossterm::event::KeyCode;
 use image::{Rgba, RgbaImage};
 use ratatui::layout::Rect;
 use std::path::PathBuf;
@@ -606,12 +607,12 @@ fn overlays_and_fullscreen_stop_loops() {
     assert!(started);
     assert_eq!(again.matches("\x1b_Ga=t,").count(), 3);
 
-    char_key(&mut app, 'i');
+    press(&mut app, KeyCode::Tab);
     assert!(app.info_visible);
     place_stills(&mut app, &mut terminal);
     assert!(!app.loop_plays(1));
     assert!(play_at(&mut app, 3 * FRAME_TICKS).0.is_empty());
-    char_key(&mut app, 'i');
+    press(&mut app, KeyCode::Tab);
 
     app.mode = ViewMode::Fullscreen;
     assert!(!app.grid_loops_shown());

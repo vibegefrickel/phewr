@@ -18,7 +18,7 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.graphics_delete_all()?;
             app.enter_gallery();
         }
-        KeyCode::Char('i') => {
+        KeyCode::Tab => {
             app.graphics_delete_all()?;
             app.toggle_info();
         }
@@ -234,7 +234,7 @@ mod tests {
         let mut app = fullscreen_app(2, 0);
         let info = app.info_visible;
 
-        char_key(&mut app, 'i');
+        press(&mut app, KeyCode::Tab);
         assert_ne!(app.info_visible, info);
         char_key(&mut app, '?');
         assert!(app.help_visible);

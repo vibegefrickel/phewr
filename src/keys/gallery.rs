@@ -76,7 +76,7 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             app.enter_fullscreen_selected();
             app.request_video_window();
         }
-        KeyCode::Char('i') => {
+        KeyCode::Tab => {
             app.graphics_delete_all()?;
             app.toggle_info();
         }
@@ -311,13 +311,13 @@ mod tests {
         let mut app = gallery_app(2);
         let info = app.info_visible;
 
-        char_key(&mut app, 'i');
+        press(&mut app, KeyCode::Tab);
         assert_ne!(app.info_visible, info);
         char_key(&mut app, '?');
         assert!(app.help_visible);
-        press(&mut app, KeyCode::Tab);
+        char_key(&mut app, 'i');
         assert!(!app.help_visible);
-        press(&mut app, KeyCode::Tab);
+        char_key(&mut app, 'i');
         assert_eq!(app.mode, ViewMode::Gallery);
 
         assert!(!press(&mut app, KeyCode::Esc), "Esc does not quit the grid");

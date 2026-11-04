@@ -125,7 +125,7 @@ Order: speed first, then formats, then the first release. The first release is p
 - Tooling from schnattr: justfile, lint table, cargo deny, nextest, Codeberg release flow
 - Configurable, zoomable thumbnail size (`+` / `-` / `0`, remembered in state file)
 - Slideshow with interval, pause and loop (`s`, `Space`, `[` / `]`, `--slideshow`)
-- Info panel with file data and EXIF (`i`, `--info`)
+- Info panel with file data and EXIF (`Tab`, `--info`)
 - HEIC / HEIF decoding through libheif
 - Video playback in mpv (`[video] player`: terminal, window, builtin)
 - Built-in player: a pause no longer drops a packet or stops the loop

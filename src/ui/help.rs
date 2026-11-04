@@ -29,7 +29,7 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("Wheel", "Scroll the grid"),
     ("PgDn/PgUp, ^f/^b", "Page down / up"),
     ("n", "Toggle filename labels"),
-    ("i / right click", "Toggle info panel"),
+    ("Tab / right click", "Toggle info panel"),
     ("s", "Slideshow from cursor"),
     #[cfg(feature = "video")]
     ("p", "Open in the mpv window"),
@@ -57,7 +57,7 @@ const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
     #[cfg(feature = "video")]
     ("Enter on Live Photo", "Play the motion once"),
     ("h/j/k/l, drag", "Pan when zoomed"),
-    ("i / right click", "Toggle info panel"),
+    ("Tab / right click", "Toggle info panel"),
     ("s", "Start / stop slideshow"),
     #[cfg(feature = "video")]
     ("p", "Open in the mpv window"),
