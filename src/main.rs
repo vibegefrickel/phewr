@@ -37,7 +37,7 @@ mod yazi;
 
 use app::App;
 use clap::Parser;
-use cli::{Cli, initial_dir_from_paths, start_paths};
+use cli::{Cli, initial_dir_from_paths, start_paths, write_cwd_file};
 use config::Config;
 use crossterm::{
     cursor, execute,
@@ -281,9 +281,11 @@ fn main() -> io::Result<()> {
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();
     let reveal_path = app.reveal_path();
+    let gallery_dir = app.gallery_dir();
     // The drop cancels the loop jobs. Their ffmpeg runs end before the process.
     drop(app);
-    if run_result.is_ok() && restore_result.is_ok() {
+    let mut result = run_result.and(restore_result);
+    if result.is_ok() {
         // phewr quits anyway. A yazi that does not answer keeps its old cursor.
         reveal_in_yazi(
             reveal_path.as_deref(),
@@ -291,8 +293,12 @@ fn main() -> io::Result<()> {
             std::env::var_os("PATH").as_deref(),
             run_briefly,
         );
+        // The shell wrapper changes into the folder of the grid, like after yazi.
+        if let Some(file) = &cli.cwd_file {
+            result = write_cwd_file(file, &gallery_dir);
+        }
     }
-    run_result.and(restore_result)
+    result
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 
 use crate::scanner::canonicalize_or_self;
 use clap::Parser;
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -29,6 +30,10 @@ pub(crate) struct Cli {
     /// Open the info panel on start
     #[arg(short, long)]
     pub(crate) info: bool,
+
+    /// Write the folder of the grid into this file on exit, for a `cd` in the shell
+    #[arg(long, value_name = "PATH")]
+    pub(crate) cwd_file: Option<PathBuf>,
 }
 
 /// The pool needs one thread at least.
@@ -69,6 +74,13 @@ pub(crate) fn start_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Option<PathBuf>
     (vec![folder], Some(target))
 }
 
+/// Write `dir` into `file`, like `yazi --cwd-file`, so a shell wrapper can `cd` there.
+///
+/// The path goes out without a newline. A wrapper reads it with `$(cat -- "$file")`.
+pub(crate) fn write_cwd_file(file: &Path, dir: &Path) -> io::Result<()> {
+    std::fs::write(file, dir.as_os_str().as_encoded_bytes())
+}
+
 /// The first directory argument, else the parent of the first file.
 pub(crate) fn initial_dir_from_paths(paths: &[PathBuf]) -> PathBuf {
     for p in paths {
@@ -87,10 +99,10 @@ pub(crate) fn initial_dir_from_paths(paths: &[PathBuf]) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, initial_dir_from_paths, start_paths};
+    use super::{Cli, initial_dir_from_paths, start_paths, write_cwd_file};
     use crate::test_support::synthetic_tree;
     use clap::Parser;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn parses_files_and_options() {
@@ -104,6 +116,7 @@ mod tests {
         assert!(cli.slideshow);
         assert_eq!(cli.interval, Some(2.5));
         assert!(cli.info);
+        assert_eq!(cli.cwd_file, None);
     }
 
     #[test]
@@ -116,6 +129,8 @@ mod tests {
             "--interval",
             "7",
             "--info",
+            "--cwd-file",
+            "/tmp/phewr-cwd",
         ])
         .unwrap();
 
@@ -123,6 +138,7 @@ mod tests {
         assert_eq!(cli.threads, Some(2));
         assert!(cli.slideshow && cli.info);
         assert_eq!(cli.interval, Some(7.0));
+        assert_eq!(cli.cwd_file, Some(PathBuf::from("/tmp/phewr-cwd")));
     }
 
     #[test]
@@ -141,6 +157,26 @@ mod tests {
         assert!(Cli::try_parse_from(["phewr", "--threads", "-1"]).is_err());
         assert!(Cli::try_parse_from(["phewr", "--fullscreen"]).is_err());
         assert!(Cli::try_parse_from(["phewr", "-t", "nord"]).is_err());
+        assert!(Cli::try_parse_from(["phewr", "--cwd-file"]).is_err());
+    }
+
+    #[test]
+    fn cwd_file_holds_the_folder_without_a_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cwd");
+
+        write_cwd_file(&file, dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            dir.path().as_os_str().as_encoded_bytes()
+        );
+
+        // A second exit replaces the first folder.
+        write_cwd_file(&file, Path::new("/photos")).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "/photos");
+
+        let missing = dir.path().join("missing").join("cwd");
+        assert!(write_cwd_file(&missing, Path::new("/photos")).is_err());
     }
 
     #[test]

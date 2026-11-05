@@ -49,7 +49,27 @@ phewr -s ~/Pictures/holiday        # start a slideshow at once
 phewr -s -n 5 ~/Pictures/holiday   # ... with 5 seconds per slide
 phewr -i ~/Pictures                # open with the info panel
 phewr -j 4 ~/Pictures              # decode threads (default: all cores)
+phewr --cwd-file /tmp/phewr-cwd    # write the folder of the grid into the file on exit
 ```
+
+### Change the shell directory on exit
+
+A program cannot change the directory of its shell. Like yazi, phewr writes the folder of the
+grid into the file of `--cwd-file` when it exits, and a shell function does the `cd`:
+
+```sh
+# ~/.zshrc
+p() {
+  local tmp="$(mktemp -t "phewr-cwd.XXXXXX")"
+  phewr "$@" --cwd-file="$tmp"
+  if cwd="$(cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+    builtin cd -- "$cwd"
+  fi
+  rm -f -- "$tmp"
+}
+```
+
+`p ~/Pictures` opens the grid. When you quit in a subfolder, the shell is in that subfolder.
 
 ### From yazi
 

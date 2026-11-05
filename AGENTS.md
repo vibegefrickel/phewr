@@ -220,8 +220,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   session and the start of the run loop. `main` is a thin shell. `check_paths`,
   `apply_cli_overrides`, `probe_terminal` (the start probe and the cell size, `StartProbe`) and
   `prepare_app` hold the logic with tests.
-- `cli.rs`: the clap arguments (`Cli`), the value parsers of `--threads` and `--interval`, and the
-  start directory.
+- `cli.rs`: the clap arguments (`Cli`), the value parsers of `--threads` and `--interval`, the
+  start directory and `write_cwd_file` (the folder of the grid for `--cwd-file`).
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
   `query_terminal`, `query_cell_size_and_probe` (`CSI 16 t`, the Kitty probes and the DA1 query
   in one write, the DA1 answer ends the read) and the cell pixel size. `read_answer` is the poll
@@ -550,6 +550,10 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 - **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
   that does not answer cannot hold phewr. Tests pass a closure and never start `ya`.
+- **Shell directory on exit:** `--cwd-file <PATH>` writes `App::gallery_dir` into the file after
+  `TerminalSession::restore`, without a newline, like `yazi --cwd-file`. A shell function reads
+  it and does the `cd` (README, "Change the shell directory on exit"). A failed run writes
+  nothing, and a failed write is the exit error of phewr.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
   no status note. The note shows in the status row at the bottom. The next key press or mouse
   button press clears it (`clears_status`), a key release or repeat does not. A read error of the
