@@ -4,6 +4,7 @@
 use crate::app::App;
 use crate::gallery::LABEL_ROWS;
 use crate::icons::{self, Icon};
+use crate::kitty_output::IconCell;
 use crate::styles::STYLES;
 use ratatui::{
     prelude::*,
@@ -15,6 +16,12 @@ use unicode_width::UnicodeWidthStr;
 /// The mark of a Live Photo still in the gap above its cell.
 const LIVE_MARK: &str = "\u{25ce} Live";
 
+/// The grid area and the icons that the cells ask Kitty for.
+struct GridDraw<'a> {
+    rect: Rect,
+    icons: &'a mut Vec<IconCell>,
+}
+
 #[derive(Clone, Copy)]
 struct CellLook {
     style: Style,
@@ -22,8 +29,17 @@ struct CellLook {
 }
 
 /// The grid cells with their optional labels. The selected border comes last and wins on a gap
-/// that two cells share.
-pub(super) fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &App, grid_rect: Rect) {
+/// that two cells share. `icons` gets the icons that Kitty draws.
+pub(super) fn draw_thumbnail_cells(
+    frame: &mut Frame<'_>,
+    app: &App,
+    grid_rect: Rect,
+    icons: &mut Vec<IconCell>,
+) {
+    let mut grid = GridDraw {
+        rect: grid_rect,
+        icons,
+    };
     let first_visible = app.gallery.scroll_offset * app.gallery.grid_cols;
     let mut selected_border = None;
 
@@ -47,14 +63,14 @@ pub(super) fn draw_thumbnail_cells(frame: &mut Frame<'_>, app: &App, grid_rect: 
             marked: is_marked,
         };
         if app.is_folder(img_idx) {
-            draw_folder_cell(frame, app, vis_idx, img_idx, look, grid_rect);
+            draw_folder_cell(frame, app, vis_idx, img_idx, look, &mut grid);
         } else if !app.thumb_cache.contains(img_idx) {
             let icon = if app.is_video(img_idx) {
                 Icon::Video
             } else {
                 Icon::Loading
             };
-            draw_cell_icon(frame, app, app.gallery.thumb_rect(vis_idx), icon, grid_rect);
+            draw_cell_icon(frame, app, vis_idx, icon, &mut grid);
         }
         if app.gallery.show_filenames && !is_parent(app, img_idx) {
             draw_label(frame, app, vis_idx, img_idx, look, grid_rect);
@@ -93,26 +109,37 @@ fn draw_live_mark(frame: &mut Frame<'_>, border: Rect, style: Style, grid_rect: 
         .set_stringn(at.x, at.y, LIVE_MARK, room, style);
 }
 
-/// A large dim icon in the middle of `thumb`, or the one-cell symbol when the area is small or
-/// the grid edge cuts the icon. Kitty draws the thumbnail above it, and the icon needs no
-/// redraw. Returns the row below the icon.
+/// A large dim icon in the middle of the thumbnail area of `vis_idx`, or the one-cell symbol
+/// when the area is small or the grid edge cuts the icon. The large icon is a Kitty image when
+/// the terminal foreground is known, else octant text. Kitty draws the thumbnail above the text,
+/// and the text icon needs no redraw. Returns the row below the icon.
 fn draw_cell_icon(
     frame: &mut Frame<'_>,
     app: &App,
-    thumb: Rect,
+    vis_idx: usize,
     icon: Icon,
-    grid_rect: Rect,
+    grid: &mut GridDraw<'_>,
 ) -> Option<u16> {
+    let thumb = app.gallery.thumb_rect(vis_idx);
     let shape =
-        icons::icon_rect(thumb, app.cell_px).filter(|area| grid_rect.intersection(*area) == *area);
+        icons::icon_rect(thumb, app.cell_px).filter(|area| grid.rect.intersection(*area) == *area);
     if let Some(area) = shape {
+        // The help popup hides the icons.
         if !app.help_visible {
-            icons::draw_icon(frame.buffer_mut(), area, icon, STYLES.dim);
+            if app.grid_icons.as_images() {
+                grid.icons.push(IconCell {
+                    cell: vis_idx,
+                    icon,
+                    area,
+                });
+            } else {
+                icons::draw_icon(frame.buffer_mut(), area, icon, STYLES.dim);
+            }
         }
         return Some(area.bottom());
     }
     let center = Position::new(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
-    if !grid_rect.contains(center) {
+    if !grid.rect.contains(center) {
         return None;
     }
     if !app.help_visible {
@@ -135,7 +162,7 @@ fn draw_folder_cell(
     vis_idx: usize,
     img_idx: usize,
     look: CellLook,
-    grid_rect: Rect,
+    grid: &mut GridDraw<'_>,
 ) {
     let thumb = app.gallery.thumb_rect(vis_idx);
     let icon = if is_parent(app, img_idx) {
@@ -143,7 +170,7 @@ fn draw_folder_cell(
     } else {
         Icon::Folder
     };
-    let Some(below) = draw_cell_icon(frame, app, thumb, icon, grid_rect) else {
+    let Some(below) = draw_cell_icon(frame, app, vis_idx, icon, grid) else {
         return;
     };
     if app.gallery.show_filenames || icon == Icon::Parent {
@@ -154,7 +181,7 @@ fn draw_folder_cell(
         height: LABEL_ROWS,
         ..thumb
     }
-    .intersection(grid_rect);
+    .intersection(grid.rect);
     draw_centered_text(
         frame,
         label_text(app, img_idx, look.marked, name_rect.width),

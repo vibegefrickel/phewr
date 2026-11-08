@@ -16,24 +16,24 @@ use std::time::Instant;
 #[cfg(feature = "video")]
 use video::handle_video_key;
 
-/// Drops a Kitty probe answer that comes after the timeout.
+/// Drops a Kitty probe answer or an OSC 10 answer that comes after the timeout.
 ///
 /// crossterm reads a late `ESC _ G i=31 ; OK ESC \\` as the keys Alt+`_`, `G`, `i`, `=`, ...
-/// and Alt+`\\`. Unfiltered, those keys zoom, jump and open the info panel. Nothing in phewr
-/// uses Alt+`_`, and a key that fits no answer ends the swallow.
+/// and Alt+`\\`, and a late `ESC ] 10 ; rgb:... BEL` as Alt+`]`, `1`, `0`, ... and Ctrl+`g`.
+/// Unfiltered, those keys zoom, jump and open the info panel. Nothing in phewr uses Alt+`_` or
+/// Alt+`]`, and a key that fits no answer ends the swallow.
 #[derive(Debug, Default)]
 pub(crate) struct LateAnswerFilter {
-    /// The answers that can still come late. Each one ends with Alt+`\\`.
+    /// The answers that can still come late. Each one ends with Alt+`\\`, an OSC answer also
+    /// with Ctrl+`g`.
     owed: usize,
-    inside: bool,
+    /// The opener of the answer in progress: `_` for Kitty, `]` for OSC.
+    inside: Option<char>,
 }
 
 impl LateAnswerFilter {
     pub(crate) fn new(owed: usize) -> Self {
-        Self {
-            owed,
-            inside: false,
-        }
+        Self { owed, inside: None }
     }
 
     /// True when `event` belongs to a late answer.
@@ -45,24 +45,31 @@ impl LateAnswerFilter {
             return false;
         };
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('_') if alt && !self.inside => {
-                self.inside = true;
+            KeyCode::Char(open @ ('_' | ']')) if alt && self.inside.is_none() => {
+                self.inside = Some(open);
                 true
             }
-            KeyCode::Char('\\') if alt && self.inside => {
-                self.inside = false;
-                self.owed -= 1;
-                true
-            }
-            KeyCode::Char(c) if self.inside && !alt && c.is_ascii() && !c.is_ascii_control() => {
+            KeyCode::Char('\\') if alt && self.inside.is_some() => self.end_answer(),
+            KeyCode::Char('g') if ctrl && self.inside == Some(']') => self.end_answer(),
+            KeyCode::Char(c)
+                if self.inside.is_some() && !alt && c.is_ascii() && !c.is_ascii_control() =>
+            {
                 true
             }
             _ => {
-                self.inside = false;
+                self.inside = None;
                 false
             }
         }
+    }
+
+    /// The last key of an answer: one answer less is owed.
+    fn end_answer(&mut self) -> bool {
+        self.inside = None;
+        self.owed -= 1;
+        true
     }
 }
 
@@ -184,6 +191,30 @@ mod tests {
         }
         let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
         assert!(!filter.swallows(&alt_underscore), "two answers at most");
+    }
+
+    /// A late OSC 10 answer ends with BEL (Ctrl+`g`) or with `ESC \`, and the Kitty answer follows.
+    #[test]
+    fn filter_drops_late_foreground_answer() {
+        let bel = Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        let mut filter = LateAnswerFilter::new(2);
+        let mut keys = late_answer_keys("\x1b]10;rgb:ffff/ffff/ffff");
+        keys.push(bel.clone());
+        keys.extend(late_answer_keys("\x1b_Gi=31;OK\x1b\\"));
+        for key in keys {
+            assert!(filter.swallows(&key), "{key:?}");
+        }
+        let zero = Event::Key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+        assert!(!filter.swallows(&zero), "both answers came");
+
+        let mut filter = LateAnswerFilter::new(1);
+        for key in late_answer_keys("\x1b]10;rgb:ff/ff/ff\x1b\\") {
+            assert!(filter.swallows(&key), "{key:?}");
+        }
+        assert!(
+            !filter.swallows(&bel),
+            "Ctrl+g outside an answer is a real key"
+        );
     }
 
     #[test]

@@ -194,6 +194,7 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
         // The terminal keeps the pixels. A stored thumbnail goes out again as an `a=p`.
         kitty::clear_placements_to(out)?;
         app.grid_loops.forget_placements();
+        app.grid_icons.forget_placements();
         delete_stale_images_to(app, out, |_| true)?;
         delete_evicted_images_to(app, out)?;
         for id in std::mem::take(&mut app.grid_loops.stale_ids) {

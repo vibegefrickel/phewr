@@ -8,3 +8,6 @@ These pages hold the design facts that the module docs no longer hold. Read AGEN
 - [Benchmarks](benchmarks.md): what the benches of `src/bench/` measure and what they leave out.
 - [App state](app-state.md): the thumbnail jobs, the disk cache, the folder prefetch, the grid loop jobs and the fullscreen view.
 - [Live Photos](live-photos.md): the pairing of an iPhone still and its `.mov`, the identifiers, the scan cost, the choices and the open questions.
+- [Gotchas in detail](gotchas.md): the long form of each gotcha in AGENTS.md, with the numbers and the dates of the decisions.
+- [Module map](layout.md): every file of `src/` with its main types and functions.
+- [Tests in detail](testing.md): the `PHEWR_TEST_*` variables, the fixtures, their make scripts and the real-file tests.

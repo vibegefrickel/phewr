@@ -132,13 +132,19 @@ pub(crate) struct StartAnswers {
     /// The owed Kitty answers that can still come late, as key presses. Zero when a later device
     /// attributes answer came.
     pub(crate) late_answers: usize,
+    /// The foreground color of the terminal (OSC 10), the color of the grid icons.
+    pub(crate) foreground: Option<[u8; 3]>,
 }
 
 /// The primary device attributes query (DA1). Every terminal answers it after the queries
 /// before it.
 const DEVICE_ATTRIBUTES_QUERY: &[u8] = b"\x1b[c";
 
-/// Send the cell size query, the Kitty `probe` and DA1 in one write, and wait for the cell size
+/// OSC 10 asks for the foreground color. The answer ends with BEL like the query, so it never
+/// counts as a Kitty answer.
+const FOREGROUND_QUERY: &[u8] = b"\x1b]10;?\x07";
+
+/// Send the cell size query, the foreground query, the Kitty `probe` and DA1 in one write, and wait for the cell size
 /// and for `answers` Kitty answers.
 ///
 /// A terminal answers in order. The DA1 answer ends the wait even when the terminal skips a
@@ -156,9 +162,12 @@ pub(crate) fn query_cell_size_and_probe(probe: &[u8], answers: usize) -> StartAn
     start_answers(&answer, answers)
 }
 
-/// The cell size query, the Kitty `probe` and DA1, in the order of the answers.
+/// The cell size query, the foreground query, the Kitty `probe` and DA1, in the order of the
+/// answers. The foreground answer comes before the Kitty answers, so the read waits for it
+/// without an end condition of its own.
 fn start_sequence(probe: &[u8]) -> Vec<u8> {
     let mut sequence = CELL_SIZE_QUERY.to_vec();
+    sequence.extend_from_slice(FOREGROUND_QUERY);
     sequence.extend_from_slice(probe);
     sequence.extend_from_slice(DEVICE_ATTRIBUTES_QUERY);
     sequence
@@ -182,13 +191,16 @@ fn start_answers(answer: &[u8], answers: usize) -> StartAnswers {
     let last_end = string_terminator_ends(answer).last();
     let probe_complete = string_terminators_end(answer, answers).is_some()
         || device_attributes_end(answer).is_some();
+    let foreground = parse_foreground(answer);
     StartAnswers {
         cell_px: parse_cell_size_report(answer),
+        foreground,
         probe: last_end.map(|end| answer[..end].to_vec()),
+        // A missing OSC 10 answer can come late too, before the Kitty answers.
         late_answers: if probe_complete {
             0
         } else {
-            answers.saturating_sub(received)
+            answers.saturating_sub(received) + usize::from(foreground.is_none())
         },
     }
 }
@@ -207,13 +219,46 @@ fn device_attributes_end(answer: &[u8]) -> Option<usize> {
     })
 }
 
-/// The end of each answer with the string terminator `ESC \`.
+/// The end of each Kitty answer, `ESC _ ... ESC \`. An OSC answer with the same terminator does
+/// not count.
 fn string_terminator_ends(answer: &[u8]) -> impl Iterator<Item = usize> + '_ {
-    answer
-        .windows(2)
-        .enumerate()
-        .filter(|(_, pair)| *pair == b"\x1b\\")
-        .map(|(start, _)| start + 2)
+    let mut from = 0;
+    std::iter::from_fn(move || {
+        let start = from + find(&answer[from..], b"\x1b_")?;
+        let end = start + find(&answer[start..], b"\x1b\\")? + 2;
+        from = end;
+        Some(end)
+    })
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// The color of the OSC 10 answer, `ESC ] 10 ; rgb:RRRR/GGGG/BBBB` with 1 to 4 hex digits per
+/// channel.
+fn parse_foreground(answer: &[u8]) -> Option<[u8; 3]> {
+    const HEAD: &[u8] = b"\x1b]10;rgb:";
+    let start = find(answer, HEAD)? + HEAD.len();
+    let body = &answer[start..];
+    let end = body
+        .iter()
+        .position(|byte| !byte.is_ascii_hexdigit() && *byte != b'/')?;
+    let mut channels = std::str::from_utf8(&body[..end])
+        .ok()?
+        .split('/')
+        .map(|hex| {
+            let digits = u32::try_from(hex.len())
+                .ok()
+                .filter(|n| (1..=4).contains(n))?;
+            let value = u32::from_str_radix(hex, 16).ok()?;
+            // Scale 1 to 4 hex digits to one byte.
+            u8::try_from(value * 255 / ((1 << (4 * digits)) - 1)).ok()
+        });
+    let color = [channels.next()??, channels.next()??, channels.next()??];
+    channels.next().is_none().then_some(color)
 }
 
 /// The length of the first `count` answers with the string terminator, once all are there.
@@ -332,9 +377,9 @@ fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CELL_SIZE_QUERY, DEVICE_ATTRIBUTES_QUERY, cell_pixel_size, cell_size_report_end,
-        disable_mouse, enable_mouse, parse_cell_size_report, read_answer, start_answers,
-        start_answers_end, start_sequence,
+        CELL_SIZE_QUERY, DEVICE_ATTRIBUTES_QUERY, FOREGROUND_QUERY, cell_pixel_size,
+        cell_size_report_end, disable_mouse, enable_mouse, parse_cell_size_report,
+        parse_foreground, read_answer, start_answers, start_answers_end, start_sequence,
     };
     use crossterm::terminal::WindowSize;
     use std::io::Write;
@@ -463,6 +508,34 @@ mod tests {
     }
 
     #[test]
+    fn foreground_answer_gives_color() {
+        let cell = b"\x1b[6;43;18t".as_slice();
+        let probe = b"\x1b_Gi=31;OK\x1b\\".as_slice();
+        for color in [
+            b"\x1b]10;rgb:ffff/8080/0000\x07".as_slice(),
+            b"\x1b]10;rgb:ff/80/00\x1b\\",
+            b"\x1b]10;rgb:f/8/0\x07",
+        ] {
+            let answer = [cell, color, probe].concat();
+            assert_eq!(start_answers_end(&answer, 1), Some(answer.len()));
+            let answers = start_answers(&answer, 1);
+            let foreground = answers.foreground.unwrap();
+            assert_eq!(foreground[0], 255);
+            assert!((128..=137).contains(&foreground[1]), "{foreground:?}");
+            assert_eq!(foreground[2], 0);
+            assert_eq!(answers.late_answers, 0);
+        }
+        assert_eq!(
+            start_answers_end(&[cell, b"\x1b]10;rgb:ff/ff/ff\x1b\\"].concat(), 1),
+            None,
+            "an OSC answer is no Kitty answer"
+        );
+        assert_eq!(parse_foreground(b"\x1b]10;rgb:ff/ff\x07"), None);
+        assert_eq!(parse_foreground(b"\x1b]10;rgb:fffff/0/0\x07"), None);
+        assert_eq!(parse_foreground(b"\x1b]11;rgb:ff/ff/ff\x07"), None);
+    }
+
+    #[test]
     fn timeout_keeps_early_answer() {
         let only_cell = start_answers(b"\x1b[6;43;18t", 1);
         assert_eq!(only_cell.cell_px, Some((18, 43)));
@@ -476,6 +549,9 @@ mod tests {
         );
         let nothing = start_answers(b"", 1);
         assert_eq!((nothing.cell_px, nothing.probe), (None, None));
+        assert_eq!(nothing.late_answers, 2, "the OSC 10 and the Kitty answer");
+        let with_color = start_answers(b"\x1b]10;rgb:ff/ff/ff\x07", 1);
+        assert_eq!(with_color.late_answers, 1, "only the Kitty answer");
     }
 
     fn window(columns: u16, rows: u16, width: u16, height: u16) -> WindowSize {
@@ -507,8 +583,9 @@ mod tests {
     #[test]
     fn start_sequence_keeps_answer_order() {
         let sequence = start_sequence(b"PROBE");
-        let probe_at = CELL_SIZE_QUERY.len();
+        let probe_at = CELL_SIZE_QUERY.len() + FOREGROUND_QUERY.len();
         assert!(sequence.starts_with(CELL_SIZE_QUERY));
+        assert_eq!(&sequence[CELL_SIZE_QUERY.len()..probe_at], FOREGROUND_QUERY);
         assert_eq!(&sequence[probe_at..probe_at + 5], b"PROBE");
         assert!(sequence.ends_with(DEVICE_ATTRIBUTES_QUERY));
     }

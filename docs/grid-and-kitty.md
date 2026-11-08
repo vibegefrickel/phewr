@@ -110,6 +110,33 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 - Parked pictures count against the limit and go first.
 - The grid writes run in a synchronized update.
 
+### Grid icons
+
+- The icons are the Lucide SVGs in `assets/icons/` (ISC license, `assets/icons/LICENSE`), with
+  `stroke-width` 1.5 instead of 2. `include_str!` puts them into the binary.
+- The start write asks for the terminal foreground with OSC 10, before the Kitty probes. The
+  terminal answers in order, so the read needs no end condition of its own. The query ends with
+  BEL, and an answer with `ESC \` does not count as a Kitty answer.
+- `icons::render` draws an icon with resvg at the pixel size of the icon box. The pixels are the
+  foreground color at 45 % of the SVG alpha (`ICON_ALPHA`). One render takes 0.11 ms at 144x129
+  px and 0.25 ms at 400x344 px (release build). `GridIcons` keeps at most 64 renders in memory.
+- Each icon has 4 fixed image ids below the loop ids (`ICON_ID_BASE`, `SLOTS`), one per pixel
+  size. The first grid rows get the spare rows, so one grid can need 2 sizes of an icon. A new
+  size takes a free id, else the id of a size that no visible cell needs. The placements of
+  that id go first.
+- Each cell places the image with `a=p` and its own placement id `p=` (the visible cell index plus
+  1). A place with the same ids moves the placement.
+- The draw records the icons that the cells need (`GridIcons::wanted`). After the thumbnail
+  writes, `sync_grid_icons` deletes and places only the placements that changed, in a
+  synchronized update. When nothing changed, nothing goes out.
+- The thumbnail padding is transparent. For this reason, a cell that gets its thumbnail loses its
+  icon placement (`a=d,d=i,i=<id>,p=<cell>`) in the same pass.
+- `d=a` and `d=A` remove the icon placements too. `GridIcons::forget_placements` and
+  `forget_images` follow them.
+- If the terminal does not answer OSC 10, or phewr sends no probe, the icons stay octant blocks
+  (2x4 dots per cell) on a ratatui canvas. The thumbnail that Kitty draws covers them.
+- A change of the terminal theme during a session does not change the icon color.
+
 ## Run loop waits
 
 The code is `next_timeout` in `run_loop.rs`. The rules are in AGENTS.md (gotcha "The run loop

@@ -7,6 +7,7 @@ use crate::keys::{LateAnswerFilter, handle_event};
 use crate::kitty_output::render_video_frame;
 use crate::kitty_output::{
     emit_new_thumbnails, play_grid_loops, render_fullscreen_image, render_gallery_images,
+    sync_grid_icons,
 };
 #[cfg(feature = "video")]
 use crate::mpv;
@@ -246,6 +247,8 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
         ViewMode::Gallery => play_grid_loops(app, Instant::now())?,
         _ => false,
     };
+    // After the thumbnails: a cell that got its picture loses its icon in the same pass.
+    sync_grid_icons(app)?;
     Ok(chrome_again)
 }
 

@@ -10,20 +10,26 @@ Scope:
 - Target terminal: Ghostty on macOS Apple Silicon, using the Kitty graphics protocol.
 - Measure speed changes with `just bench` on `PHEWR_TEST_DIR`.
 
-State of the main goal:
+State of the main goal (2026-11-08):
 
-- Speed: the grid, the fullscreen view, the prefetch, the disk cache (QOI) and the Kitty temp file medium are in place. The open speed items are in "Next".
-- Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations and videos open. JPEG XL and camera RAW have no test on real files yet.
+- Speed: the grid, the fullscreen view, the prefetch, the disk cache (QOI), the Kitty temp file medium and the player start ahead of Enter are in place. The open speed items are in "Next".
+- Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
+- Health on 2026-11-08: `just check` passes with 946 tests (55 ignored tests need real files), clippy is clean, and `cargo deny` reports only duplicate versions.
 
 ## Now
 
-Maintainer tests in Ghostty and in herdr: run the 13 steps in `~/Pictures/phewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders and placeholders). Steps 9 and 10 now include the grid loops: every video and animated cell must loop after its still. Measured on 2026-10-30: 30 looping cells cost about 3 % of one core in total (phewr 0.2 %, Ghostty 1.7 %, herdr 1.3 %). Open since the native animations (merged 2026-10-30): plain Ghostty 1.4.0 must pick the animation path (`?` shows it), and herdr 0.9.5 gets the ticks without the probe: herdr answers the animation probe but plays no Kitty animation, and the ticks play there (maintainer, 2026-11-03). Also make sure that `a=f` frames go through `t=t` in Ghostty, and that the start in herdr is not slower (the DA1 answer must end the read).
+Maintainer tests in Ghostty and in herdr: run the 14 steps in `~/Pictures/phewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders, placeholders and Live Photos). Steps 9 and 10 include the grid loops: every video and animated cell must loop after its still. Measured on 2026-10-30: 30 looping cells cost about 3 % of one core in total (phewr 0.2 %, Ghostty 1.7 %, herdr 1.3 %).
+
+Open points of the test run:
+
+- Plain Ghostty 1.4.0 must pick the animation path (`?` shows it). herdr 0.9.5 gets the ticks without the probe, and the ticks play there (maintainer, 2026-11-03).
+- Make sure that `a=f` frames go through `t=t` in Ghostty, and that the start in herdr is not slower (the DA1 answer must end the read).
+- The SVG grid icons (steps 3 and 8): the icons show in the terminal foreground at 45 % alpha. If herdr does not answer OSC 10, the octant icons stay. Make sure that both cases look right.
+- Cmd+Q in the mpv window of a running slideshow must stop the slideshow on the placeholder (`--input-ipc-server`, merged 2026-11-03).
 
 Test run of 2026-10-24 (plain Ghostty): steps 1 and 2 passed. The run stopped at step 3a, and the fixes from it are in (see Done). Continue at step 3 with the current build.
-
-Also test once: Cmd+Q in the mpv window of a running slideshow must stop the slideshow on the placeholder (`--input-ipc-server`, merged 2026-11-03).
 
 After the tests:
 
@@ -34,39 +40,53 @@ After the tests:
 Order: speed first, then formats, then the first release. The first release is postponed to Q1 2027 at the earliest (decided 2026-11-03). Until then, the maintainer tests phewr and only pushes the source to Codeberg for the dotfiles install.
 
 1. Speed
-   - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The issue draft `~/Projects/dev/herdr-issue-kitty-graphics-performance.md` holds the three findings with these numbers. Post it. The RGBA fast path idea for phewr waits for the answer.
-   - Player start: done 2026-10-31 (`6008ca7`). The player starts while the cursor rests on a video, and the run loop wakes at the end of the 200 ms rest delay: after a rest of 500 ms or more, the first frame comes 1 ms to 2 ms after Enter (about 240 ms without a rest). The 17-point HDR cube was measured and dropped (colors move by up to 39 levels). A waiting player ends after 10 s (decided 2026-11-03), because a waiting ffmpeg on a 4K HLG clip holds about 450 MB. `Esc` does nothing in the grid (decided 2026-11-03), only `q` quits. The herdr and crossterm issue drafts stay unposted for now.
-   - Process start: libheif costs about 20 ms of dylib load before `main`. The delete removal took `trash` and Foundation out on 2026-11-03, with no measurable change (50 runs of `phewr --version`: median 15.2 ms before, 15.4 ms after).
-   - Lower thread priority for the folder prefetch: done, no gain. A utility QoS class (2026-10-31) and a rayon pool of its own with 2 threads (2026-11-03) gave no gain beyond the spread of the bench `folders::grid_during_prefetch`. With one libheif tile thread per prefetch decode, the grid was 80 ms (4 %) faster, inside the spread, and the prefetch of a 35-cell HEIC folder took 12.2 s instead of 3.9 s. In the app, the prefetch pauses while the grid has work, so at most one prefetch decode overlaps the grid.
-   - JPEG XL sample copy: done 2026-11-03 (`5ae9309`). The copy runs on all cores through the grids of `jxl-render` (exact pins `jxl-oxide =0.12.6` and `jxl-render =0.12.4`), and the decode is 1.3 to 2.3 times faster. The render is now the largest cost. Open: patch files (text, screenshots) still copy on one thread, because jxl-oxide has no public region API. The upstream draft `~/Projects/dev/jxl-oxide-issue-parallel-stream.md` needs the four API items of the merge report (re-export `ImageBuffer` and `Region`, public grid regions, `ExtraChannel::bit_depth()`, or a row-range `write_to_buffer`). With them, phewr drops the direct `jxl-render` dependency.
-   - ORF previews from the Olympus maker note: done 2026-11-03 (`6912776`, cache v20). The fit rule of `covers` came with it, so every RAW fullscreen view takes a preview that covers the fit (ORF: 31 ms to 73 ms instead of 2.2 s to 7.5 s).
-   - DCT scale for the fit: done 2026-11-03 (`52c9222`, cache v21). libjpeg-turbo decodes at the smallest NEON scale (1/8, 1/4, 1/2, 1) that covers the fit. The cold grid of 24 iPhone JPEGs is about 8 % faster. The odd eighths run in plain C and are slower than the full decode.
+   - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The RGBA fast path for phewr waits for the answer to the herdr issue: send `f=32`, so that the herdr `t=f` fast path applies. Measure it against the numbers above before you build it. If herdr scrolls without lag on Ghostty 1.4.0, drop the idea.
+   - JPEG XL patch files (text, screenshots) still copy on one thread, because jxl-oxide has no public region API. The upstream draft needs four API items: re-export `ImageBuffer` and `Region`, public grid regions, `ExtraChannel::bit_depth()`, or a row-range `write_to_buffer`. With them, phewr drops the direct `jxl-render` dependency.
+   - Loop job results (idea, 2026-11-08): a running loop job alone gives no 10 ms poll, so the first loop frame of a cold grid and the start of the folder prefetch can wait up to 250 ms for the idle timeout. A wake on the job result removes this wait without a 10 ms poll during the long ffmpeg runs. Measure it with `bench::live::grid_animation` before you build it.
+   - AV1 on M1 and M2 has no VideoToolbox decoder and takes the software path after one failed GPU run. Untested.
    - Candidate, low priority: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size.
-   - Video start without VideoToolbox: done 2026-11-03 (`141a2ad`). After one failed GPU run, later starts of the file go straight to software for the session (VP8: 110 ms, then 32 ms). AV1 on M1 and M2 takes the same path, untested.
-2. Formats
-   - HDR stills: done 2026-10-31 (`263e48d`). PQ and HLG in AVIF, HEIC, JPEG XL and 16-bit PNG map like the player cube, with fixtures in `tests/fixtures/hdr/`. Thumbnail cache v14. jxl-oxide 0.12 clips lossy HDR JPEG XL outside the sRGB gamut (a test marks it).
-   - JPEG XL with a PQ or HLG ICC profile: done with the HDR stills.
-   - Real files for the new formats. `~/Pictures/phewr-test/08-raw` holds camera RAW files. JPEG XL has only converted and synthetic files.
-     - JPEG XL on real files: done 2026-11-03. 34 of 40 public files match their reference within 4 levels, and gray PQ now takes the HDR path. On 2026-11-03, 6 more real files (`~/Downloads/phewr-jxl-real/`, its `REPORT.md` holds the sources): two CC0 linear sRGB Lumix photos match within 1 level, a CC0 Samsung SM-S901E DNG 1.7 with JPEG XL tiles decodes through sips (3.4 s for the develop, the embedded JPEG serves the grid), and three lossy PQ photos of Eric Chan show the XYB clip (max 104 to 166 levels, mean 1.7 to 3.1). Open: a real HLG photo (Sony HLG `.HIF` is the one real source, the public files have no license), an iPhone 16 Pro ProRAW with JPEG XL, a plain camera or app `.jxl`, a P3 PQ file, the saklistudio.com HDR samples (the server blocks scripts), the `moxcms` gamut edge and the XYB clip of jxl-oxide.
-     - Camera RAW on real files: done 2026-11-03 (`df7ba6d`, `3c8027b`). All 22 files of `08-raw` and four real portrait RAF and ARW files pass. `sips -Z` develops the RAW and reads no preview. phewr turns a RAF or ARW develop that sips left unturned, and a black develop gives way to the embedded JPEG. An orientation of 2, 3 or 4 on RAF and ARW comes from a pixel compare with a small embedded JPEG (`ace8d40`, cache v18).
-   - HDR10 peak: done 2026-11-03. A PQ video, HEIF, PNG or JPEG XL maps with the peak of its HDR metadata, tested on the Apple HDR10 example clip, two libavif stills and 4000-nit fixtures. One `color::convert` takes the peak for all callers (`18cc453`). The probe reads the peak from the container (`af61a4b`), tested on two small MP4 fixtures. The embedded HEIC preview maps with the peak of the primary image (`b34d7e6`).
-   - HEIC preview of another aspect: two synthetic tests prove other margins and no stretch (`a972574`, `square_preview_of_wide_photo_keeps_its_shape`, `padded_preview_keeps_the_aspect_of_its_cells`). A real file with such a thumbnail is still missing.
-3. Delete removal: done 2026-11-03 (`5da64fa`). The keys `d` and `D`, the delete question and the `trash` crate are gone. The marks (`Space`, `a`, `A`) stay in `app/marks.rs` for a later use, for example a slideshow of the marked images.
-4. Grid loops: done (merged 2026-10-27). Native Kitty animations for the loops: done (merged 2026-10-30, `9d84897`, the follow-ups in `e0a9e62`). herdr 0.9.5 gets the ticks, and they play there (maintainer, 2026-11-03). Open: the terminal test of the animation path in Ghostty 1.4.0 ("Now"). Stop the loops, the player and the slideshow while the tab is hidden (mode 2033): stopped on 2026-10-30, crossterm 0.27 to 0.29 never end the report sequence and lose all input after it, the issue draft is `~/Projects/dev/crossterm-issue-visibility-report.md` (`REVIEW-2026-10-28.md` K3).
-5. First release, postponed to Q1 2027 at the earliest: create the Codeberg repository `phewr`, then `just render` and `just release`. The dry run `just render` passed on 2026-11-03: a 3.3 MB arm64 tarball, and the formula passes `brew style` in a tap folder. The formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (done 2026-10-27). The release binary does not bundle FFmpeg. FFmpeg stays a Homebrew dependency.
-6. Small leftovers of the cleanup review: done 2026-11-03 (`df7ba6d`). `batch_since` replaces `entries_since`, the loop ids skip the live ids after a wrap, an empty image writes nothing, and `video::tests::real_clip_first_frame` tests the first frame on a real clip.
-7. Dependencies: `just outdated` lists the direct dependencies with a newer version. On 2026-11-03, all direct dependencies are at their newest version (`2d8dd99`: lru 0.19, moxcms 0.9.1). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
-   - File the moxcms issue: 0.9.1 `make_gamma_table_impl` (`src/gamma.rs:645`, line 654) lost `.round()`, so 8-bit and 16-bit outputs to sRGB, BT.709 and CICP destinations truncate. The identity transform sRGB to sRGB maps 200 to 199. phewr works around it with `rounding_output_curve` (`docs/images-and-colors.md`, "Conversion").
+2. Formats: real files that are still missing.
+   - JPEG XL: a real HLG photo (Sony HLG `.HIF` is the one real source, the public files have no license), an iPhone 16 Pro ProRAW with JPEG XL, a plain camera or app `.jxl`, a P3 PQ file, and the saklistudio.com HDR samples (the server blocks scripts). Also open: the `moxcms` gamut edge and the XYB clip of jxl-oxide.
+   - HEIC: a real file with an embedded thumbnail of another aspect.
+   - Live Photos: a pair that a camera wrote as a pair (`docs/live-photos.md`, question 1).
+3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
+4. First release, postponed to Q1 2027 at the earliest: create the Codeberg repository `phewr`, then `just render` and `just release`. The dry run `just render` passed on 2026-11-03: a 3.3 MB arm64 tarball, and the formula passes `brew style` in a tap folder.
+5. Dependencies: all direct dependencies are at their newest version (2026-11-03). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18. If `moxcms_still_truncates_known_curves` fails after an update, remove `rounding_output_curve` and the test.
+6. Upstream issue drafts in `~/Projects/dev/` (maintainer, not posted):
+   - `herdr-issue-kitty-graphics-performance.md`: the three herdr findings with the numbers above.
+   - `herdr-issue-kitty-graphics-offset.md`: herdr scales a relayed image to whole cells and applies `X=` / `Y=` twice.
+   - `crossterm-issue-visibility-report.md`: the mode 2033 report sequence (item 3).
+   - `jxl-oxide-issue-parallel-stream.md`: the four API items (item 1).
+   - `moxcms-issue-gamma-table-round.md`: 0.9.1 `make_gamma_table_impl` (`src/gamma.rs:645`, line 654) lost `.round()`, so the identity transform sRGB to sRGB maps 200 to 199.
 
 ## Later
 
-- Android Motion Photos (idea, not decided, 2026-11-03): Pixel and Samsung phones put the clip inside the JPEG or HEIC. They could get the grid roll and the play on Enter of the Live Photos. immich-app/test-assets holds 5 real files in `formats/motionphoto/` (AGPL, local tests only).
-- Live Photo pairing: done 2026-11-03 (`4e2d22b`, choices B and C, `docs/live-photos.md`). Open: a pair that a camera wrote as a pair (question 1). The motion length in the status row is done (`7a62965`). The prestart of the motion in the fullscreen view is done (`b82f164`, 0.1 ms instead of about 123 ms after Enter). The bench group `bench::live` is done (`bd2a3d2`, `just bench-live`): on an idle machine, the pairing costs 3.2 % of the first scan entry with 3334 pairs, and every Live cell of the real folder loops after 1435 ms.
-
+- Android Motion Photos (idea, not decided, 2026-11-03): Pixel and Samsung phones put the clip inside the JPEG or HEIC. phewr can give them the grid roll and the play on Enter of the Live Photos. immich-app/test-assets holds 5 real files in `formats/motionphoto/` (AGPL, local tests only).
+- The marks (`Space`, `a`, `A`) stay in `app/marks.rs` without a use. A slideshow of the marked images is one option.
 
 ## Done
 
-- Review of 2026-10-28 (worked 2026-10-30, `REVIEW-2026-10-28.md` holds the plan and the state): 26 commits through 12 workers.
+- Cleanup of 2026-11-08: `AGENTS.md` went from 804 to about 390 lines. The long forms moved word for word into `docs/gotchas.md`, `docs/layout.md` and `docs/testing.md`. The test modules of `decode/jxl.rs`, `decode/sips.rs` and `player/probe/mod.rs` moved into `tests.rs` files. `REVIEW-2026-10-28.md` is removed. A late OSC 10 answer after a probe timeout no longer becomes key presses (`LateAnswerFilter`).
+- SVG grid icons (2026-11-08): the cells without a thumbnail show the Lucide icons `image`, `play`, `folder` and `folder-up` as Kitty images in the terminal foreground (OSC 10). Without an OSC 10 answer, the octant icons stay.
+- `--cwd-file <PATH>` (2026-11-05): phewr writes the folder of the grid into the file on exit, like yazi. A `p()` wrapper in the shell does the `cd` (README, "Change the shell directory on exit").
+- `Tab` toggles the info panel, not `i` (2026-11-04, `7e76b6c`).
+- Live Photos (2026-11-03 and 2026-11-04): the pairing with the grid roll (`4e2d22b`, choices B and C), the motion length in the status row (`7a62965`), the motion prestart in the fullscreen view (`b82f164`, 0.1 ms instead of about 123 ms after Enter) and the bench group `bench::live` (`bd2a3d2`). On an idle machine, the pairing costs 3.2 % of the first scan entry with 3334 pairs, and every Live cell of the real folder loops after 1435 ms.
+- DCT scale for the fit (2026-11-03, `52c9222`, cache v21): libjpeg-turbo decodes at the smallest NEON scale (1/8, 1/4, 1/2, 1) that covers the fit. The cold grid of 24 iPhone JPEGs is about 8 % faster. The odd eighths run in plain C and are slower than the full decode.
+- ORF previews from the Olympus maker note (2026-11-03, `6912776`, cache v20), with the fit rule of `covers`: every RAW fullscreen view takes a preview that covers the fit (ORF: 31 ms to 73 ms instead of 2.2 s to 7.5 s).
+- Video start without VideoToolbox (2026-11-03, `141a2ad`): after one failed GPU run, later starts of the file go straight to software for the session (VP8: 110 ms, then 32 ms).
+- JPEG XL sample copy on all cores (2026-11-03, `5ae9309`): the decode is 1.3 to 2.3 times faster, with the exact pins `jxl-oxide =0.12.6` and `jxl-render =0.12.4`.
+- Real files (2026-11-03): 34 of 40 public JPEG XL files match their reference within 4 levels, and gray PQ takes the HDR path. 6 more real JPEG XL files are in `~/Downloads/phewr-jxl-real/` (`REPORT.md` holds the sources and results). All 22 camera RAW files of `08-raw` and four real portrait RAF and ARW files pass (`df7ba6d`, `3c8027b`, the flip compare in `ace8d40`, cache v18).
+- HDR10 peak (2026-11-03): a PQ video, HEIF, PNG or JPEG XL maps with the peak of its HDR metadata (`18cc453`). The probe reads the peak from the container (`af61a4b`), and the embedded HEIC preview maps with the peak of the primary image (`b34d7e6`).
+- HEIC preview of another aspect (2026-11-03, `a972574`): two synthetic tests prove other margins and no stretch.
+- Delete removal (2026-11-03, `5da64fa`): the keys `d` and `D`, the delete question and the `trash` crate are gone. The process start did not change (50 runs of `phewr --version`: median 15.2 ms before, 15.4 ms after).
+- Dependencies current (2026-11-03, `2d8dd99`): lru 0.19 and moxcms 0.9.1, with the workaround `rounding_output_curve`.
+- Small leftovers of the cleanup review (2026-11-03, `df7ba6d`): `batch_since` replaces `entries_since`, the loop ids skip the live ids after a wrap, an empty image writes nothing, and `real_clip_first_frame` tests the first frame on a real clip.
+- Lower thread priority for the folder prefetch (2026-10-31 and 2026-11-03): no gain. A utility QoS class and a rayon pool of its own with 2 threads gave no gain beyond the spread of `folders::grid_during_prefetch`. With one libheif tile thread per prefetch decode, the grid was 80 ms (4 %) faster, inside the spread, and the prefetch of a 35-cell HEIC folder took 12.2 s instead of 3.9 s.
+- Native Kitty animations for the grid loops (merged 2026-10-30, `9d84897`, the follow-ups in `e0a9e62`). herdr 0.9.5 gets the ticks.
+- Player start (2026-10-31, `6008ca7`): the player starts while the cursor rests on a video. After a rest of 500 ms or more, the first frame comes 1 ms to 2 ms after Enter (about 240 ms without a rest). A measurement dropped the 17-point HDR cube (colors move by up to 39 levels). Decisions of 2026-11-03: a waiting player ends after 10 s, because a waiting ffmpeg on a 4K HLG clip holds about 450 MB. `Esc` does nothing in the grid, only `q` quits.
+- HDR stills (2026-10-31, `263e48d`, cache v14): PQ and HLG in AVIF, HEIC, JPEG XL (also with a PQ or HLG ICC profile) and 16-bit PNG map like the player cube, with fixtures in `tests/fixtures/hdr/`.
+- The release formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (2026-10-27). The release binary does not bundle FFmpeg.
+- Review of 2026-10-28 (worked 2026-10-30 to 2026-11-03): 26 commits through 12 workers. Every item is done or listed above. The plan file `REVIEW-2026-10-28.md` is in the git history (removed 2026-11-08).
 - No small `▶` marker anymore.
 - Grid loops (2026-10-27): every visible video and animated cell plays a loop of its frames, in place of the `▶` marker. Decisions: a short clip with fewer than 12 keyframes decodes 12 frames at a constant rate, 2 decode threads per loop run, new stills cancel the loop runs, the prune removes loop files before stills, `[gallery] animate = false` turns the loops off.
 - One `q` leaves the player for the grid, also after a step from the fullscreen view onto a video (before, the first `q` showed the fullscreen placeholder).

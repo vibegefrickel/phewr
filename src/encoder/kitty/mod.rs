@@ -288,6 +288,33 @@ pub(crate) fn delete_placements_to<W: Write + ?Sized>(out: &mut W, id: u32) -> i
     apc(out, format_args!("a=d,d=i,i={id},q=2"), b"")
 }
 
+/// Delete the placement `placement` of the image `id` and keep its pixels.
+pub(crate) fn delete_placement_to<W: Write + ?Sized>(
+    out: &mut W,
+    id: u32,
+    placement: u32,
+) -> io::Result<()> {
+    apc(out, format_args!("a=d,d=i,i={id},p={placement},q=2"), b"")
+}
+
+/// Place a stored image at the cursor as the placement `placement`, scaled to `cell_box`. A
+/// second place with the same ids moves the placement. `C=1` keeps the text cursor fixed.
+pub(crate) fn place_as_to<W: Write + ?Sized>(
+    out: &mut W,
+    id: u32,
+    placement: u32,
+    cell_box: (u16, u16),
+) -> io::Result<()> {
+    apc(
+        out,
+        format_args!(
+            "a=p,q=2,C=1,i={id},p={placement}{}",
+            cell_box_keys(Some(cell_box))
+        ),
+        b"",
+    )
+}
+
 /// Place a stored image by its id at the cursor, scaled to `cell_box`. `C=1` keeps the text
 /// cursor fixed: a large placement never scrolls the grid.
 pub(crate) fn place_by_id_to<W: Write + ?Sized>(

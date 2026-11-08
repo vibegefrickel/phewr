@@ -9,6 +9,8 @@ pub(crate) struct Placement {
     /// The cursor as `(column, row)`, 1-based like `CSI row ; column H`.
     pub cell: (u16, u16),
     pub cell_box: Option<(u16, u16)>,
+    /// The placement id `p=`. A second place with the same ids moves the placement.
+    pub number: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,7 +150,17 @@ impl FakeTerminal {
                 let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
                 self.store(id, bytes);
             }
-            Some("p") => self.place(number("i").unwrap_or(0), cell_box),
+            Some("p") => {
+                let (id, placement) = (number("i").unwrap_or(0), number("p"));
+                if placement.is_some() {
+                    self.placements
+                        .retain(|old| (old.id, old.number) != (id, placement));
+                }
+                self.place(id, cell_box);
+                if let Some(last) = self.placements.last_mut().filter(|last| last.id == id) {
+                    last.number = placement;
+                }
+            }
             Some("f") => {
                 let id = number("i").unwrap_or(0);
                 let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
@@ -177,7 +189,10 @@ impl FakeTerminal {
                 }
                 Some("i") => {
                     let id = number("i").unwrap_or(0);
-                    self.placements.retain(|placement| placement.id != id);
+                    let only = number("p");
+                    self.placements.retain(|placement| {
+                        placement.id != id || only.is_some_and(|p| placement.number != Some(p))
+                    });
                 }
                 Some("I") => {
                     let id = number("i").unwrap_or(0);
@@ -238,6 +253,7 @@ impl FakeTerminal {
             id,
             cell: self.cursor,
             cell_box,
+            number: None,
         });
     }
 }
@@ -253,7 +269,8 @@ fn stores_places_and_deletes() {
         vec![Placement {
             id: 7,
             cell: (5, 3),
-            cell_box: None
+            cell_box: None,
+            number: None,
         }]
     );
 

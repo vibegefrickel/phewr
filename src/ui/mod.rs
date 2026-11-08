@@ -25,6 +25,8 @@ const STATUS_ROWS: u16 = 1;
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     let area = frame.area();
     app.layout.screen = area;
+    // Only the grid asks for icons.
+    app.grid_icons.wanted.clear();
     let (main, info) = split_info(area, app);
     match app.mode {
         ViewMode::Gallery => draw_gallery(frame, app, main, status),
@@ -134,7 +136,9 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
     let filtered_count = app.gallery.filtered_indices.len();
     let line = gallery_status_line(app, filtered_count, status);
     draw_status_row(frame, app, status_area(area), line, status);
-    draw_thumbnail_cells(frame, app, grid_rect);
+    let mut wanted = std::mem::take(&mut app.grid_icons.wanted);
+    draw_thumbnail_cells(frame, app, grid_rect, &mut wanted);
+    app.grid_icons.wanted = wanted;
 }
 
 /// The rows above the status row.

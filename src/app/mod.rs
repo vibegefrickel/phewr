@@ -30,7 +30,7 @@ use crate::gallery::{GalleryState, ThumbnailCache};
 pub(crate) use crate::image_list::EntryKind;
 use crate::image_list::SharedImageList;
 use crate::info::ImageInfo;
-use crate::kitty_output::TerminalImages;
+use crate::kitty_output::{GridIcons, TerminalImages};
 use crate::prefetch::Prefetcher;
 use crate::scanner::LivePhotos;
 use disk_cache::default_disk_cache_dir;
@@ -163,6 +163,8 @@ pub(crate) struct App {
 
     /// The images that the terminal stores. A cell places a stored image by its id.
     pub(crate) terminal_images: TerminalImages,
+    /// The SVG icons of the cells without a thumbnail, as Kitty images.
+    pub(crate) grid_icons: GridIcons,
     pub(crate) grid_loops: grid_loops::GridLoops,
     /// True after the thumbnail cache dropped its pictures while the terminal still stores them.
     /// The next redraw then sends a full `d=A`.
@@ -274,6 +276,7 @@ impl App {
             stale_image_ids: Vec::new(),
             animated: HashMap::new(),
             terminal_images: TerminalImages::new(),
+            grid_icons: GridIcons::default(),
             grid_loops: grid_loops::GridLoops::new(config.animate),
             graphics_storage_dirty: false,
         }
@@ -299,6 +302,7 @@ impl App {
     pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         crate::encoder::kitty::delete_all_to(out)?;
         self.terminal_images.clear();
+        self.grid_icons.forget_images();
         self.grid_loops.forget_placements();
         Ok(())
     }

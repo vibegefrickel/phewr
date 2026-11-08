@@ -1,6 +1,8 @@
-//! The large icons of the grid cells, in octant blocks (2x4 dots per cell) that Ghostty draws
-//! itself. A cell too small for an icon of two rows gets a one-cell symbol. `stamp_play` draws
-//! the play triangle into the pixels of a still: Kitty draws a picture above the text.
+//! The large icons of the grid cells. With the terminal foreground known, an icon is a Lucide
+//! SVG (`assets/icons/`) that `render` turns into pixels for a Kitty image. Without it, the icon
+//! is octant blocks (2x4 dots per cell) that Ghostty draws itself. A cell too small for an icon
+//! of two rows gets a one-cell symbol. `stamp_play` draws the play triangle into the pixels of a
+//! still: Kitty draws a picture above the text.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -10,12 +12,14 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::canvas::{Canvas, Painter, Shape};
 
 const ICON_HEIGHT_SHARE: f64 = 0.3;
+/// The alpha of a rendered icon: the foreground at this share is as dim as `STYLES.dim`.
+const ICON_ALPHA: f32 = 0.45;
 /// A smaller cell gets the one-cell symbol.
 const MIN_ICON_ROWS: u16 = 2;
 /// The dots of one octant cell.
 const DOTS: (u16, u16) = (2, 4);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Icon {
     /// An image whose thumbnail is not decoded yet.
     Loading,
@@ -27,6 +31,19 @@ pub(crate) enum Icon {
 }
 
 impl Icon {
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 4] = [Self::Loading, Self::Video, Self::Folder, Self::Parent];
+
+    /// The Lucide icon (ISC license, `assets/icons/LICENSE`).
+    const fn svg(self) -> &'static str {
+        match self {
+            Self::Loading => include_str!("../assets/icons/image.svg"),
+            Self::Video => include_str!("../assets/icons/play.svg"),
+            Self::Folder => include_str!("../assets/icons/folder.svg"),
+            Self::Parent => include_str!("../assets/icons/folder-up.svg"),
+        }
+    }
+
     pub(crate) const fn symbol(self) -> &'static str {
         match self {
             Self::Loading => "\u{25cc}",
@@ -99,6 +116,31 @@ pub(crate) fn stamp_play(image: &mut image::RgbaImage) {
     }
 }
 
+/// Render `icon` into a picture of `size` pixels in `color`, at `ICON_ALPHA`. The icon is a
+/// square of the full height, centered. `None` for an empty size.
+pub(crate) fn render(icon: Icon, size: (u32, u32), color: [u8; 3]) -> Option<image::RgbaImage> {
+    use resvg::{tiny_skia, usvg};
+
+    let tree = usvg::Tree::from_str(icon.svg(), &usvg::Options::default()).ok()?;
+    let mut pixmap = tiny_skia::Pixmap::new(size.0, size.1)?;
+    let side = size.0.min(size.1) as f32;
+    let scale = side / tree.size().width().max(tree.size().height());
+    let left = (size.0 as f32 - side) / 2.0;
+    let top = (size.1 as f32 - side) / 2.0;
+    let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(left, top);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    // The SVG strokes in black, so only the alpha carries the shape.
+    let pixels = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let alpha = (f32::from(pixel.alpha()) * ICON_ALPHA).round() as u8;
+            [color[0], color[1], color[2], alpha]
+        })
+        .collect();
+    image::RgbaImage::from_raw(size.0, size.1, pixels)
+}
+
 /// `over` on `under`, with the alpha of `over`.
 fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
     let alpha = u32::from(over[3]);
@@ -167,7 +209,7 @@ impl Shape for IconShape {
 
 #[cfg(test)]
 mod tests {
-    use super::{Icon, draw_icon, icon_rect, stamp_play};
+    use super::{ICON_ALPHA, Icon, draw_icon, icon_rect, render, stamp_play};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Style};
@@ -206,6 +248,30 @@ mod tests {
             assert!(drawn.len() >= 8, "{icon:?} draws a visible shape");
             assert!(drawn.iter().all(|cell| cell.fg == Color::DarkGray));
         }
+    }
+
+    #[test]
+    fn svg_icons_render_in_color() {
+        let max_alpha = (255.0 * ICON_ALPHA).round() as u8;
+        for icon in Icon::ALL {
+            let picture = render(icon, (72, 43), [10, 200, 30]).unwrap();
+            assert_eq!(picture.dimensions(), (72, 43));
+            let drawn: Vec<_> = picture.pixels().filter(|pixel| pixel[3] > 0).collect();
+            assert!(drawn.len() > 100, "{icon:?} draws a visible shape");
+            assert!(drawn.iter().all(|pixel| pixel.0[..3] == [10, 200, 30]));
+            assert!(drawn.iter().all(|pixel| pixel[3] <= max_alpha));
+            assert_eq!(
+                picture.get_pixel(0, 0)[3],
+                0,
+                "{icon:?}: the corner is clear"
+            );
+            assert_eq!(
+                picture.get_pixel(71, 21)[3],
+                0,
+                "{icon:?}: the square is centered"
+            );
+        }
+        assert!(render(Icon::Folder, (0, 10), [0, 0, 0]).is_none());
     }
 
     #[test]

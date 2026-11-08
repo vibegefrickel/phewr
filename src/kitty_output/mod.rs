@@ -1,6 +1,7 @@
 //! The Kitty writes per frame: the fullscreen image, the video frame, the grid and its loops.
 
 mod grid;
+mod grid_icons;
 mod loops;
 mod terminal_images;
 
@@ -10,6 +11,7 @@ use crate::encoder::{self, MAX_PAYLOAD_BYTES};
 use crate::gallery::centered;
 use crossterm::{cursor, queue};
 pub(crate) use grid::{emit_new_thumbnails, render_gallery_images};
+pub(crate) use grid_icons::{GridIcons, IconCell, sync_grid_icons};
 pub(crate) use loops::play_grid_loops;
 use ratatui::prelude::*;
 use std::borrow::Cow;
@@ -98,6 +100,7 @@ pub(crate) fn render_video_frame(app: &mut App) -> io::Result<()> {
     app.with_graphics_out(|app, out| {
         if render_video_frame_to(app, out, clear)? && clear {
             app.clear_before_video = false;
+            app.grid_icons.forget_placements();
         }
         Ok(())
     })

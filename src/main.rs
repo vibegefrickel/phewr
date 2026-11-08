@@ -173,6 +173,8 @@ struct StartProbe {
     cell_px: Option<(u32, u32)>,
     /// The Kitty answers that can still come late, as key presses.
     late_answers: usize,
+    /// The terminal foreground. Without the round trip of the probe, phewr does not ask for it.
+    foreground: Option<[u8; 3]>,
 }
 
 /// Probe the transfer, the loop path and the cell size in one round trip. Without a probe, the
@@ -187,12 +189,14 @@ fn probe_terminal(
     let mut cell_px = None;
     let mut asked_cell_size = false;
     let mut late_answers = 0;
+    let mut foreground = None;
     let graphics =
         encoder::kitty::detect_backend(transfer_override, loops, ssh, |sequence, answers| {
             let start = query_start(sequence, answers);
             asked_cell_size = true;
             cell_px = start.cell_px;
             late_answers = start.late_answers;
+            foreground = start.foreground;
             start.probe
         });
     if !asked_cell_size {
@@ -202,6 +206,7 @@ fn probe_terminal(
         graphics,
         cell_px,
         late_answers,
+        foreground,
     }
 }
 
@@ -271,6 +276,7 @@ fn main() -> io::Result<()> {
     let cell_px = probe.cell_px.unwrap_or_else(window_cell_pixel_size);
     state.late_answers = keys::LateAnswerFilter::new(probe.late_answers);
     let mut app = App::with_config(cell_px, shared_list, &config, config_paths.state);
+    app.grid_icons.set_color(probe.foreground);
     prepare_app(
         &mut app,
         probe.graphics,
@@ -386,12 +392,14 @@ mod tests {
                     cell_px: Some((10, 20)),
                     probe: None,
                     late_answers: 1,
+                    foreground: Some([200, 200, 200]),
                 }
             },
             || panic!("the cell size goes out with the probe"),
         );
         assert_eq!(probe.cell_px, Some((10, 20)));
         assert_eq!(probe.late_answers, 1);
+        assert_eq!(probe.foreground, Some([200, 200, 200]));
         assert_eq!(probe.graphics.transfer(), Transfer::Direct);
         assert_eq!(probe.graphics.loops(), Loops::Ticks);
     }
@@ -407,6 +415,7 @@ mod tests {
         );
         assert_eq!(probe.cell_px, Some((7, 14)));
         assert_eq!(probe.late_answers, 0);
+        assert_eq!(probe.foreground, None);
         assert_eq!(probe.graphics.transfer(), Transfer::Png);
         assert_eq!(probe.graphics.loops(), Loops::Animation);
     }
