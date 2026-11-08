@@ -84,7 +84,7 @@ holds the queues. `decode.rs` holds the work of one job.
 
 ## Folder prefetch
 
-- The rules are in AGENTS.md (gotcha "Folder prefetch"). The code is in `app/folder_prefetch/`.
+- The rules are in `gotchas.md` ("Folder prefetch"). The code is in `app/folder_prefetch/`.
 - `mod.rs` holds the state and the rest of the cursor. `worker.rs` holds the thread and the first
   screen.
 - The start delay is 300 ms (`FOLDER_PREFETCH_DELAY`).

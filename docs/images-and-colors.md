@@ -247,7 +247,7 @@ The code is in `decode/hdr/`.
 
 ## JPEG XL
 
-- The facts of the ICC handling and of the XYB limit are in AGENTS.md (gotcha "JPEG XL colors").
+- The facts of the ICC handling and of the XYB limit are in `gotchas.md` ("JPEG XL colors").
 - A PQ or HLG file keeps its 16-bit signal for the tone map of `decode/hdr/`.
 - On 2026-11-03, 40 public files (27 of the libjxl conformance set, 13 from jpegxl.info,
   convertico.com and libjxl/testdata) went through `real_jxl_matches_reference`. 34 match their
@@ -284,7 +284,7 @@ The code is in `decode/hdr/`.
   Patches, layers, a frame offset, a crop and spot colors take the stream. cjxl writes patches
   for text and screenshots, so these files still copy on one thread. The render is now the
   largest cost: about 70 ms for 12 MP lossy and 280 ms for 12 MP lossless under load.
-- The update rule of the exact pins of `jxl-oxide` and `jxl-render` is in AGENTS.md (gotcha "JPEG
+- The update rule of the exact pins of `jxl-oxide` and `jxl-render` is in `gotchas.md` ("JPEG
   XL sample copy").
 - Tested on 2026-11-03: two linear sRGB Lumix photos (within 1 level), a Samsung DNG 1.7 with
   JPEG XL tiles (through sips), and three lossy PQ photos (the XYB clip, max 104 to 166 levels).

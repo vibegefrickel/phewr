@@ -146,7 +146,7 @@ read after a reboot.
 ## Scan cost
 
 - Today, one folder argument is one `read_dir` and one sort. The first batch waits for the sort
-  of the whole folder: 6.3 ms for 10 000 files (AGENTS.md, "Entry kinds").
+  of the whole folder: 6.3 ms for 10 000 files (`gotchas.md`, "Entry kinds").
 - The pairing pass of the probe runs after the sort, on the sorted names:
 
 | Pass | 1000 names | 10 000 names |
