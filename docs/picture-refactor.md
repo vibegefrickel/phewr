@@ -1,9 +1,11 @@
 # The shared picture pipeline: refactor plan
 
-Status (2026-11-09): phases 1, 2 and 3 are done in phewr (`6b7482a`, `36ecdea`, `688dc4e`).
+Status (2026-11-09): phases 1, 2, 3, 4 and 4b are done (`6b7482a`, `36ecdea`, `688dc4e`,
+schnattr `8f45abc`, `455ac6f`). Next is the sync of phase 4b into schnattr (step 2 of phase 4b).
+schnattr turns on `kitty-flush`, `kitty-events`, `kitty-layers` and `kitty-overlay`. It moves to
+moxcms 0.9.2 and deletes its `allow(unfulfilled_lint_expectations)`. Phase 5 comes after that.
 Phase 0 is open: the maintainer measures the baseline in a real terminal and fills the herdr note.
-Phase 4 (schnattr takes the module) is next. This file in phewr is the master of the plan.
-schnattr keeps a copy of the draft of 2026-11-09.
+This file in phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
 
 phewr, schnattr and youtr each decode, shape and send pictures to the terminal. phewr does this
 best: it is the fastest, it has the most formats, and it measured each step. This plan makes
@@ -192,8 +194,8 @@ Open items for the next phases:
 - The module uses these crates besides the list of "The module": `ratatui`, `crossterm`,
   `directories`, `rustix`, `tempfile` and `jxl-render`.
 - Done in phase 3: the module takes its names from `CARGO_PKG_NAME`, and phewr keeps its names.
-- The module tests read `tests/fixtures/`. A copy has no fixtures. Phase 4 copies them or gates
-  those tests.
+- Done in phase 4b: the module tests read `tests/fixtures/`, and `just pictures-sync` copies
+  these fixtures into the copy.
 - `pictures::kitty` still holds `Loops`, `transmit_frame` and the animation writes of
   `encoder/`. Phase 2 decides whether they belong to the app.
 
@@ -226,10 +228,6 @@ Open items for phase 4 and phase 5:
 - The engine report maps each part of `frame/kitty.rs` of schnattr: `Placements::place` and
   `place_under`, `hide`, `Screen::flush` for `update`, `resized`, `cleared`, `focus_gained`,
   `delete_all`, `Pixels`, `TERMINAL_IMAGE_BUDGET` for `TERMINAL_BUDGET`, and the sync constants.
-- phewr does not call `flush`, the events, `with_placing`, `with_pass_bytes`, `lost`, `hide` and
-  `place_under`. They carry `cfg_attr(not(test), expect(dead_code))` in two impl blocks. In an
-  app that uses every item of a block, `expect` fails the build, and the lint table forbids
-  `allow`. Decided on 2026-11-09: a cargo feature per part of the interface (see "Phase 4b").
 - phewr keeps `d=A` on an overlay, a resize and the quit, and it has no focus reports (mode 1004).
   With `hide()` and focus reports, phewr gets the store back after an overlay and the resend of
   rule 6. This changes the behavior of phewr. Decided on 2026-11-09: the measurement in herdr at
@@ -300,6 +298,20 @@ Open items for phase 4:
 
 Done when `just check` passes, and the render tests show the same text.
 
+Result (schnattr `8f45abc`, 2026-11-09):
+
+- schnattr holds the copy of `61c5256` with all decoders in `src/pictures/`. Its own decode, box
+  copies, corners, decode workers and `frame/kitty.rs` are gone. `images/stand_in.rs` stays.
+- schnattr keeps its own LRU of box copies in `src/tui/images.rs`, not `ThumbnailCache`. The LRU
+  holds the pending and the failed decodes, the file stamp of each avatar and the avatar pin.
+  schnattr uses no disk cache.
+- schnattr uses `Placing::Changed` and the temp file medium `t=t`. The first flush of a full
+  screen sends 3 133 bytes instead of 2.5 MB. An unchanged frame sends 0 bytes instead of 713.
+- The live check in herdr and in Ghostty passed, with pane switches and tab switches.
+- Two interim steps stay until step 2 of phase 4b: the pin `moxcms = "=0.9.1"`, and
+  `allow(unfulfilled_lint_expectations)` on `mod pictures;`.
+- The sync of phase 4 copied no fixtures. The module fixtures went into schnattr by hand.
+
 ### Phase 4b: a feature per part of the engine interface (phewr repository)
 
 Decision of the maintainer, 2026-11-09. The parts of `pictures::kitty::screen` that phewr does not
@@ -318,6 +330,53 @@ Phase 4b comes after the merge of phase 4, because phase 4 must not edit the cop
 
 Done when `just check` passes in phewr and in schnattr, and no `expect(dead_code)` of the engine
 is left in the module.
+
+Result of step 1 (`455ac6f`, 2026-11-09). Step 2 is open.
+
+- Seven cargo features gate the parts of the engine that phewr does not call. phewr turns none
+  of them on. Each gate is `cfg(any(test, feature = "..."))`, so the tests build every part.
+
+  | Feature | It gates |
+  |---|---|
+  | `kitty-flush` | `Screen::flush` |
+  | `kitty-events` | `Screen::resized`, `cleared`, `focus_gained`, `delete_all`, the field `Screen::size`, `TerminalImages::ids` |
+  | `kitty-layers` | `Placements::place_under` |
+  | `kitty-overlay` | `Placements::hide`, `Screen::unplace_all` |
+  | `kitty-placing` | `Screen::with_placing` |
+  | `kitty-pass-bytes` | `Screen::with_pass_bytes` |
+  | `kitty-store` | `Screen::lost`, `Screen::stored_bytes` |
+
+- schnattr calls `flush`, `resized`, `cleared`, `focus_gained`, `delete_all`, `place_under` and
+  `hide`. youtr needs `kitty-placing` for `Placing::EveryFrame`. phewr calls `lost` and
+  `stored_bytes` only in its tests.
+- Dead items for an app: if an app leaves one of these items without a caller, the app keeps
+  `expect(dead_code)` on its `mod pictures;` line.
+  - `Screen::forget_placements` and `protocol::clear_placements_to`. Without `kitty-overlay`, the
+    module does not call them. phewr calls them only with `video`.
+  - The box copies and the corners (`shape::copies`, `shape::corners`) and `thumbnail_dir_below`.
+  - Each gated part of a `kitty-*` feature that the app turns on but does not call.
+- The fixture sync: `just pictures-sync` and `just pictures-check` also cover the module
+  fixtures (`pictures_fixtures` in the justfile). The sync copies `color/`, `hdr/`, `jxl/` and
+  `png/` in full (107 files with each `make.sh` and `ref/`) and the 4 `still.*` files. It writes
+  `tests/fixtures/SOURCE`. The animations, the root `make.sh`, `video/` and `.DS_Store` stay out.
+  If an entry leaves the list, the next sync deletes its files and its empty folders. The other
+  files in `tests/fixtures/` of the target stay.
+- Two changes of the master:
+  - The route fallback: a file with an extension that `IMAGE_EXTENSIONS` does not list tries
+    `sips` after a failed raster decode. A listed raster extension never tries `sips`.
+  - The `sips` limit: a `sips` run gets 10 s (`SIPS_TIMEOUT`), and then a kill.
+- `just lint` runs clippy with all seven features, and `cargo check` with each feature alone on
+  top of the default features. `just test-lean` runs with all seven features.
+- One `dead_code` expectation of the module stays: `is_hdr` in `pictures/decode/hdr/mod.rs`.
+  Only the libheif and the JPEG XL routes call `is_hdr`. phewr needs the expectation for the
+  lean set and for `--no-default-features`. It is not part of the engine interface.
+
+Open items:
+
+- `pictures::decode::dimensions` has no `sips` fallback. A HEIC file with the extension `.img`
+  decodes, but its shape and its size facts stay empty.
+- In step 2, schnattr also deletes its own `sips` limit (`images/converter.rs`), because the
+  master has `SIPS_TIMEOUT` now.
 
 ### Phase 5: herdr hardening (phewr repository, then schnattr and youtr)
 

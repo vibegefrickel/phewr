@@ -64,29 +64,41 @@ loops stay in `kitty_output/`.
 `docs/picture-refactor.md`). It holds `Placements`, `Screen`, `Update`, `Placing` and `Layer`.
 
 - The app puts the places of a frame into `Placements`: `place`, `place_under` (below the cell
-  grounds), `place_over` (a preview that keeps its place while its sharp picture waits), `keep`
-  (stored, without a place) and `hide` (an overlay frame places no picture).
-- One `Screen::write_frame` (or `flush`) writes one synchronized update: the deletes, the removed
-  placements, the transfers up to the byte cap in the order of the frame, the changed
-  placements, and the trim of the budget.
+  grounds, `kitty-layers`), `place_over` (a preview that keeps its place while its sharp picture
+  waits), `keep` (stored, without a place) and `hide` (an overlay frame places no picture,
+  `kitty-overlay`).
+- One `Screen::write_frame` (or `flush`, `kitty-flush`) writes one synchronized update: the
+  deletes, the removed placements, the transfers up to the byte cap in the order of the frame,
+  the changed placements, and the trim of the budget.
 - Each place has its own placement id. An unchanged place keeps its id, and a moved place takes a
   free id of its picture. The first place of a new picture goes out as one `a=T` with `p=`.
 - `Placing::Changed` (the default) sends only a new or a moved placement. `Placing::EveryFrame`
-  places every picture on each flush. youtr uses it until phase 5 of the plan.
+  places every picture on each flush (`with_placing`, `kitty-placing`). youtr uses it until
+  phase 5 of the plan.
 - `Screen` holds `TerminalImages` (`App::screen`), the ids after a clear (`maybe_stored`) and
-  the pictures to send again after a focus gain (`focus_gained`).
+  the pictures to send again after a focus gain (`focus_gained`, `kitty-events`).
 - A started `Update` always ends its synchronized update. Its `Drop` writes `ESC 8` and
   `END_SYNC` after an early error.
 - phewr calls `write_frame`, `wipe`, `record`, `forget_placements`, `stores`, `bytes_of`,
-  `budget` and `waiting`. `flush`, `resized`, `cleared`, `focus_gained`, `delete_all`,
-  `with_placing`, `lost`, `hide` and `place_under` run only in the tests until schnattr takes
-  the module (phase 4). They carry `expect(dead_code)` outside the tests.
+  `budget` and `waiting`. Each other part of the interface has a cargo feature (phase 4b). An app
+  turns on the features that it calls. phewr turns on none, and its tests build every part.
+
+  | Feature | It gates |
+  |---|---|
+  | `kitty-flush` | `Screen::flush` |
+  | `kitty-events` | `Screen::resized`, `cleared`, `focus_gained`, `delete_all`, the field `Screen::size`, `TerminalImages::ids` |
+  | `kitty-layers` | `Placements::place_under` |
+  | `kitty-overlay` | `Placements::hide`, `Screen::unplace_all` |
+  | `kitty-placing` | `Screen::with_placing` |
+  | `kitty-pass-bytes` | `Screen::with_pass_bytes` |
+  | `kitty-store` | `Screen::lost`, `Screen::stored_bytes` |
+
 - `Loops`, `transmit_frame_to` and `animate_to` stay in `pictures::kitty`, because the usage hint
   `N=1` depends on the probe result. The loop logic of phewr stays in `kitty_output/loops.rs`.
   It writes the frames into the update of the pass and calls `Screen::record`.
 - A lost frame of a visible loop gives the still and a new transfer of the loop. Nothing calls
-  `Screen::lost` today, and the trim keeps every frame of a visible loop, so this path has no
-  trigger yet.
+  `Screen::lost` (`kitty-store`) today, and the trim keeps every frame of a visible loop. So
+  this path has no trigger yet.
 
 ### Writers and pixels
 

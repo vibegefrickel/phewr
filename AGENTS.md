@@ -27,15 +27,16 @@ features, for the grid icons). The features `turbo` (libjpeg-turbo) and `heic` (
 native Homebrew libraries. The feature `jxl` makes jxl-oxide and jxl-render optional. The feature
 `video` links no library: it starts `ffmpeg`, `ffprobe` and `mpv` from PATH when they exist, and
 reads ffprobe's JSON with serde_json. The feature `sips` runs the macOS tool `/usr/bin/sips`. All
-five features are on by default.
+five features are on by default. Seven `kitty-*` features gate the parts of the frame engine that
+phewr does not call. They are off by default.
 
 ## Build, test, run
 
 ```sh
-just                 # = just check: fmt --check, clippy -D warnings (3 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny
+just                 # = just check: fmt --check, clippy -D warnings (4 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
-just test-lean [FILTER]  # the tests without heic, jxl and turbo (the lean set: video,sips)
+just test-lean [FILTER]  # the tests without heic, jxl and turbo (the lean set: video,sips), with the kitty-* features
 just test-real [FILTER]  # also the ignored tests that decode real files (PHEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
@@ -44,8 +45,8 @@ just bench [DIR] [FILTER]  # the speed measurements of src/bench/ on PHEWR_TEST_
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | outdated   # the single steps
-just pictures-sync TARGET   # copy src/pictures/ to TARGET/src/pictures/, write SOURCE, fmt + clippy
-just pictures-check TARGET  # fail when the copy in TARGET drifted from the master copy
+just pictures-sync TARGET   # copy src/pictures/ and the module fixtures to TARGET, write both SOURCE files, fmt + clippy
+just pictures-check TARGET  # fail when the copy or its fixtures in TARGET drifted from the master copy
 ```
 
 Plain cargo works too. Homebrew's rustup is keg-only, so run
@@ -95,10 +96,12 @@ Files at run time:
 - **No output on stdout or stderr while the TUI runs.** A stray `eprintln!` breaks the screen.
   Only the CLI checks before the TUI starts print, behind an `#[expect(clippy::print_stderr)]`.
 - **No `unsafe`.** The crate denies `unsafe_code`.
-- **Each feature set builds.** `just lint` runs clippy with the default features, with
-  `--no-default-features` and with the lean set (`video,sips`). Then it runs
-  `cargo check --all-targets` with `-D warnings` for each of `turbo`, `heic`, `jxl`, `video` and
-  `sips` alone. Code behind `#[cfg(feature = "...")]` must compile in all of them.
+- **Each feature set builds.** `just lint` runs clippy with the default features, with the
+  default features and the seven `kitty-*` features, with `--no-default-features` and with the
+  lean set (`video,sips`). Then it runs `cargo check --all-targets` with `-D warnings` for each
+  of `turbo`, `heic`, `jxl`, `video` and `sips` alone. It also runs that check for each `kitty-*`
+  feature alone on top of the default features. Code behind `#[cfg(feature = "...")]` must
+  compile in all of them.
 - **Terminal colors only.** The TUI uses the terminal default colors and the 16 ANSI colors from
   `styles.rs`. Do not add RGB values or 256-color indexes. The grid icons use the foreground
   that the terminal reports (OSC 10).
@@ -107,8 +110,11 @@ Files at run time:
 - **`src/pictures/` is the master copy of the shared picture module.** Change the module only
   here. The module imports no app module of phewr. It takes the app name from `CARGO_PKG_NAME`
   (`pictures::names`). The module holds no lint level for the whole module. Each project sets
-  that lint level on its `mod pictures;` line (`main.rs`). A sync into another project needs
-  the go of the session of that project. `docs/picture-refactor.md` holds the plan.
+  that lint level on its `mod pictures;` line (`main.rs`). An app turns on the `kitty-*`
+  features that it calls. If an app leaves an item of "Dead items for an app"
+  (`docs/picture-refactor.md`) without a caller, the app keeps `expect(dead_code)` on its
+  `mod pictures;` line. A sync into another project needs the go of the session of that project.
+  `docs/picture-refactor.md` holds the plan.
 - **Language:** code, comments and docs are in English.
 
 ### Tests
@@ -131,7 +137,7 @@ its `make.sh`, and the real-file tests by name.
 - The `sips` tests run `/usr/bin/sips`. The synthetic libheif tests encode with the aom and x265
   plugins of Homebrew's libheif. If a plugin is missing, `just check` fails.
 - `cargo nextest run --no-default-features` passes too. `just test-lean` runs every test with the
-  lean set (`video,sips`), and `just check` runs it.
+  lean set (`video,sips`) and the `kitty-*` features, and `just check` runs it.
 - A test that writes files uses `tempfile::tempdir()` or `tempfile::NamedTempFile`.
 - The helpers that the tests of more than one module share live in `test_support/`. The fake
   Kitty terminal is `test_support::kitty`.
@@ -385,6 +391,9 @@ decisions. Read the long form before you change the code that an item names.
   embedded JPEG first (`pictures/decode/embedded_jpeg/`). A JPEG that covers the fit of the box is
   the thumbnail, and sips does not run. sips ignores the orientation of RAF and ARW, so phewr turns
   or flips the develop (`pictures::decode::sips::flip_gap`). A relative path gets `./` in front.
+  If `IMAGE_EXTENSIONS` does not list the extension of a file, the file tries sips after a failed
+  raster decode. A listed raster extension never tries sips. A sips run gets 10 s
+  (`SIPS_TIMEOUT`), and then a kill.
 - **Embedded JPEG orientation:** the container orientation wins over the EXIF of the embedded
   JPEG. libjpeg-turbo decodes at the smallest of 1/8, 1/4, 1/2 and 1 that covers the fit. The
   other eighths run without NEON and are slower than the full decode.

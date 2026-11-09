@@ -16,7 +16,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-09: `just check` passes with 1018 tests with the default features and 945 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-09: `just check` passes with 1022 tests with the default features and 949 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
@@ -49,6 +49,7 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
    - Live Photos: a pair that a camera wrote as a pair (`docs/live-photos.md`, question 1).
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
 4. Dependencies: all direct dependencies are at their newest version (2026-11-09). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
+5. Shared picture module: step 2 of phase 4b, the sync into schnattr, is open (`docs/picture-refactor.md`). The sync needs the go of the schnattr session. schnattr turns on `kitty-flush`, `kitty-events`, `kitty-layers` and `kitty-overlay`, moves to moxcms `0.9.2`, and deletes its `allow(unfulfilled_lint_expectations)`. Phase 5 comes after the sync.
 
 ## Later
 
@@ -62,6 +63,8 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Done
 
+- Shared picture module, phase 4b, step 1 (2026-11-09, `455ac6f`): seven `kitty-*` features gate the engine parts that phewr does not call, and phewr turns none of them on. `just pictures-sync` and `just pictures-check` also cover the module fixtures. A file with an extension that `IMAGE_EXTENSIONS` does not list tries sips after a failed raster decode. A sips run gets 10 s (`SIPS_TIMEOUT`), and then a kill.
+- Shared picture module, phase 4 (2026-11-09, schnattr `8f45abc`): schnattr uses the copied module for the decode, the box shapes, the decode jobs and the Kitty output. Through `t=t`, its first flush sends 3 133 bytes instead of 2.5 MB. The live check in herdr and in Ghostty passed.
 - Marks to yazi (2026-11-09): on quit, phewr hands the marks (`Space`, `a`) to the yazi that started it, through `ya emit plugin phewr-select <list>`. The plugin in `~/.config/yazi/plugins/phewr-select.yazi` (dotfiles, and the README for other users) selects each path with `toggle` and a `File` object. yazi then moves, copies or deletes the files, and phewr stays a viewer. A marked Live still brings its hidden `.mov`. A test with a yazi 26.9.1 in a pseudo terminal selected the listed files in two folders and skipped a missing file.
 - Dependencies (2026-11-09): kamadak-exif 0.6.2, moxcms 0.9.2 and toml 1.2.1. moxcms 0.9.2 rounds its output curves again, so the workaround `rounding_output_curve` and its canary test are gone. 0.07 % of the 8-bit values of a color grid move by one level, so the thumbnail cache is v22.
 - Decisions (2026-11-09): Marks to yazi gets built. Android Motion Photos stay an idea. An edited Live copy pairs only with its own motion (`docs/live-photos.md`, question 7). AV1 on M1 and M2 (this Mac is an M5) and the medium `t=s` left "Next". The upstream drafts moved to "Later". The picture plan got phase 4b (a cargo feature per part of the engine interface) and the rule that phase 5 starts after phase 4 and 4b.

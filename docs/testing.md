@@ -29,8 +29,13 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   `names::test_file("JPEG")`). `<APP>` is the package name in capitals, so phewr reads
   `PHEWR_TEST_*`, and a copy in schnattr reads `SCHNATTR_TEST_*`.
 - `just test-lean` runs every test with the lean set (`--no-default-features --features
-  video,sips`), without `heic`, `jxl` and `turbo`. `just check` runs it. It covers the picture
-  module as a copy without these decoders.
+  video,sips`) and the seven `kitty-*` features, without `heic`, `jxl` and `turbo`. `just check`
+  runs it. It covers the picture module as a copy without these decoders.
+- `just pictures-sync` copies the module fixtures into `tests/fixtures/` of the target: the
+  folders `color/`, `hdr/`, `jxl/` and `png/` in full, and the 4 stills `still.avif`,
+  `still.gif`, `still.png` and `still.webp`. `pictures_fixtures` in the justfile lists them. If a
+  new module test reads another fixture, add the fixture to `pictures_fixtures`. The root
+  `make.sh` builds the stills and the animations together, so it stays out of the copy.
 - `tests/fixtures/color/` holds a Display P3 chart as JPEG, PNG, WebP, TIFF and HEIC with an ICC
   profile, as HEIC and AVIF with nclx, and as PNG with cICP and with gAMA and cHRM, plus an
   Adobe RGB JPEG and untagged sRGB files. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures with
