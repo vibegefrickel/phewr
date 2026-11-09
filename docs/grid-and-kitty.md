@@ -144,7 +144,7 @@ loops stay in `kitty_output/`.
   ignores an unknown key.
 - Stills and the fullscreen image carry no hint.
 - The in-memory cache holds `max(200, 2 * visible cells)` entries and at most
-  `THUMB_CACHE_BYTE_LIMIT` (512 MB) of padded pixels. It never evicts a visible cell.
+  512 MB of padded pixels (`THUMB_CACHE_LIMITS` in `app/thumbnails/mod.rs`). It never evicts a visible cell.
 - The cache also holds the parked sharp thumbnails of the folders that the grid left
   (`ThumbnailCache::park`, `take_parked`). The key is the path and the decode size, with the
   mtime and the length of the file. A changed file decodes again.

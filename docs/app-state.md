@@ -5,10 +5,10 @@ holds the rules and the layout of the files.
 
 ## Thumbnail jobs
 
-The code is in `app/thumbnails/`. `mod.rs` holds `ThumbnailJobs` and the scheduling. `decode.rs`
-holds the work of one job. `pictures/jobs/queue.rs` holds the queues, and `pictures/jobs/pool.rs`
-holds the job bounds and the pool of the cache reads. `pictures/jobs/thumbnail_cache.rs` holds the
-memory cache.
+The code is in `app/thumbnails/`. `mod.rs` holds `ThumbnailJobs`, the scheduling, the job bounds
+and `THUMB_CACHE_LIMITS`. `decode.rs` holds the work of one job. `pictures/jobs/queue.rs` holds
+the queues and `Priority`, and `pictures/jobs/pool.rs` holds the pool of the cache reads.
+`pictures/jobs/thumbnail_cache.rs` holds the memory cache.
 
 ### Slots and limits
 
@@ -24,8 +24,12 @@ memory cache.
     milliseconds.
   - The preview phase also decodes the embedded JPEG of RAW and PSD files.
 - At most 64 cache reads (`MAX_CACHE_READS`) run in parallel.
-- The other cells wait in a queue in grid order. `next_sharp_job` starts the cells that show
-  nothing before the HEIC sharp jobs.
+- The cell at the cursor decodes first, then the other cells of the screen in grid order.
+  `render_gallery_images` spawns the cursor cell first and gives each job
+  `Priority::on_screen(position, Some(cursor))`. A free slot starts a job at once, so the rank
+  orders only the waiting jobs.
+- The other cells wait in a queue. `JobQueue::push` puts a job behind each job with the same or a
+  lower rank. `next_sharp_job` starts the cells that show nothing before the HEIC sharp jobs.
 - A failed thumbnail decode sends `None` and frees its slot.
 - The thumbnail and preview queues are `JobSlots` with an image index per job. A job whose index
   left the list starts nothing.
@@ -69,7 +73,8 @@ memory cache.
 ### Fields and calls
 
 - `ThumbnailJobs::sharp` holds at most `MAX_THUMB_JOBS` running jobs. `previews` holds at most
-  `MAX_PREVIEW_JOBS`. `cache_reads` holds at most `MAX_CACHE_READS`.
+  `MAX_PREVIEW_JOBS`. `cache_reads` holds at most `MAX_CACHE_READS`. The three bounds and
+  `THUMB_CACHE_LIMITS` (512 MB, at least 200 entries) are in `app/thumbnails/mod.rs`.
 - `park_thumbnails`: the folder switch calls it before it drops the image list.
 - `warm_disk_cache`: the folder prefetch calls it.
 - `pad_for_grid`, `pad_loop_frame` and `thumb_target_px` are in `pictures/resize/padding.rs`. The
@@ -78,7 +83,10 @@ memory cache.
 ## Disk cache
 
 - The code is in `pictures/jobs/disk_cache/`. `mod.rs` holds `FileStamp`, `CacheEntry`,
-  `LazyEntry` and the key. `write.rs` holds the temp file write and the prune.
+  `LazyEntry`, `thumbnail_dir_below` and the key. `write.rs` holds the temp file write and the
+  prune.
+- The module has no default folder. `app/disk_cache/mod.rs` holds `default_disk_cache_dir`, the
+  folder of phewr (`~/Library/Caches/phewr`). The prune refuses a folder that holds a subfolder.
 - The loop files are in `app/disk_cache/loop_file.rs`. The file is `<hash>.loop`. It holds QOI
   frames with their times.
 - The key version of a loop file is `phewr-loop-v1` (`LOOP_CACHE_VERSION`). Change the version

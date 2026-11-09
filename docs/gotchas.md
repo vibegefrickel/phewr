@@ -311,15 +311,24 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.
-- **Thumbnail cache key:** the key hashes `phewr-thumbnail-v21` (`THUMBNAIL_CACHE_VERSION`, v21 since the DCT scale follows the fit), the
-  path, the size, the mtime, the target size and the color target. Change the version string when
-  the thumbnail output changes. If several workers change the thumbnail output at the same time,
-  each takes its own version, higher than main and than every branch in flight. `thumbnail_entry`
-  in `app/disk_cache/mod.rs` computes the key, and `CacheEntry` holds the file and the stamp (the
-  length and the mtime). A job computes it at most one time, and the folder prefetch one time per
-  file (`warm_disk_cache` calls `sharp_thumbnail` with the same key). A test rebuilds the hash from
-  its inputs, so a change of the input or of its order fails the test. The prune removes temp
-  files of the cache and partial cube files of the tone map that are older than 1 hour.
+- **Thumbnail cache key:** the key hashes `THUMBNAIL_CACHE_VERSION`, the path, the size, the
+  mtime, the target size and the color target. The version is
+  `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v21")`, so phewr hashes `phewr-thumbnail-v21` as
+  before (v21 since the DCT scale follows the fit). When the thumbnail output changes, increase
+  the `v21` part. If several workers change the thumbnail output at the same time, each takes its
+  own version, higher than main and than every branch in flight. `thumbnail_entry` in
+  `pictures/jobs/disk_cache/mod.rs` computes the key, and `CacheEntry` holds the file and the
+  stamp (the length and the mtime). A job computes it at most one time, and the folder prefetch
+  one time per file (`warm_disk_cache` and `sharp_thumbnail` call `decode_into_cache` with the same key). A test
+  rebuilds the hash from its inputs, so a change of the input or of its order fails the test. The
+  prune removes temp files of the cache and partial cube files of the tone map that are older than
+  1 hour.
+- **Thumbnail cache folder:** the thumbnails of phewr sit at the top of `~/Library/Caches/phewr`
+  (`default_disk_cache_dir` in `app/disk_cache/mod.rs`). Do not move them, because a move makes
+  the cache of the maintainer cold. The test `the_cache_folder_stays_where_it_was` holds the path.
+  `prune_disk_cache` refuses a folder that holds a subfolder, so phewr must keep no subfolder
+  there. The shared module has no default folder. Another app passes
+  `thumbnail_dir_below(<its cache root>)`.
 - **Folder prefetch:** after the cursor rests on a folder cell for `FOLDER_PREFETCH_DELAY`
   (300 ms) and `App::has_pending_work` is false, one thread decodes the first screen of that
   folder into the disk cache (`app/folder_prefetch/`). It computes what Enter computes, with

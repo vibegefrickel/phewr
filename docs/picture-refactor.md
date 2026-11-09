@@ -1,9 +1,9 @@
 # The shared picture pipeline: refactor plan
 
-Status (2026-11-09): phases 1 and 2 are done in phewr (`6b7482a`, `36ecdea`). Phase 0 is open:
-the maintainer measures the baseline in a real terminal and fills the herdr note. Phase 3 is
-next. This file in
-phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
+Status (2026-11-09): phases 1, 2 and 3 are done in phewr (`6b7482a`, `36ecdea`, `688dc4e`).
+Phase 0 is open: the maintainer measures the baseline in a real terminal and fills the herdr note.
+Phase 4 (schnattr takes the module) is next. This file in phewr is the master of the plan.
+schnattr keeps a copy of the draft of 2026-11-09.
 
 phewr, schnattr and youtr each decode, shape and send pictures to the terminal. phewr does this
 best: it is the fastest, it has the most formats, and it measured each step. This plan makes
@@ -184,21 +184,14 @@ Result (`6b7482a`, 2026-11-09):
 
 Open items for the next phases:
 
-- The module keeps five gates on the phewr feature `video`: `decode/color/mod.rs`,
-  `decode/color/tags.rs` (`icc_known_space` for the player), `decode/hdr/mod.rs` (`nits`) and
-  `jobs/disk_cache/mod.rs` (`FileStamp`). A copy without a `video` feature fails clippy with
-  `unexpected_cfgs`. Phase 2 or 3 turns them into module features or moves the items to the app.
-- The `jxl` gate is not there yet. It goes on `pub(crate) mod jxl`, `Route::Jxl` and its arms,
-  `decode::dimensions`, `JXL_EXTENSIONS`, the `Route::Jxl` arm of `shown_size`, and in the app on `read_exif`,
-  `is_supported` and the jxl benches. `jxl-oxide` and `jxl-render` become optional.
-- In a copy, many `pub(crate)` items have no caller (`JobSlots`, `box_px`, `centered`,
-  `query_cell_size_and_probe`, `Loops`, `trim_to_budget`), so clippy with `-D warnings` fails.
-  Phase 4 must solve this before the first sync builds.
+- Done in phase 3: the five gates on the phewr feature `video` are gone from the module.
+- Done in phase 3: the feature `jxl` gates the JPEG XL route, and `jxl-oxide` and `jxl-render`
+  are optional.
+- Done in phase 3: each project sets the lint level of the module on its `mod pictures;` line, so
+  a `pub(crate)` item without a caller does not fail clippy.
 - The module uses these crates besides the list of "The module": `ratatui`, `crossterm`,
   `directories`, `rustix`, `tempfile` and `jxl-render`.
-- The module has phewr names in strings: `ProjectDirs::from("", "", "phewr")`,
-  `phewr-thumbnail-v21`, the thread name `phewr-cache-read-*`, `PHEWR_KITTY_TRANSFER`,
-  `PHEWR_KITTY_LOOPS` and `PHEWR_TEST_*`. Each project needs its own values.
+- Done in phase 3: the module takes its names from `CARGO_PKG_NAME`, and phewr keeps its names.
 - The module tests read `tests/fixtures/`. A copy has no fixtures. Phase 4 copies them or gates
   those tests.
 - `pictures::kitty` still holds `Loops`, `transmit_frame` and the animation writes of
@@ -252,6 +245,47 @@ Open items for phase 4 and phase 5:
    cache is optional per app.
 
 Done when `just check` passes in phewr.
+
+Result (`688dc4e`, 2026-11-09):
+
+- `pictures::shape::copies` and `pictures::shape::corners` hold the box copies of schnattr with
+  their tests. Each resize goes through `fast_image_resize` (Catmull-Rom). phewr calls no box copy.
+- `ThumbJob`, `JobQueue` and `JobSlots` are generic over the key, and `Priority::on_screen` gives
+  the order of the screen. The cell at the cursor decodes first (a decision of the maintainer).
+- `ThumbnailCache::new` takes `CacheLimits { bytes, min_entries }` from the app. phewr passes
+  `THUMB_CACHE_LIMITS` (512 MB, at least 200 entries), so its evictions stay the same.
+- The new feature `jxl` gates the JPEG XL route. The module has no `video` gate.
+  `just test-lean` runs every test without `heic`, `jxl` and `turbo`.
+- `pictures::names` takes the names from `CARGO_PKG_NAME`. In phewr, each value is byte-for-byte
+  the same, so the disk cache of the maintainer stays valid.
+- The disk cache has no default folder. The app gives the folder, and `thumbnail_dir_below` gives
+  `<root>/thumbnails`. The prune refuses a folder that holds a subfolder.
+- `just check` passes with 1013 tests, and with 940 tests in the lean set. An interleaved A/B
+  against a copy of `main` showed no regression in the bench.
+
+Open items for phase 4:
+
+- The interface for schnattr:
+  - `pictures::shape::copies` (`Kind`, `Bitmap`, `boxed`, `dimmed`, `capped`) replaces
+    `images/copies.rs`. `BoxCopy` stays in schnattr.
+  - `pictures::shape::corners` (`round_corners`, `CORNER_RADIUS`) replaces `images/corners.rs`.
+    `round_corners` takes and returns an `RgbaImage`.
+  - `pictures::jobs::queue` (`ThumbJob`, `JobQueue`, `JobSlots`, `Priority`) and
+    `pictures::jobs::pool` (`spawn_job`, `ThumbPhase`) replace the decode workers. schnattr keeps
+    its bound (`MAX_DECODES = 2`) through `JobSlots::new`.
+  - `pictures::jobs::thumbnail_cache` replaces the `LruCache` of schnattr, with
+    `CacheLimits { bytes, min_entries: None }`.
+  - The disk cache (`jobs::disk_cache`) is optional. An app that uses it passes
+    `thumbnail_dir_below(<its cache root>)`.
+- Each project sets the lint level of the module on its `mod pictures;` line. The module holds no
+  lint level for the whole module.
+- The `sips` feature must exist in each copy, because the module gates on it.
+- The value of the memory cache is `GridPicture`, not `Bitmap`. If schnattr caches `Bitmap`
+  copies, phase 4 must make the value generic.
+- schnattr passes `thumbnail_dir_below(root)` and never its cache root, because that root holds
+  `media/` and `gallery/`.
+- Decision 1 holds the names. If the module becomes a workspace crate, `names.rs` must take a
+  value from the app. In a workspace crate, `CARGO_PKG_NAME` is the name of that crate.
 
 ### Phase 4: schnattr takes the module (schnattr repository)
 

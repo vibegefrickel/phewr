@@ -206,7 +206,7 @@ Each decoder reports the color of its pixels.
 - ffprobe reports no profile for WebP and APNG. The probe reads their ICC profile or cICP chunk
   (`animation::embedded_primaries`).
 - A profile with the colorants of sRGB, Display P3 or BT.2020 maps to its primaries
-  (`color::icc_known_space`). Any other profile counts as BT.709.
+  (`player::tone_map::icc_known_space`). Any other profile counts as BT.709.
 - A source in the target space gets no cube.
 - The SDR cube runs in 8 bit (`rgb24`, `rgba`). Its values hold half a level, because `lut3d`
   truncates to 8 bit. A real ffmpeg test fails if `lut3d` starts to round.

@@ -25,6 +25,12 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   `bench::decoders::jpeg_xl` reads `PHEWR_TEST_JXL`, measures the decode and both copies, and
   names the path of the copy. `parallel_copy_matches_stream` compares the copy with the stream
   on every fixture.
+- The tests of `src/pictures/` read `<APP>_TEST_*` through `names::test_file` (for example
+  `names::test_file("JPEG")`). `<APP>` is the package name in capitals, so phewr reads
+  `PHEWR_TEST_*`, and a copy in schnattr reads `SCHNATTR_TEST_*`.
+- `just test-lean` runs every test with the lean set (`--no-default-features --features
+  video,sips`), without `heic`, `jxl` and `turbo`. `just check` runs it. It covers the picture
+  module as a copy without these decoders.
 - `tests/fixtures/color/` holds a Display P3 chart as JPEG, PNG, WebP, TIFF and HEIC with an ICC
   profile, as HEIC and AVIF with nclx, and as PNG with cICP and with gAMA and cHRM, plus an
   Adobe RGB JPEG and untagged sRGB files. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures with

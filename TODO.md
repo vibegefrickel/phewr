@@ -16,7 +16,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-09: `just check` passes with 955 tests (55 ignored tests need real files), clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-09: `just check` passes with 1013 tests with the default features and 940 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
@@ -50,7 +50,7 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
    - HEIC: a real file with an embedded thumbnail of another aspect.
    - Live Photos: a pair that a camera wrote as a pair (`docs/live-photos.md`, question 1).
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
-4. Release paths (2026-11-09): the formula, the installer and the release docs are gone. After the merge of the worker `pictures-phase3`, delete the recipes `dist`, `render`, `publish`, `tap` and `release`, `[profile.dist]` and the `/dist/` line of `.gitignore`.
+4. Release paths (2026-11-09): the formula, the installer and the release docs are gone. The worker `pictures-phase3` is merged (`688dc4e`). Now delete the recipes `dist`, `render`, `publish`, `tap` and `release`, `[profile.dist]` and the `/dist/` line of `.gitignore`.
 5. Dependencies: all direct dependencies are at their newest version (2026-11-03). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18. If `moxcms_still_truncates_known_curves` fails after an update, remove `rounding_output_curve` and the test.
 6. Upstream issue drafts in `~/Projects/dev/` (maintainer, not posted):
    - `herdr-issue-kitty-graphics-performance.md`: the three herdr findings with the numbers above.
@@ -71,6 +71,7 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Done
 
+- Shared picture module, phase 3 (2026-11-09, `688dc4e`): the box copies and the rounded corners of schnattr are in `pictures::shape`, the jobs have a priority, and the cell at the cursor decodes first. The memory cache takes `CacheLimits` from the app. The feature `jxl` is new, the module has no `video` gate, and `just test-lean` runs the tests without `heic`, `jxl` and `turbo`. The module takes its names from `CARGO_PKG_NAME`. Phase 4 (schnattr takes the module) is next (`docs/picture-refactor.md`).
 - Grid place on a zoom (2026-11-09): a zoom, the info panel or a resize keeps the screen row of the cursor, and at the list edges the grid stays flush with the edge. Before, a zoom out at the end of a list showed only the last row, and `Tab` moved the cursor row to the top or the bottom of the screen.
 - Loop job poll (2026-11-09): a running grid loop job gives the 10 ms poll again. The first loop of a cold Live grid comes after 1016 ms instead of 1168 ms, and every Live cell loops after 1354 ms instead of 1425 ms (animation) and after 1365 ms instead of 1592 ms (ticks). These are medians of 5 runs of `bench::live` at a load of 7 to 18. A 50 ms poll gave only half of the gain. A wake on the job result is not possible, because `crossterm::event::poll` has no waker.
 - Slideshow badge (2026-11-09): a badge at the bottom right of a slideshow shows ▶ or ⏸, the interval and the status note, or an error on red. The still and the video frame go out below the cell backgrounds (`z=-1073741825`), so the badge covers them.

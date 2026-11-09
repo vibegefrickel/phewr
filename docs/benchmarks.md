@@ -21,6 +21,13 @@ filter `bench::` finds all 26 benches. `just bench-live` runs only the group `be
 - The warm animation fill of `bench::loops` is bimodal: a run takes about 20 ms or about 38 ms to
   the first loop, on `main` too. A comparison of two trees needs several interleaved rounds at a
   1-minute load below 4.
+- An A/B of a worker branch against main needs no git command:
+  1. Copy the main checkout into a folder of its own, and take over the files that another
+     session edits there.
+  2. Build the test binary in the copy and in the worker tree.
+  3. Run the two test binaries in turns, at a 1-minute load below 4.
+- Phase 3 of the picture plan (`688dc4e`) used this method for the one bench group that moved by
+  more than 5 %. The interleaved A/B showed no regression.
 
 ## Start (`bench/start.rs`)
 

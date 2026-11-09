@@ -24,16 +24,18 @@ It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT).
 The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
 serde/toml, jxl-oxide and jxl-render (both with exact pins), moxcms, resvg (without default
 features, for the grid icons). The features `turbo` (libjpeg-turbo) and `heic` (libheif) link
-native Homebrew libraries. The feature `video` links no library: it starts `ffmpeg`, `ffprobe` and
-`mpv` from PATH when they exist, and reads ffprobe's JSON with serde_json. The feature `sips` runs
-the macOS tool `/usr/bin/sips`. All four features are on by default.
+native Homebrew libraries. The feature `jxl` makes jxl-oxide and jxl-render optional. The feature
+`video` links no library: it starts `ffmpeg`, `ffprobe` and `mpv` from PATH when they exist, and
+reads ffprobe's JSON with serde_json. The feature `sips` runs the macOS tool `/usr/bin/sips`. All
+five features are on by default.
 
 ## Build, test, run
 
 ```sh
-just                 # = just check: fmt --check, clippy -D warnings (2 feature sets), check per feature, nextest, rustdoc, cargo deny
+just                 # = just check: fmt --check, clippy -D warnings (3 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
+just test-lean [FILTER]  # the tests without heic, jxl and turbo (the lean set: video,sips)
 just test-real [FILTER]  # also the ignored tests that decode real files (PHEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
@@ -93,18 +95,20 @@ Files at run time:
 - **No output on stdout or stderr while the TUI runs.** A stray `eprintln!` breaks the screen.
   Only the CLI checks before the TUI starts print, behind an `#[expect(clippy::print_stderr)]`.
 - **No `unsafe`.** The crate denies `unsafe_code`.
-- **Each feature set builds.** `just lint` runs clippy with the default features and with
-  `--no-default-features`. Then it runs `cargo check --all-targets` with `-D warnings` for each of
-  `turbo`, `heic`, `video` and `sips` alone. Code behind `#[cfg(feature = "...")]` must compile in
-  all of them.
+- **Each feature set builds.** `just lint` runs clippy with the default features, with
+  `--no-default-features` and with the lean set (`video,sips`). Then it runs
+  `cargo check --all-targets` with `-D warnings` for each of `turbo`, `heic`, `jxl`, `video` and
+  `sips` alone. Code behind `#[cfg(feature = "...")]` must compile in all of them.
 - **Terminal colors only.** The TUI uses the terminal default colors and the 16 ANSI colors from
   `styles.rs`. Do not add RGB values or 256-color indexes. The grid icons use the foreground
   that the terminal reports (OSC 10).
 - **One formatter, one style.** Use rustfmt with `rustfmt.toml`. The hook runs
   `cargo fmt --check`.
 - **`src/pictures/` is the master copy of the shared picture module.** Change the module only
-  here. The module imports no app module of phewr. A sync into another project needs the go of
-  the session of that project. `docs/picture-refactor.md` holds the plan.
+  here. The module imports no app module of phewr. It takes the app name from `CARGO_PKG_NAME`
+  (`pictures::names`). The module holds no lint level for the whole module. Each project sets
+  that lint level on its `mod pictures;` line (`main.rs`). A sync into another project needs
+  the go of the session of that project. `docs/picture-refactor.md` holds the plan.
 - **Language:** code, comments and docs are in English.
 
 ### Tests
@@ -126,7 +130,8 @@ its `make.sh`, and the real-file tests by name.
   twin is `#[ignore]`.
 - The `sips` tests run `/usr/bin/sips`. The synthetic libheif tests encode with the aom and x265
   plugins of Homebrew's libheif. If a plugin is missing, `just check` fails.
-- `cargo nextest run --no-default-features` passes too.
+- `cargo nextest run --no-default-features` passes too. `just test-lean` runs every test with the
+  lean set (`video,sips`), and `just check` runs it.
 - A test that writes files uses `tempfile::tempdir()` or `tempfile::NamedTempFile`.
 - The helpers that the tests of more than one module share live in `test_support/`. The fake
   Kitty terminal is `test_support::kitty`.
@@ -167,18 +172,21 @@ short form:
     and `has_extension`. Submodules: `raster`, `turbo`, `libheif/`, `jxl`, `sips`, `embedded_jpeg/`,
     `heif_boxes`, `screen/`, `tonemap`, `hdr/` and `color/`.
   - `resize/`: the `fast_image_resize` helpers and `padding.rs` (the pad to whole cells).
-  - `shape/`: the folder aspect from the headers and `DEFAULT_IMAGE_ASPECT`.
-  - `jobs/`: `pool.rs` (the job bounds and the cache read pool), `queue.rs` (`JobQueue`,
-    `JobSlots`), `thumbnail_cache.rs` (the memory cache) and `disk_cache/`.
+  - `shape/`: the folder aspect from the headers and `DEFAULT_IMAGE_ASPECT`. `copies.rs` holds
+    the box copies and `corners.rs` the rounded corners.
+  - `jobs/`: `pool.rs` (`spawn_job` and the cache read pool), `queue.rs` (`JobQueue`,
+    `JobSlots`, `Priority`), `thumbnail_cache.rs` (the memory cache with `CacheLimits`) and
+    `disk_cache/` (`thumbnail_dir_below`, no default folder).
+  - `names.rs`: `APP_NAME` from `CARGO_PKG_NAME` and the `<APP>_TEST_*` names.
   - `kitty/`: the Kitty graphics protocol (`KittyBackend`, `Transfer`, `Loops`, `Pixels`,
     `EMIT_PASS_BYTES`). `protocol/` holds the escape sequences, and `protocol/probe.rs` the start
     probes. `placement.rs` holds the placements, `terminal_images.rs` the storage budget and
     `query.rs` the start probe and the cell size.
   - `test_support/`: the test file builders.
 - `app/`: `App`, the whole view state, one file per topic: fullscreen, zoom, marks, folders,
-  scan, slideshow, meta, mouse, the thumbnail jobs (`thumbnails/`), the loop files of the disk
-  cache (`disk_cache/`), the folder prefetch (`folder_prefetch/`) and the grid loops
-  (`grid_loops/`).
+  scan, slideshow, meta, mouse, the thumbnail jobs and their bounds (`thumbnails/`), the cache
+  folder and the loop files of the disk cache (`disk_cache/`), the folder prefetch
+  (`folder_prefetch/`) and the grid loops (`grid_loops/`).
 - `ui/`: the ratatui drawing: `mod.rs` (the views and the info panel), `status.rs`, `grid.rs`,
   `help.rs`.
 - `gallery/`: the grid geometry and the cursor.
@@ -341,10 +349,14 @@ decisions. Read the long form before you change the code that an item names.
 
 ### Decoders and colors
 
-- **Thumbnail cache key:** the key hashes `THUMBNAIL_CACHE_VERSION` (now `phewr-thumbnail-v21`),
-  the path, the size, the mtime, the target size and the color target. Change the version when
-  the thumbnail output changes. If several workers change the output at the same time, each
-  takes its own version, higher than main and than every branch in flight.
+- **Thumbnail cache key:** the key hashes `THUMBNAIL_CACHE_VERSION`, the path, the size, the
+  mtime, the target size and the color target. The version is
+  `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v21")`. When the thumbnail output changes,
+  increase the `v21` part. If several workers change the output at the same time, each takes its
+  own version, higher than main and than every branch in flight.
+- **Thumbnail cache folder:** the thumbnails of phewr sit at the top of `~/Library/Caches/phewr`
+  (`default_disk_cache_dir`). Do not move them. The prune refuses a folder that holds a
+  subfolder, so phewr must keep no subfolder there.
 - **Disk cache format:** QOI files. A hit reads and decodes in about 0.75 ms.
 - **Resize and pixel layouts:** every resize uses Catmull-Rom and the fastest layout of
   `fast_image_resize`. Only a downscale to 1/2 or less resizes as RGB. An opaque image goes out

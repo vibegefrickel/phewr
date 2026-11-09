@@ -73,11 +73,14 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   entries of the grid, `is_parent_entry`, `Enter` into a folder, `go_to_parent`, the tests in
   `folders/tests.rs`), `video.rs` (the terminal player state, the return after a video, the mpv
   window watch), `thumbnails/` (`ThumbnailJobs` in `mod.rs`: the channel, the sharp, preview and
-  cache read slots, the misses and the generation, and `ThumbImage`. `decode.rs` holds the work of
-  one job (`warm_disk_cache`, the embedded preview, the animation flag)), `disk_cache/` (the loop
-  files in `loop_file.rs`). `grid_loops/` is listed above.
+  cache read slots, the misses and the generation, and `ThumbImage`. `mod.rs` also holds the job
+  bounds `MAX_THUMB_JOBS`, `MAX_PREVIEW_JOBS` and `MAX_CACHE_READS`, and `THUMB_CACHE_LIMITS`.
+  `decode.rs` holds the work of one job (`warm_disk_cache`, the embedded preview, the animation
+  flag)), `disk_cache/` (`default_disk_cache_dir` in `mod.rs`, the cache folder of phewr, and the
+  loop files in `loop_file.rs`). `grid_loops/` is listed above.
 - `pictures/`: the shared picture module, the master copy for `just pictures-sync`
-  (`docs/picture-refactor.md`). It imports no app module of phewr.
+  (`docs/picture-refactor.md`). It imports no app module of phewr. `names.rs` holds `APP_NAME`
+  (`CARGO_PKG_NAME`) and the names of the `<APP>_TEST_*` variables (`test_file`).
 - `pictures/decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the
   route by extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the
   user waits for. `pictures::decode::dimensions` gives the size from the header.
@@ -108,14 +111,16 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `rgb_resize_is_fastest`, `scaled_down_size` and `resize_region`, a resize of a region through a
   view. `padding.rs` holds the padding to whole cells (`pad_for_grid`, `pad_loop_frame`,
   `thumb_target_px`).
-- `pictures/shape/`: the image dimensions from the file headers, for the cell shape
-  (`folder_aspect`, `shown_size`, `DEFAULT_IMAGE_ASPECT`).
-- `pictures/jobs/`: `pool.rs` holds the job bounds (`MAX_THUMB_JOBS`, `MAX_PREVIEW_JOBS`,
-  `MAX_CACHE_READS`) and `spawn_job`. `queue.rs` holds `JobQueue` and `JobSlots`.
-  `thumbnail_cache.rs` holds the in-memory thumbnail cache (`ThumbnailCache`, `GridPicture`,
-  `ParkKey`) with the parked pictures. `disk_cache/` holds the thumbnail disk cache:
-  `CacheEntry`, `LazyEntry` and `FileStamp` in `mod.rs`, the temp file write and the prune in
-  `write.rs`.
+- `pictures/shape/`: `mod.rs` holds the image dimensions from the file headers, for the cell
+  shape (`folder_aspect`, `shown_size`, `DEFAULT_IMAGE_ASPECT`). `copies.rs` holds the box copies
+  (`Kind`, `Bitmap`, `boxed`, `dimmed`, `capped`), with its tests in `copies/tests.rs`.
+  `corners.rs` holds `round_corners` and `CORNER_RADIUS`. phewr calls no box copy.
+- `pictures/jobs/`: `pool.rs` holds `spawn_job` and `ThumbPhase`. `queue.rs` holds `ThumbJob`,
+  `JobQueue`, `JobSlots` and `Priority`. `thumbnail_cache.rs` holds the in-memory thumbnail cache
+  (`ThumbnailCache`, `CacheLimits`, `GridPicture`, `ParkKey`) with the parked pictures.
+  `disk_cache/` holds the thumbnail disk cache: `CacheEntry`, `LazyEntry`, `FileStamp` and
+  `thumbnail_dir_below` in `mod.rs`, the temp file write and the prune in `write.rs`. The module
+  has no default cache folder.
 - `pictures/kitty/`: the Kitty graphics protocol. `mod.rs` holds `KittyBackend`, `Transfer`,
   `Loops`, `Pixels` and `EMIT_PASS_BYTES`. `screen.rs` holds the frame engine (`Placements`,
   `Screen`, `Update`, `Placing`, `Layer`), and `screen/tests.rs` its fake writer tests. `protocol/probe.rs` holds the start probes
@@ -123,7 +128,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
   the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
-  frame, and `chosen_loops` reads `PHEWR_KITTY_LOOPS` and the config key.
+  frame, and `chosen_loops` reads the override value and the config key. `main.rs` reads
+  `PHEWR_KITTY_LOOPS` and `PHEWR_KITTY_TRANSFER` and passes the values in.
   `PHEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `Pixels` is a view of RGB or
   RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
   every medium. The check and the copy go in chunks of 4096 pixels and stop at the first
