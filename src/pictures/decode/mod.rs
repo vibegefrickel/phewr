@@ -223,12 +223,29 @@ pub(crate) fn decode_image(
     let _ = embedded;
 
     match Route::for_path(path) {
+        #[cfg(all(feature = "sips", target_os = "macos"))]
+        Route::Raster => decode_raster(path, target).or_else(|error| {
+            if !tries_sips_after_raster(path) {
+                return Err(error);
+            }
+            // The raster error stays: it says what the content of the file is not.
+            sips::decode(path, target).or(Err(error))
+        }),
+        #[cfg(not(all(feature = "sips", target_os = "macos")))]
         Route::Raster => decode_raster(path, target),
         #[cfg(feature = "jxl")]
         Route::Jxl => jxl::decode(path, color::target()),
         #[cfg(all(feature = "sips", target_os = "macos"))]
         Route::Sips => sips::decode_with_preview(path, target),
     }
+}
+
+/// A file without a known extension can hold a format that only sips reads, for example a HEIC
+/// photo named `.img`. A broken file with a raster extension runs no sips, so it costs no sips
+/// run each time it shows.
+#[cfg(all(feature = "sips", target_os = "macos"))]
+fn tries_sips_after_raster(path: &Path) -> bool {
+    !extensions::has_extension(path, extensions::IMAGE_EXTENSIONS)
 }
 
 thread_local! {
@@ -513,6 +530,41 @@ mod tests {
                 .unwrap();
             assert_tone_mapped(&exr);
             assert_tone_mapped(&hdr);
+        }
+    }
+
+    /// A HEIC photo under an unknown extension fails on the raster route, and sips reads it.
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    #[test]
+    fn unknown_extension_falls_back_to_sips() {
+        let dir = test_dir();
+        let path = dir.path().join("photo.img");
+        fs::copy(
+            crate::pictures::test_support::fixture("color/p3-icc.heic"),
+            &path,
+        )
+        .unwrap();
+        let decoded = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (64, 32));
+    }
+
+    /// Only an unknown extension tries sips, and a failed sips run keeps the raster error.
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    #[test]
+    fn broken_file_keeps_the_raster_error() {
+        use super::raster::decode_raster;
+        use super::tries_sips_after_raster;
+        assert!(tries_sips_after_raster(Path::new("photo.img")));
+        assert!(tries_sips_after_raster(Path::new("no-extension")));
+        assert!(!tries_sips_after_raster(Path::new("broken.JPG")));
+        assert!(!tries_sips_after_raster(Path::new("broken.png")));
+        let dir = test_dir();
+        for name in ["broken.img", "broken.png"] {
+            let path = dir.path().join(name);
+            fs::write(&path, b"not a picture").unwrap();
+            let error = decode_image_with_hint(&path, None, EmbeddedThumbnail::Deny).unwrap_err();
+            let raster = decode_raster(&path, None).err().unwrap();
+            assert_eq!(error.to_string(), raster.to_string(), "{name}");
         }
     }
 }

@@ -17,8 +17,16 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const SIPS: &str = "/usr/bin/sips";
+
+/// A sips run that takes longer hangs, and the decode kills it.
+const SIPS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The step of the wait for sips. A run takes 50 ms and more.
+const SIPS_POLL: Duration = Duration::from_millis(2);
 
 /// sips draws the vector formats sharp at each size.
 const VECTOR_EXTENSIONS: &[&str] = &["pdf", "svg"];
@@ -310,11 +318,38 @@ fn pixels(value: &str) -> Option<u32> {
 
 /// A failure returns the exit status and stderr.
 fn run(args: &[&OsStr]) -> io::Result<Output> {
-    let output = Command::new(SIPS)
+    run_with_limit(Path::new(SIPS), args, SIPS_TIMEOUT)
+}
+
+/// sips can hang on a file that it cannot read, so `program` gets `limit`, and then a kill. The
+/// pipes of stdout and stderr hold 64 KB, and sips writes a few lines, so the wait reads them at
+/// the end.
+fn run_with_limit(program: &Path, args: &[&OsStr], limit: Duration) -> io::Result<Output> {
+    let named = |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", program.display()));
+    let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
-        .output()
-        .map_err(|e| io::Error::new(e.kind(), format!("{SIPS}: {e}")))?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(named)?;
+    let deadline = Instant::now() + limit;
+    while child.try_wait().map_err(named)?.is_none() {
+        if Instant::now() >= deadline {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a child that exited between the poll and the kill needs no kill"
+            )]
+            let _ = child.kill();
+            child.wait().map_err(named)?;
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("{} took more than {limit:?}", program.display()),
+            ));
+        }
+        thread::sleep(SIPS_POLL);
+    }
+    let output = child.wait_with_output().map_err(named)?;
     if output.status.success() {
         return Ok(output);
     }

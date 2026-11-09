@@ -1,7 +1,7 @@
 use super::{
     FLIP_MARGIN, SIPS, VECTOR_ZOOM_SIDE, argument_path, corrected, covering_side, decode,
     dimensions, enlarged_side, flip_gap, gray_thumbnail, is_all_black, mean_difference,
-    misses_turn, parse_size, preview_turns,
+    misses_turn, parse_size, preview_turns, run_with_limit,
 };
 use crate::pictures::decode::color::SourceColor;
 use crate::pictures::decode::embedded_jpeg::find;
@@ -13,6 +13,7 @@ use crate::pictures::test_support::{
 };
 use image::metadata::Orientation;
 use image::{DynamicImage, GenericImageView, ImageBuffer, LumaA, Rgb, RgbImage, Rgba, RgbaImage};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -611,4 +612,31 @@ fn decodes_real_file(name: &str) {
         landscape(&full),
         "info panel {panel:?} against full"
     );
+}
+
+/// A program that hangs gets its limit and a kill, and the error names the limit.
+#[test]
+fn hanging_program_is_killed() {
+    let start = std::time::Instant::now();
+    let limit = std::time::Duration::from_millis(100);
+    let error = run_with_limit(Path::new("/bin/sleep"), &[OsStr::new("30")], limit).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(error.to_string().contains("100ms"), "{error}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+}
+
+/// A program within its limit gives its output, and a failed run gives its stderr.
+#[test]
+fn program_within_limit_gives_output() {
+    let limit = std::time::Duration::from_secs(5);
+    let output = run_with_limit(
+        Path::new("/bin/echo"),
+        &[OsStr::new("pixelWidth: 4")],
+        limit,
+    );
+    assert_eq!(output.unwrap().stdout, b"pixelWidth: 4\n");
+    let error =
+        run_with_limit(Path::new("/bin/ls"), &[OsStr::new("/no/such/file")], limit).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("/no/such/file"), "{error}");
 }

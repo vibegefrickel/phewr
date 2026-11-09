@@ -177,6 +177,23 @@ video = ["dep:serde_json"]
 # Camera RAW, PSD, PDF, SVG and the other ImageIO formats through macOS `/usr/bin/sips`. The
 # feature has no effect on other systems.
 sips = ["dep:tempfile"]
+# The parts of the frame engine in src/pictures/kitty/ that phewr does not call. phewr turns none
+# of them on. Another app with a copy of the module turns on the parts that it calls. The tests
+# build every part with and without these features.
+# `Screen::flush`: one frame in its own synchronized update.
+kitty-flush = []
+# `Screen::resized`, `cleared`, `focus_gained` and `delete_all`.
+kitty-events = []
+# `Placements::place_under`: a picture under the text of the cells.
+kitty-layers = []
+# `Placements::hide` and `Screen::unplace_all`: an overlay without pictures.
+kitty-overlay = []
+# `Screen::with_placing`: the placement policy, for example `Placing::EveryFrame`.
+kitty-placing = []
+# `Screen::with_pass_bytes`: another byte cap per flush.
+kitty-pass-bytes = []
+# `Screen::lost` and `Screen::stored_bytes`: the record of the terminal store.
+kitty-store = []
 
 # Image decoding is slow without optimizations, also in debug builds and tests.
 [profile.dev.package."*"]

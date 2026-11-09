@@ -16,12 +16,21 @@ mod keys;
 mod kitty_output;
 #[cfg(feature = "video")]
 mod mpv;
-// The shared picture module holds no lint level of its own: each project sets it here. phewr
-// calls neither the box copies nor `thumbnail_dir_below`. The tests call them, and clippy with
-// `--all-targets` still finds a module item without any caller.
+// The shared picture module holds no lint level of its own: each project sets it here. Outside
+// the tests, phewr leaves these items of the module without a caller:
+// - always the box copies and the corners (`shape::copies`, `shape::corners`) and
+//   `thumbnail_dir_below`;
+// - without `video`, `Screen::forget_placements` and `protocol::clear_placements_to`;
+// - with a `kitty-*` feature on (`just lint`), the engine parts that the feature gates.
+// The tests call them, and clippy with `--all-targets` still finds a module item without any
+// caller.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "phewr calls no box copy of the shared module")
+    expect(
+        dead_code,
+        reason = "phewr calls no box copy, no corner and no thumbnail_dir_below of the shared \
+                  module, no placement clear without video, and no part of a kitty-* feature"
+    )
 )]
 mod pictures;
 #[cfg(feature = "video")]

@@ -73,10 +73,7 @@ impl TerminalImages {
     }
 
     /// The stored ids, the oldest first.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "an app uses a part of the interface")
-    )]
+    #[cfg(any(test, feature = "kitty-events"))]
     pub(crate) fn ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.stored.iter().rev().map(|(&id, _)| id)
     }

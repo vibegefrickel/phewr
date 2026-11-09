@@ -1,7 +1,8 @@
 //! The frame engine: the pictures that the terminal stores and their places on the screen. The
 //! app puts the places of one frame into [`Placements`]. After the draw of ratatui, one
-//! [`Screen::flush`] writes the deletes, the transfers up to the byte cap of a pass in the order
-//! of the frame, and the changed placements, in one synchronized update.
+//! `Screen::flush` (feature `kitty-flush`) or one [`Screen::write_frame`] writes the deletes, the
+//! transfers up to the byte cap of a pass in the order of the frame, and the changed placements,
+//! in one synchronized update.
 //!
 //! Each picture goes to the terminal one time, under its id, and each place gets a direct
 //! placement on its cells (`c=` and `r=`) with its own placement id (`p=`). The engine uses no
@@ -110,19 +111,18 @@ impl Placements {
     }
 }
 
-/// The places for apps with other needs: the ground under the text and the overlay.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "an app uses a part of the interface")
-)]
+/// The places for apps with other needs: the ground under the text (feature `kitty-layers`) and
+/// the overlay (feature `kitty-overlay`). The tests build every part.
 impl Placements {
     /// Puts the picture `id` on `cells` under the text of the cells, as a ground for text.
+    #[cfg(any(test, feature = "kitty-layers"))]
     pub(crate) fn place_under(&mut self, id: u32, cells: Rect) {
         self.push(id, cells, Layer::UnderCells, None);
     }
 
     /// An overlay covers the screen: this frame shows no picture. The terminal draws a picture
     /// above the text, so a `Clear` of the cells does not remove it.
+    #[cfg(any(test, feature = "kitty-overlay"))]
     pub(crate) fn hide(&mut self) {
         self.places.clear();
         self.hidden = true;
@@ -246,10 +246,7 @@ pub(crate) struct Screen {
     /// The cells by picture id and placement id.
     placed: BTreeMap<(u32, u32), Shown>,
     /// The size after the last resize. A resize to the same size clears nothing.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "an app uses a part of the interface")
-    )]
+    #[cfg(any(test, feature = "kitty-events"))]
     size: Option<(u16, u16)>,
     placing: Placing,
     /// The pixel bytes of new pictures per flush. The first picture of a flush always goes out.
@@ -275,6 +272,7 @@ impl Screen {
             maybe_stored: BTreeSet::new(),
             resend: BTreeSet::new(),
             placed: BTreeMap::new(),
+            #[cfg(any(test, feature = "kitty-events"))]
             size: None,
             placing: Placing::default(),
             pass_bytes: EMIT_PASS_BYTES,
@@ -282,8 +280,8 @@ impl Screen {
         }
     }
 
-    /// [`Screen::flush`] into an update that the app opened, after its own writes. The pixel
-    /// bytes of the update count for the byte cap.
+    /// `Screen::flush` (feature `kitty-flush`) into an update that the app opened, after its own
+    /// writes. The pixel bytes of the update count for the byte cap.
     pub(crate) fn write_frame<'a, W: Write + ?Sized>(
         &mut self,
         update: &mut Update<'_, W>,
@@ -577,19 +575,18 @@ impl Screen {
 }
 
 /// The settings and the events for apps with other needs: the placement policy, the byte cap,
-/// the own update, the resize, the clear, the focus gain and the quit.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "an app uses a part of the interface")
-)]
+/// the own update, the resize, the clear, the focus gain and the quit. Each part has its own
+/// feature, so an app builds only the parts that it calls. The tests build every part.
 impl Screen {
     /// The same screen with the placement policy `placing`.
+    #[cfg(any(test, feature = "kitty-placing"))]
     pub(crate) const fn with_placing(mut self, placing: Placing) -> Self {
         self.placing = placing;
         self
     }
 
     /// The same screen with a byte cap of `bytes` new pixel bytes per flush.
+    #[cfg(any(test, feature = "kitty-pass-bytes"))]
     pub(crate) const fn with_pass_bytes(mut self, bytes: usize) -> Self {
         self.pass_bytes = bytes;
         self
@@ -599,6 +596,7 @@ impl Screen {
     /// placements, the new pictures up to the byte cap, the changed placements and the deletes
     /// of the budget. `pixels` gives the data of a picture that the terminal does not store. A
     /// picture without data gets no placement. `frame` is empty after the call.
+    #[cfg(any(test, feature = "kitty-flush"))]
     pub(crate) fn flush<'a>(
         &mut self,
         out: &mut impl Write,
@@ -613,12 +611,14 @@ impl Screen {
     }
 
     /// The pixel bytes that the terminal stores now.
+    #[cfg(any(test, feature = "kitty-store"))]
     pub(crate) fn stored_bytes(&self) -> usize {
         self.store.bytes()
     }
 
     /// A resize to a new size clears the screen, and the clear deletes every picture. The next
     /// flushes send and place every picture again.
+    #[cfg(any(test, feature = "kitty-events"))]
     pub(crate) fn resized(&mut self, columns: u16, rows: u16) {
         if self.size.replace((columns, rows)) != Some((columns, rows)) {
             self.cleared();
@@ -628,6 +628,7 @@ impl Screen {
     /// The app cleared the screen, for example after a program ran in the terminal. The next
     /// flushes send and place every picture again. The terminal can still hold the pictures, so
     /// their ids move to `maybe_stored`, and a later delete still reaches them.
+    #[cfg(any(test, feature = "kitty-events"))]
     pub(crate) fn cleared(&mut self) {
         let ids: Vec<u32> = self.store.ids().collect();
         self.maybe_stored.extend(ids);
@@ -641,11 +642,13 @@ impl Screen {
     /// another app has the focus, so each picture sends its pixels again at its next placement.
     /// Nothing cleared the screen: the pictures still count for the budget, and a placement that
     /// the next frame does not use still gets its delete.
+    #[cfg(any(test, feature = "kitty-events"))]
     pub(crate) fn focus_gained(&mut self) {
         self.resend.extend(self.store.ids());
     }
 
     /// Deletes every stored picture, so the terminal frees its memory when the app quits.
+    #[cfg(any(test, feature = "kitty-events"))]
     pub(crate) fn delete_all(&mut self, out: &mut impl Write) -> io::Result<()> {
         let mut ids: BTreeSet<u32> = self.store.ids().collect();
         ids.append(&mut self.maybe_stored);
@@ -659,6 +662,7 @@ impl Screen {
 
     /// Deletes every placement with one `d=a`, also the placements that the app wrote without
     /// the engine. The terminal keeps the pixels, so the next flush only places.
+    #[cfg(any(test, feature = "kitty-overlay"))]
     pub(crate) fn unplace_all<W: Write + ?Sized>(&mut self, out: &mut W) -> io::Result<()> {
         protocol::clear_placements_to(out)?;
         self.forget_placements();
@@ -667,6 +671,7 @@ impl Screen {
 
     /// The terminal lost the picture `id`, for example after an error answer. The next flush
     /// that places it sends it again.
+    #[cfg(any(test, feature = "kitty-store"))]
     pub(crate) fn lost(&mut self, id: u32) {
         self.forget(id);
     }
