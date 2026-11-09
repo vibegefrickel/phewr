@@ -44,6 +44,8 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
             &encoder::DisplayOptions {
                 columns: placement.columns,
                 rows: placement.rows,
+                // The slideshow badge sits on top of the picture.
+                below_backgrounds: app.slideshow_running(),
                 ..encoder::DisplayOptions::default()
             },
         )?;
@@ -213,6 +215,7 @@ pub(crate) fn render_video_frame_to(
             transmit_only: false,
             columns: None,
             rows: None,
+            below_backgrounds: app.slideshow_running(),
             transient: true,
         },
     )?;

@@ -18,6 +18,9 @@ impl App {
             self.needs_render = true;
         }
 
+        // Read the flag before the entries. The scanner marks the list complete after its last
+        // push, so a complete list then gives every entry in this poll.
+        let complete = self.shared_list.is_complete();
         if self.shared_list.len() > self.known_len {
             // The scanner sets the pairs before the first entry.
             if self.known_len == 0 {
@@ -46,7 +49,7 @@ impl App {
             }
         }
 
-        if !self.scan_complete && self.shared_list.is_complete() {
+        if !self.scan_complete && complete {
             self.scan_complete = true;
             self.finalize_scan_order();
             self.request_cell_shape();

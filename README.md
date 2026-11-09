@@ -138,7 +138,8 @@ and date. For a video, it shows the length, the frame rate and `SDR`, `HLG` or `
 
 A slideshow uses the whole screen: it hides the status row and scales each picture to fill the
 screen with its aspect. A portrait picture reaches the top and the bottom, a landscape picture
-the left and the right.
+the left and the right. A small badge at the bottom right shows the play or pause state, the
+interval and errors.
 
 ### Video
 

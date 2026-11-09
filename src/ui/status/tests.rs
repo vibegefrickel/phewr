@@ -210,7 +210,7 @@ fn slideshow_has_no_status_row() {
     app.error = Some("decode failed".to_owned());
     let screen = render(&mut app, Some("a note"), 100, 30);
     assert_hides(&screen, "a.jpg");
-    assert_hides(&screen, "decode failed");
+    assert_shows(&screen, " Error: decode failed ");
     assert_hides(&screen, "a note");
 }
 

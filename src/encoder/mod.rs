@@ -71,12 +71,19 @@ pub(crate) struct DisplayOptions {
     /// Scale to this many rows (`r=`), and the terminal takes the columns from the aspect ratio.
     /// `cell_box` and `columns` win.
     pub rows: Option<u16>,
+    /// Draw the picture below the cells with a background color (`z=` [`BELOW_BACKGROUNDS`]), so
+    /// that a text badge with a background shows on top of the picture.
+    pub below_backgrounds: bool,
     /// Send without a placement (`a=t`). A later `a=p` places the image by its id.
     pub transmit_only: bool,
     /// The usage hint `N=1`: the terminal can evict the image first. [`KittyBackend`] sends it only
     /// for [`Loops::Animation`].
     pub transient: bool,
 }
+
+/// The z-index below `i32::MIN / 2`: the terminal draws the picture under the cell backgrounds
+/// that are not the default background.
+pub(crate) const BELOW_BACKGROUNDS: i32 = -1_073_741_825;
 
 /// The largest raw payload of one transmission. Ghostty 1.4.0 refuses a payload above 65 MiB.
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 64 << 20;
@@ -361,6 +368,7 @@ mod tests {
                     cell_box: Some((5, 3)),
                     columns: None,
                     rows: None,
+                    below_backgrounds: false,
                     transmit_only: false,
                     transient: false,
                 },

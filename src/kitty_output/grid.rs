@@ -85,6 +85,7 @@ fn transmit_cell(
             transmit_only: false,
             columns: None,
             rows: None,
+            below_backgrounds: false,
             transient: false,
         },
     )?;

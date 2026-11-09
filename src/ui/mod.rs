@@ -14,7 +14,7 @@ use ratatui::{
 };
 #[cfg(feature = "video")]
 use status::video_status_line;
-use status::{draw_status_row, fullscreen_status_line, gallery_status_line};
+use status::{draw_slideshow_badge, draw_status_row, fullscreen_status_line, gallery_status_line};
 
 /// The preferred info panel width, with its border.
 const INFO_PANEL_WIDTH: u16 = 42;
@@ -119,6 +119,9 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Opt
             middle,
         );
     }
+    if status_rows(app) == 0 {
+        draw_slideshow_badge(frame, app, inner, status);
+    }
 
     app.image_rect = inner;
 }
@@ -127,7 +130,11 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Opt
 fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
     let bottom_line = video_status_line(app, status);
     draw_status_row(frame, app, status_area(area, app), bottom_line, status);
-    app.image_rect = content_area(area, app);
+    let inner = content_area(area, app);
+    if status_rows(app) == 0 {
+        draw_slideshow_badge(frame, app, inner, status);
+    }
+    app.image_rect = inner;
 }
 
 fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
@@ -141,8 +148,8 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
     app.grid_icons.wanted = wanted;
 }
 
-/// The rows above the status row.
-/// A slideshow shows the picture on the whole screen, without the status row.
+/// A slideshow shows the picture on the whole screen, without the status row. A badge on top of
+/// the picture shows its state.
 fn status_rows(app: &App) -> u16 {
     if app.slideshow_running() && app.mode != ViewMode::Gallery {
         0
@@ -151,6 +158,7 @@ fn status_rows(app: &App) -> u16 {
     }
 }
 
+/// The rows above the status row.
 pub(crate) fn content_area(area: Rect, app: &App) -> Rect {
     Rect {
         height: area.height.saturating_sub(status_rows(app)),
@@ -204,6 +212,39 @@ mod tests {
         app.stop_slideshow();
         render_buffer(&mut app, None, 40, 12);
         assert_eq!(app.image_rect.height, 11);
+    }
+
+    /// The badge sits at the bottom right of a slideshow: the state, a note or an error.
+    #[test]
+    fn slideshow_badge_shows_state() {
+        let mut app = crate::test_support::fullscreen_app(3, 0);
+        app.slideshow_interval = std::time::Duration::from_secs(5);
+        app.start_slideshow();
+        let buffer = render_buffer(&mut app, None, 40, 12);
+        let rows = screen_rows(&buffer);
+        assert!(rows[11].ends_with(" \u{25b6} 5.0s "), "{rows:?}");
+        assert_eq!(buffer[(39, 11)].style().bg, Some(Color::Gray));
+        assert_ne!(
+            buffer[(0, 11)].style().bg,
+            Some(Color::Gray),
+            "the picture shows left of the badge"
+        );
+
+        app.slideshow_toggle_pause();
+        let rows = screen_rows(&render_buffer(&mut app, Some("a note"), 40, 12));
+        assert!(rows[11].ends_with(" a note  \u{23f8} 5.0s "), "{rows:?}");
+
+        app.error = Some("broken".to_owned());
+        let rows = screen_rows(&render_buffer(&mut app, None, 40, 12));
+        assert!(rows[11].ends_with(" Error: broken "), "{rows:?}");
+
+        app.error = None;
+        app.stop_slideshow();
+        let rows = screen_rows(&render_buffer(&mut app, None, 40, 12));
+        assert!(
+            !rows[11].contains("5.0s"),
+            "no badge after the slideshow: {rows:?}"
+        );
     }
 
     pub(super) fn render_buffer(

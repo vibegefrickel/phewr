@@ -1,6 +1,6 @@
 //! The Kitty graphics writes: the transmit through each medium, the frames, the deletes and the
 //! placements.
-use super::{DisplayOptions, Pixels, Transfer};
+use super::{BELOW_BACKGROUNDS, DisplayOptions, Pixels, Transfer};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -182,7 +182,12 @@ fn header_keys(pixels: Pixels<'_>, opts: &DisplayOptions, format: u32) -> String
     };
     let action = if opts.transmit_only { 't' } else { 'T' };
     let hint = if opts.transient { ",N=1" } else { "" };
-    format!("a={action},q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}{hint}")
+    let layer = if opts.below_backgrounds {
+        format!(",z={BELOW_BACKGROUNDS}")
+    } else {
+        String::new()
+    };
+    format!("a={action},q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}{layer}{hint}")
 }
 
 fn cell_box_keys(cell_box: Option<(u16, u16)>) -> String {

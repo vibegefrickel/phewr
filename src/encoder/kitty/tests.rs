@@ -81,6 +81,7 @@ fn transmit_names_cell_box() {
             cell_box: Some((4, 2)),
             columns: None,
             rows: None,
+            below_backgrounds: false,
             transmit_only: false,
             transient: false,
         },
@@ -358,6 +359,21 @@ fn rows_without_columns_name_only_r() {
     );
     assert!(encoded.contains(",s=4,v=8,r=9,m=0;"), "{encoded}");
     assert!(!encoded.contains(",c="), "{encoded}");
+}
+
+#[test]
+fn below_backgrounds_names_layer() {
+    let image = RgbaImage::from_pixel(4, 8, image::Rgba([1, 2, 3, 255]));
+    let encoded = transmit(
+        &image,
+        &DisplayOptions {
+            rows: Some(9),
+            below_backgrounds: true,
+            ..DisplayOptions::default()
+        },
+        Transfer::Direct,
+    );
+    assert!(encoded.contains(",r=9,z=-1073741825,m=0;"), "{encoded}");
 }
 
 #[test]

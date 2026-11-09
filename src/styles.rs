@@ -20,6 +20,10 @@ pub(crate) struct Styles {
     pub dim: Style,
     /// Key hints and the help key column.
     pub key: Style,
+    /// The slideshow badge on top of the picture. The background hides the picture below it.
+    pub badge: Style,
+    /// An error in the slideshow badge.
+    pub badge_error: Style,
 }
 
 pub(crate) const STYLES: Styles = Styles {
@@ -32,4 +36,6 @@ pub(crate) const STYLES: Styles = Styles {
     error: Style::new().fg(Color::Red),
     dim: Style::new().fg(Color::DarkGray),
     key: Style::new().fg(Color::Cyan),
+    badge: Style::new().fg(Color::Black).bg(Color::Gray),
+    badge_error: Style::new().fg(Color::Black).bg(Color::Red),
 };

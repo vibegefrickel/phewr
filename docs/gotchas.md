@@ -34,8 +34,14 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   video, and its still carries a play triangle until its loop starts. The probe, the routes and
   the stamp are in `docs/video.md` ("Animated images" and "Probe").
 - **Slideshow view (2026-11-09):** a running or paused slideshow has no status row
-  (`ui::status_rows` gives 0 outside the grid), so `image_rect` covers the whole screen. A status
-  note, an error and the pause state do not show. The image goes out at its decoded size and
+  (`ui::status_rows` gives 0 outside the grid), so `image_rect` covers the whole screen. A badge
+  at the bottom right of `image_rect` (`draw_slideshow_badge` in `ui/status.rs`) shows the play
+  or pause glyph and the interval, with the status note in front. An error replaces the badge
+  text on a red background. The badge is always on (maintainer, 2026-11-09). Kitty draws a
+  picture above the text, so the still and the video frame of a slideshow go out with
+  `z=-1073741825` (`BELOW_BACKGROUNDS`): Ghostty draws them below every cell with a background
+  color, and the cells with the default background show the picture. The badge has a background
+  color (`STYLES.badge`, black on ANSI gray, like the active tab of herdr). The image goes out at its decoded size and
   the terminal scales it to the fill of `image_rect` (`filled_placement` in
   `kitty_output/mod.rs`): a portrait image gets `r=` with the rows of the box, a landscape image
   `c=` with the columns, and the terminal takes the other side from the aspect, so the picture

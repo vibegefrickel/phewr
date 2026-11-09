@@ -107,9 +107,14 @@ fn slideshow_fills_box_with_image() {
         !native.contains(",r=") && !native.contains(",c="),
         "{native}"
     );
+    assert!(!native.contains(",z="), "{native}");
 
     app.start_slideshow();
     let portrait = render(&mut app, (10, 40));
+    assert!(
+        portrait.contains(",z=-1073741825"),
+        "the badge sits on top of the picture: {portrait}"
+    );
     assert!(
         portrait.contains(",r=10,"),
         "flush with the top and the bottom: {portrait}"
@@ -285,6 +290,21 @@ pub(super) fn playing_app() -> App {
     assert!(player.poll());
     app.video = Some(player);
     app
+}
+
+/// In a slideshow, the video frame sits below the badge too.
+#[cfg(feature = "video")]
+#[test]
+fn slideshow_frame_below_badge() {
+    let mut app = playing_app();
+    let mut out = Vec::new();
+    super::render_video_frame_to(&app, &mut out, false).unwrap();
+    assert!(!text(&out).contains(",z="), "{}", text(&out));
+
+    app.start_slideshow();
+    let mut out = Vec::new();
+    super::render_video_frame_to(&app, &mut out, false).unwrap();
+    assert!(text(&out).contains(",z=-1073741825"), "{}", text(&out));
 }
 
 #[cfg(feature = "video")]

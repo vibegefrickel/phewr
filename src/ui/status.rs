@@ -72,6 +72,64 @@ pub(super) fn fullscreen_status_line(app: &App, status: Option<&str>) -> Line<'s
     Line::from(spans)
 }
 
+/// The badge at the bottom right of a slideshow: the picture stays visible around it, because the
+/// picture sits below the cell backgrounds.
+pub(super) fn draw_slideshow_badge(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    status: Option<&str>,
+) {
+    let Some(line) = slideshow_badge(app, status) else {
+        return;
+    };
+    let width = u16::try_from(line.width())
+        .unwrap_or(u16::MAX)
+        .min(area.width);
+    if width == 0 || area.height == 0 {
+        return;
+    }
+    let badge = Rect {
+        x: area.right() - width,
+        y: area.bottom() - 1,
+        width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(line), badge);
+}
+
+/// An error, or the note and the state of the slideshow: the play or pause glyph and the interval.
+fn slideshow_badge(app: &App, status: Option<&str>) -> Option<Line<'static>> {
+    let show = app.slideshow.as_ref()?;
+    if let Some(err) = app
+        .error
+        .as_deref()
+        .or(app.scan_error.as_deref())
+        .or_else(|| video_error(app))
+    {
+        return Some(Line::from(Span::styled(
+            format!(" Error: {err} "),
+            STYLES.badge_error,
+        )));
+    }
+    let glyph = if show.paused { "\u{23f8}" } else { "\u{25b6}" };
+    let note = status.map(|note| format!(" {note} ")).unwrap_or_default();
+    Some(Line::from(Span::styled(
+        format!("{note} {glyph} {:.1}s ", show.interval.as_secs_f64()),
+        STYLES.badge,
+    )))
+}
+
+#[cfg(feature = "video")]
+fn video_error(app: &App) -> Option<&str> {
+    app.video.as_ref().and_then(|v| v.error.as_deref())
+}
+
+#[cfg(not(feature = "video"))]
+fn video_error(_app: &App) -> Option<&str> {
+    None
+}
+
 #[cfg(feature = "video")]
 const PLAYING_GLYPH: &str = "\u{25b6}";
 /// The glyph at the end of a clip that does not loop. The player has no pause.

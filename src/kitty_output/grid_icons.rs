@@ -225,6 +225,7 @@ fn store(
             transmit_only: true,
             columns: None,
             rows: None,
+            below_backgrounds: false,
             transient: false,
         },
     )?;
