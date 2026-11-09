@@ -1,7 +1,8 @@
 # The shared picture pipeline: refactor plan
 
-Status (2026-11-09): phase 1 is done in phewr (`6b7482a`). Phase 0 is open: the maintainer
-measures the baseline in a real terminal and fills the herdr note. Phase 2 is next. This file in
+Status (2026-11-09): phases 1 and 2 are done in phewr (`6b7482a`, `36ecdea`). Phase 0 is open:
+the maintainer measures the baseline in a real terminal and fills the herdr note. Phase 3 is
+next. This file in
 phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
 
 phewr, schnattr and youtr each decode, shape and send pictures to the terminal. phewr does this
@@ -60,15 +61,12 @@ The maintainer decided these items on 2026-11-09:
    file with the sums, and refuses a copy with edits of its own, as `just frame-sync` does. The
    code must pass the union of the lint tables of the three projects. A sync into a project needs
    the explicit go of the session of that project.
-2. **Homebrew from source for schnattr and youtr.** The release builds from source through a
-   Homebrew formula with `depends_on "libheif"` and `depends_on "jpeg-turbo"`. So all decoders
-   (`turbo`, `heic`, `jxl`, `sips`) run in the three projects. The universal binary and the curl
-   installer of the release plan of schnattr change with this decision: the release steps in
-   `docs/todo.md` and the recipes in `packaging/` need a rework before 0.1.0. That rework is not
-   part of this plan. youtr is the exception (decision of the maintainer, 2026-11-09): it decodes
-   only JPEG, PNG and WebP thumbnails and links no native library. youtr takes the module with
-   `heic`, `jxl` and `turbo` turned off, and it keeps its prebuilt binary and its `packaging/`
-   until its own release rework in Q1 2027.
+2. **Built from source, no release.** There is no release, no package and no installer for any of
+   the projects (decision of the maintainer, 2026-11-09). Each user clones a repository and runs
+   `just install`. schnattr and phewr link the Homebrew `libheif` and `jpeg-turbo` at build time,
+   so all decoders (`turbo`, `heic`, `jxl`, `sips`) run there. youtr decodes only JPEG, PNG and
+   WebP thumbnails and links no native library: it takes the module with `heic`, `jxl` and
+   `turbo` turned off.
 3. **The frame engine moves.** `frame/kitty.rs` moves into `src/pictures/kitty/`, merged with the
    phewr output. The frame keeps only the `Pictures` trait and stays free of pictures.
 4. **Only changed placements.** Only a new or a moved placement goes out, as in phewr. The resend
@@ -190,8 +188,8 @@ Open items for the next phases:
   `decode/color/tags.rs` (`icc_known_space` for the player), `decode/hdr/mod.rs` (`nits`) and
   `jobs/disk_cache/mod.rs` (`FileStamp`). A copy without a `video` feature fails clippy with
   `unexpected_cfgs`. Phase 2 or 3 turns them into module features or moves the items to the app.
-- The `jxl` gate is not there yet. It goes on `pubcrate mod jxl`, `Route::Jxl` and its arms, `decode::dimensions`,
-  `JXL_EXTENSIONS`, the `Route::Jxl` arm of `shown_size`, and in the app on `read_exif`,
+- The `jxl` gate is not there yet. It goes on `pub(crate) mod jxl`, `Route::Jxl` and its arms,
+  `decode::dimensions`, `JXL_EXTENSIONS`, the `Route::Jxl` arm of `shown_size`, and in the app on `read_exif`,
   `is_supported` and the jxl benches. `jxl-oxide` and `jxl-render` become optional.
 - In a copy, many `pub(crate)` items have no caller (`JobSlots`, `box_px`, `centered`,
   `query_cell_size_and_probe`, `Loops`, `trim_to_budget`), so clippy with `-D warnings` fails.
@@ -215,6 +213,35 @@ Open items for the next phases:
    of the screen, the recovery after a clear.
 
 Done when `just check` passes in phewr, and phewr runs on the merged layer.
+
+Result (`36ecdea`, 2026-11-09):
+
+- `pictures/kitty/screen.rs` is the frame engine: `Placements` (`place`, `place_under`,
+  `place_over`, `keep`, `hide`), `Screen`, `Update`, `Placing` (`Changed` by default,
+  `EveryFrame` for youtr) and `Layer`. `docs/grid-and-kitty.md` describes it.
+- The phewr grid writes one frame per pass through the engine. A redraw has no byte cap, as
+  before. A preview keeps its place until its sharp picture shows.
+- `Loops`, `transmit_frame_to` and `animate_to` stay in `pictures::kitty`, because `N=1` depends
+  on the probe result.
+- The pre-review found 2 issues: a second grid pass of the icons in one run-loop pass, and the
+  loop benches outside 5 %. The worker fixed both. An interleaved A/B with 6 rounds at a load
+  below 4 gave the cold loop benches 2 % to 3 % faster than `main`. The warm animation fill is
+  bimodal in both trees.
+
+Open items for phase 4 and phase 5:
+
+- The engine report maps each part of `frame/kitty.rs` of schnattr: `Placements::place` and
+  `place_under`, `hide`, `Screen::flush` for `update`, `resized`, `cleared`, `focus_gained`,
+  `delete_all`, `Pixels`, `TERMINAL_IMAGE_BUDGET` for `TERMINAL_BUDGET`, and the sync constants.
+- phewr does not call `flush`, the events, `with_placing`, `with_pass_bytes`, `lost`, `hide` and
+  `place_under`. They carry `cfg_attr(not(test), expect(dead_code))` in two impl blocks. In an
+  app that uses every item of a block, `expect` fails the build, and the lint table forbids
+  `allow`. Phase 4 needs a rule: a cargo feature per part of the interface, or phewr uses the
+  events itself.
+- phewr keeps `d=A` on an overlay, a resize and the quit, and it has no focus reports (mode 1004).
+  With `hide()` and focus reports, phewr gets the store back after an overlay and the resend of
+  rule 6. This changes the behavior of phewr. Decide it in phase 5.
+- Nothing calls `Screen::lost` yet. The self check of phase 5 is its first caller.
 
 ### Phase 3: the shapes and the caches (phewr repository)
 
@@ -277,8 +304,6 @@ The maintainer runs the scenarios that need a real terminal. The workers write t
 
 ## Risks
 
-- **The release plan of schnattr changes.** A Homebrew formula from source replaces the universal
-  binary and the curl installer (decision 2). The release steps need a rework before 0.1.0.
 - **Three copies of a large module.** The `SOURCE` check of each copy and the refusal of the sync
   keep the copies equal. The module must pass three lint tables.
 - **herdr changes.** A new herdr version can fix or change the delivery. The self check of phase 5
@@ -293,6 +318,6 @@ The maintainer runs the scenarios that need a real terminal. The workers write t
 - The frame stays with schnattr as its master copy. A frame sync into youtr needs the explicit go
   of the youtr session.
 - youtr names no sibling project in its code and docs.
-- youtr links no native library and keeps its release packaging until Q1 2027 (decision 2).
+- youtr links no native library (decision 2).
 - Each worker runs with `--review auto`. The orchestrator lists each finding of the pre-review and
   each answer of the worker in the merge report.

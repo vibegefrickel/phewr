@@ -59,6 +59,18 @@ pub(crate) struct GalleryState {
     image_aspect: f64,
     /// The zoom level of the reset key.
     pub(crate) default_zoom_rows: usize,
+    /// The cursor place before the first of several layout changes. It holds while the cursor and
+    /// the scroll stay, so a zoom out and back in returns to the same screen after a clamp at the
+    /// list edge.
+    kept_place: Option<KeptPlace>,
+}
+
+/// A cursor place (`GalleryState::cursor_place`) and the cursor and the scroll after its relayout.
+#[derive(Clone, Copy)]
+struct KeptPlace {
+    place: (usize, usize),
+    cursor: usize,
+    scroll_offset: usize,
 }
 
 impl GalleryState {
@@ -89,6 +101,7 @@ impl GalleryState {
             cols_per_row: DEFAULT_IMAGE_ASPECT * DEFAULT_CELL_RATIO,
             image_aspect: DEFAULT_IMAGE_ASPECT,
             default_zoom_rows: zoom_rows,
+            kept_place: None,
         }
     }
 
@@ -189,11 +202,17 @@ impl GalleryState {
     pub(crate) fn reset_cursor(&mut self) {
         self.cursor = 0;
         self.scroll_offset = 0;
+        self.kept_place = None;
     }
 
     /// Fit `zoom_rows` rows into `grid_rect`. The cell shape picks the column count, then the
     /// columns fill the width.
     pub(crate) fn update_grid(&mut self, grid_rect: Rect) {
+        let before = (self.grid_cols, self.visible_rows);
+        let place = self
+            .kept_place
+            .filter(|kept| kept.cursor == self.cursor && kept.scroll_offset == self.scroll_offset)
+            .map_or_else(|| self.cursor_place(), |kept| kept.place);
         self.grid_rect = grid_rect;
         self.visible_rows = self
             .zoom_rows
@@ -213,7 +232,51 @@ impl GalleryState {
         let cell_area_width = grid_rect.width.saturating_sub(gaps(cols));
         self.thumb_cols = (cell_area_width / cols).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
         self.extra_cols = spread(cell_area_width, self.thumb_cols, cols);
+        if before != (self.grid_cols, self.visible_rows) {
+            self.keep_cursor_place(place);
+            self.ensure_cursor_visible();
+            self.kept_place = Some(KeptPlace {
+                place,
+                cursor: self.cursor,
+                scroll_offset: self.scroll_offset,
+            });
+        }
         self.ensure_cursor_visible();
+    }
+
+    /// The screen row of the cursor and the screen rows.
+    fn cursor_place(&self) -> (usize, usize) {
+        let rows = self.visible_rows.max(1);
+        let row = self
+            .cursor_row()
+            .saturating_sub(self.scroll_offset)
+            .min(rows - 1);
+        (row, rows)
+    }
+
+    /// Scroll so that the cursor keeps its relative place on a screen with new rows or columns:
+    /// a zoom or the info panel then moves nothing under the eye. The scroll stays inside the
+    /// list, so at its start or its end the grid stays flush with the edge and fills the screen.
+    /// The top and the bottom row stay at their edge. A row between maps its middle to the new
+    /// screen, so a zoom out and back in returns to the same row.
+    fn keep_cursor_place(&mut self, (row, rows): (usize, usize)) {
+        let last = self.visible_rows.saturating_sub(1);
+        let on_screen = match row {
+            _ if rows == 1 => last / 2,
+            0 => 0,
+            _ if row == rows - 1 => last,
+            _ => (2 * row + 1) * self.visible_rows / (2 * rows),
+        };
+        self.scroll_offset = self
+            .cursor_row()
+            .saturating_sub(on_screen)
+            .min(self.max_scroll_offset());
+    }
+
+    /// The scroll offset that shows the last row at the bottom of the screen.
+    fn max_scroll_offset(&self) -> usize {
+        let total_rows = self.filtered_indices.len().div_ceil(self.grid_cols.max(1));
+        total_rows.saturating_sub(self.visible_rows)
     }
 
     fn col_x(&self, col: u16) -> u16 {
@@ -287,12 +350,10 @@ impl GalleryState {
 
     /// Scroll the grid by `delta` rows. The cursor keeps its column and stays on the screen.
     pub(crate) fn scroll_rows(&mut self, delta: isize) {
-        let total_rows = self.filtered_indices.len().div_ceil(self.grid_cols.max(1));
-        let max_offset = total_rows.saturating_sub(self.visible_rows);
         let offset = self
             .scroll_offset
             .saturating_add_signed(delta)
-            .min(max_offset);
+            .min(self.max_scroll_offset());
         if offset == self.scroll_offset {
             return;
         }

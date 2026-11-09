@@ -136,6 +136,72 @@ fn zoom_changes_and_clamps_rows() {
     assert!(!gallery.reset_zoom());
 }
 
+/// The screen row of the cursor.
+fn screen_row(gallery: &GalleryState) -> usize {
+    gallery.cursor_row() - gallery.scroll_offset
+}
+
+/// The last file stays at the bottom through a zoom in and out, and the rows above fill the
+/// screen.
+#[test]
+fn zoom_at_end_keeps_screen_full() {
+    let mut gallery = GalleryState::with_zoom_rows(400, 6);
+    gallery.update_grid(Rect::new(0, 0, 160, 40));
+    gallery.move_to_last();
+    while gallery.thumb_zoom_in() {}
+    assert_eq!(gallery.grid_cols, 2, "{}", gallery.grid_cols);
+    assert_eq!(screen_row(&gallery), gallery.visible_rows - 1);
+
+    while gallery.thumb_zoom_out() {}
+    assert_eq!(gallery.visible_range().end, 400);
+    assert_eq!(screen_row(&gallery), gallery.visible_rows - 1);
+    assert!(
+        gallery.visible_range().len() > (gallery.visible_rows - 1) * gallery.grid_cols,
+        "every row shows files: {:?}",
+        gallery.visible_range()
+    );
+}
+
+/// The first file stays at the top, and a file in the middle of the screen stays there.
+#[test]
+fn zoom_keeps_cursor_place() {
+    let mut gallery = GalleryState::with_zoom_rows(300, 5);
+    gallery.update_grid(Rect::new(0, 0, 160, 40));
+    gallery.thumb_zoom_in();
+    assert_eq!(gallery.scroll_offset, 0);
+
+    gallery.move_cursor_to(150);
+    gallery.scroll_offset = gallery.cursor_row() - 2;
+    assert_eq!(gallery.visible_rows, 4);
+    gallery.thumb_zoom_out();
+    gallery.thumb_zoom_out();
+    assert_eq!(gallery.visible_rows, 6);
+    assert!(
+        (3..=4).contains(&screen_row(&gallery)),
+        "row 2 of 4 stays in the middle: {}",
+        screen_row(&gallery)
+    );
+    gallery.thumb_zoom_in();
+    gallery.thumb_zoom_in();
+    assert_eq!(screen_row(&gallery), 2, "back on the same row");
+}
+
+/// The info panel takes columns. The cursor keeps its place on the screen.
+#[test]
+fn narrower_grid_keeps_cursor_place() {
+    let mut gallery = GalleryState::with_zoom_rows(300, 4);
+    gallery.update_grid(Rect::new(0, 0, 160, 40));
+    gallery.move_cursor_to(150);
+    gallery.scroll_offset = gallery.cursor_row() - 1;
+    let cols = gallery.grid_cols;
+
+    gallery.update_grid(Rect::new(0, 0, 118, 40));
+    assert_ne!(gallery.grid_cols, cols);
+    assert_eq!(screen_row(&gallery), 1);
+    gallery.update_grid(Rect::new(0, 0, 160, 40));
+    assert_eq!(screen_row(&gallery), 1);
+}
+
 #[test]
 fn selected_index_follows_filtered_indices() {
     let mut gallery = GalleryState::new(5);

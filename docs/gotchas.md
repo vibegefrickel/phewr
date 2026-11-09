@@ -251,7 +251,13 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Grid zoom:** the grid shows 2 to 12 rows (`MIN_VISIBLE_ROWS`, `MAX_VISIBLE_ROWS`). A 2x2
   grid is the largest thumbnail size. The fullscreen view is the larger view. The config key
   and the state file clamp to that range on load. A terminal too small for 2 rows keeps the
-  rows that fit.
+  rows that fit. A change of the rows or the columns (a zoom, the info panel, a resize, the
+  cell shape) keeps the place of the cursor row on the screen: the top row stays at the top, the
+  bottom row at the bottom, and a row between maps its middle. The scroll then stays inside the
+  list, so at its start or its end the screen stays full. Until 2026-11-09 the grid kept the
+  scroll row: after a zoom out at the end of a list, only the last row showed. The place of the
+  first change holds while the cursor and the scroll stay (`KeptPlace`), so a zoom out and back
+  in returns to the same screen.
   A state file that does not parse stays as it is: `+`, `-` and `0` do not save over it, and each
   save goes through a temp file and a rename.
   The state file holds a global `visible_rows` fallback, a `zoom_counter` and a `[zoom]` table

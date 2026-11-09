@@ -17,9 +17,9 @@ It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT).
 - The target is macOS on Apple Silicon, in Ghostty. phewr uses the Kitty graphics protocol, not the
   Kitty terminal. Nobody tests in the Kitty terminal.
 - The maintainer is the only user today. Write user-facing texts for other people anyway.
-- phewr is not published. The maintainer tests phewr until the end of 2026. The first release
-  comes in Q1 2027 at the earliest. Until then, the Codeberg repository holds only the source.
-  The dotfiles install clones it and runs `just install`.
+- phewr has no release. The first release comes in Q1 2027 at the earliest, and the maintainer
+  plans no Homebrew release. Users clone the repository and build phewr with `just install`,
+  and the dotfiles install does the same. There is no CI.
 
 The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
 serde/toml, jxl-oxide and jxl-render (both with exact pins), moxcms, resvg (without default
@@ -42,9 +42,6 @@ just bench [DIR] [FILTER]  # the speed measurements of src/bench/ on PHEWR_TEST_
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | outdated   # the single steps
-just dist            # arm64 binary in dist/ (dist profile, ad-hoc codesign, sha256)
-just render          # dist + the filled formula and install.sh in dist/, publishes nothing
-just release         # check + tag + Codeberg release + tap (maintainer only, see below)
 just pictures-sync TARGET   # copy src/pictures/ to TARGET/src/pictures/, write SOURCE, fmt + clippy
 just pictures-check TARGET  # fail when the copy in TARGET drifted from the master copy
 ```
@@ -74,33 +71,6 @@ Files at run time:
 - State (the remembered zoom levels): `~/.local/state/phewr/state.toml`.
 - Thumbnail cache: `~/Library/Caches/phewr/`, QOI files and the `.loop` files of the grid loops,
   pruned at 512 MB.
-
-### Release (maintainer only)
-
-CAUTION: Do not run `just release` or `just publish` unless the maintainer asks for it. These
-recipes publish to Codeberg and push the Homebrew tap.
-
-The release is postponed to Q1 2027 at the earliest. Until then, there is no Codeberg release,
-no Homebrew tap and no installer script. Do not prepare or change release steps unless the
-maintainer asks for it. Keep the recipes and the templates in `packaging/` as they are.
-
-There is no CI. The maintainer builds and publishes each release from their own machine.
-
-One-time setup:
-
-1. Create the Codeberg repository `phewr` under `webgefrickel`.
-2. Export `CODEBERG_TOKEN`.
-3. Clone `homebrew-tap` next to this repository (`../homebrew-tap`).
-
-For each release:
-
-1. Change `version` in `Cargo.toml` and commit.
-2. Run `just release`. It runs `just check`, builds the binary, tags, creates the Codeberg
-   release with the asset and `install.sh`, and pushes the formula to the tap.
-
-The release binary is arm64 only, because Homebrew's libheif is an arm64 library. The formula
-depends on libheif, and ffmpeg and mpv are recommended dependencies. `install.sh` stops if libheif
-is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without them.
 
 ## Rules
 
@@ -319,9 +289,11 @@ decisions. Read the long form before you change the code that an item names.
   the grid has work. A cursor move, a folder change, a zoom, a resize, a mode change or the quit
   cancels it, and the next start waits for the old thread. A lower thread priority gave no gain
   (2026-11-03).
-- **Grid zoom:** the grid shows 2 to 12 rows. `+`, `-` and `0` do no file I/O on the UI thread:
-  they queue a `StateChange` to the writer thread. A state file that does not parse stays as it
-  is. The state file holds a global `visible_rows`, a `zoom_counter` and a `[zoom]` table keyed
+- **Grid zoom:** the grid shows 2 to 12 rows. A zoom or the info panel keeps the screen row of
+  the cursor, and at the list edges the grid stays flush with the edge
+  (`GalleryState::keep_cursor_place`). `+`, `-` and `0` do no file I/O on the UI thread: they
+  queue a `StateChange` to the writer thread. A state file that does not parse stays as it is.
+  The state file holds a global `visible_rows`, a `zoom_counter` and a `[zoom]` table keyed
   by the canonical folder path, with at most 200 folders. The drop of `App` flushes the queue.
   A zoom test uses `StateWriter::with_delay` and `flush`, not a poll loop.
 

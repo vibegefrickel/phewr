@@ -10,8 +10,8 @@ It is tested in [Ghostty](https://ghostty.org/).
 phewr is a fork of [rview](https://github.com/jrf/rview) by jrf. The fork adds a zoomable grid,
 slideshows, an info panel with EXIF data, video playback, Live Photos, HEIC and many more formats.
 
-**Status:** phewr is in development and has no release yet. The maintainer tests it until the end
-of 2026. The first release comes in Q1 2027 at the earliest.
+**Status:** phewr is in development and has no release. The first release comes in Q1 2027 at the
+earliest. To get phewr, clone the repository and build it (see "Install").
 
 ## Install
 

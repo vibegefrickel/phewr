@@ -16,7 +16,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-09: `just check` passes with 952 tests (55 ignored tests need real files), clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-09: `just check` passes with 955 tests (55 ignored tests need real files), clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
@@ -38,7 +38,7 @@ After the tests:
 
 ## Next
 
-Order: speed first, then formats, then the first release. The first release is postponed to Q1 2027 at the earliest (decided 2026-11-03). Until then, the maintainer tests phewr and only pushes the source to Codeberg for the dotfiles install.
+Order: speed first, then formats. There is no release before Q1 2027 (decided 2026-11-03), and the maintainer plans no Homebrew release (2026-11-09). Users clone the repository and build phewr. The maintainer pushes only the source to Codeberg for the dotfiles install.
 
 1. Speed
    - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The RGBA fast path for phewr waits for the answer to the herdr issue: send `f=32`, so that the herdr `t=f` fast path applies. Measure it against the numbers above before you build it. If herdr scrolls without lag on Ghostty 1.4.0, drop the idea.
@@ -50,7 +50,7 @@ Order: speed first, then formats, then the first release. The first release is p
    - HEIC: a real file with an embedded thumbnail of another aspect.
    - Live Photos: a pair that a camera wrote as a pair (`docs/live-photos.md`, question 1).
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
-4. First release, postponed to Q1 2027 at the earliest: create the Codeberg repository `phewr`, then `just render` and `just release`. The dry run `just render` passed on 2026-11-03: a 3.3 MB arm64 tarball, and the formula passes `brew style` in a tap folder.
+4. Release paths (2026-11-09): the formula, the installer and the release docs are gone. After the merge of the worker `pictures-phase3`, delete the recipes `dist`, `render`, `publish`, `tap` and `release`, `[profile.dist]` and the `/dist/` line of `.gitignore`.
 5. Dependencies: all direct dependencies are at their newest version (2026-11-03). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18. If `moxcms_still_truncates_known_curves` fails after an update, remove `rounding_output_curve` and the test.
 6. Upstream issue drafts in `~/Projects/dev/` (maintainer, not posted):
    - `herdr-issue-kitty-graphics-performance.md`: the three herdr findings with the numbers above.
@@ -71,6 +71,7 @@ Order: speed first, then formats, then the first release. The first release is p
 
 ## Done
 
+- Grid place on a zoom (2026-11-09): a zoom, the info panel or a resize keeps the screen row of the cursor, and at the list edges the grid stays flush with the edge. Before, a zoom out at the end of a list showed only the last row, and `Tab` moved the cursor row to the top or the bottom of the screen.
 - Loop job poll (2026-11-09): a running grid loop job gives the 10 ms poll again. The first loop of a cold Live grid comes after 1016 ms instead of 1168 ms, and every Live cell loops after 1354 ms instead of 1425 ms (animation) and after 1365 ms instead of 1592 ms (ticks). These are medians of 5 runs of `bench::live` at a load of 7 to 18. A 50 ms poll gave only half of the gain. A wake on the job result is not possible, because `crossterm::event::poll` has no waker.
 - Slideshow badge (2026-11-09): a badge at the bottom right of a slideshow shows ▶ or ⏸, the interval and the status note, or an error on red. The still and the video frame go out below the cell backgrounds (`z=-1073741825`), so the badge covers them.
 - Scan race (2026-11-09): `refresh_from_scanner` read the flag `complete` after the batch. If the scanner pushed its last files between both reads, the scan finalized on a partial list. Then the cursor target of `phewr FILE` was lost. If the partial list was unsorted, `replace_all` also dropped the late files. The fix reads the flag first. The flaky test `scan_end_requests_shape` showed the race.
@@ -94,7 +95,6 @@ Order: speed first, then formats, then the first release. The first release is p
 - Native Kitty animations for the grid loops (merged 2026-10-30, `9d84897`, the follow-ups in `e0a9e62`). herdr 0.9.5 gets the ticks.
 - Player start (2026-10-31, `6008ca7`): the player starts while the cursor rests on a video. After a rest of 500 ms or more, the first frame comes 1 ms to 2 ms after Enter (about 240 ms without a rest). A measurement dropped the 17-point HDR cube (colors move by up to 39 levels). Decisions of 2026-11-03: a waiting player ends after 10 s, because a waiting ffmpeg on a 4K HLG clip holds about 450 MB. `Esc` does nothing in the grid, only `q` quits.
 - HDR stills (2026-10-31, `263e48d`, cache v14): PQ and HLG in AVIF, HEIC, JPEG XL (also with a PQ or HLG ICC profile) and 16-bit PNG map like the player cube, with fixtures in `tests/fixtures/hdr/`.
-- The release formula recommends ffmpeg and mpv, and `install.sh` only notes when they are missing (2026-10-27). The release binary does not bundle FFmpeg.
 - Review of 2026-10-28 (worked 2026-10-30 to 2026-11-03): 26 commits through 12 workers. Every item is done or listed above. The plan file `REVIEW-2026-10-28.md` is in the git history (removed 2026-11-08).
 - No small `▶` marker anymore.
 - Grid loops (2026-10-27): every visible video and animated cell plays a loop of its frames, in place of the `▶` marker. Decisions: a short clip with fewer than 12 keyframes decodes 12 frames at a constant rate, 2 decode threads per loop run, new stills cancel the loop runs, the prune removes loop files before stills, `[gallery] animate = false` turns the loops off.
@@ -151,7 +151,7 @@ Order: speed first, then formats, then the first release. The first release is p
 - HEIC grid thumbnails: a safe ISOBMFF reader compares `irot` and `imir` with the primary image
 - No unsafe code: the `sips` route and the box reader replace ImageIO and libheif-sys
 - Fork of rview
-- Tooling from schnattr: justfile, lint table, cargo deny, nextest, Codeberg release flow
+- Tooling from schnattr: justfile, lint table, cargo deny and nextest
 - Configurable, zoomable thumbnail size (`+` / `-` / `0`, remembered in state file)
 - Slideshow with interval, pause and loop (`s`, `Space`, `[` / `]`, `--slideshow`)
 - Info panel with file data and EXIF (`Tab`, `--info`)
