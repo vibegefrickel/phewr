@@ -306,8 +306,9 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Process start:** about 30 ms pass before `main`, most of it the dylib load of libheif and its
   codec libraries (a C program that links libheif needs 24.9 ms, with no library 4.6 ms).
   The removal of the `trash` crate took Foundation out of the binary, with no measurable change of
-  the start time (50 runs of `phewr --version`: median 15.2 ms before, 15.4 ms after). The `dist` profile and `target-cpu` give no
-  measurable gain, so `just install` builds `--release`.
+  the start time (50 runs of `phewr --version`: median 15.2 ms before, 15.4 ms after). The former `dist`
+  profile (full LTO, stripped symbols) and `target-cpu` gave no measurable gain, so `just install`
+  builds `--release`.
 - **Disk cache format:** the cache files are QOI (`.qoi`): a hit reads and decodes in about
   0.75 ms instead of 1.7 ms for PNG, at the same size. Raw RGBA reads faster but takes 2.3 times
   the space. The prune removes the `.png` files of older versions at once.

@@ -184,12 +184,3 @@ opt-level = 2
 
 [profile.release]
 debug = 1
-
-# Published binaries (`just dist`): release without debug info, stripped, full LTO. Day-to-day
-# release builds keep line tables for readable backtraces.
-[profile.dist]
-inherits = "release"
-debug = false
-strip = "symbols"
-lto = "fat"
-codegen-units = 1

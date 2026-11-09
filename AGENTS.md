@@ -389,7 +389,8 @@ decisions. Read the long form before you change the code that an item names.
   JPEG. libjpeg-turbo decodes at the smallest of 1/8, 1/4, 1/2 and 1 that covers the fit. The
   other eighths run without NEON and are slower than the full decode.
 - **Process start:** about 30 ms pass before `main`, most of it the dylib load of libheif.
-  `just install` builds `--release`, because the `dist` profile gives no measurable gain.
+  `just install` builds `--release`. A profile with full LTO and stripped symbols gave no
+  measurable gain.
 
 ## Workflow for agents
 
