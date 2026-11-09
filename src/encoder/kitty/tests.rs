@@ -80,6 +80,7 @@ fn transmit_names_cell_box() {
             id: None,
             cell_box: Some((4, 2)),
             columns: None,
+            rows: None,
             transmit_only: false,
             transient: false,
         },
@@ -342,6 +343,21 @@ fn columns_without_rows_name_only_c() {
     );
     assert!(encoded.contains(",s=8,v=4,c=7,m=0;"), "{encoded}");
     assert!(!encoded.contains(",r="), "{encoded}");
+}
+
+#[test]
+fn rows_without_columns_name_only_r() {
+    let image = RgbaImage::from_pixel(4, 8, image::Rgba([1, 2, 3, 255]));
+    let encoded = transmit(
+        &image,
+        &DisplayOptions {
+            rows: Some(9),
+            ..DisplayOptions::default()
+        },
+        Transfer::Direct,
+    );
+    assert!(encoded.contains(",s=4,v=8,r=9,m=0;"), "{encoded}");
+    assert!(!encoded.contains(",c="), "{encoded}");
 }
 
 #[test]

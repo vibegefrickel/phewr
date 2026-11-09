@@ -68,6 +68,9 @@ pub(crate) struct DisplayOptions {
     /// Scale to this many columns (`c=`), and the terminal takes the rows from the aspect ratio.
     /// `cell_box` wins.
     pub columns: Option<u16>,
+    /// Scale to this many rows (`r=`), and the terminal takes the columns from the aspect ratio.
+    /// `cell_box` and `columns` win.
+    pub rows: Option<u16>,
     /// Send without a placement (`a=t`). A later `a=p` places the image by its id.
     pub transmit_only: bool,
     /// The usage hint `N=1`: the terminal can evict the image first. [`KittyBackend`] sends it only
@@ -357,6 +360,7 @@ mod tests {
                     id: Some(7),
                     cell_box: Some((5, 3)),
                     columns: None,
+                    rows: None,
                     transmit_only: false,
                     transient: false,
                 },

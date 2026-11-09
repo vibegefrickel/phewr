@@ -33,6 +33,15 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
   video, and its still carries a play triangle until its loop starts. The probe, the routes and
   the stamp are in `docs/video.md` ("Animated images" and "Probe").
+- **Slideshow view (2026-11-09):** a running or paused slideshow has no status row
+  (`ui::status_rows` gives 0 outside the grid), so `image_rect` covers the whole screen. A status
+  note, an error and the pause state do not show. The image goes out at its decoded size and
+  the terminal scales it to the fill of `image_rect` (`filled_placement` in
+  `kitty_output/mod.rs`): a portrait image gets `r=` with the rows of the box, a landscape image
+  `c=` with the columns, and the terminal takes the other side from the aspect, so the picture
+  never stretches. The decode does not upscale: the terminal scale costs no payload and no CPU.
+  The start of a slideshow changes `image_rect` by one row, so the current image decodes again
+  one time. Outside a slideshow, an image shows at its own size, centered.
 - **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
   terminal player stops playing (`playing()` is false), and the slideshow moves on. Outside a slideshow, the clip
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,

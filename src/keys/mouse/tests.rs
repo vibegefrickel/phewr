@@ -188,7 +188,7 @@ fn right_click_shows_info_panel() {
 fn status_row_click_toggles_help() {
     let mut app = gallery_app(9);
     draw_frame(&mut app, 120, 24);
-    let status = ui::status_area(app.layout.screen);
+    let status = ui::status_area(app.layout.screen, &app);
 
     click(&mut app, (status.x + 3, status.y));
     assert!(app.help_visible);
@@ -277,7 +277,7 @@ fn player_leaves_on_right_click_only() {
 
     let mut app = video_app();
     draw_frame(&mut app, 120, 24);
-    let content = ui::content_area(app.layout.screen);
+    let content = ui::content_area(app.layout.screen, &app);
     let mut info = clip_info();
     info.duration = 60.0;
     let decoder = fake_decoder(info);
@@ -314,7 +314,7 @@ fn player_status_row_click_opens_help() {
 
     let mut app = video_app();
     draw_frame(&mut app, 120, 24);
-    let status = ui::status_area(app.layout.screen);
+    let status = ui::status_area(app.layout.screen, &app);
     click(&mut app, (3, status.y));
     assert_eq!(app.mode, ViewMode::Video);
     assert!(app.help_visible);

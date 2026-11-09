@@ -232,6 +232,10 @@ decisions. Read the long form before you change the code that an item names.
   `load_if_needed`, `zoom_in` and `slideshow_tick` skip it.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
   video (`docs/video.md`, "Animated images").
+- **Slideshow view:** a running or paused slideshow has no status row (`ui::status_rows`), so
+  `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal
+  scales it to the fill of the box with `r=` or `c=` alone (`filled_placement` in
+  `kitty_output/mod.rs`). Outside a slideshow, an image shows at its own size.
 - **Slideshow and videos:** a running slideshow plays a video one time and moves on. Outside a
   slideshow, the clip loops. The mpv window of a slideshow reads the `end-file` reason through
   `--input-ipc-server`: `quit` or `stop` stops the slideshow (`mpv::exit_with_reason`).

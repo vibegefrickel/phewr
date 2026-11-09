@@ -8,7 +8,7 @@ mod terminal_images;
 use crate::app::App;
 use crate::decode::ScreenImage;
 use crate::encoder::{self, MAX_PAYLOAD_BYTES};
-use crate::gallery::centered;
+use crate::gallery::{box_px, centered};
 use crossterm::{cursor, queue};
 pub(crate) use grid::{emit_new_thumbnails, render_gallery_images};
 pub(crate) use grid_icons::{GridIcons, IconCell, sync_grid_icons};
@@ -31,22 +31,19 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
     app.graphics_delete_all_to(out)?;
 
     if let Some(img) = &app.loaded {
-        let start = centered_image(app.image_rect, app.cell_px, img.dimensions());
-        queue!(out, cursor::MoveTo(start.x, start.y))?;
         let fitted = within_payload_cap(img);
-        // The terminal scales a shrunk image back to the full width in cells and takes the rows from
-        // the aspect ratio. The image never stretches to a rounded box.
-        let columns = (fitted.dimensions() != img.dimensions()).then(|| {
-            let columns = (f64::from(img.width()) / f64::from(app.cell_px.0))
-                .round()
-                .max(1.0);
-            columns as u16
-        });
+        let placement = if app.slideshow_running() {
+            filled_placement(app.image_rect, app.cell_px, img.dimensions())
+        } else {
+            native_placement(app.image_rect, app.cell_px, img, &fitted)
+        };
+        queue!(out, cursor::MoveTo(placement.cells.x, placement.cells.y))?;
         app.graphics.transmit(
             out,
             fitted.as_ref().into(),
             &encoder::DisplayOptions {
-                columns,
+                columns: placement.columns,
+                rows: placement.rows,
                 ..encoder::DisplayOptions::default()
             },
         )?;
@@ -75,6 +72,75 @@ fn within_payload_cap(img: &ScreenImage) -> Cow<'_, ScreenImage> {
     let side = |value: u32| ((f64::from(value) * scale) as u32).max(1);
     let (width, height) = (side(width), side(height));
     Cow::Owned(img.crop_resized((0, 0, img.width(), img.height()), (width, height)))
+}
+
+/// The cells of the fullscreen image and the one side that the terminal scales it to. With one
+/// side, the terminal takes the other side from the aspect ratio, so the image never stretches to
+/// a rounded box.
+#[derive(Debug, PartialEq, Eq)]
+struct Placement {
+    cells: Rect,
+    columns: Option<u16>,
+    rows: Option<u16>,
+}
+
+/// The image at its own pixel size, centered. The terminal scales a copy that the payload cap
+/// shrank back to the width of `img` in cells.
+fn native_placement(
+    rect: Rect,
+    cell_px: (u32, u32),
+    img: &ScreenImage,
+    fitted: &ScreenImage,
+) -> Placement {
+    let columns = (fitted.dimensions() != img.dimensions()).then(|| {
+        let columns = (f64::from(img.width()) / f64::from(cell_px.0))
+            .round()
+            .max(1.0);
+        columns as u16
+    });
+    Placement {
+        cells: centered_image(rect, cell_px, img.dimensions()),
+        columns,
+        rows: None,
+    }
+}
+
+/// The image scaled up or down to fill `rect` with its aspect, for the slideshow. A portrait
+/// image reaches the top and the bottom of `rect`, a landscape image the left and the right.
+fn filled_placement(rect: Rect, cell_px: (u32, u32), size: (u32, u32)) -> Placement {
+    let (box_w, box_h) = box_px(rect, cell_px);
+    let (width, height) = (u64::from(size.0), u64::from(size.1));
+    if width == 0 || height == 0 || box_w == 0 || box_h == 0 {
+        return Placement {
+            cells: centered_image(rect, cell_px, size),
+            columns: None,
+            rows: None,
+        };
+    }
+    let side = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+    if width * u64::from(box_h) >= height * u64::from(box_w) {
+        let cells = centered_image(
+            rect,
+            cell_px,
+            (box_w, side(u64::from(box_w) * height / width)),
+        );
+        Placement {
+            cells,
+            columns: Some(cells.width),
+            rows: None,
+        }
+    } else {
+        let cells = centered_image(
+            rect,
+            cell_px,
+            (side(u64::from(box_h) * width / height), box_h),
+        );
+        Placement {
+            cells,
+            columns: None,
+            rows: Some(cells.height),
+        }
+    }
 }
 
 /// The cells of an image of `size` pixels centered in `rect`.
@@ -146,6 +212,7 @@ pub(crate) fn render_video_frame_to(
             cell_box: Some((cells.width, cells.height)),
             transmit_only: false,
             columns: None,
+            rows: None,
             transient: true,
         },
     )?;

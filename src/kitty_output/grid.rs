@@ -84,6 +84,7 @@ fn transmit_cell(
             cell_box: Some((area.width, area.height)),
             transmit_only: false,
             columns: None,
+            rows: None,
             transient: false,
         },
     )?;

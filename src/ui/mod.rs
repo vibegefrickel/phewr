@@ -102,8 +102,8 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Opt
     let placeholder = app.shows_video_placeholder();
 
     let bottom_line = fullscreen_status_line(app, status);
-    let inner = content_area(area);
-    draw_status_row(frame, app, status_area(area), bottom_line, status);
+    let inner = content_area(area, app);
+    draw_status_row(frame, app, status_area(area, app), bottom_line, status);
     if placeholder {
         let middle = Rect {
             y: inner.y + inner.height / 2,
@@ -126,33 +126,42 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Opt
 #[cfg(feature = "video")]
 fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
     let bottom_line = video_status_line(app, status);
-    draw_status_row(frame, app, status_area(area), bottom_line, status);
-    app.image_rect = content_area(area);
+    draw_status_row(frame, app, status_area(area, app), bottom_line, status);
+    app.image_rect = content_area(area, app);
 }
 
 fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
-    let grid_rect = content_area(area);
+    let grid_rect = content_area(area, app);
     app.gallery.update_grid(grid_rect);
     let filtered_count = app.gallery.filtered_indices.len();
     let line = gallery_status_line(app, filtered_count, status);
-    draw_status_row(frame, app, status_area(area), line, status);
+    draw_status_row(frame, app, status_area(area, app), line, status);
     let mut wanted = std::mem::take(&mut app.grid_icons.wanted);
     draw_thumbnail_cells(frame, app, grid_rect, &mut wanted);
     app.grid_icons.wanted = wanted;
 }
 
 /// The rows above the status row.
-pub(crate) fn content_area(area: Rect) -> Rect {
+/// A slideshow shows the picture on the whole screen, without the status row.
+fn status_rows(app: &App) -> u16 {
+    if app.slideshow_running() && app.mode != ViewMode::Gallery {
+        0
+    } else {
+        STATUS_ROWS
+    }
+}
+
+pub(crate) fn content_area(area: Rect, app: &App) -> Rect {
     Rect {
-        height: area.height.saturating_sub(STATUS_ROWS),
+        height: area.height.saturating_sub(status_rows(app)),
         ..area
     }
 }
 
-pub(crate) fn status_area(area: Rect) -> Rect {
+pub(crate) fn status_area(area: Rect, app: &App) -> Rect {
     Rect {
-        y: area.y + content_area(area).height,
-        height: area.height.min(STATUS_ROWS),
+        y: area.y + content_area(area, app).height,
+        height: area.height.min(status_rows(app)),
         ..area
     }
 }
@@ -179,6 +188,22 @@ mod tests {
         app.gallery.filtered_indices = (0..names.len()).collect();
         app.scan_complete = true;
         app
+    }
+
+    /// A slideshow gives the whole screen to the picture, and its end brings the status row back.
+    #[test]
+    fn slideshow_hides_status_row() {
+        let mut app = crate::test_support::fullscreen_app(3, 0);
+        render_buffer(&mut app, None, 40, 12);
+        assert_eq!(app.image_rect.height, 11);
+
+        app.start_slideshow();
+        render_buffer(&mut app, Some("a note"), 40, 12);
+        assert_eq!(app.image_rect, ratatui::layout::Rect::new(0, 0, 40, 12));
+
+        app.stop_slideshow();
+        render_buffer(&mut app, None, 40, 12);
+        assert_eq!(app.image_rect.height, 11);
     }
 
     pub(super) fn render_buffer(

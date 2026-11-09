@@ -88,6 +88,56 @@ fn fullscreen_centers_image() {
     assert!(app.terminal_images.is_empty());
 }
 
+/// A slideshow scales the image to the fill of its box with one side, so it never stretches.
+#[test]
+fn slideshow_fills_box_with_image() {
+    let mut app = crate::test_support::fullscreen_app(3, 0);
+    app.cell_px = (8, 16);
+    // 80x160 px.
+    app.image_rect = Rect::new(2, 1, 10, 10);
+    let render = |app: &mut App, size: (u32, u32)| {
+        app.loaded = Some(RgbaImage::new(size.0, size.1).into());
+        let mut out = Vec::new();
+        render_fullscreen_image_to(app, &mut out).unwrap();
+        text(&out)
+    };
+
+    let native = render(&mut app, (10, 40));
+    assert!(
+        !native.contains(",r=") && !native.contains(",c="),
+        "{native}"
+    );
+
+    app.start_slideshow();
+    let portrait = render(&mut app, (10, 40));
+    assert!(
+        portrait.contains(",r=10,"),
+        "flush with the top and the bottom: {portrait}"
+    );
+    assert!(!portrait.contains(",c="), "{portrait}");
+    assert!(
+        portrait.contains("\x1b[2;5H"),
+        "5 of 10 columns, centered: {portrait}"
+    );
+
+    let landscape = render(&mut app, (40, 10));
+    assert!(
+        landscape.contains(",c=10,"),
+        "flush with the left and the right: {landscape}"
+    );
+    assert!(!landscape.contains(",r="), "{landscape}");
+    assert!(
+        landscape.contains("\x1b[6;3H"),
+        "2 of 10 rows, centered: {landscape}"
+    );
+
+    let large = render(&mut app, (800, 3200));
+    assert!(
+        large.contains(",r=10,"),
+        "a large image fills the box too: {large}"
+    );
+}
+
 /// A 6016x3384 px image, 81 MB as RGBA, with one transparent pixel when `transparent` is set.
 fn six_k_image(transparent: bool) -> RgbaImage {
     let mut image = RgbaImage::from_pixel(6016, 3384, image::Rgba([9, 9, 9, 255]));

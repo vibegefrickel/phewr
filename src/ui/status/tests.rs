@@ -199,19 +199,19 @@ fn fullscreen_shows_zoom() {
 }
 
 #[test]
-fn fullscreen_shows_slideshow_state() {
+fn slideshow_has_no_status_row() {
     let mut app = app_with(&["a.jpg"]);
     app.mode = ViewMode::Fullscreen;
     app.start_slideshow();
-    let interval = format!("{:.1}s", app.slideshow_interval.as_secs_f64());
     let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, &format!("\u{25b6} {interval}"));
-    assert_hides(&screen, "space: pause");
+    assert_hides(&screen, "a.jpg");
 
     app.slideshow_toggle_pause();
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, "\u{23f8}");
-    assert_shows(&screen, &interval);
+    app.error = Some("decode failed".to_owned());
+    let screen = render(&mut app, Some("a note"), 100, 30);
+    assert_hides(&screen, "a.jpg");
+    assert_hides(&screen, "decode failed");
+    assert_hides(&screen, "a note");
 }
 
 #[test]

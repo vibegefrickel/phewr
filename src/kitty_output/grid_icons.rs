@@ -224,6 +224,7 @@ fn store(
             cell_box: None,
             transmit_only: true,
             columns: None,
+            rows: None,
             transient: false,
         },
     )?;

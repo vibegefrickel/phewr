@@ -136,6 +136,10 @@ and date. For a video, it shows the length, the frame rate and `SDR`, `HLG` or `
 | `q` | Back to the gallery. In a slideshow, `q` stops it too. |
 | `Esc` | Stop the slideshow, or go back to the gallery |
 
+A slideshow uses the whole screen: it hides the status row and scales each picture to fill the
+screen with its aspect. A portrait picture reaches the top and the bottom, a landscape picture
+the left and the right.
+
 ### Video
 
 phewr plays videos in the terminal with its own player. The player has no sound, no pause and no

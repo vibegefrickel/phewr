@@ -15,6 +15,10 @@ pub(super) fn draw_status_row(
     line: Line<'static>,
     status: Option<&str>,
 ) {
+    // A slideshow has no status row.
+    if area.height == 0 {
+        return;
+    }
     let busy = status.is_some()
         || app.error.is_some()
         || app.scan_error.is_some()
@@ -40,7 +44,7 @@ fn facts_fit(left_width: usize, facts: &str, area_width: u16) -> bool {
     left_width + facts.width() <= usize::from(area_width)
 }
 
-/// An error, or the name, the position, the zoom, the slideshow and the note.
+/// An error, or the name, the position, the zoom and the note. A slideshow has no status row.
 pub(super) fn fullscreen_status_line(app: &App, status: Option<&str>) -> Line<'static> {
     if let Some(line) = error_line(app) {
         return line;
@@ -55,20 +59,9 @@ pub(super) fn fullscreen_status_line(app: &App, status: Option<&str>) -> Line<'s
     } else {
         String::new()
     };
-    let slideshow = app
-        .slideshow
-        .as_ref()
-        .map(|show| {
-            format!(
-                " {} {:.1}s",
-                if show.paused { "\u{23f8}" } else { "\u{25b6}" },
-                show.interval.as_secs_f64()
-            )
-        })
-        .unwrap_or_default();
     let mut spans = vec![Span::styled(
         format!(
-            " {} [{}/{}]{zoom}{slideshow} ",
+            " {} [{}/{}]{zoom} ",
             filename,
             app.current + 1,
             app.images.len(),

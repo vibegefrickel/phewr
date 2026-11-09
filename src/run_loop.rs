@@ -174,7 +174,7 @@ fn draw_ui(frame: &mut Frame<'_>, app: &mut App, state: &LoopState) {
 
 fn fullscreen_box(area: Rect, app: &App) -> Rect {
     let (main, _info) = ui::split_info(area, app);
-    ui::content_area(main)
+    ui::content_area(main, app)
 }
 
 /// Take the results of the background work.

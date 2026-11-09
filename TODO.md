@@ -27,6 +27,7 @@ Open points of the test run:
 - Plain Ghostty 1.4.0 must pick the animation path (`?` shows it). herdr 0.9.5 gets the ticks without the probe, and the ticks play there (maintainer, 2026-11-03).
 - Make sure that `a=f` frames go through `t=t` in Ghostty, and that the start in herdr is not slower (the DA1 answer must end the read).
 - The SVG grid icons (steps 3 and 8): the icons show in the terminal foreground at 45 % alpha. If herdr does not answer OSC 10, the octant icons stay. Make sure that both cases look right.
+- The slideshow view: a portrait image must reach the top and the bottom of the screen, a landscape image the left and the right, without a stretch. Ghostty must take the missing side of `r=` or `c=` from the aspect.
 - Cmd+Q in the mpv window of a running slideshow must stop the slideshow on the placeholder (`--input-ipc-server`, merged 2026-11-03).
 
 Test run of 2026-10-24 (plain Ghostty): steps 1 and 2 passed. The run stopped at step 3a, and the fixes from it are in (see Done). Continue at step 3 with the current build.
@@ -66,6 +67,7 @@ Order: speed first, then formats, then the first release. The first release is p
 
 ## Done
 
+- Slideshow view (2026-11-09): a slideshow hides the status row and scales each image to fill the screen with its aspect, through `r=` or `c=` alone, so the terminal does the upscale. The slideshow state (▶ or ⏸ and the interval) left the status row with it.
 - Cleanup of 2026-11-08: `AGENTS.md` went from 804 to about 390 lines. The long forms moved word for word into `docs/gotchas.md`, `docs/layout.md` and `docs/testing.md`. The test modules of `decode/jxl.rs`, `decode/sips.rs` and `player/probe/mod.rs` moved into `tests.rs` files. `REVIEW-2026-10-28.md` is removed. A late OSC 10 answer after a probe timeout no longer becomes key presses (`LateAnswerFilter`).
 - SVG grid icons (2026-11-08): the cells without a thumbnail show the Lucide icons `image`, `play`, `folder` and `folder-up` as Kitty images in the terminal foreground (OSC 10). Without an OSC 10 answer, the octant icons stay.
 - `--cwd-file <PATH>` (2026-11-05): phewr writes the folder of the grid into the file on exit, like yazi. A `p()` wrapper in the shell does the `cd` (README, "Change the shell directory on exit").

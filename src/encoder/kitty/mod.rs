@@ -175,9 +175,10 @@ fn raw_format(pixels: Pixels<'_>) -> u32 {
 fn header_keys(pixels: Pixels<'_>, opts: &DisplayOptions, format: u32) -> String {
     let (w, h) = pixels.dimensions();
     let id_part = opts.id.map(|id| format!(",i={id}")).unwrap_or_default();
-    let box_part = match (opts.cell_box, opts.columns) {
-        (None, Some(columns)) => format!(",c={columns}"),
-        (cell_box, _) => cell_box_keys(cell_box),
+    let box_part = match (opts.cell_box, opts.columns, opts.rows) {
+        (None, Some(columns), _) => format!(",c={columns}"),
+        (None, None, Some(rows)) => format!(",r={rows}"),
+        (cell_box, _, _) => cell_box_keys(cell_box),
     };
     let action = if opts.transmit_only { 't' } else { 'T' };
     let hint = if opts.transient { ",N=1" } else { "" };

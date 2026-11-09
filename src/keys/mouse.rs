@@ -43,8 +43,8 @@ struct Regions {
 fn regions(app: &App) -> Regions {
     let (main, info) = ui::split_info(app.layout.screen, app);
     Regions {
-        content: ui::content_area(main),
-        status: ui::status_area(main),
+        content: ui::content_area(main, app),
+        status: ui::status_area(main, app),
         info,
     }
 }
