@@ -311,13 +311,9 @@ impl App {
         &self.images[self.current]
     }
 
-    /// The prefetch counts, because only `Prefetcher::poll` starts its waiting jobs.
+    /// The prefetch counts, because only `Prefetcher::poll` starts its waiting jobs. A loop job
+    /// counts too: a 10 ms poll shows the first loop of a cold grid about 140 ms sooner.
     pub(crate) fn has_pending_work(&self) -> bool {
-        self.has_pending_work_but_loops() || self.grid_loops_pending()
-    }
-
-    /// True while a background job other than a loop job runs. A loop result needs no short poll.
-    pub(crate) fn has_pending_work_but_loops(&self) -> bool {
         self.fullscreen_decode.is_some()
             || self.zoom_state.source_rx.is_some()
             || self.thumbnails_pending()
@@ -326,6 +322,7 @@ impl App {
             || self.shape_rx.is_some()
             || !self.scan_complete
             || self.meta_pending()
+            || self.grid_loops_pending()
     }
 
     /// Drop the shown image, the thumbnails and the prefetch after a new list or cell size.

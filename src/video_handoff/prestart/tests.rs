@@ -203,7 +203,6 @@ fn loop_job_holds_start() {
     app.fullscreen_box = Rect::new(0, 0, 100, 40);
     app.poll_grid_loops();
     assert!(app.grid_loops_pending(), "the clip gets its loop job");
-    assert!(!app.has_pending_work_but_loops(), "only the loop job runs");
 
     let start = Instant::now();
     tick_prestart(&mut app, &state, start);

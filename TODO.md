@@ -16,7 +16,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-09: `just check` passes with 949 tests (55 ignored tests need real files), clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-09: `just check` passes with 952 tests (55 ignored tests need real files), clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
@@ -43,7 +43,6 @@ Order: speed first, then formats, then the first release. The first release is p
 1. Speed
    - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The RGBA fast path for phewr waits for the answer to the herdr issue: send `f=32`, so that the herdr `t=f` fast path applies. Measure it against the numbers above before you build it. If herdr scrolls without lag on Ghostty 1.4.0, drop the idea.
    - JPEG XL patch files (text, screenshots) still copy on one thread, because jxl-oxide has no public region API. The upstream draft needs four API items: re-export `ImageBuffer` and `Region`, public grid regions, `ExtraChannel::bit_depth()`, or a row-range `write_to_buffer`. With them, phewr drops the direct `jxl-render` dependency.
-   - Loop job results (idea, 2026-11-08): a running loop job alone gives no 10 ms poll, so the first loop frame of a cold grid and the start of the folder prefetch can wait up to 250 ms for the idle timeout. A wake on the job result removes this wait without a 10 ms poll during the long ffmpeg runs. Measure it with `bench::live::grid_animation` before you build it.
    - AV1 on M1 and M2 has no VideoToolbox decoder and takes the software path after one failed GPU run. Untested.
    - Candidate, low priority: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size.
 2. Formats: real files that are still missing.
@@ -72,6 +71,7 @@ Order: speed first, then formats, then the first release. The first release is p
 
 ## Done
 
+- Loop job poll (2026-11-09): a running grid loop job gives the 10 ms poll again. The first loop of a cold Live grid comes after 1016 ms instead of 1168 ms, and every Live cell loops after 1354 ms instead of 1425 ms (animation) and after 1365 ms instead of 1592 ms (ticks). These are medians of 5 runs of `bench::live` at a load of 7 to 18. A 50 ms poll gave only half of the gain. A wake on the job result is not possible, because `crossterm::event::poll` has no waker.
 - Slideshow badge (2026-11-09): a badge at the bottom right of a slideshow shows ▶ or ⏸, the interval and the status note, or an error on red. The still and the video frame go out below the cell backgrounds (`z=-1073741825`), so the badge covers them.
 - Scan race (2026-11-09): `refresh_from_scanner` read the flag `complete` after the batch. If the scanner pushed its last files between both reads, the scan finalized on a partial list. Then the cursor target of `phewr FILE` was lost. If the partial list was unsorted, `replace_all` also dropped the late files. The fix reads the flag first. The flaky test `scan_end_requests_shape` showed the race.
 - Slideshow view (2026-11-09): a slideshow hides the status row and scales each image to fill the screen with its aspect, through `r=` or `c=` alone, so the terminal does the upscale. The slideshow state (▶ or ⏸ and the interval) left the status row with it.

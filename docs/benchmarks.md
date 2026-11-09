@@ -96,6 +96,9 @@ filter `bench::` finds all 26 benches. `just bench-live` runs only the group `be
 - Result of 2026-11-04 (5 runs, load 3.02 to 3.41): the pairing takes 0.17 ms for 3334 pairs,
   3.2 % of the first entry, and about 0 ms without pairs. Every Live cell of the real folder
   loops after 1435 ms with Kitty animations and after 1595 ms with ticks.
+- Result of 2026-11-09, after the 10 ms poll for loop jobs (medians of 5 runs, load 7 to 18): the
+  first loop comes after 1016 ms (before: 1168 ms). Every Live cell loops after 1354 ms with Kitty
+  animations (before: 1425 ms) and after 1365 ms with ticks (before: 1592 ms).
 
 ## Test helpers (`src/test_support/`)
 

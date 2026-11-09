@@ -291,7 +291,7 @@ decisions. Read the long form before you change the code that an item names.
 
 - **Run loop waits:** the loop polls every 10 ms while a background job runs
   (`App::has_pending_work`), and faster during the first picture and the cache reads. Otherwise
-  it waits 250 ms. A running loop job alone gives no 10 ms poll. The waits are in
+  it waits 250 ms. A grid loop job counts as a background job. The waits are in
   `docs/grid-and-kitty.md`.
 - **Decodes share the cores:** `LibheifSlot` shares the tile threads. At most 4 thumbnail and 2
   prefetch decodes run at once, and a cache read never waits behind a cold decode

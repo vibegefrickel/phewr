@@ -183,17 +183,18 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   probe cache of the thumbnail job.
 
 - **The run loop polls every 10 ms while a background job runs** (`App::has_pending_work`:
-  a decode, a prefetch, a thumbnail, a filter, the scan or thumbnails that wait for their emit),
+  a decode, a prefetch, a thumbnail, a grid loop, a filter, the scan or thumbnails that wait for
+  their emit),
   because no event wakes it, and every 1 ms during the first 20 ms of the header read for the
   cell shape (`SHAPE_POLL`, `SHAPE_POLL_WINDOW`), every 2 ms while a cache read runs or waits
   (`CACHE_READ_POLL`), and every 2 ms while the grid decodes and shows no picture yet
   (`FIRST_PICTURE_POLL`, `App::waits_for_the_first_picture`), and until the next frame of a
   playing grid loop (`App::grid_loop_timeout`). There is no wait while the grid has emits left
   from the last pass, or while new loop frames wait for their write (`App::loops_to_send`).
-  A running loop job alone gives no 10 ms poll (`App::has_pending_work_but_loops`): its result
-  waits for the idle look, so the first loop frame of a cold grid can come 250 ms later.
-  `has_pending_work` still counts the loop jobs, so the folder prefetch can start up to 250 ms
-  after the last loop job. Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
+  A grid loop job gives the 10 ms poll too. From 2026-10-30 to 2026-11-09 it did not, and its
+  frames waited for the 250 ms wait: the first loop of a cold Live grid then came about 150 ms
+  later (`bench::live::grid_animation`, 1168 ms against 1016 ms). A 50 ms poll gave only half of
+  the gain. Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
 - **Decodes share the cores.** `LibheifSlot` shares the tile threads, at most 4 thumbnail and 2
   prefetch decodes run at once, and a cache read never waits behind a cold decode. The queues,
   the slots, the cache key and the header read are in `docs/app-state.md` ("Thumbnail jobs").

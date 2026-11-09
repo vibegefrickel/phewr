@@ -1,8 +1,8 @@
 //! The tests of the run loop: the waits, the input step, the mouse capture and the renders.
 use super::{
-    CACHE_READ_POLL, FIRST_PICTURE_POLL, IDLE_POLL, LoopState, SHAPE_POLL, SHAPE_POLL_WINDOW,
-    clears_status, draw_ui, handle_input, mouse_capture_wanted, next_timeout, sync_mouse_capture,
-    waits_for_a_fast_shape, window_open,
+    BUSY_POLL, CACHE_READ_POLL, FIRST_PICTURE_POLL, IDLE_POLL, LoopState, SHAPE_POLL,
+    SHAPE_POLL_WINDOW, clears_status, draw_ui, handle_input, mouse_capture_wanted, next_timeout,
+    sync_mouse_capture, waits_for_a_fast_shape, window_open,
 };
 use crate::app::ViewMode;
 use crate::config::Config;
@@ -62,13 +62,13 @@ fn only_key_press_clears_note() {
     assert!(!clears_status(&Event::Resize(80, 24)));
 }
 
+/// A loop job alone polls fast, so its frames go out soon after its ffmpeg run.
 #[test]
-fn loop_job_alone_waits_idle() {
+fn loop_job_alone_polls_busy() {
     let mut app = gallery_app(3);
     app.pretend_loop_job(0);
     assert!(app.has_pending_work(), "the folder prefetch still waits");
-    assert!(!app.has_pending_work_but_loops());
-    assert_eq!(next_timeout(&app, &[]), IDLE_POLL);
+    assert_eq!(next_timeout(&app, &[]), BUSY_POLL);
 }
 
 #[test]

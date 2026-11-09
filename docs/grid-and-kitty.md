@@ -146,8 +146,8 @@ polls"). This is the order of the decisions:
 2. The base wait depends on the state:
    - While a video player runs, it is the time to the next frame (`time_until_next_frame`).
      Background results then wait for the next frame.
-   - Else it is 10 ms (`BUSY_POLL`) when `App::has_pending_work_but_loops` is true or emits are
-     pending. A running loop job alone gives no 10 ms poll.
+   - Else it is 10 ms (`BUSY_POLL`) when `App::has_pending_work` is true or emits are pending.
+     A running grid loop job counts.
    - Else it is 250 ms (`IDLE_POLL`).
 3. The loop then takes the minimum with each of these waits:
 

@@ -266,7 +266,7 @@ pub(crate) fn next_timeout(app: &App, pending_emits: &[usize]) -> Duration {
     if app.mode == ViewMode::Gallery && (!pending_emits.is_empty() || app.loops_to_send()) {
         return Duration::ZERO;
     }
-    let busy = app.has_pending_work_but_loops() || !pending_emits.is_empty();
+    let busy = app.has_pending_work() || !pending_emits.is_empty();
     let mut timeout = {
         #[cfg(feature = "video")]
         if let Some(v) = &app.video {
