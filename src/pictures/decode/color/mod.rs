@@ -17,7 +17,7 @@ pub(crate) use tags::{png_color, png_peak, tiff_icc_profile};
 
 use super::hdr;
 use image::{RgbImage, RgbaImage};
-use moxcms::{ColorProfile, ToneReprCurve};
+use moxcms::ColorProfile;
 use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,33 +45,13 @@ impl ColorTarget {
         }
     }
 
-    /// The destination of every `moxcms` transform, with an output curve that rounds.
+    /// The destination of every `moxcms` transform.
     pub(crate) fn profile(self) -> ColorProfile {
-        rounding_output_curve(match self {
+        match self {
             Self::DisplayP3 => ColorProfile::new_display_p3(),
             Self::Srgb => ColorProfile::new_srgb(),
-        })
-    }
-}
-
-/// moxcms 0.9.1 truncates the output table of the sRGB, BT.709 and CICP curves
-/// (`make_gamma_table_impl` in its `src/gamma.rs`), so half of the 8-bit values come out one
-/// level too dark. The same curve with 7 parameters and without CICP takes the parametric
-/// inverse of moxcms, and that table rounds.
-fn rounding_output_curve(mut profile: ColorProfile) -> ColorProfile {
-    for trc in [
-        &mut profile.red_trc,
-        &mut profile.green_trc,
-        &mut profile.blue_trc,
-    ] {
-        if let Some(ToneReprCurve::Parametric(params)) = trc
-            && params.len() == 5
-        {
-            params.extend([0.0, 0.0]);
         }
     }
-    profile.cicp = None;
-    profile
 }
 
 /// `main` sets it before the first decode. The tests keep sRGB, where an untagged image keeps

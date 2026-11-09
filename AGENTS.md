@@ -274,8 +274,9 @@ decisions. Read the long form before you change the code that an item names.
   listing of the home folder triggers no macOS privacy prompt.
 - **One file argument:** `cli::start_paths` turns it into its folder and a cursor target. Several
   arguments stay a plain file list without folders and without Live pairs.
-- **yazi reveal and `--cwd-file`:** both run after `TerminalSession::restore`. `ya` gets at most
-  1 s (`YA_TIMEOUT`). Tests pass a closure and never start `ya`. `--cwd-file` writes
+- **yazi reveal, marks and `--cwd-file`:** all run after `TerminalSession::restore`. The marks
+  become the selection of the yazi that started phewr, through the plugin `phewr-select`. Each
+  `ya` call gets at most 1 s (`YA_TIMEOUT`). Tests pass a closure and never start `ya`. `--cwd-file` writes
   `App::gallery_dir` without a newline.
 - **Status notes:** the note lives in `LoopState`, not in `App`. The next key press or mouse
   button press clears it. A scan read error lives in `App::scan_error`.
@@ -351,7 +352,7 @@ decisions. Read the long form before you change the code that an item names.
 
 - **Thumbnail cache key:** the key hashes `THUMBNAIL_CACHE_VERSION`, the path, the size, the
   mtime, the target size and the color target. The version is
-  `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v21")`. When the thumbnail output changes,
+  `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v22")`. When the thumbnail output changes,
   increase the `v21` part. If several workers change the output at the same time, each takes its
   own version, higher than main and than every branch in flight.
 - **Thumbnail cache folder:** the thumbnails of phewr sit at the top of `~/Library/Caches/phewr`
@@ -363,9 +364,8 @@ decisions. Read the long form before you change the code that an item names.
   as RGB. The grid thumbnails keep RGBA with their
   padding.
 - **Image colors:** phewr converts every image into Display P3 (`[terminal] colorspace`),
-  because Ghostty shows the pixels without a conversion. moxcms 0.9.1 truncates known output
-  curves, and `rounding_output_curve` works around it. When the canary test
-  `moxcms_still_truncates_known_curves` fails, remove the workaround and the test.
+  because Ghostty shows the pixels without a conversion. phewr needs moxcms 0.9.2 or later:
+  0.9.1 truncated its output curves.
 - **JPEG XL:** jxl-oxide 0.12 converts ICC v2 samples wrong, so `moxcms` converts lossless files
   with an ICC profile. jxl-oxide clips lossy HDR samples outside the sRGB gamut, and a test
   marks the limit. The sample copy reads the private layout of `jxl-render`, so

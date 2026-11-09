@@ -229,11 +229,11 @@ Open items for phase 4 and phase 5:
 - phewr does not call `flush`, the events, `with_placing`, `with_pass_bytes`, `lost`, `hide` and
   `place_under`. They carry `cfg_attr(not(test), expect(dead_code))` in two impl blocks. In an
   app that uses every item of a block, `expect` fails the build, and the lint table forbids
-  `allow`. Phase 4 needs a rule: a cargo feature per part of the interface, or phewr uses the
-  events itself.
+  `allow`. Decided on 2026-11-09: a cargo feature per part of the interface (see "Phase 4b").
 - phewr keeps `d=A` on an overlay, a resize and the quit, and it has no focus reports (mode 1004).
   With `hide()` and focus reports, phewr gets the store back after an overlay and the resend of
-  rule 6. This changes the behavior of phewr. Decide it in phase 5.
+  rule 6. This changes the behavior of phewr. Decided on 2026-11-09: the measurement in herdr at
+  the start of phase 5 picks one of the two.
 - Nothing calls `Screen::lost` yet. The self check of phase 5 is its first caller.
 
 ### Phase 3: the shapes and the caches (phewr repository)
@@ -300,7 +300,30 @@ Open items for phase 4:
 
 Done when `just check` passes, and the render tests show the same text.
 
+### Phase 4b: a feature per part of the engine interface (phewr repository)
+
+Decision of the maintainer, 2026-11-09. The parts of `pictures::kitty::screen` that phewr does not
+call get one cargo feature each: `flush`, the events (`resized`, `cleared`, `focus_gained`,
+`delete_all`), `with_placing`, `with_pass_bytes`, `lost`, `hide` and `place_under`. The module
+gates these parts, and their `expect(dead_code)` goes.
+
+1. Add the features to the module and to the `Cargo.toml` of phewr. phewr turns none of them on,
+   and its behavior does not change.
+2. After the go of the schnattr session, run `just pictures-sync ../schnattr`. schnattr turns on
+   the features that it calls. This sync also brings the master after `61c5256`: moxcms 0.9.2
+   without the rounding workaround, and `THUMBNAIL_CACHE_VERSION` v22. schnattr moves its pin
+   from `moxcms = "=0.9.1"` to `"0.9.2"`.
+
+Phase 4b comes after the merge of phase 4, because phase 4 must not edit the copy in schnattr.
+
+Done when `just check` passes in phewr and in schnattr, and no `expect(dead_code)` of the engine
+is left in the module.
+
 ### Phase 5: herdr hardening (phewr repository, then schnattr and youtr)
+
+Phase 5 starts after phase 4 and phase 4b (decision of the maintainer, 2026-11-09). At its start,
+the measurement in herdr also decides for phewr: `d=A` on an overlay and a resize as today, or
+`hide()` with focus reports (mode 1004).
 
 1. Build the self check of rule 7, behind a setting, off by default.
 2. Measure in herdr: does herdr pass the `ENOENT` answers of the host, or answer itself? If herdr

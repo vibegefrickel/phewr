@@ -178,16 +178,13 @@ Each decoder reports the color of its pixels.
 - The conversion runs after the resize. It runs in the layout of the image (RGB through
   `color::convert_rgb`, or RGBA).
 - It is one cached `moxcms` transform with the rows in parallel.
-- moxcms 0.9.1 truncates the output table of a known curve: `make_gamma_table_impl` in its
-  `src/gamma.rs` (line 654) lost the `.round()` of 0.8.1. Half of all 8-bit values came out one
-  level dark, also in the identity transform sRGB to sRGB. `ColorTarget::profile` writes the
-  target curve with 7 parameters and without CICP (`rounding_output_curve`). moxcms then
-  inverts the parametric curve, and that table rounds. The mean error against exact f64 math is
-  0.25 levels, as with 0.8.1, against 0.52 without the workaround. The transform speed does not
-  change (23.0 ms for 12 MP).
+- moxcms 0.9.1 truncated the output table of a known curve: `make_gamma_table_impl` in its
+  `src/gamma.rs` lost the `.round()` of 0.8.1, and half of all 8-bit values came out one level
+  dark. From 2026-11-03 to 2026-11-09, `rounding_output_curve` wrote the target curve with 7
+  parameters and without CICP as a workaround. moxcms 0.9.2 rounds again, so the workaround and
+  its canary test are gone. Against the workaround, 0.07 % of the 8-bit values of a color grid
+  move by one level (thumbnail cache v22).
 - `gray_levels_keep_their_value` sends all 256 gray levels through the production transforms.
-  The canary `moxcms_still_truncates_known_curves` fails when moxcms rounds again. Then remove
-  `rounding_output_curve` and the canary.
 - A source in the target space converts nothing. So iPhone photos (Display P3) cost nothing.
 - A source that cannot convert converts as sRGB. Examples: an unreadable or non-RGB ICC profile
   and unknown CICP codes.

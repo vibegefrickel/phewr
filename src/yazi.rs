@@ -1,7 +1,8 @@
-//! The reveal of the last file in the yazi that started phewr.
+//! The reveal of the last file and the selection of the marks in the yazi that started phewr.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -29,6 +30,53 @@ pub(crate) fn reveal_in_yazi(
         path.into_os_string(),
     ];
     Some(run(&ya, &args))
+}
+
+/// The yazi plugin that selects the files of a list (README, "Marks to yazi").
+const SELECT_PLUGIN: &str = "phewr-select";
+
+/// Select `paths` in the yazi that started phewr, so yazi moves, copies or deletes them.
+///
+/// The paths go into a list file in `list_dir`, and `run` starts
+/// `ya emit plugin phewr-select <list>`. The plugin reads the list and deletes it. Without
+/// paths, without `YAZI_ID` or without `ya` on PATH, nothing happens.
+pub(crate) fn select_in_yazi(
+    paths: &[PathBuf],
+    yazi_id: Option<&OsStr>,
+    search_path: Option<&OsStr>,
+    list_dir: &Path,
+    run: impl FnOnce(&Path, &[OsString]) -> io::Result<()>,
+) -> Option<io::Result<()>> {
+    if paths.is_empty() {
+        return None;
+    }
+    yazi_id.filter(|id| !id.is_empty())?;
+    let ya = find_on_path("ya", search_path)?;
+    Some(write_list(paths, list_dir).and_then(|list| {
+        let args = [
+            OsString::from("emit"),
+            OsString::from("plugin"),
+            OsString::from(SELECT_PLUGIN),
+            list.into_os_string(),
+        ];
+        run(&ya, &args)
+    }))
+}
+
+/// One absolute path per line. A name with a line break does not fit the list and stays out.
+fn write_list(paths: &[PathBuf], list_dir: &Path) -> io::Result<PathBuf> {
+    let mut text = Vec::new();
+    for path in paths {
+        let path = std::path::absolute(path)?;
+        let bytes = path.as_os_str().as_bytes();
+        if !bytes.contains(&b'\n') {
+            text.extend_from_slice(bytes);
+            text.push(b'\n');
+        }
+    }
+    let list = list_dir.join(format!("phewr-marks-{}.txt", std::process::id()));
+    std::fs::write(&list, text)?;
+    Ok(list)
 }
 
 /// Run `program` without output and wait at most [`YA_TIMEOUT`] for its exit. Then kill it.
@@ -69,7 +117,7 @@ pub(crate) fn find_on_path(program: &str, path: Option<&OsStr>) -> Option<PathBu
 
 #[cfg(test)]
 mod tests {
-    use super::{find_on_path, reveal_in_yazi, run_briefly};
+    use super::{find_on_path, reveal_in_yazi, run_briefly, select_in_yazi};
     use std::ffi::{OsStr, OsString};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -146,6 +194,69 @@ mod tests {
             assert_eq!(result, None, "{case}");
             assert!(calls.is_empty(), "{case}");
         }
+    }
+
+    fn select(
+        paths: &[PathBuf],
+        yazi_id: Option<&str>,
+        search_path: &OsStr,
+        list_dir: &Path,
+    ) -> (Option<bool>, Vec<Vec<OsString>>) {
+        let mut calls = Vec::new();
+        let result = select_in_yazi(
+            paths,
+            yazi_id.map(OsStr::new),
+            Some(search_path),
+            list_dir,
+            |_program, args| {
+                calls.push(args.to_vec());
+                Ok(())
+            },
+        );
+        (result.map(|result| result.is_ok()), calls)
+    }
+
+    /// The marks go into a list file, one absolute path per line, and the plugin gets the list.
+    #[test]
+    fn marks_go_to_select_plugin() {
+        let (_dir, path) = path_with_ya();
+        let lists = tempfile::tempdir().unwrap();
+        let marks = [
+            PathBuf::from("/photos/a.jpg"),
+            PathBuf::from("photos/b.jpg"),
+            PathBuf::from("/photos/line\nbreak.jpg"),
+        ];
+        let (result, calls) = select(&marks, Some("4711"), &path, lists.path());
+        assert_eq!(result, Some(true));
+        let list = PathBuf::from(&calls[0][3]);
+        assert_eq!(
+            calls[0][..3],
+            ["emit", "plugin", "phewr-select"].map(OsString::from)
+        );
+        assert!(list.starts_with(lists.path()), "{list:?}");
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&list).unwrap(),
+            format!("/photos/a.jpg\n{}\n", cwd.join("photos/b.jpg").display()),
+            "a name with a line break stays out"
+        );
+    }
+
+    #[test]
+    fn no_marks_or_no_yazi_selects_nothing() {
+        let (_dir, path) = path_with_ya();
+        let lists = tempfile::tempdir().unwrap();
+        let marks = [PathBuf::from("/photos/a.jpg")];
+        for (case, marks, yazi_id) in [
+            ("no marks", &marks[..0], Some("1")),
+            ("no YAZI_ID", &marks[..], None),
+            ("an empty YAZI_ID", &marks[..], Some("")),
+        ] {
+            let (result, calls) = select(marks, yazi_id, &path, lists.path());
+            assert_eq!(result, None, "{case}");
+            assert!(calls.is_empty(), "{case}");
+        }
+        assert_eq!(std::fs::read_dir(lists.path()).unwrap().count(), 0);
     }
 
     #[test]

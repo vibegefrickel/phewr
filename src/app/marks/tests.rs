@@ -30,3 +30,20 @@ fn selection_marks_and_clears() {
     app.toggle_selection_at_cursor();
     assert!(app.selection.is_empty());
 }
+
+/// A marked Live still brings its hidden motion. The paths come in name order.
+#[test]
+fn marked_live_still_brings_motion() {
+    use std::path::PathBuf;
+    let mut app = app_with(&["b.png", "c.heic"]);
+    let motion = app.images[1].with_extension("mov");
+    app.set_live_photos(crate::scanner::LivePhotos::from_pairs([(
+        app.images[1].clone(),
+        motion.clone(),
+    )]));
+    assert!(app.marked_paths().is_empty());
+
+    app.select_all_filtered();
+    let expected: Vec<PathBuf> = vec![app.images[0].clone(), app.images[1].clone(), motion];
+    assert_eq!(app.marked_paths(), expected);
+}

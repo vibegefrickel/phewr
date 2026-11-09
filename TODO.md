@@ -16,7 +16,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-09: `just check` passes with 1016 tests with the default features and 943 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-09: `just check` passes with 1018 tests with the default features and 945 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
@@ -43,33 +43,28 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 1. Speed
    - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The RGBA fast path for phewr waits for the answer to the herdr issue: send `f=32`, so that the herdr `t=f` fast path applies. Measure it against the numbers above before you build it. If herdr scrolls without lag on Ghostty 1.4.0, drop the idea.
    - JPEG XL patch files (text, screenshots) still copy on one thread, because jxl-oxide has no public region API. The upstream draft needs four API items: re-export `ImageBuffer` and `Region`, public grid regions, `ExtraChannel::bit_depth()`, or a row-range `write_to_buffer`. With them, phewr drops the direct `jxl-render` dependency.
-   - AV1 on M1 and M2 has no VideoToolbox decoder and takes the software path after one failed GPU run. Untested.
-   - Candidate, low priority: the shared memory medium `t=s` needs `shm_open` (unsafe or a crate). The temp file medium reaches the same payload size.
 2. Formats: real files that are still missing.
    - JPEG XL: a real HLG photo (Sony HLG `.HIF` is the one real source, the public files have no license), an iPhone 16 Pro ProRAW with JPEG XL, a plain camera or app `.jxl`, a P3 PQ file, and the saklistudio.com HDR samples (the server blocks scripts). Also open: the `moxcms` gamut edge and the XYB clip of jxl-oxide.
    - HEIC: a real file with an embedded thumbnail of another aspect.
    - Live Photos: a pair that a camera wrote as a pair (`docs/live-photos.md`, question 1).
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
-4. Dependencies: all direct dependencies are at their newest version (2026-11-03). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18. If `moxcms_still_truncates_known_curves` fails after an update, remove `rounding_output_curve` and the test.
-5. Upstream issue drafts in `~/Projects/dev/` (maintainer, not posted):
-   - `herdr-issue-kitty-graphics-performance.md`: the three herdr findings with the numbers above.
-   - `herdr-issue-kitty-graphics-offset.md`: herdr scales a relayed image to whole cells and applies `X=` / `Y=` twice.
-   - `crossterm-issue-visibility-report.md`: the mode 2033 report sequence (item 3).
-   - `jxl-oxide-issue-parallel-stream.md`: the four API items (item 1).
-   - `moxcms-issue-gamma-table-round.md`: 0.9.1 `make_gamma_table_impl` (`src/gamma.rs:645`, line 654) lost `.round()`, so the identity transform sRGB to sRGB maps 200 to 199.
+4. Dependencies: all direct dependencies are at their newest version (2026-11-09). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
 
 ## Later
 
-- Android Motion Photos (idea, not decided, 2026-11-03): Pixel and Samsung phones put the clip inside the JPEG or HEIC. phewr can give them the grid roll and the play on Enter of the Live Photos. immich-app/test-assets holds 5 real files in `formats/motionphoto/` (AGPL, local tests only).
-- Marks to yazi (design, maintainer, 2026-11-09): the marks (`Space`, `a`, `A`, `app/marks.rs`) become a list of files that yazi selects, so yazi does the file operations and phewr stays a viewer.
-  - phewr already runs with `YAZI_ID` (the `g v` binding in the yazi keymap of the dotfiles) and calls `ya emit reveal` on quit (`yazi.rs`).
-  - yazi `toggle` acts only on the hovered file and takes no URL. For this reason, a small yazi plugin `phewr-select` in the dotfiles reads a list of paths and does `reveal` and `toggle --state=on` for each path inside yazi.
-  - On quit, phewr writes the marked paths to a temp file and sends one `ya emit-to $YAZI_ID plugin phewr-select <file>`. The other route, `reveal` and `toggle` through `ya` for each file, costs 2 process starts per file.
-  - A marked Live still also sends its hidden `.mov`. Otherwise a move in yazi leaves the motion behind.
-  - Optional: `--marks-file <PATH>` like `--cwd-file`, for use without yazi.
+- Upstream issue drafts in `~/Projects/dev/` (maintainer, 2026-11-09: no upstream tasks for now):
+  - `herdr-issue-kitty-graphics-performance.md`: the three herdr findings with the numbers of "Next", item 1.
+  - `herdr-issue-kitty-graphics-lost-pictures.md`: the pictures that herdr loses after a scroll (`docs/picture-refactor.md`, phase 0).
+  - `herdr-issue-kitty-graphics-offset.md`: herdr scales a relayed image to whole cells and applies `X=` / `Y=` twice.
+  - `crossterm-issue-visibility-report.md`: the mode 2033 report sequence ("Next", item 3).
+  - `jxl-oxide-issue-parallel-stream.md`: the four API items ("Next", item 1).
+- Android Motion Photos (an idea, kept on 2026-11-09): Pixel and Samsung phones put the clip inside the JPEG or HEIC. phewr can give them the grid roll and the play on Enter of the Live Photos. immich-app/test-assets holds 5 real files in `formats/motionphoto/` (AGPL, local tests only).
 
 ## Done
 
+- Marks to yazi (2026-11-09): on quit, phewr hands the marks (`Space`, `a`) to the yazi that started it, through `ya emit plugin phewr-select <list>`. The plugin in `~/.config/yazi/plugins/phewr-select.yazi` (dotfiles, and the README for other users) selects each path with `toggle` and a `File` object. yazi then moves, copies or deletes the files, and phewr stays a viewer. A marked Live still brings its hidden `.mov`. A test with a yazi 26.9.1 in a pseudo terminal selected the listed files in two folders and skipped a missing file.
+- Dependencies (2026-11-09): kamadak-exif 0.6.2, moxcms 0.9.2 and toml 1.2.1. moxcms 0.9.2 rounds its output curves again, so the workaround `rounding_output_curve` and its canary test are gone. 0.07 % of the 8-bit values of a color grid move by one level, so the thumbnail cache is v22.
+- Decisions (2026-11-09): Marks to yazi gets built. Android Motion Photos stay an idea. An edited Live copy pairs only with its own motion (`docs/live-photos.md`, question 7). AV1 on M1 and M2 (this Mac is an M5) and the medium `t=s` left "Next". The upstream drafts moved to "Later". The picture plan got phase 4b (a cargo feature per part of the engine interface) and the rule that phase 5 starts after phase 4 and 4b.
 - Release paths removed (2026-11-09): phewr has no release before Q1 2027 and no planned Homebrew release. The formula, the installer, the release docs, the recipes `dist`, `render`, `publish`, `tap` and `release`, `[profile.dist]` and the `/dist/` line of `.gitignore` are gone. Users clone the repository and run `just install`.
 - Shared picture module, phase 3 (2026-11-09, `688dc4e`): the box copies and the rounded corners of schnattr are in `pictures::shape`, the jobs have a priority, and the cell at the cursor decodes first. The memory cache takes `CacheLimits` from the app. The feature `jxl` is new, the module has no `video` gate, and `just test-lean` runs the tests without `heic`, `jxl` and `turbo`. The module takes its names from `CARGO_PKG_NAME`. Phase 4 (schnattr takes the module) is next (`docs/picture-refactor.md`).
 - Grid place on a zoom (2026-11-09): a zoom, the info panel or a resize keeps the screen row of the cursor, and at the list edges the grid stays flush with the edge. Before, a zoom out at the end of a list showed only the last row, and `Tab` moved the cursor row to the top or the bottom of the screen.

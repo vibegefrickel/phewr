@@ -301,7 +301,7 @@ fn gray_ramp() -> RgbaImage {
 #[test]
 fn gray_levels_keep_their_value() {
     // sRGB and Display P3 share the white point and the curve, so a gray keeps its level.
-    // moxcms 0.9.1 truncates the output table of a known curve, and 200 came out as 199.
+    // moxcms 0.9.1 truncated the output table of a known curve, and 200 came out as 199.
     for (source, target) in [
         (SourceColor::Srgb, ColorTarget::DisplayP3),
         (SourceColor::DisplayP3, ColorTarget::Srgb),
@@ -321,8 +321,7 @@ fn gray_levels_keep_their_value() {
 
 #[test]
 fn sixteen_bit_target_keeps_every_level() {
-    // The 16-bit transforms of `decode::jxl` use the same target profile and options. The missing
-    // round of moxcms 0.9.1 costs less than 1 of 65535 there.
+    // The 16-bit transforms of `decode::jxl` use the same target profile and options.
     use moxcms::{ColorProfile, Layout, RenderingIntent, TransformOptions};
     let options = TransformOptions {
         rendering_intent: RenderingIntent::RelativeColorimetric,
@@ -351,18 +350,4 @@ fn sixteen_bit_target_keeps_every_level() {
         assert!(largest <= Some(16), "{target:?}: largest move {largest:?}");
         assert!(mean.abs() <= 2.0, "{target:?}: mean move {mean}");
     }
-}
-
-#[test]
-fn moxcms_still_truncates_known_curves() {
-    // When this test fails, moxcms rounds its sRGB output table again: remove
-    // `rounding_output_curve` in `color/mod.rs` and this test.
-    use moxcms::{ColorProfile, Layout, TransformOptions};
-    let srgb = ColorProfile::new_srgb();
-    let executor = srgb
-        .create_transform_8bit(Layout::Rgb, &srgb, Layout::Rgb, TransformOptions::default())
-        .unwrap();
-    let mut out = [0; 3];
-    executor.transform(&[200; 3], &mut out).unwrap();
-    assert_eq!(out, [199; 3]);
 }

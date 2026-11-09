@@ -27,6 +27,9 @@ from this page.
   and one JPEG) and copies of one real iPhone 14 Pro Live Photo movie with the identifier of
   each still. phewr reads all 11 identifiers like exiftool, so the tag places hold for HEIC and
   for JPEG. No pair there comes from a camera as a pair. Question 1 stays open.
+- Question 7 (maintainer, 2026-11-09): an edited copy `IMG_E1234.HEIC` pairs only with
+  `IMG_E1234.MOV`, as the code does (`edited_copy_pairs_with_own_motion`). The original still
+  keeps its own motion.
 
 ## The real folders
 

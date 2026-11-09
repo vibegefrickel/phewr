@@ -165,6 +165,14 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
   that does not answer cannot hold phewr. Tests pass a closure and never start `ya`.
+- **Marks to yazi (2026-11-09):** after the reveal, `select_in_yazi` writes the marks
+  (`App::marked_paths`) into `phewr-marks-<pid>.txt` in the temp folder, one absolute path per
+  line, and runs `ya emit plugin phewr-select <list>`. The yazi plugin (README, "Marks to yazi")
+  selects each path with `toggle` and a `File` object, deletes the list and moves no cursor.
+  yazi 26.9 `toggle` takes no path from the command line, only a `File` from Lua, so a plugin is
+  necessary. A marked Live still brings its hidden `.mov`. A folder change clears the marks, so
+  the pairs of the folder at quit cover every mark. A name with a line break stays out of the
+  list. Without the plugin in yazi, nothing happens, and the list stays in the temp folder.
 - **Shell directory on exit:** `--cwd-file <PATH>` writes `App::gallery_dir` into the file after
   `TerminalSession::restore`, without a newline, like `yazi --cwd-file`. A shell function reads
   it and does the `cd` (README, "Change the shell directory on exit"). A failed run writes
@@ -314,7 +322,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   the space. The prune removes the `.png` files of older versions at once.
 - **Thumbnail cache key:** the key hashes `THUMBNAIL_CACHE_VERSION`, the path, the size, the
   mtime, the target size and the color target. The version is
-  `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v21")`, so phewr hashes `phewr-thumbnail-v21` as
+  `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v22")`, so phewr hashes `phewr-thumbnail-v22` as
   before (v21 since the DCT scale follows the fit). When the thumbnail output changes, increase
   the `v21` part. If several workers change the thumbnail output at the same time, each takes its
   own version, higher than main and than every branch in flight. `thumbnail_entry` in
@@ -345,10 +353,8 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Image colors:** phewr converts every image into Display P3 (`[terminal] colorspace`), because
   Ghostty copies the pixels of a Kitty image without a conversion. The sources, the transform
   cache and the cubes of the player are in `docs/images-and-colors.md` ("Color conversion").
-  moxcms 0.9.1 truncates the output table of a known curve (sRGB, BT.709, CICP), so 200 gives
-  199. `ColorTarget::profile` writes the target curve with 7 parameters and without CICP, and
-  that table rounds (`rounding_output_curve`). When the canary test
-  `moxcms_still_truncates_known_curves` fails, remove the workaround and the test.
+  moxcms 0.9.1 truncated the output table of a known curve, and 0.9.2 rounds again. The
+  workaround `rounding_output_curve` went with the update (2026-11-09, thumbnail cache v22).
 - **JPEG XL colors:** jxl-oxide 0.12 converts ICC v2 samples wrong. A lossless file with an ICC
   profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
   of 64 rows). A transform error, XYB and the SDR enum encodings stay with jxl-oxide. A PQ or HLG

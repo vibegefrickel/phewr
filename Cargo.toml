@@ -142,7 +142,7 @@ libheif-rs = { version = "3", optional = true }
 lru = "0.19"
 # The ICC profile of a JPEG XL file to sRGB (`decode/jxl.rs`). `image` and `jxl-oxide` still use
 # moxcms 0.8.
-moxcms = "0.9.1"
+moxcms = "0.9.2"
 nucleo-matcher = "0.3"
 ratatui = "0.30"
 rayon = "1.12"

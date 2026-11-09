@@ -10,7 +10,7 @@ use std::time::Duration;
 
 /// Change it when the thumbnail output changes. The package name keeps the keys of two apps
 /// apart.
-const THUMBNAIL_CACHE_VERSION: &str = concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v21");
+const THUMBNAIL_CACHE_VERSION: &str = concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v22");
 
 /// QOI decodes twice as fast as PNG at the same file size.
 pub(crate) const CACHE_FORMAT: image::ImageFormat = image::ImageFormat::Qoi;

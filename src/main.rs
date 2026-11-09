@@ -59,7 +59,7 @@ use scanner::canonicalize_or_self;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use terminal::TerminalSession;
-use yazi::{reveal_in_yazi, run_briefly};
+use yazi::{reveal_in_yazi, run_briefly, select_in_yazi};
 
 /// Skips the probe of the Kitty transfer: `direct`, `png` or `file`.
 const TRANSFER_OVERRIDE: &str = "PHEWR_KITTY_TRANSFER";
@@ -298,6 +298,7 @@ fn main() -> io::Result<()> {
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();
     let reveal_path = app.reveal_path();
+    let marked = app.marked_paths();
     let gallery_dir = app.gallery_dir();
     // The drop cancels the loop jobs. Their ffmpeg runs end before the process.
     drop(app);
@@ -308,6 +309,14 @@ fn main() -> io::Result<()> {
             reveal_path.as_deref(),
             std::env::var_os("YAZI_ID").as_deref(),
             std::env::var_os("PATH").as_deref(),
+            run_briefly,
+        );
+        // The marks become the selection of that yazi, which does the file operations.
+        select_in_yazi(
+            &marked,
+            std::env::var_os("YAZI_ID").as_deref(),
+            std::env::var_os("PATH").as_deref(),
+            &std::env::temp_dir(),
             run_briefly,
         );
         // The shell wrapper changes into the folder of the grid, like after yazi.

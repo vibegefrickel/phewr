@@ -33,8 +33,8 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("s", "Slideshow from cursor"),
     #[cfg(feature = "video")]
     ("p", "Open in the mpv window"),
-    ("Space", "Toggle selection"),
-    ("a / A", "Select all / clear all"),
+    ("Space", "Mark (yazi selects on quit)"),
+    ("a / A", "Mark all / clear marks"),
     ("/", "Search"),
     ("?", "Toggle help"),
     ("q", "Quit"),

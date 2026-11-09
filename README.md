@@ -90,6 +90,36 @@ If your multiplexer relays Kitty graphics slowly, open phewr in a new Ghostty wi
 run  = 'shell -- open -na Ghostty.app --args -e sh -c "YAZI_ID=$YAZI_ID exec $HOME/.local/bin/phewr %h"'
 ```
 
+### Marks to yazi
+
+phewr is a viewer and changes no file. Mark files in the grid with `Space` or `a`, then quit:
+phewr hands the marks to the yazi that started it, and yazi selects them. Then move, copy or
+delete them in yazi. A marked Live Photo still brings its hidden `.mov`.
+
+This needs a small yazi plugin. Save it as
+`~/.config/yazi/plugins/phewr-select.yazi/main.lua` (yazi 26.9 or later):
+
+```lua
+return {
+	entry = function(_, job)
+		local list = job.args[1]
+		local file = list and io.open(list, "r")
+		if not file then
+			return
+		end
+		for line in file:lines() do
+			local url = Url(line)
+			local cha = fs.cha(url)
+			if cha then
+				ya.emit("toggle", { File { url = url, cha = cha }, state = "on" })
+			end
+		end
+		file:close()
+		os.remove(list)
+	end,
+}
+```
+
 ## Controls
 
 `?` shows all keys. `q` goes back one step in every view. Only `q` in the grid quits phewr.
@@ -109,8 +139,8 @@ run  = 'shell -- open -na Ghostty.app --args -e sh -c "YAZI_ID=$YAZI_ID exec $HO
 | `n` | Show or hide file names |
 | `Tab` | Show or hide the info panel |
 | `/` | Search. `Enter` applies, `Esc` clears. |
-| `Space` | Select or unselect |
-| `a` `A` | Select all / clear the selection |
+| `Space` | Mark or unmark (the marks go to yazi on quit) |
+| `a` `A` | Mark all / clear the marks |
 | `q` | Quit |
 
 The grid shows the subfolders first, with `..` for the parent folder. The cell shape follows the

@@ -1,6 +1,7 @@
 //! The marks of the grid.
 
 use super::App;
+use std::path::{Path, PathBuf};
 
 impl App {
     /// Mark or unmark the file under the cursor. A folder takes no mark.
@@ -28,6 +29,21 @@ impl App {
 
     pub(crate) fn clear_selection(&mut self) {
         self.selection.clear();
+    }
+
+    /// The marked files in name order. A marked Live still brings its hidden motion, so a move in
+    /// yazi takes both files. A folder change clears the marks, so the pairs of this folder cover
+    /// every mark.
+    pub(crate) fn marked_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self
+            .selection
+            .iter()
+            .flat_map(|still| {
+                std::iter::once(still.clone()).chain(self.live.motion(still).map(Path::to_path_buf))
+            })
+            .collect();
+        paths.sort();
+        paths
     }
 
     /// The grid asks per cell per frame. An empty selection answers without a path hash.
