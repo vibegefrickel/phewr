@@ -2,7 +2,7 @@ use super::{
     Chroma, ProbeCache, Rate, Samples, frame_peak_args, output_within, packet_limit, probe,
     probe_args,
 };
-use crate::decode::hdr::Peak;
+use crate::pictures::decode::hdr::Peak;
 use crate::player::tone_map::{Hdr, Primaries};
 use crate::test_support::fixture;
 use crate::test_support::video::real_ffprobe;
@@ -350,7 +350,7 @@ fn real_videos_report_size_and_rate() {
         return;
     };
     for variable in ["PHEWR_TEST_HDR_VIDEO", "PHEWR_TEST_SDR_VIDEO"] {
-        let Some(path) = crate::decode::real_test_file(variable) else {
+        let Some(path) = crate::pictures::decode::real_test_file(variable) else {
             continue;
         };
         let info = probe(&ffprobe, &path).unwrap();

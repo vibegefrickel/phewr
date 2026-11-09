@@ -9,9 +9,9 @@ use super::{
     CELL_PX, fine_millis, fullscreen_rect, median, millis, remove_temp_files, report, run_until,
     scanned_app, test_dir,
 };
-use crate::encoder::KittyBackend;
-use crate::encoder::Transfer;
 use crate::kitty_output::render_fullscreen_image_to;
+use crate::pictures::kitty::KittyBackend;
+use crate::pictures::kitty::Transfer;
 use std::time::Duration;
 use std::time::Instant;
 

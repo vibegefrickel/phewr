@@ -1,9 +1,5 @@
 //! The builders and helpers that the tests of more than one module share.
 
-#[cfg(all(feature = "sips", target_os = "macos"))]
-mod files;
-#[cfg(feature = "heic")]
-mod heif;
 mod input;
 pub(crate) mod kitty;
 #[cfg(feature = "video")]
@@ -11,10 +7,7 @@ pub(crate) mod live;
 #[cfg(feature = "video")]
 pub(crate) mod video;
 
-#[cfg(all(feature = "sips", target_os = "macos"))]
-pub(crate) use files::*;
-#[cfg(feature = "heic")]
-pub(crate) use heif::*;
+pub(crate) use crate::pictures::test_support::*;
 pub(crate) use input::*;
 
 use crate::app::App;
@@ -92,28 +85,6 @@ pub(crate) fn fullscreen_app(count: usize, index: usize) -> App {
 
 pub(crate) fn text(out: &[u8]) -> String {
     String::from_utf8_lossy(out).into_owned()
-}
-
-pub(crate) const RED: [u8; 3] = [255, 0, 0];
-pub(crate) const BLUE: [u8; 3] = [0, 0, 255];
-
-pub(crate) fn test_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-/// A checked-in file below `tests/fixtures`.
-pub(crate) fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-pub(crate) fn assert_close(pixel: [u8; 4], expected: [u8; 3]) {
-    let close = pixel
-        .iter()
-        .zip(expected)
-        .all(|(&got, want)| got.abs_diff(want) < 60);
-    assert!(close, "pixel {pixel:?}, expected {expected:?}");
 }
 
 pub(crate) fn app() -> App {

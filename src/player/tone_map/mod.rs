@@ -7,8 +7,8 @@
 
 mod math;
 
-use crate::decode::color::{ColorTarget, SourceColor};
-use crate::decode::hdr::Peak;
+use crate::pictures::decode::color::{ColorTarget, SourceColor};
+use crate::pictures::decode::hdr::Peak;
 use math::{conversion, convert_sdr, rgb_to_xyz, tone_map};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -85,7 +85,7 @@ impl Primaries {
                 _ => None,
             },
             SourceColor::Icc(data) => {
-                Self::of_source_color(&crate::decode::color::icc_known_space(data)?)
+                Self::of_source_color(&crate::pictures::decode::color::icc_known_space(data)?)
             }
             SourceColor::AdobeRgb | SourceColor::PngGamma { .. } => None,
         }

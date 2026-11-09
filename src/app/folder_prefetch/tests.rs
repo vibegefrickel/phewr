@@ -2,11 +2,11 @@
 
 use super::worker::{Control, first_screen, prefetch};
 use super::{FOLDER_PREFETCH_DELAY, Running, START_POLL};
-use crate::app::disk_cache::get_cache_file_path;
-use crate::app::thumbnails::ThumbJob;
-use crate::app::thumbnails::thumb_target_px;
 use crate::app::{App, ViewMode};
 use crate::config;
+use crate::pictures::jobs::disk_cache::get_cache_file_path;
+use crate::pictures::jobs::queue::ThumbJob;
+use crate::pictures::resize::padding::thumb_target_px;
 use crate::test_support::{app, wait_until};
 use image::RgbaImage;
 use ratatui::layout::Rect;

@@ -1,6 +1,6 @@
 //! The loop of one cell on the shared clock of the grid.
 
-use crate::gallery::GridPicture;
+use crate::pictures::jobs::thumbnail_cache::GridPicture;
 use std::time::Duration;
 
 /// The highest rate of an animation loop (`grid_loop::MAX_ANIMATION_FPS`). A tick is the
@@ -136,7 +136,7 @@ fn tick_ends(delays: &[Duration]) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{CellLoop, START_ALIGN, tick_ends};
-    use crate::gallery::GridPicture;
+    use crate::pictures::jobs::thumbnail_cache::GridPicture;
     use image::RgbaImage;
     use std::time::Duration;
 

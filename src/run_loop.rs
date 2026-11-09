@@ -11,7 +11,8 @@ use crate::kitty_output::{
 };
 #[cfg(feature = "video")]
 use crate::mpv;
-use crate::terminal::{disable_mouse, enable_mouse, query_cell_pixel_size};
+use crate::pictures::kitty::query::query_cell_pixel_size;
+use crate::terminal::{disable_mouse, enable_mouse};
 use crate::ui;
 #[cfg(feature = "video")]
 use crate::video_handoff::{VideoState, play_videos, poll_mpv_window};

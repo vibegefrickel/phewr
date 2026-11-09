@@ -24,16 +24,18 @@ pub(crate) use slideshow::Slideshow;
 pub(crate) use video::VideoReturn;
 
 use crate::config::{self, Config};
-use crate::decode::ScreenImage;
-use crate::encoder::{GraphicsOutput, KittyBackend};
-use crate::gallery::{GalleryState, ThumbnailCache};
+use crate::gallery::GalleryState;
 pub(crate) use crate::image_list::EntryKind;
 use crate::image_list::SharedImageList;
 use crate::info::ImageInfo;
-use crate::kitty_output::{GridIcons, TerminalImages};
+use crate::kitty_output::GridIcons;
+use crate::pictures::decode::ScreenImage;
+use crate::pictures::jobs::disk_cache::default_disk_cache_dir;
+use crate::pictures::jobs::thumbnail_cache::ThumbnailCache;
+use crate::pictures::kitty::terminal_images::TerminalImages;
+use crate::pictures::kitty::{GraphicsOutput, KittyBackend};
 use crate::prefetch::Prefetcher;
 use crate::scanner::LivePhotos;
-use disk_cache::default_disk_cache_dir;
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::collections::{HashMap, HashSet};
@@ -208,7 +210,7 @@ impl App {
             usize::from(config::MIN_VISIBLE_ROWS),
             usize::from(config::MAX_VISIBLE_ROWS),
         );
-        gallery.set_cell_shape(crate::gallery::DEFAULT_IMAGE_ASPECT, cell_px);
+        gallery.set_cell_shape(crate::pictures::shape::DEFAULT_IMAGE_ASPECT, cell_px);
         Self {
             images: Vec::new(),
             filenames: Vec::new(),
@@ -300,7 +302,7 @@ impl App {
     }
 
     pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
-        crate::encoder::kitty::delete_all_to(out)?;
+        crate::pictures::kitty::protocol::delete_all_to(out)?;
         self.terminal_images.clear();
         self.grid_icons.forget_images();
         self.grid_loops.forget_placements();

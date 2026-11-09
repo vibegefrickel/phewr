@@ -5,8 +5,6 @@
 //! order. A cache read runs on its own threads and never waits behind a cold decode.
 
 mod decode;
-mod padding;
-mod queue;
 #[cfg(test)]
 #[cfg(feature = "heic")]
 mod tests;
@@ -16,37 +14,21 @@ use self::decode::{
     animation_flag, decode_into_cache, has_embedded_preview, is_playable, preview_or_cached,
     sharp_thumbnail,
 };
-pub(crate) use self::padding::{pad_for_grid, pad_loop_frame, thumb_target_px};
-pub(super) use self::queue::{JobSlots, ThumbJob};
 use super::App;
-use super::disk_cache::{FileStamp, LazyEntry};
-use crate::gallery::{GridPicture, ParkKey};
+use crate::pictures::jobs::disk_cache::{FileStamp, LazyEntry};
+use crate::pictures::jobs::pool::{
+    MAX_CACHE_READS, MAX_PREVIEW_JOBS, MAX_THUMB_JOBS, ThumbPhase, spawn_job,
+};
+use crate::pictures::jobs::queue::{JobSlots, ThumbJob};
+use crate::pictures::jobs::thumbnail_cache::{GridPicture, ParkKey};
+use crate::pictures::resize::padding::{pad_for_grid, thumb_target_px};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, mpsc};
-
-/// With 4 jobs, each with its share of the cores, the first thumbnail comes after one decode.
-const MAX_THUMB_JOBS: usize = 4;
-
-/// The sharp decodes of the preview formats wait until every preview is out.
-const MAX_PREVIEW_JOBS: usize = 4;
-
-/// A warm grid reads all its cells together, not 4 at a time behind the decode slots.
-const MAX_CACHE_READS: usize = 64;
-
-/// A QOI read takes one core. More threads than cores give nothing.
-const MAX_CACHE_READ_THREADS: usize = 8;
+use std::sync::mpsc;
 
 /// One flag holds a path and a bool: the map stays below about 10 MB.
 const MAX_ANIMATION_FLAGS: usize = 65_536;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ThumbPhase {
-    CacheRead,
-    Preview,
-    Sharp,
-}
 
 /// A preview job sends a sharp picture on a cache hit.
 pub(super) enum ThumbImage {
@@ -411,27 +393,6 @@ impl App {
             });
         });
     }
-}
-
-/// A cache hit never waits for a cold HEIC or sips decode to free a thread.
-fn spawn_job(phase: ThumbPhase, job: impl FnOnce() + Send + 'static) {
-    match cache_read_pool() {
-        Some(pool) if phase == ThumbPhase::CacheRead => pool.spawn(job),
-        _ => rayon::spawn(job),
-    }
-}
-
-/// `None` when the build failed: the reads then share the global pool.
-fn cache_read_pool() -> Option<&'static rayon::ThreadPool> {
-    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
-    POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(rayon::current_num_threads().min(MAX_CACHE_READ_THREADS))
-            .thread_name(|index| format!("phewr-cache-read-{index}"))
-            .build()
-            .ok()
-    })
-    .as_ref()
 }
 
 #[cfg(test)]

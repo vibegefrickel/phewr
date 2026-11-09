@@ -4,7 +4,7 @@
 //! phewr links no `FFmpeg` library. It starts the programs when PATH has them. Without them, a
 //! video cell keeps its play icon, and a video opens in the mpv window.
 
-use crate::decode::color::{self, ColorTarget};
+use crate::pictures::decode::color::{self, ColorTarget};
 use crate::player::{
     Decoder, SystemDecoder, VideoInfo, cube_for, first_frame_args, frame_box, with_fallback,
 };
@@ -22,7 +22,7 @@ use std::time::Duration;
 pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn is_video(path: &Path) -> bool {
-    crate::scanner::has_extension(path, crate::scanner::VIDEO_EXTENSIONS)
+    crate::pictures::decode::extensions::has_extension(path, crate::scanner::VIDEO_EXTENSIONS)
 }
 
 /// `None` when PATH has no such program.
@@ -138,7 +138,7 @@ pub(crate) fn convert_first_frame(
             image,
             &info.primaries.source_color(),
             target,
-            crate::decode::hdr::Peak::DEFAULT,
+            crate::pictures::decode::hdr::Peak::DEFAULT,
         )
     }
 }

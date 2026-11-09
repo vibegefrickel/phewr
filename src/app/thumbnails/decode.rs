@@ -2,13 +2,13 @@
 //! flag.
 
 use super::AnimationFlag;
-use crate::app::disk_cache::{CacheEntry, LazyEntry};
-use crate::decode::EmbeddedThumbnail;
+use crate::pictures::decode::EmbeddedThumbnail;
 #[cfg(all(feature = "sips", target_os = "macos"))]
-use crate::decode::embedded_jpeg;
+use crate::pictures::decode::embedded_jpeg;
 #[cfg(feature = "heic")]
-use crate::decode::libheif::{decode_heif_preview, decodes_with_libheif};
-use crate::decode::resize::load_and_resize_px;
+use crate::pictures::decode::libheif::{decode_heif_preview, decodes_with_libheif};
+use crate::pictures::jobs::disk_cache::{CacheEntry, LazyEntry};
+use crate::pictures::resize::load_and_resize_px;
 use image::RgbaImage;
 use std::io;
 use std::path::Path;
@@ -51,8 +51,8 @@ pub(super) fn animation_flag(
 }
 
 #[cfg(all(test, feature = "video"))]
-static HEADER_READS: crate::app::disk_cache::PathCounter =
-    crate::app::disk_cache::PathCounter::new();
+static HEADER_READS: crate::pictures::jobs::disk_cache::PathCounter =
+    crate::pictures::jobs::disk_cache::PathCounter::new();
 
 /// True for a video or an animated image: its still gets the play stamp.
 #[cfg(feature = "video")]
@@ -314,7 +314,7 @@ mod embedded_jpeg_tests {
 mod read_count_tests {
     use super::warm_disk_cache;
     use crate::app::App;
-    use crate::app::disk_cache::KEY_COMPUTATIONS;
+    use crate::pictures::jobs::disk_cache::KEY_COMPUTATIONS;
     use crate::test_support::{app_with_files, test_dir, wait_until};
     use ratatui::layout::Rect;
     use std::path::PathBuf;

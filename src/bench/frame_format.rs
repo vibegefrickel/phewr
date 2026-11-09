@@ -1,7 +1,7 @@
 //! The ways to send an opaque RGBA animation frame.
 
-use crate::encoder::kitty::{self, Keys, write_pixels};
-use crate::encoder::{Pixels, Transfer};
+use crate::pictures::kitty::protocol::{self, Keys, write_pixels};
+use crate::pictures::kitty::{Pixels, Transfer};
 use image::RgbaImage;
 
 /// The cost of the three ways to send an opaque RGBA animation frame through the temp file medium.
@@ -70,7 +70,7 @@ fn timings() {
                     }
                 }
                 times.push(start.elapsed());
-                for path in kitty::temp_file_paths(&out) {
+                for path in protocol::temp_file_paths(&out) {
                     std::fs::remove_file(path).unwrap();
                 }
             }

@@ -1,7 +1,7 @@
 //! Tests of the ffmpeg command lines and the filter graphs.
 
 use super::{Pipeline, Rate, VideoInfo, args, cube_for, download_format, first_frame_args};
-use crate::decode::color::ColorTarget;
+use crate::pictures::decode::color::ColorTarget;
 use crate::player::probe::{Chroma, Samples};
 use crate::player::tone_map::{Hdr, Primaries};
 use std::ffi::OsString;

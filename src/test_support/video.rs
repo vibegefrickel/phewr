@@ -2,9 +2,9 @@
 
 use crate::app::{App, ViewMode};
 use crate::config::VideoPlayer;
-use crate::encoder::{KittyBackend, Transfer};
 use crate::image_list::SharedImageList;
 use crate::mpv;
+use crate::pictures::kitty::{KittyBackend, Transfer};
 use crate::player::{Decoder, FrameStream, VideoInfo};
 use crate::run_loop::LoopState;
 use crate::video_handoff::VideoState;

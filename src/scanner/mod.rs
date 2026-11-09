@@ -4,13 +4,9 @@
 mod extensions;
 mod live;
 
-#[cfg(feature = "heic")]
-pub(crate) use extensions::LIBHEIF_EXTENSIONS;
-#[cfg(all(feature = "sips", target_os = "macos"))]
-pub(crate) use extensions::SIPS_EXTENSIONS;
 #[cfg(feature = "video")]
 pub(crate) use extensions::VIDEO_EXTENSIONS;
-pub(crate) use extensions::{IMAGE_EXTENSIONS, JXL_EXTENSIONS, has_extension, is_supported};
+pub(crate) use extensions::is_supported;
 pub(crate) use live::LivePhotos;
 #[cfg(feature = "video")]
 pub(crate) use live::identifiers_differ;

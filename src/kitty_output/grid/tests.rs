@@ -2,13 +2,13 @@
 use super::emit_new_thumbnails_to;
 use super::{place_gallery_images_to, render_gallery_images};
 use crate::app::App;
-use crate::app::thumbnails::pad_for_grid;
-use crate::app::thumbnails::thumb_target_px;
-use crate::gallery::GridPicture;
 use crate::image_list::SharedImageList;
 use crate::kitty_output::tests::{
     BEGIN_SYNC, BOX_PX, DELETE_ALL, END_SYNC, TRANSMIT, grid_app, sharp_thumbnail, thumbnail_app,
 };
+use crate::pictures::jobs::thumbnail_cache::GridPicture;
+use crate::pictures::resize::padding::pad_for_grid;
+use crate::pictures::resize::padding::thumb_target_px;
 use crate::test_support::char_key;
 use crate::test_support::kitty::FakeTerminal;
 use crate::test_support::text;
@@ -615,7 +615,8 @@ fn emit_and_place(app: &mut App) -> (String, String) {
 /// The cursor move that puts a picture of `cells` in the middle of the cell 0.
 #[cfg(feature = "heic")]
 fn moved_to(app: &App, cells: (u16, u16)) -> String {
-    let rect = crate::gallery::centered(app.gallery.thumb_rect(0), cells.0, cells.1);
+    let rect =
+        crate::pictures::kitty::placement::centered(app.gallery.thumb_rect(0), cells.0, cells.1);
     format!("\x1b[{};{}H", rect.y + 1, rect.x + 1)
 }
 

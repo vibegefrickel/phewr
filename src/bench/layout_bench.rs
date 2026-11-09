@@ -1,13 +1,13 @@
 //! The fullscreen layouts against the RGBA layout. Each step runs both ways in turn.
 
 use crate::app::App;
-use crate::decode::color::{self, ColorTarget};
-use crate::decode::resize::{rgb_resize_is_fastest, scaled_down_size};
-use crate::decode::screen::ScreenImage;
-use crate::decode::{EmbeddedThumbnail, decode_image};
-use crate::encoder::{KittyBackend, Transfer, kitty};
 use crate::image_list::SharedImageList;
 use crate::kitty_output::render_fullscreen_image_to;
+use crate::pictures::decode::color::{self, ColorTarget};
+use crate::pictures::decode::screen::ScreenImage;
+use crate::pictures::decode::{EmbeddedThumbnail, decode_image};
+use crate::pictures::kitty::{KittyBackend, Transfer, protocol};
+use crate::pictures::resize::{rgb_resize_is_fastest, scaled_down_size};
 use image::{DynamicImage, RgbaImage};
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
@@ -51,7 +51,7 @@ fn write(app: &mut App, image: ScreenImage) -> Duration {
     app.loaded = Some(image);
     let mut out = Vec::new();
     let elapsed = time(|| render_fullscreen_image_to(app, &mut out).unwrap());
-    for path in kitty::temp_file_paths(&out) {
+    for path in protocol::temp_file_paths(&out) {
         std::fs::remove_file(path).unwrap();
     }
     elapsed
@@ -81,7 +81,7 @@ fn measure_fit(name: &str, full: &RgbaImage, color: &color::SourceColor) {
                 time(|| {
                     before_input
                         .crop_resized((0, 0, size.0, size.1), dst)
-                        .convert(color, target, crate::decode::hdr::Peak::DEFAULT)
+                        .convert(color, target, crate::pictures::decode::hdr::Peak::DEFAULT)
                 })
             },
             || {
@@ -90,7 +90,7 @@ fn measure_fit(name: &str, full: &RgbaImage, color: &color::SourceColor) {
                     input.fit_within(BOX_PX.0, BOX_PX.1).convert(
                         color,
                         target,
-                        crate::decode::hdr::Peak::DEFAULT,
+                        crate::pictures::decode::hdr::Peak::DEFAULT,
                     )
                 })
             },

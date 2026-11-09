@@ -7,7 +7,7 @@
 //! The frames take the first-frame chain at half the grid picture size.
 
 use crate::app::grid_loops::LoopFrames;
-use crate::decode::color;
+use crate::pictures::decode::color;
 use crate::player::{
     Decoder, LoopSampling, Pipeline, VideoInfo, frame_box, loop_args, with_fallback,
 };

@@ -4,7 +4,7 @@ use super::{
     Tools, convert_first_frame, decode_first_frame, decoder_of, first_frame_cube, first_frame_of,
     is_video, session_first_frame,
 };
-use crate::decode::color::ColorTarget;
+use crate::pictures::decode::color::ColorTarget;
 use crate::player::tone_map::Hdr;
 use crate::player::tone_map::Primaries;
 use crate::player::{Decoder, Pipeline, Samples, SystemDecoder};
@@ -493,7 +493,7 @@ fn real_clip_first_frame() {
     let (Some(ffmpeg), Some(ffprobe)) = (real_ffmpeg(), real_ffprobe()) else {
         return;
     };
-    let Some(clip) = crate::decode::real_test_file("PHEWR_TEST_SDR_VIDEO") else {
+    let Some(clip) = crate::pictures::decode::real_test_file("PHEWR_TEST_SDR_VIDEO") else {
         return;
     };
     let tools = Tools {

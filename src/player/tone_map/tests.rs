@@ -1,7 +1,9 @@
 //! Tests of the cubes: the tone map, the SDR conversion and the cube files.
 
 use super::*;
-use crate::decode::color;
+use crate::pictures::decode::color;
+use crate::pictures::decode::hdr::ToneMap;
+use crate::pictures::decode::hdr::tests::{TARGETS, cicp, exact};
 use image::RgbaImage;
 
 #[test]
@@ -388,4 +390,71 @@ fn non_ascii_path_keeps_cube() {
     let cache = dir.path().join("Jürgen Ö/Caches");
     let file = cube_file(&[&cache], hdr_cube(Hdr::Hlg, ColorTarget::DisplayP3)).unwrap();
     assert!(file.is_file());
+}
+
+/// The copied math matches the player cube at each point, within 1e-3 of the output range.
+#[cfg(feature = "video")]
+#[test]
+fn map_matches_player_cube() {
+    use crate::player::tone_map::{Cube, CubeSource};
+    let sources = Peak::BUCKETS
+        .map(|peak| (CubeSource::Pq(peak), 16, peak))
+        .into_iter()
+        .chain([(CubeSource::Hlg, 18, Peak::DEFAULT)]);
+    for target in TARGETS {
+        for (source, transfer, peak) in sources.clone() {
+            let map = ToneMap::of_source(&cicp(9, transfer), target)
+                .unwrap()
+                .with_peak(peak);
+            let cube = Cube { source, target };
+            let text = cube.text();
+            let mut lines = text.lines();
+            let size: u32 = lines
+                .next()
+                .and_then(|line| line.strip_prefix("LUT_3D_SIZE "))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let last = f64::from(size - 1);
+            let mut worst = 0.0f64;
+            for (index, line) in lines.enumerate() {
+                let index = u32::try_from(index).unwrap();
+                let signal = [index % size, index / size % size, index / (size * size)]
+                    .map(|step| f64::from(step) / last);
+                let values: Vec<f64> = line.split(' ').map(|v| v.parse().unwrap()).collect();
+                for (ours, theirs) in exact(&map, signal).into_iter().zip(values) {
+                    worst = worst.max((ours - theirs).abs());
+                }
+            }
+            // Single precision near black: 1e-3 is a quarter of a level.
+            assert!(worst < 1e-3, "{source:?} {target:?}: {worst}");
+        }
+    }
+}
+
+/// Write the player's HDR cubes into `PHEWR_HDR_CUBE_DIR` for `tests/fixtures/hdr/make.sh`: `pq`
+/// and `hlg`, and `pq<nits>` for each PQ bucket.
+#[cfg(feature = "video")]
+#[test]
+#[ignore = "writes the cubes for tests/fixtures/hdr/make.sh"]
+fn write_the_player_hdr_cubes() {
+    use crate::player::tone_map::{Cube, CubeSource};
+    let Some(dir) = crate::pictures::decode::real_test_file("PHEWR_HDR_CUBE_DIR") else {
+        return;
+    };
+    let buckets = Peak::BUCKETS.map(|peak| (CubeSource::Pq(peak), format!("pq{}", peak.nits())));
+    let sources = [
+        (CubeSource::Pq(Peak::DEFAULT), "pq".to_owned()),
+        (CubeSource::Hlg, "hlg".to_owned()),
+    ];
+    for target in TARGETS {
+        for (source, name) in buckets.iter().chain(&sources).cloned() {
+            let suffix = match target {
+                ColorTarget::DisplayP3 => "p3",
+                ColorTarget::Srgb => "srgb",
+            };
+            let cube = Cube { source, target };
+            std::fs::write(dir.join(format!("{name}-{suffix}.cube")), cube.text()).unwrap();
+        }
+    }
 }

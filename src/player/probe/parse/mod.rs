@@ -1,7 +1,7 @@
 //! The parse of the `ffprobe` JSON, and the pacing rate from the stream rates or the packets.
 
 use super::{Chroma, Rate, Samples, TIMING_PACKETS, VideoInfo, invalid};
-use crate::decode::hdr::hdr10_peak;
+use crate::pictures::decode::hdr::hdr10_peak;
 use crate::player::tone_map::{Hdr, Primaries};
 use serde::Deserialize;
 use std::io;

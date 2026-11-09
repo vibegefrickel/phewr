@@ -173,9 +173,9 @@ fn grid_work_holds_start() {
 
 #[test]
 fn loop_job_holds_start() {
-    use crate::app::thumbnails::pad_for_grid;
     use crate::config::Config;
     use crate::image_list::SharedImageList;
+    use crate::pictures::resize::padding::pad_for_grid;
     use crate::test_support::wait_until;
 
     let decoder = fake_decoder(clip_info());

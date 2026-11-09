@@ -30,7 +30,7 @@ pub(crate) use probe::probe as probe_file;
 pub(crate) use probe::seed_probe;
 pub(crate) use probe::{VideoInfo, probe_cached, probe_peek};
 
-use crate::encoder::Pixels;
+use crate::pictures::kitty::Pixels;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
@@ -155,7 +155,7 @@ impl Player {
     ) -> std::io::Result<Self> {
         let info = decoder.probe(path)?;
         let frame = frame_box((info.width, info.height), limit);
-        let cube = cube_for(&info, crate::decode::color::target(), cube_dirs);
+        let cube = cube_for(&info, crate::pictures::decode::color::target(), cube_dirs);
         let interval = info.frame_interval();
         let pipeline = Pipeline::first(&info);
         let opened = Instant::now();

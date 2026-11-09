@@ -1,9 +1,9 @@
 //! The tests of the fullscreen image and the video frame writes.
 use super::render_fullscreen_image_to;
 use crate::app::App;
-use crate::app::thumbnails::pad_for_grid;
-use crate::gallery::GridPicture;
 use crate::image_list::SharedImageList;
+use crate::pictures::jobs::thumbnail_cache::GridPicture;
+use crate::pictures::resize::padding::pad_for_grid;
 use crate::test_support::text;
 use image::RgbaImage;
 use ratatui::layout::Rect;
@@ -154,7 +154,7 @@ fn six_k_image(transparent: bool) -> RgbaImage {
 
 #[test]
 fn payload_over_cap_shrinks() {
-    use crate::encoder::{KittyBackend, MAX_PAYLOAD_BYTES, Transfer, kitty};
+    use crate::pictures::kitty::{KittyBackend, MAX_PAYLOAD_BYTES, Transfer, protocol};
     use crate::test_support::kitty::FakeTerminal;
 
     let mut app = App::new((8, 16), SharedImageList::new());
@@ -168,7 +168,7 @@ fn payload_over_cap_shrinks() {
     let mut terminal = FakeTerminal::new();
     terminal.feed(&out);
     assert_eq!(terminal.synchronized_depth, 0);
-    let paths = kitty::temp_file_paths(&out);
+    let paths = protocol::temp_file_paths(&out);
     assert_eq!(paths.len(), 1);
     let size = std::fs::metadata(&paths[0]).unwrap().len();
     std::fs::remove_file(&paths[0]).unwrap();
@@ -211,7 +211,7 @@ fn wire_size(text: &str) -> (u32, u32) {
 
 #[test]
 fn opaque_6k_image_needs_no_resize() {
-    use crate::decode::ScreenImage;
+    use crate::pictures::decode::ScreenImage;
 
     let rgb = image::RgbImage::from_pixel(6016, 3384, image::Rgb([9, 9, 9]));
     assert!(matches!(
@@ -319,7 +319,7 @@ fn first_frame_removes_old_pictures() {
     let second = app.graphics_out.take_bytes();
 
     for bytes in [&first, &second] {
-        for path in crate::encoder::kitty::temp_file_paths(bytes) {
+        for path in crate::pictures::kitty::protocol::temp_file_paths(bytes) {
             std::fs::remove_file(path).unwrap();
         }
     }
@@ -348,7 +348,7 @@ fn video_frame_uses_temp_file() {
 
     super::render_video_frame_to(&app, &mut out, false).unwrap();
 
-    for path in crate::encoder::kitty::temp_file_paths(&out) {
+    for path in crate::pictures::kitty::protocol::temp_file_paths(&out) {
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 64 * 48 * 3);
         std::fs::remove_file(path).unwrap();
     }
@@ -367,7 +367,7 @@ fn video_frame_uses_temp_file() {
 #[cfg(feature = "video")]
 #[test]
 fn video_frame_transient_with_animations() {
-    use crate::encoder::Loops;
+    use crate::pictures::kitty::Loops;
 
     for (loops, hinted) in [(Loops::Ticks, false), (Loops::Animation, true)] {
         let mut app = playing_app();
@@ -376,7 +376,7 @@ fn video_frame_transient_with_animations() {
 
         super::render_video_frame_to(&app, &mut out, false).unwrap();
 
-        for path in crate::encoder::kitty::temp_file_paths(&out) {
+        for path in crate::pictures::kitty::protocol::temp_file_paths(&out) {
             std::fs::remove_file(path).unwrap();
         }
         let text = text(&out);
@@ -427,4 +427,115 @@ fn one_row_terminal_closes_update() {
         app.clear_before_video,
         "the clear waits for the first frame that goes out"
     );
+}
+
+/// The DCT scaling of libjpeg-turbo decides the scale of the resize.
+#[cfg(feature = "turbo")]
+mod jpeg {
+    use super::render_fullscreen_image_to;
+    use crate::app::App;
+    use crate::image_list::SharedImageList;
+    use crate::pictures::decode::color;
+    use crate::pictures::decode::hdr::Peak;
+    use crate::pictures::decode::screen::tests::rgba_fullscreen;
+    use crate::pictures::decode::screen::{ScreenImage, load_for_screen};
+    use crate::pictures::decode::{EmbeddedThumbnail, decode_image};
+    use crate::pictures::kitty::{KittyBackend, Pixels, Transfer};
+    use crate::test_support::test_dir;
+    use image::{DynamicImage, Rgb, RgbImage};
+    use ratatui::layout::Rect;
+    use std::path::{Path, PathBuf};
+
+    fn gradient_jpeg(dir: &Path) -> PathBuf {
+        let path = dir.join("gradient.jpg");
+        RgbImage::from_fn(640, 480, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 99]))
+            .save(&path)
+            .unwrap();
+        path
+    }
+
+    /// The bytes of `image` as the fullscreen image of a test app, through the direct medium.
+    fn written(image: ScreenImage) -> Vec<u8> {
+        let mut app = App::new((8, 16), SharedImageList::new());
+        app.graphics = KittyBackend::new(Transfer::Direct);
+        app.image_rect = Rect::new(0, 0, 40, 20);
+        app.loaded = Some(image);
+        let mut out = Vec::new();
+        render_fullscreen_image_to(&mut app, &mut out).unwrap();
+        out
+    }
+
+    fn written_before(path: &Path, box_px: (u32, u32)) -> Vec<u8> {
+        let decoded = decode_image(path, Some(box_px), EmbeddedThumbnail::Deny).unwrap();
+        written(rgba_fullscreen(decoded, box_px, color::target()).into())
+    }
+
+    #[test]
+    fn half_scale_jpeg_stays_rgb() {
+        let dir = test_dir();
+        let path = gradient_jpeg(dir.path());
+        // libjpeg-turbo scales to 80x60, and the fit to 300x30 scales to 1/2 after.
+        let box_px = (300, 30);
+        let decoded = decode_image(&path, Some(box_px), EmbeddedThumbnail::Deny).unwrap();
+        let DynamicImage::ImageRgb8(rgb) = &decoded.image else {
+            panic!("the decode is RGB: {:?}", decoded.image.color())
+        };
+        assert_eq!(rgb.dimensions(), (80, 60));
+        let source = decoded.color.clone();
+        let screen = ScreenImage::of_decode(decoded.image, decoded.opaque);
+        assert!(matches!(screen, ScreenImage::Rgb(_)), "the layout is RGB");
+        let fitted = screen.fit_within(box_px.0, box_px.1);
+        assert!(matches!(fitted, ScreenImage::Rgb(_)), "the resize is RGB");
+        let converted = fitted.convert(&source, color::target(), Peak::DEFAULT);
+        assert!(
+            matches!(converted, ScreenImage::Rgb(_)),
+            "the conversion is RGB"
+        );
+        let loaded = load_for_screen(&path, box_px).unwrap();
+        assert_eq!(loaded, converted);
+        let pixels = Pixels::from(&loaded);
+        assert!(
+            !pixels.alpha && pixels.opaque_rgb().is_none(),
+            "the write has nothing to scan or copy"
+        );
+        let after = written(loaded);
+        assert!(String::from_utf8_lossy(&after).contains(",f=24,s=40,v=30,"));
+        assert_eq!(
+            after,
+            written_before(&path, box_px),
+            "the same bytes as before"
+        );
+    }
+
+    #[test]
+    fn mild_scale_jpeg_resizes_as_rgba() {
+        let dir = test_dir();
+        let path = gradient_jpeg(dir.path());
+        // libjpeg-turbo scales to 320x240, and the fit to 200x200 scales to 0.625 after.
+        let box_px = (200, 200);
+        let decoded = decode_image(&path, Some(box_px), EmbeddedThumbnail::Deny).unwrap();
+        assert!(decoded.opaque, "a JPEG has no alpha channel");
+        let source = decoded.color.clone();
+        let screen = ScreenImage::of_decode(decoded.image, decoded.opaque);
+        assert!(
+            matches!(&screen, ScreenImage::Opaque(rgba) if rgba.dimensions() == (320, 240)),
+            "RGBA without the alpha multiply resizes fastest at this scale"
+        );
+        let fitted = screen.fit_within(box_px.0, box_px.1);
+        assert!(matches!(fitted, ScreenImage::Rgb(_)), "the fit gives RGB");
+        let loaded = load_for_screen(&path, box_px).unwrap();
+        assert_eq!(
+            loaded,
+            fitted.convert(&source, color::target(), Peak::DEFAULT)
+        );
+        let pixels = Pixels::from(&loaded);
+        assert!(!pixels.alpha && pixels.opaque_rgb().is_none());
+        let after = written(loaded);
+        assert!(String::from_utf8_lossy(&after).contains(",f=24,s=200,v=150,"));
+        assert_eq!(
+            after,
+            written_before(&path, box_px),
+            "the same bytes as before"
+        );
+    }
 }

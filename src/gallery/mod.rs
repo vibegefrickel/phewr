@@ -1,4 +1,5 @@
-//! The grid geometry, the cursor and the in-memory thumbnail cache.
+//! The grid geometry and the cursor. The in-memory thumbnail cache lives in
+//! `crate::pictures::jobs::thumbnail_cache`.
 //!
 //! A line of n cells takes n + 1 gaps of `GAP` cells, one between two neighbors and one at each
 //! edge. `update_grid` gives the remainder to the first columns and rows, and the grid reaches
@@ -8,12 +9,9 @@
 //! the gaps (`GalleryState::border_rect`): plain for a marked cell, thick for the selected cell,
 //! drawn last. A border that the grid edge cuts stays open at that edge.
 use crate::config::{MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
+use crate::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use ratatui::layout::Rect;
 use std::ops::Range;
-
-mod thumbnail_cache;
-
-pub(crate) use thumbnail_cache::{GridPicture, ParkKey, ThumbnailCache};
 
 pub(crate) const LABEL_ROWS: u16 = 1;
 /// The gap in terminal cells between two cells and at the grid edges. The borders sit in it.
@@ -27,8 +25,6 @@ const MAX_THUMB_COLS: u16 = 120;
 const MIN_THUMB_ROWS: u16 = 3;
 const MAX_THUMB_ROWS: u16 = 60;
 
-/// The width over the height of a photo of unknown size: 3:2.
-pub(crate) const DEFAULT_IMAGE_ASPECT: f64 = 1.5;
 const DEFAULT_CELL_RATIO: f64 = 2.0;
 const MIN_GRID_COLS: usize = 2;
 
@@ -63,24 +59,6 @@ pub(crate) struct GalleryState {
     image_aspect: f64,
     /// The zoom level of the reset key.
     pub(crate) default_zoom_rows: usize,
-}
-
-/// The pixel size of `rect`: the box that a decode fits into.
-pub(crate) fn box_px(rect: Rect, cell_px: (u32, u32)) -> (u32, u32) {
-    (
-        u32::from(rect.width) * cell_px.0,
-        u32::from(rect.height) * cell_px.1,
-    )
-}
-
-/// A box of `cols` x `rows` terminal cells centered in `outer`, in whole cells.
-pub(crate) fn centered(outer: Rect, cols: u16, rows: u16) -> Rect {
-    Rect {
-        x: outer.x + outer.width.saturating_sub(cols) / 2,
-        y: outer.y + outer.height.saturating_sub(rows) / 2,
-        width: cols,
-        height: rows,
-    }
 }
 
 impl GalleryState {

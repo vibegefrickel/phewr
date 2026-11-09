@@ -1,6 +1,6 @@
 //! The help popup: the keys of the gallery and of the fullscreen view, and the Kitty medium.
 
-use crate::gallery::centered;
+use crate::pictures::kitty::placement::centered;
 use crate::styles::STYLES;
 use ratatui::{
     prelude::*,
@@ -105,8 +105,8 @@ fn help_lines<'a>(rows: impl IntoIterator<Item = &'a HelpRow>) -> Vec<Line<'stat
 /// terminal gets one column that the popup clips. The last row names the Kitty medium.
 pub(super) fn draw_help_popup(
     frame: &mut Frame<'_>,
-    transfer: crate::encoder::Transfer,
-    loops: Option<crate::encoder::Loops>,
+    transfer: crate::pictures::kitty::Transfer,
+    loops: Option<crate::pictures::kitty::Loops>,
 ) {
     let area = frame.area();
     let two_columns = area.width >= HELP_TWO_COLUMN_WIDTH;
@@ -151,8 +151,8 @@ pub(super) fn draw_help_popup(
         Paragraph::new(Line::from(Span::styled(
             format!(
                 " press any key to close \u{b7} Kitty transfer: {} \u{b7} loops: {}",
-                crate::encoder::kitty::describe(transfer),
-                crate::encoder::kitty::describe_loops(loops)
+                crate::pictures::kitty::protocol::describe(transfer),
+                crate::pictures::kitty::protocol::describe_loops(loops)
             ),
             STYLES.dim,
         ))),

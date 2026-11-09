@@ -1,8 +1,8 @@
 //! The decode of the neighbors of the fullscreen image ahead of time.
 
-use crate::decode::{EmbeddedThumbnail, ScreenImage, decode_image};
-use crate::encoder::capped_box;
-use crate::gallery::box_px;
+use crate::pictures::decode::{EmbeddedThumbnail, ScreenImage, decode_image};
+use crate::pictures::kitty::capped_box;
+use crate::pictures::kitty::placement::box_px;
 use lru::LruCache;
 use ratatui::layout::Rect;
 use std::collections::{HashSet, VecDeque};

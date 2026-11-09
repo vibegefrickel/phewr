@@ -166,7 +166,9 @@ pub(crate) fn icon_rect(thumb: Rect, cell_px: (u32, u32)) -> Option<Rect> {
     if cols > thumb.width {
         return None;
     }
-    Some(crate::gallery::centered(thumb, cols, rows))
+    Some(crate::pictures::kitty::placement::centered(
+        thumb, cols, rows,
+    ))
 }
 
 /// Draw `icon` into `area` in the foreground color of `style`.

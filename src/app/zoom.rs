@@ -1,8 +1,10 @@
 //! Zoom and pan in the fullscreen view, with the full-resolution source behind them.
 
 use super::App;
-use crate::decode::{Decoded, EmbeddedThumbnail, ScreenImage, decode_image, spawn_foreground};
-use crate::gallery::box_px;
+use crate::pictures::decode::{
+    Decoded, EmbeddedThumbnail, ScreenImage, decode_image, spawn_foreground,
+};
+use crate::pictures::kitty::placement::box_px;
 use std::io;
 use std::sync::mpsc;
 
@@ -245,7 +247,7 @@ mod tests {
 
     #[test]
     fn rgb_source_gives_rgb_crop() {
-        use crate::decode::ScreenImage;
+        use crate::pictures::decode::ScreenImage;
         let mut app = app();
         app.cell_px = (1, 1);
         app.image_rect = Rect::new(0, 0, 10, 10);

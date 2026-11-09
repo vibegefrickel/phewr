@@ -6,7 +6,7 @@
 //! thumbnail job runs the check off the UI thread and stores the answer in `App::animated`.
 
 use super::tone_map::Primaries;
-use crate::decode::color::SourceColor;
+use crate::pictures::decode::color::SourceColor;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek};
 use std::path::Path;
@@ -18,7 +18,7 @@ const MAX_CHUNK: u64 = 1 << 31;
 
 /// The player decodes such a file in software at a constant rate.
 pub(crate) fn has_animation_extension(path: &Path) -> bool {
-    crate::scanner::has_extension(path, ANIMATION_EXTENSIONS)
+    crate::pictures::decode::extensions::has_extension(path, ANIMATION_EXTENSIONS)
 }
 
 /// The ICC profile or cICP primaries of a WebP or PNG file. ffprobe does not report them.
@@ -35,7 +35,7 @@ pub(crate) fn embedded_primaries(path: &Path) -> Option<Primaries> {
     }
     // A PNG chunk wins over the ICC profile, as in the decode of a still image.
     let chunks = (format == ImageFormat::Png)
-        .then(|| crate::decode::color::png_color(path))
+        .then(|| crate::pictures::decode::color::png_color(path))
         .flatten();
     let source = match chunks {
         Some(source) => source,
@@ -224,8 +224,8 @@ mod tests {
 
     #[test]
     fn apng_first_frame_decodes_as_png() {
-        use crate::decode::resize::load_and_resize_px;
-        use crate::decode::{EmbeddedThumbnail, Route};
+        use crate::pictures::decode::{EmbeddedThumbnail, Route};
+        use crate::pictures::resize::load_and_resize_px;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("loop.apng");
         std::fs::copy(fixture("anim.png"), &path).unwrap();

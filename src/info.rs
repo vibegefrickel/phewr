@@ -1,6 +1,6 @@
 //! File and EXIF metadata for the info panel.
 
-use crate::decode::{self, Route};
+use crate::pictures::decode::{self, Route, dimensions};
 use chrono::{DateTime, Local};
 use exif::{In, Tag};
 use std::fs::File;
@@ -77,19 +77,6 @@ pub(crate) fn human_size(bytes: u64) -> String {
         format!("{bytes} B")
     } else {
         format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
-pub(crate) fn dimensions(path: &Path) -> Option<(u32, u32)> {
-    #[cfg(feature = "heic")]
-    if decode::libheif::decodes_with_libheif(path) {
-        return decode::libheif::libheif_dimensions(path);
-    }
-    match Route::for_path(path) {
-        Route::Raster => decode::raster::header_dimensions(path),
-        Route::Jxl => decode::jxl::dimensions(path),
-        #[cfg(all(feature = "sips", target_os = "macos"))]
-        Route::Sips => decode::sips::shown_dimensions(path),
     }
 }
 
@@ -191,17 +178,6 @@ fn read_exif(path: &Path) -> Option<exif::Exif> {
     exif::Reader::new()
         .read_from_container(&mut BufReader::new(file))
         .ok()
-}
-
-/// The orientation (1 to 8) of JPEG bytes in memory. libjpeg-turbo ignores it.
-#[cfg(any(feature = "turbo", all(feature = "sips", target_os = "macos")))]
-pub(crate) fn orientation_from_bytes(data: &[u8]) -> Option<u8> {
-    let exif = exif::Reader::new()
-        .read_from_container(&mut std::io::Cursor::new(data))
-        .ok()?;
-    let field = exif.get_field(Tag::Orientation, In::PRIMARY)?;
-    let orientation = u8::try_from(field.value.get_uint(0)?).ok()?;
-    (1..=8).contains(&orientation).then_some(orientation)
 }
 
 fn gps_coordinates(exif: &exif::Exif) -> Option<String> {
@@ -444,6 +420,7 @@ mod tests {
     #[cfg(any(feature = "turbo", all(feature = "sips", target_os = "macos")))]
     #[test]
     fn orientation_accepts_one_to_eight() {
+        use crate::pictures::decode::raster::orientation_from_bytes;
         let jpeg = |orientation: Option<u16>| {
             let mut bytes = Vec::new();
             let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut bytes);
@@ -512,5 +489,72 @@ mod tests {
         let info = load(&psd);
         let dims = row(&info.rows, "Dimensions").unwrap();
         assert!(dims.starts_with("6 x 4"), "dims: {dims}");
+    }
+
+    /// `PHEWR_TEST_HEIC=/path/to/photo.heic`.
+    #[cfg(feature = "heic")]
+    #[test]
+    #[ignore = "needs PHEWR_TEST_HEIC, a real photo"]
+    fn decodes_heic_from_env() {
+        use crate::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
+
+        let Some(path) = decode::real_test_file("PHEWR_TEST_HEIC") else {
+            return;
+        };
+        let path = path.as_path();
+        let full =
+            decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
+        assert!(full.width() > 0 && full.height() > 0);
+        let thumb = decode_image_with_hint(path, Some((200, 200)), EmbeddedThumbnail::Deny)
+            .expect("scaled decode");
+        assert!(
+            thumb.width() <= 200 && thumb.height() <= 200,
+            "{}x{}",
+            thumb.width(),
+            thumb.height()
+        );
+        let dims = decode::libheif::libheif_dimensions(path).expect("dimensions");
+        assert_eq!(dims, (full.width(), full.height()));
+        let info = load(path);
+        assert!(
+            info.rows.iter().any(|(_, v)| v == "EXIF"),
+            "rows: {:?}",
+            info.rows
+        );
+    }
+
+    /// Decode a real JPEG XL file: `PHEWR_TEST_JXL=/path/to/image.jxl`.
+    #[test]
+    #[ignore = "needs PHEWR_TEST_JXL, a real JPEG XL file"]
+    fn decodes_jxl_from_env() {
+        use crate::pictures::decode::jxl::dimensions;
+        use crate::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
+
+        let Some(path) = decode::real_test_file("PHEWR_TEST_JXL") else {
+            return;
+        };
+        let path = path.as_path();
+        let start = std::time::Instant::now();
+        let full =
+            decode_image_with_hint(path, None, EmbeddedThumbnail::Deny).expect("full decode");
+        // clippy.toml allows output in tests.
+        eprintln!("TIMING full decode {:?}", start.elapsed());
+        for (name, box_px) in [("grid", (480, 270)), ("fullscreen", (2880, 1800))] {
+            let start = std::time::Instant::now();
+            crate::pictures::resize::load_and_resize_px(path, box_px, EmbeddedThumbnail::Deny)
+                .expect("box decode");
+            eprintln!("TIMING {name} box {box_px:?} {:?}", start.elapsed());
+        }
+        assert_eq!(dimensions(path), Some((full.width(), full.height())));
+        let thumb =
+            crate::pictures::resize::load_and_resize_px(path, (200, 200), EmbeddedThumbnail::Allow)
+                .expect("grid decode");
+        assert!(thumb.width() <= 200 && thumb.height() <= 200);
+        let info = load(path);
+        assert!(
+            info.rows.iter().any(|(label, _)| label == "Dimensions"),
+            "rows: {:?}",
+            info.rows
+        );
     }
 }

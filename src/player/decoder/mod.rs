@@ -96,7 +96,7 @@ mod tests {
     use super::{
         Decoder, Pipeline, SystemDecoder, args, cube_for, first_frame_args, with_fallback,
     };
-    use crate::decode::color::{self, ColorTarget, SourceColor};
+    use crate::pictures::decode::color::{self, ColorTarget, SourceColor};
     use crate::player::probe::VideoInfo;
     use crate::player::tone_map::Primaries;
     use std::ffi::OsString;
@@ -167,7 +167,7 @@ mod tests {
             image,
             &SourceColor::Srgb,
             ColorTarget::DisplayP3,
-            crate::decode::hdr::Peak::DEFAULT,
+            crate::pictures::decode::hdr::Peak::DEFAULT,
         );
         converted
             .as_raw()

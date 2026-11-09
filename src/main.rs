@@ -5,8 +5,6 @@ mod app;
 mod bench;
 mod cli;
 mod config;
-mod decode;
-mod encoder;
 mod file_meta;
 mod gallery;
 #[cfg(feature = "video")]
@@ -18,6 +16,7 @@ mod keys;
 mod kitty_output;
 #[cfg(feature = "video")]
 mod mpv;
+mod pictures;
 #[cfg(feature = "video")]
 mod player;
 mod prefetch;
@@ -43,16 +42,16 @@ use crossterm::{
     cursor, execute,
     terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
-use encoder::{KittyBackend, Loops};
 use image_list::SharedImageList;
+use pictures::kitty::query::{
+    StartAnswers, query_cell_pixel_size, query_cell_size_and_probe, window_cell_pixel_size,
+};
+use pictures::kitty::{KittyBackend, Loops};
 use run_loop::{LoopState, run};
 use scanner::canonicalize_or_self;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use terminal::{
-    StartAnswers, TerminalSession, query_cell_pixel_size, query_cell_size_and_probe,
-    window_cell_pixel_size,
-};
+use terminal::TerminalSession;
 use yazi::{reveal_in_yazi, run_briefly};
 
 /// Give the terminal back in the order of `TerminalSession::restore`. Every step runs, and the
@@ -62,7 +61,7 @@ fn release_terminal_to(
     mouse: bool,
     disable_raw: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
-    let mut first_error = encoder::kitty::delete_all_to(out)
+    let mut first_error = pictures::kitty::protocol::delete_all_to(out)
         .and_then(|()| out.flush())
         .err();
     if mouse
@@ -190,15 +189,19 @@ fn probe_terminal(
     let mut asked_cell_size = false;
     let mut late_answers = 0;
     let mut foreground = None;
-    let graphics =
-        encoder::kitty::detect_backend(transfer_override, loops, ssh, |sequence, answers| {
+    let graphics = pictures::kitty::protocol::detect_backend(
+        transfer_override,
+        loops,
+        ssh,
+        |sequence, answers| {
             let start = query_start(sequence, answers);
             asked_cell_size = true;
             cell_px = start.cell_px;
             late_answers = start.late_answers;
             foreground = start.foreground;
             start.probe
-        });
+        },
+    );
     if !asked_cell_size {
         cell_px = query_cell();
     }
@@ -242,7 +245,7 @@ fn main() -> io::Result<()> {
 
     let config_paths = config::Paths::from_env();
     let mut config = config::load(&config_paths);
-    decode::color::set_target(config.colorspace);
+    pictures::decode::color::set_target(config.colorspace);
     apply_cli_overrides(&mut config, cli.interval, cli.info);
     let mut state = LoopState::new(&config);
 
@@ -255,19 +258,19 @@ fn main() -> io::Result<()> {
     install_panic_hook(config.mouse);
     let mut session = TerminalSession::enter(config.mouse)?;
 
-    let loops = encoder::kitty::chosen_loops(
-        std::env::var(encoder::kitty::LOOPS_OVERRIDE)
+    let loops = pictures::kitty::protocol::chosen_loops(
+        std::env::var(pictures::kitty::protocol::LOOPS_OVERRIDE)
             .ok()
             .as_deref(),
         config.loops,
-        encoder::kitty::is_herdr(),
+        pictures::kitty::protocol::is_herdr(),
     );
     let probe = probe_terminal(
-        std::env::var(encoder::kitty::TRANSFER_OVERRIDE)
+        std::env::var(pictures::kitty::protocol::TRANSFER_OVERRIDE)
             .ok()
             .as_deref(),
         loops,
-        encoder::kitty::is_ssh(),
+        pictures::kitty::protocol::is_ssh(),
         query_cell_size_and_probe,
         query_cell_pixel_size,
     );
@@ -314,8 +317,8 @@ mod tests {
         release_terminal_to,
     };
     use crate::config::Config;
-    use crate::encoder::{KittyBackend, Loops, Transfer};
-    use crate::terminal::StartAnswers;
+    use crate::pictures::kitty::query::StartAnswers;
+    use crate::pictures::kitty::{KittyBackend, Loops, Transfer};
     use std::path::PathBuf;
 
     #[test]

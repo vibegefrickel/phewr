@@ -1,10 +1,10 @@
 //! The loop jobs and the loop clock of the grid, on files that hold no video.
 
-use crate::app::thumbnails::pad_for_grid;
 use crate::app::{App, ViewMode};
 use crate::config::Config;
-use crate::gallery::GridPicture;
 use crate::image_list::SharedImageList;
+use crate::pictures::jobs::thumbnail_cache::GridPicture;
+use crate::pictures::resize::padding::pad_for_grid;
 use crate::test_support::{test_dir, wait_until};
 use image::RgbaImage;
 use ratatui::layout::Rect;
@@ -94,7 +94,8 @@ fn no_ffmpeg_tries_once() {
 fn warm_folder_reads_loops_from_cache() {
     let dir = test_dir();
     let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
-    let target = crate::app::thumbnails::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+    let target =
+        crate::pictures::resize::padding::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
     let frames = super::LoopFrames {
         frames: vec![RgbaImage::new(80, 48), RgbaImage::new(80, 48)],
         delays: vec![Duration::from_millis(333); 2],
@@ -131,7 +132,8 @@ fn live_still_loops_its_motion() {
     let dir = test_dir();
     let (mut app, motion) = live_grid_app(dir.path(), &Config::default());
     assert_eq!(app.loop_source(0), Some(motion.clone()));
-    let target = crate::app::thumbnails::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+    let target =
+        crate::pictures::resize::padding::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
     let frames = super::LoopFrames {
         frames: vec![RgbaImage::new(80, 48); 3],
         delays: vec![Duration::from_millis(333); 3],
@@ -433,7 +435,7 @@ fn same_screen_keeps_hidden_list() {
 
 #[test]
 fn wrapped_ids_skip_live_loops() {
-    use crate::encoder::Loops;
+    use crate::pictures::kitty::Loops;
     let mut loops = super::GridLoops::new(true);
     let delays = [Duration::from_millis(100); 3];
     loops.insert(
@@ -485,7 +487,8 @@ fn real_live_still_loops_its_motion() {
     let still = index_of(&app, "IMG_2927.HEIC");
     let motion = app.loop_source(still).unwrap();
     assert_eq!(motion, dir.join("IMG_2927.MOV"));
-    let target = crate::app::thumbnails::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+    let target =
+        crate::pictures::resize::padding::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
 
     let decoder = SystemDecoder::new(Some(ffprobe));
     let start = std::time::Instant::now();

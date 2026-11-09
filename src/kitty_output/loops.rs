@@ -1,11 +1,12 @@
 //! The grid loops of the video and animated cells: the frames or the Kitty animation, the
 //! placement and the swaps on the ticks.
 
-use super::grid::{EMIT_PASS_BYTES, place_at, visible_image_ids};
-use super::terminal_images::trim_to_budget;
+use super::grid::{place_at, visible_image_ids};
 use crate::app::App;
-use crate::encoder;
-use crate::encoder::kitty;
+use crate::pictures::kitty;
+use crate::pictures::kitty::EMIT_PASS_BYTES;
+use crate::pictures::kitty::protocol;
+use crate::pictures::kitty::terminal_images::trim_to_budget;
 use crossterm::queue;
 use std::io::{self, Write};
 use std::time::Instant;
@@ -115,12 +116,12 @@ fn start_grid_loops_to(app: &mut App, out: &mut impl Write, tick: u64) -> io::Re
             kept_bytes += bytes;
         }
         if let Some((_, still)) = app.thumb_cache.peek(img_idx) {
-            kitty::delete_placements_to(out, still)?;
+            protocol::delete_placements_to(out, still)?;
         }
         kept.extend(start_loop_to(app, out, vis_idx, img_idx, tick)?);
         started = true;
     }
-    trim_to_budget(app, out, &kept)?;
+    trim_to_budget(&mut app.terminal_images, out, &kept)?;
     Ok(started)
 }
 
@@ -139,7 +140,7 @@ fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::
         app.graphics.transmit(
             out,
             (&frame.image).into(),
-            &encoder::DisplayOptions {
+            &kitty::DisplayOptions {
                 id: Some(id),
                 cell_box: None,
                 columns: None,
@@ -166,7 +167,7 @@ fn transmit_animation_to(app: &mut App, out: &mut impl Write, img_idx: usize) ->
     app.graphics.transmit(
         out,
         (&root.image).into(),
-        &encoder::DisplayOptions {
+        &kitty::DisplayOptions {
             id: Some(id),
             cell_box: None,
             columns: None,
@@ -180,7 +181,7 @@ fn transmit_animation_to(app: &mut App, out: &mut impl Write, img_idx: usize) ->
         app.graphics
             .transmit_frame(out, (&picture.image).into(), id, cell_loop.gap_ms(frame))?;
     }
-    kitty::animate_to(out, id, cell_loop.gap_ms(0))?;
+    protocol::animate_to(out, id, cell_loop.gap_ms(0))?;
     app.terminal_images.insert(id, cell_loop.bytes());
     Ok(())
 }
@@ -221,7 +222,7 @@ fn swap_loop_frames_to(app: &mut App, out: &mut impl Write, tick: u64) -> io::Re
         }
     }
     for (vis_idx, img_idx, old, new, cells) in swaps {
-        kitty::delete_placements_to(out, old)?;
+        protocol::delete_placements_to(out, old)?;
         place_at(app, out, vis_idx, cells, new)?;
         if let Some(cell_loop) = app.grid_loops.loops.get_mut(&img_idx) {
             cell_loop.placed = Some(new);

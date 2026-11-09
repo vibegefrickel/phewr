@@ -3,8 +3,8 @@
 //! the icons that the cells need, and `sync_grid_icons` writes only the placements that changed.
 
 use crate::app::App;
-use crate::encoder::{self, kitty};
 use crate::icons::{self, Icon};
+use crate::pictures::kitty::{self, protocol};
 use crossterm::{cursor, queue};
 use image::RgbaImage;
 use ratatui::layout::Rect;
@@ -161,7 +161,7 @@ fn sync_grid_icons_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
 }
 
 fn unplace(app: &mut App, out: &mut impl Write, cell: usize, id: u32) -> io::Result<()> {
-    kitty::delete_placement_to(out, id, placement_id(cell))?;
+    protocol::delete_placement_to(out, id, placement_id(cell))?;
     app.grid_icons.placed.remove(&cell);
     Ok(())
 }
@@ -184,7 +184,7 @@ fn place(
         id
     };
     queue!(out, cursor::MoveTo(cell.area.x, cell.area.y))?;
-    kitty::place_as_to(
+    protocol::place_as_to(
         out,
         id,
         placement_id(cell.cell),
@@ -219,7 +219,7 @@ fn store(
     app.graphics.transmit(
         out,
         picture.into(),
-        &encoder::DisplayOptions {
+        &kitty::DisplayOptions {
             id: Some(id),
             cell_box: None,
             transmit_only: true,

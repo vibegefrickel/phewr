@@ -1,23 +1,17 @@
 //! The grid thumbnails: the new ones of each pass, the placements of a redraw and the deletes.
 
 use super::loops::place_loop_frame_to;
-use super::terminal_images::{delete_image_to, trim_to_budget};
 use crate::app::App;
-use crate::encoder;
-use crate::encoder::kitty;
-use crate::gallery::centered;
+use crate::pictures::kitty;
+use crate::pictures::kitty::EMIT_PASS_BYTES;
+use crate::pictures::kitty::placement::centered;
+use crate::pictures::kitty::protocol;
+use crate::pictures::kitty::terminal_images::{delete_image_to, trim_to_budget};
 use crossterm::{cursor, queue};
 use ratatui::prelude::*;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::time::Instant;
-
-/// The pixel bytes of new thumbnails per pass. A write of the whole screen holds the first
-/// picture and the keys until it ends.
-///
-/// The count is the RGBA bytes of the cache, not the bytes on the wire. The first picture of a
-/// pass always goes out.
-pub(super) const EMIT_PASS_BYTES: usize = 4 * 1024 * 1024;
 
 /// Write the new thumbnails of `pending` that fit one pass, and keep the visible rest.
 pub(crate) fn emit_new_thumbnails(app: &mut App, pending: &mut Vec<usize>) -> io::Result<()> {
@@ -57,7 +51,7 @@ fn emit_new_thumbnails_to(
     }
     // The cells left for the next pass keep their previews until their sharp image goes out.
     delete_stale_images_to(app, out, |cell| sent.contains(&cell))?;
-    trim_to_budget(app, out, &shown)?;
+    trim_to_budget(&mut app.terminal_images, out, &shown)?;
     queue!(out, EndSynchronizedUpdate)?;
     out.flush()?;
     Ok(left)
@@ -79,7 +73,7 @@ fn transmit_cell(
     app.graphics.transmit(
         out,
         (&picture.image).into(),
-        &encoder::DisplayOptions {
+        &kitty::DisplayOptions {
             id: Some(id),
             cell_box: Some((area.width, area.height)),
             transmit_only: false,
@@ -107,7 +101,7 @@ fn delete_stale_images_to(
         .position(|&(cell, _)| select(cell))
     {
         let (_, id) = app.stale_image_ids.remove(position);
-        delete_image_to(app, out, id)?;
+        delete_image_to(&mut app.terminal_images, out, id)?;
     }
     Ok(())
 }
@@ -115,7 +109,7 @@ fn delete_stale_images_to(
 /// Delete the images of the thumbnails that the cache dropped.
 fn delete_evicted_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
     for id in app.thumb_cache.take_evicted_ids() {
-        delete_image_to(app, out, id)?;
+        delete_image_to(&mut app.terminal_images, out, id)?;
     }
     Ok(())
 }
@@ -141,7 +135,7 @@ pub(super) fn place_at(
 ) -> io::Result<()> {
     let area = grid_placement(app, vis_idx, cells);
     queue!(out, cursor::MoveTo(area.x, area.y))?;
-    kitty::place_by_id_to(out, id, Some((area.width, area.height)))
+    protocol::place_by_id_to(out, id, Some((area.width, area.height)))
 }
 
 /// The ids that the visible cells need: the stills and their loop frames.
@@ -194,13 +188,13 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
         app.thumb_cache.take_evicted_ids();
     } else {
         // The terminal keeps the pixels. A stored thumbnail goes out again as an `a=p`.
-        kitty::clear_placements_to(out)?;
+        protocol::clear_placements_to(out)?;
         app.grid_loops.forget_placements();
         app.grid_icons.forget_placements();
         delete_stale_images_to(app, out, |_| true)?;
         delete_evicted_images_to(app, out)?;
         for id in std::mem::take(&mut app.grid_loops.stale_ids) {
-            delete_image_to(app, out, id)?;
+            delete_image_to(&mut app.terminal_images, out, id)?;
         }
     }
 
@@ -227,7 +221,7 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
             transmit_cell(app, out, vis_idx, img_idx)?;
         }
     }
-    trim_to_budget(app, out, &shown)?;
+    trim_to_budget(&mut app.terminal_images, out, &shown)?;
     queue!(out, EndSynchronizedUpdate)?;
     out.flush()
 }

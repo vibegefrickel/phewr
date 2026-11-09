@@ -1,8 +1,8 @@
 //! The cell shape of the grid, from the headers of the first files of a scan.
 
 use super::{App, ViewMode};
-use crate::decode;
-use crate::gallery::DEFAULT_IMAGE_ASPECT;
+use crate::pictures::shape;
+use crate::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
@@ -40,7 +40,7 @@ impl App {
                     clippy::let_underscore_must_use,
                     reason = "a closed receiver means that a new scan replaced this one"
                 )]
-                let _ = tx.send(decode::shape::folder_aspect(&paths));
+                let _ = tx.send(shape::folder_aspect(&paths));
             });
         if started.is_err() {
             self.take_cell_shape(DEFAULT_IMAGE_ASPECT);

@@ -1,39 +1,15 @@
-//! The supported extensions and the extension test of the scanner and the decoders.
+//! The supported extensions of the scanner. The extensions of the decoders and the extension
+//! test live in `crate::pictures::decode::extensions`.
 
-use std::path::Path;
-
-/// JPEG and PNG come first, because most files are JPEG or PNG. The decode reads an `.apng`
-/// file as PNG.
-pub(crate) const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "apng", "gif", "webp", "bmp", "tiff", "tif", "ico", "exr", "hdr", "qoi",
-    "tga",
-];
-
-pub(crate) const JXL_EXTENSIONS: &[&str] = &["jxl"];
-
-/// The formats that `sips` reads and the `image` crate does not. `sips --formats` lists them.
-#[cfg(all(feature = "sips", target_os = "macos"))]
-pub(crate) const SIPS_EXTENSIONS: &[&str] = &[
-    // Camera RAW.
-    "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "mos", "mrw", "nef",
-    "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw",
-    // Other formats of ImageIO.
-    "psd", "jp2", "pdf", "svg", "icns", "sgi", "dds", "pict",
-];
-
-/// The `image` crate has no AVIF decoder.
 #[cfg(feature = "heic")]
-pub(crate) const LIBHEIF_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "avif"];
+use crate::pictures::decode::extensions::LIBHEIF_EXTENSIONS;
+#[cfg(all(feature = "sips", target_os = "macos"))]
+use crate::pictures::decode::extensions::SIPS_EXTENSIONS;
+use crate::pictures::decode::extensions::{IMAGE_EXTENSIONS, JXL_EXTENSIONS, has_extension};
+use std::path::Path;
 
 #[cfg(feature = "video")]
 pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
-
-/// It ignores ASCII case and allocates nothing.
-pub(crate) fn has_extension(path: &Path, list: &[&str]) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| list.iter().any(|e| ext.eq_ignore_ascii_case(e)))
-}
 
 pub(crate) fn is_supported(path: &Path) -> bool {
     if has_extension(path, IMAGE_EXTENSIONS) || has_extension(path, JXL_EXTENSIONS) {

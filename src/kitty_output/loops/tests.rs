@@ -3,12 +3,12 @@ use super::super::grid::place_gallery_images_to;
 use super::{play_grid_loops, play_grid_loops_to};
 use crate::app::App;
 use crate::app::ViewMode;
-use crate::app::thumbnails::{pad_for_grid, pad_loop_frame};
-use crate::encoder::Transfer;
-use crate::encoder::kitty;
-use crate::encoder::{KittyBackend, Loops};
 use crate::image_list::SharedImageList;
 use crate::kitty_output::render_gallery_images;
+use crate::pictures::kitty::Transfer;
+use crate::pictures::kitty::protocol;
+use crate::pictures::kitty::{KittyBackend, Loops};
+use crate::pictures::resize::padding::{pad_for_grid, pad_loop_frame};
 use crate::test_support::kitty::Animation;
 use crate::test_support::kitty::FakeTerminal;
 use crate::test_support::text;
@@ -519,7 +519,7 @@ fn lost_frame_falls_back_to_still() {
 
     // The terminal drops one frame, and phewr forgets it, as after a trim.
     let mut out = Vec::new();
-    kitty::delete_image_to(&mut out, ids[2]).unwrap();
+    protocol::delete_image_to(&mut out, ids[2]).unwrap();
     terminal.feed(&out);
     app.terminal_images.remove(ids[2]);
     place_stills(&mut app, &mut terminal);

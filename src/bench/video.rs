@@ -5,10 +5,10 @@ use super::{
     remove_temp_files, report, run_pass, test_dir,
 };
 use crate::app::App;
-use crate::decode::color;
-use crate::encoder::KittyBackend;
-use crate::encoder::Transfer;
 use crate::image_list::SharedImageList;
+use crate::pictures::decode::color;
+use crate::pictures::kitty::KittyBackend;
+use crate::pictures::kitty::Transfer;
 use crate::run_loop::next_timeout;
 use crate::run_loop::poll_background;
 use crate::scanner;
@@ -109,7 +109,7 @@ fn player_decode_rate() {
 #[test]
 #[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn player_realtime() {
-    use crate::encoder::{KittyBackend, Transfer};
+    use crate::pictures::kitty::{KittyBackend, Transfer};
     use crate::player::Player;
     use std::rc::Rc;
 
@@ -507,7 +507,7 @@ fn probe_and_first_frame() {
         .filter(|path| is_video(path))
         .collect();
     files.sort();
-    let target = crate::app::thumbnails::thumb_target_px(Rect::new(0, 0, 40, 9), CELL_PX);
+    let target = crate::pictures::resize::padding::thumb_target_px(Rect::new(0, 0, 40, 9), CELL_PX);
     let cache = tempfile::tempdir().unwrap();
     let cube_dirs = [cache.path()];
     let wait = Duration::from_secs(10);

@@ -3,9 +3,9 @@
 use super::{MPV_MISSING_NOTE, play_videos};
 use crate::app::ViewMode;
 use crate::config::VideoPlayer;
-use crate::encoder::{KittyBackend, Transfer};
 use crate::keys::fullscreen::handle_fullscreen_key;
 use crate::mpv;
+use crate::pictures::kitty::{KittyBackend, Transfer};
 use crate::player::SystemDecoder;
 use crate::test_support::video::{
     clip_info, fake_decoder, fake_runner, fullscreen_video_app, gallery_app_on_video, last_start,

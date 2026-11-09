@@ -3,10 +3,10 @@
 #[cfg(feature = "video")]
 use super::VideoReturn;
 use super::{App, ViewMode};
-use crate::decode::screen::load_for_screen;
-use crate::decode::{ScreenImage, spawn_foreground};
-use crate::encoder::capped_box;
-use crate::gallery::box_px;
+use crate::pictures::decode::screen::load_for_screen;
+use crate::pictures::decode::{ScreenImage, spawn_foreground};
+use crate::pictures::kitty::capped_box;
+use crate::pictures::kitty::placement::box_px;
 use ratatui::layout::Rect;
 use std::io;
 use std::sync::mpsc;

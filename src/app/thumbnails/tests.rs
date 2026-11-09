@@ -4,11 +4,11 @@ use crate::app::App;
 use crate::test_support::{app_with, app_with_files, test_dir, wait_until};
 
 use super::{ThumbImage, ThumbJob, ThumbPhase, ThumbResult, preview_or_cached, warm_disk_cache};
-use crate::app::disk_cache::{
+use crate::image_list::SharedImageList;
+use crate::pictures::decode::libheif::decode_heif_preview;
+use crate::pictures::jobs::disk_cache::{
     KEY_COMPUTATIONS, LazyEntry, get_cache_file_path, try_load_from_disk_cache,
 };
-use crate::decode::libheif::decode_heif_preview;
-use crate::image_list::SharedImageList;
 use crate::test_support::write_heif;
 use crate::test_support::{BLUE, RED, assert_close};
 use image::RgbaImage;

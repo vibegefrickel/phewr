@@ -5,8 +5,8 @@ mod window;
 
 use crate::app::{App, ViewMode};
 use crate::config::{Config, VideoPlayer};
-use crate::encoder::Transfer;
 use crate::mpv;
+use crate::pictures::kitty::Transfer;
 use crate::player::{Decoder, Player, SystemDecoder, frame_limit};
 use crate::run_loop::LoopState;
 use crate::video::cube_dirs;

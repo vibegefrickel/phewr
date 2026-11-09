@@ -4,8 +4,8 @@
 //! The Kitty sequences go to the buffer of the test app, so the tests measure the payload too.
 
 use crate::app::{App, ViewMode};
-use crate::decode::color::{self, ColorTarget};
 use crate::image_list::SharedImageList;
+use crate::pictures::decode::color::{self, ColorTarget};
 use crate::run_loop::{next_timeout, poll_background, render_images};
 use crate::scanner;
 use ratatui::layout::Rect;
@@ -79,7 +79,7 @@ fn median(times: &mut [Duration]) -> Duration {
 
 /// Delete the temp files that `out` names, as the terminal would. Returns their bytes.
 fn remove_temp_files(out: &[u8]) -> u64 {
-    crate::encoder::kitty::temp_file_paths(out)
+    crate::pictures::kitty::protocol::temp_file_paths(out)
         .iter()
         .map(|path| {
             let bytes = std::fs::metadata(path).map_or(0, |metadata| metadata.len());

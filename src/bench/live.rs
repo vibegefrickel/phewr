@@ -12,8 +12,8 @@ use super::{
     Bench, CELL_PX, COLS, LIMIT, ROWS, grid_rect, median, millis, report, set_color_target,
 };
 use crate::app::App;
-use crate::encoder::{KittyBackend, Transfer};
 use crate::image_list::SharedImageList;
+use crate::pictures::kitty::{KittyBackend, Transfer};
 use crate::run_loop::next_timeout;
 use crate::scanner;
 use std::path::{Path, PathBuf};

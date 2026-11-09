@@ -1,9 +1,10 @@
 //! The prefetch thread: the first screen of the folder and its decode into the disk cache.
 
 use crate::app::cell_shape::SHAPE_SAMPLE;
-use crate::app::thumbnails::{thumb_target_px, warm_disk_cache};
-use crate::decode::shape;
+use crate::app::thumbnails::warm_disk_cache;
 use crate::gallery::GalleryState;
+use crate::pictures::resize::padding::thumb_target_px;
+use crate::pictures::shape;
 use crate::scanner;
 use std::collections::BTreeSet;
 use std::path::PathBuf;

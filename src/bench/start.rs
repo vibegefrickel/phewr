@@ -2,8 +2,8 @@
 
 use super::{CELL_PX, COLS, LIMIT, ROWS, count_transmissions, millis, report, test_dir};
 use crate::app::App;
-use crate::encoder::KittyBackend;
 use crate::image_list::SharedImageList;
+use crate::pictures::kitty::KittyBackend;
 use crate::run_loop::next_timeout;
 use crate::run_loop::poll_background;
 use crate::run_loop::render_images;
@@ -86,7 +86,7 @@ fn start_once(dir: &Path, cache_dir: &Path) -> StartTimes {
     scanner::spawn(vec![dir.to_path_buf()], list.clone());
 
     let step = Instant::now();
-    let transfer = crate::encoder::kitty::detect_transfer(None, false, |_| None);
+    let transfer = crate::pictures::kitty::protocol::detect_transfer(None, false, |_| None);
     times.probe = step.elapsed();
 
     let step = Instant::now();

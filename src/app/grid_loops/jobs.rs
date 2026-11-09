@@ -2,8 +2,8 @@
 
 use super::{LoopFrames, LoopOutcome, LoopResult};
 use crate::app::disk_cache::{try_load_loop, try_save_loop};
-use crate::app::thumbnails::{pad_loop_frame, thumb_target_px};
 use crate::app::{App, ViewMode};
+use crate::pictures::resize::padding::{pad_loop_frame, thumb_target_px};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
