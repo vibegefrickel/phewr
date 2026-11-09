@@ -27,10 +27,10 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
 - `kitty_output/`: the Kitty writes per frame. Each `render_*` has a `*_to` twin that writes to
   any `Write`, so that the tests read the escape sequences. `App::with_graphics_out` runs a write
   against the graphics output. `mod.rs` holds the fullscreen image and the video frame and
-  re-exports the writes of the grid. `grid.rs` holds the thumbnail
-  writes (`emit_new_thumbnails_to`, `render_gallery_images`, `place_gallery_images_to`,
-  `grid_placement`, `place_at`, `visible_image_ids`). `loops.rs` holds the
-  grid loops (`play_grid_loops`, `transmit_animation_to`, `swap_loop_frames_to`).
+  re-exports the writes of the grid. `grid.rs` holds the grid pass (`write_grid_to`, `GridPass`,
+  `grid_frame`) and the thumbnail writes (`emit_new_thumbnails_to`, `render_gallery_images`,
+  `place_gallery_images_to`, `grid_placement`, `visible_image_ids`). `loops.rs` holds the grid
+  loops (`play_grid_loops`, `send_grid_loops_to`, `place_loop_frame`, `transmit_animation_to`).
   `grid_icons.rs` holds the SVG icons of the cells as Kitty images (`GridIcons`, `IconCell`,
   `sync_grid_icons`).
 - `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
@@ -117,7 +117,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `CacheEntry`, `LazyEntry` and `FileStamp` in `mod.rs`, the temp file write and the prune in
   `write.rs`.
 - `pictures/kitty/`: the Kitty graphics protocol. `mod.rs` holds `KittyBackend`, `Transfer`,
-  `Loops`, `Pixels` and `EMIT_PASS_BYTES`. `protocol/probe.rs` holds the start probes
+  `Loops`, `Pixels` and `EMIT_PASS_BYTES`. `screen.rs` holds the frame engine (`Placements`,
+  `Screen`, `Update`, `Placing`, `Layer`), and `screen/tests.rs` its fake writer tests. `protocol/probe.rs` holds the start probes
   (`detect_backend`, `chosen_loops`, `describe`, `describe_loops`, `is_ssh`).
   `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or

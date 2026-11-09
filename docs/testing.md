@@ -67,7 +67,10 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   The directory goes away on drop, also when the test panics.
 - The app builders and the key press helpers that tests of more than one module share live in
   `test_support/`. The synthetic file writers live in `pictures/test_support/`, and
-  `test_support/` re-exports them. The fake Kitty terminal is `test_support::kitty`.
+  `test_support/` re-exports them. The fake Kitty terminal is `test_support::kitty`. The frame
+  engine has its own fake writer tests in `pictures/kitty/screen/tests.rs`: the bytes of each
+  rule, the byte cap over several passes, the recovery after a clear and a focus gain, and both
+  placement policies.
 - A test app writes the Kitty sequences to a buffer (`GraphicsOutput::Buffer`). Read them with
   `app.graphics_out.take_bytes()`. A test that needs a config uses `App::new_with_config`, never
   `App::with_config`.

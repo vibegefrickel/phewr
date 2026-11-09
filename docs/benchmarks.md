@@ -18,6 +18,9 @@ filter `bench::` finds all 26 benches. `just bench-live` runs only the group `be
 - `Bench::drop` waits for the decodes. Then the cold numbers of the full `just bench` match a run
   of one bench.
 - `grid_rect` and `fullscreen_rect` give the same box: the terminal above the status row.
+- The warm animation fill of `bench::loops` is bimodal: a run takes about 20 ms or about 38 ms to
+  the first loop, on `main` too. A comparison of two trees needs several interleaved rounds at a
+  1-minute load below 4.
 
 ## Start (`bench/start.rs`)
 

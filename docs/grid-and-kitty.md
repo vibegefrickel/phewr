@@ -58,6 +58,36 @@ temp file medium and the storage budget. `pictures/kitty/placement.rs` holds `bo
 probe and the cell size. The grid writes stay in `kitty_output/grid.rs`. The grid icons and the
 loops stay in `kitty_output/`.
 
+### The frame engine
+
+`pictures/kitty/screen.rs` is the frame engine of the shared picture module (phase 2 of
+`docs/picture-refactor.md`). It holds `Placements`, `Screen`, `Update`, `Placing` and `Layer`.
+
+- The app puts the places of a frame into `Placements`: `place`, `place_under` (below the cell
+  grounds), `place_over` (a preview that keeps its place while its sharp picture waits), `keep`
+  (stored, without a place) and `hide` (an overlay frame places no picture).
+- One `Screen::write_frame` (or `flush`) writes one synchronized update: the deletes, the removed
+  placements, the transfers up to the byte cap in the order of the frame, the changed
+  placements, and the trim of the budget.
+- Each place has its own placement id. An unchanged place keeps its id, and a moved place takes a
+  free id of its picture. The first place of a new picture goes out as one `a=T` with `p=`.
+- `Placing::Changed` (the default) sends only a new or a moved placement. `Placing::EveryFrame`
+  places every picture on each flush. youtr uses it until phase 5 of the plan.
+- `Screen` holds `TerminalImages` (`App::screen`), the ids after a clear (`maybe_stored`) and
+  the pictures to send again after a focus gain (`focus_gained`).
+- A started `Update` always ends its synchronized update. Its `Drop` writes `ESC 8` and
+  `END_SYNC` after an early error.
+- phewr calls `write_frame`, `wipe`, `record`, `forget_placements`, `stores`, `bytes_of`,
+  `budget` and `waiting`. `flush`, `resized`, `cleared`, `focus_gained`, `delete_all`,
+  `with_placing`, `lost`, `hide` and `place_under` run only in the tests until schnattr takes
+  the module (phase 4). They carry `expect(dead_code)` outside the tests.
+- `Loops`, `transmit_frame_to` and `animate_to` stay in `pictures::kitty`, because the usage hint
+  `N=1` depends on the probe result. The loop logic of phewr stays in `kitty_output/loops.rs`.
+  It writes the frames into the update of the pass and calls `Screen::record`.
+- A lost frame of a visible loop gives the still and a new transfer of the loop. Nothing calls
+  `Screen::lost` today, and the trim keeps every frame of a visible loop, so this path has no
+  trigger yet.
+
 ### Writers and pixels
 
 - The rule that Kitty images are not ratatui widgets is in AGENTS.md.
@@ -70,8 +100,13 @@ loops stay in `kitty_output/`.
 
 ### Emit passes
 
-- A pass writes the new thumbnails in grid order, in one synchronized update. It stops at
-  `EMIT_PASS_BYTES` (`pictures/kitty/mod.rs`).
+- A pass writes the new thumbnails, the previews, the loop frames and the icons in grid order, as
+  one frame of the engine in one synchronized update. It stops at `EMIT_PASS_BYTES`
+  (`pictures/kitty/mod.rs`). One run-loop pass writes at most one grid pass. A waiting picture or
+  icon brings the next pass at once (`GridPass::waiting`).
+- A redraw (the return from fullscreen or video, the close of an overlay, a page scroll) writes
+  only the changed placements and no `d=a`. It has no byte cap (`Update::uncapped`) and sends
+  every missing visible picture in one update, as before the engine.
 - 4 MB is about 9 sharp cells of the Retina grid of the bench. The count is RGBA bytes of the
   cache, not bytes on the wire.
 - An opaque picture goes out as RGB (3/4 of the count). The direct medium adds base64 (4/3 of its
@@ -94,8 +129,8 @@ loops stay in `kitty_output/`.
 
 ### Terminal storage
 
-- `TerminalImages` (`pictures/kitty/terminal_images.rs`) tracks the images that the terminal
-  stores, with their bytes. It counts 4 bytes per pixel, also for a picture that went out as RGB.
+- `TerminalImages` (`pictures/kitty/terminal_images.rs`, inside `Screen`) tracks the images that
+  the terminal stores, with their bytes. It counts 4 bytes per pixel, also for a picture that went out as RGB.
   So the count is an upper bound.
 - The grid deletes evicted and replaced ids with `a=d,d=I`.
 - The grid trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB). The trim
@@ -131,15 +166,15 @@ loops stay in `kitty_output/`.
   size. The first grid rows get the spare rows, so one grid can need 2 sizes of an icon. A new
   size takes a free id, else the id of a size that no visible cell needs. The placements of
   that id go first.
-- Each cell places the image with `a=p` and its own placement id `p=` (the visible cell index plus
-  1). A place with the same ids moves the placement.
-- The draw records the icons that the cells need (`GridIcons::wanted`). After the thumbnail
-  writes, `sync_grid_icons` deletes and places only the placements that changed, in a
-  synchronized update. When nothing changed, nothing goes out.
+- The icons go out with the thumbnails in one frame of the engine. Their placement ids count per
+  icon image (1, 2, 3), not per cell. The first place of an icon is an `a=T`.
+- The draw records the icons that the cells need (`GridIcons::wanted`). When only the icons
+  changed and no other pass is due, `sync_grid_icons` writes one grid pass. While a picture
+  waits (`pending`), it writes nothing, because the next pass writes the icons too.
 - The thumbnail padding is transparent. For this reason, a cell that gets its thumbnail loses its
-  icon placement (`a=d,d=i,i=<id>,p=<cell>`) in the same pass.
-- `d=a` and `d=A` remove the icon placements too. `GridIcons::forget_placements` and
-  `forget_images` follow them.
+  icon placement in the same pass.
+- `d=a` and `d=A` remove the icon placements too. The engine knows the placements, and
+  `GridIcons::forget_images` follows the deletes of the images.
 - If the terminal does not answer OSC 10, or phewr sends no probe, the icons stay octant blocks
   (2x4 dots per cell) on a ratatui canvas. The thumbnail that Kitty draws covers them.
 - A change of the terminal theme during a session does not change the icon color.
