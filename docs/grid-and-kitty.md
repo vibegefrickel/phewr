@@ -16,7 +16,7 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 
 - The decode job pads every grid picture with transparent pixels to whole cells, at most the base
   cell box.
-- `pad_for_grid` in `app/thumbnails/padding.rs` gives a `GridPicture` with its cell count.
+- `pad_for_grid` in `pictures/resize/padding.rs` gives a `GridPicture` with its cell count.
 - The grid places the picture centered in its cell in whole cells. It uses `c=` and `r=` of that
   count and no `X=` and `Y=`.
 - The content is centered to within half a cell.
@@ -52,6 +52,12 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 
 ## Kitty output
 
+The generic Kitty output is in `pictures::kitty`: the writer, the pixels, `EMIT_PASS_BYTES`, the
+temp file medium and the storage budget. `pictures/kitty/placement.rs` holds `box_px`,
+`centered`, `native_placement` and `filled_placement`. `pictures/kitty/query.rs` holds the start
+probe and the cell size. The grid writes stay in `kitty_output/grid.rs`. The grid icons and the
+loops stay in `kitty_output/`.
+
 ### Writers and pixels
 
 - The rule that Kitty images are not ratatui widgets is in AGENTS.md.
@@ -65,7 +71,7 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 ### Emit passes
 
 - A pass writes the new thumbnails in grid order, in one synchronized update. It stops at
-  `EMIT_PASS_BYTES` (`kitty_output/grid.rs`).
+  `EMIT_PASS_BYTES` (`pictures/kitty/mod.rs`).
 - 4 MB is about 9 sharp cells of the Retina grid of the bench. The count is RGBA bytes of the
   cache, not bytes on the wire.
 - An opaque picture goes out as RGB (3/4 of the count). The direct medium adds base64 (4/3 of its
@@ -88,7 +94,7 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 
 ### Terminal storage
 
-- `TerminalImages` (`kitty_output/terminal_images.rs`) tracks the images that the terminal
+- `TerminalImages` (`pictures/kitty/terminal_images.rs`) tracks the images that the terminal
   stores, with their bytes. It counts 4 bytes per pixel, also for a picture that went out as RGB.
   So the count is an upper bound.
 - The grid deletes evicted and replaced ids with `a=d,d=I`.
@@ -114,7 +120,8 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 
 - The icons are the Lucide SVGs in `assets/icons/` (ISC license, `assets/icons/LICENSE`), with
   `stroke-width` 1.5 instead of 2. `include_str!` puts them into the binary.
-- The start write asks for the terminal foreground with OSC 10, before the Kitty probes. The
+- The start write (`pictures/kitty/query.rs`) asks for the terminal foreground with OSC 10,
+  before the Kitty probes. The
   terminal answers in order, so the read needs no end condition of its own. The query ends with
   BEL, and an answer with `ESC \` does not count as a Kitty answer.
 - `icons::render` draws an icon with resvg at the pixel size of the icon box. The pixels are the

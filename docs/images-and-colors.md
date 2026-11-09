@@ -1,22 +1,25 @@
 # Images and colors
 
-This page holds the design facts of the decoders (`src/decode/`) and of the color conversion.
-AGENTS.md holds the rules and the layout of the files.
+This page holds the design facts of the decoders (`src/pictures/decode/`) and of the color
+conversion. AGENTS.md holds the rules and the layout of the files.
 
-## Parts of `decode/`
+## Parts of `pictures/decode/`
 
 - The tone map of float images (`tonemap.rs`) and of PQ and HLG stills (`hdr/`).
 - The HEIF box reader (`heif_boxes.rs`).
-- The resize (`resize.rs`).
+- The extension lists and `has_extension` (`extensions.rs`).
 - The color conversion (`color/`).
 - The fullscreen image in the pixel layout of its decode (`screen/`).
-- The folder shape from the file headers (`shape.rs`).
+- `dimensions`, the size from the header (`mod.rs`).
+
+The resize is in `pictures/resize/mod.rs`, and the folder shape from the file headers is in
+`pictures/shape/mod.rs`.
 
 ## Resize and pixel layouts
 
 - Every resize uses Catmull-Rom. It costs two thirds of the time of Lanczos3 on a 24 MP frame.
 - The layout of each step is the fastest one that `fast_image_resize` has for it. The code is
-  `rgb_resize_is_fastest` in `decode/resize.rs`.
+  `rgb_resize_is_fastest` in `pictures/resize/mod.rs`.
 - Measurement of 2026-10-30, into a 3392x2052 box:
 
   | Layout | Scale 0.75 | Scale 1.5 |
@@ -26,8 +29,8 @@ AGENTS.md holds the rules and the layout of the files.
 
 - From a scale of 1/2 down, RGB is as fast.
 - The RGB copy of an opaque RGBA resize happens after the resize, at the size of the screen.
-- The tests of `decode/screen/` compare the RGB layouts with the RGBA reference path. This is the
-  path that phewr used before the RGB layouts.
+- The tests of `pictures/decode/screen/` compare the RGB layouts with the RGBA reference path.
+  This is the path that phewr used before the RGB layouts.
 - libjpeg-turbo decodes at the smallest DCT scale of 1/8, 1/4, 1/2 and 1 that covers the fit of
   the image into the box (`turbo::pick_scaling_factor`, the rule of `EmbeddedJpeg::covers`). The
   decode is never smaller than the fit. The RGB or RGBA choice then follows the decoded size.
@@ -53,8 +56,9 @@ AGENTS.md holds the rules and the layout of the files.
 
 ### HEIF boxes
 
-- `decode/heif_boxes.rs` reads `pitm` (the primary item), `iref` with its `thmb` references, and
-  `iprp` with `ipco` (the properties) and `ipma` (the property indices of each item).
+- `pictures/decode/heif_boxes.rs` reads `pitm` (the primary item), `iref` with its `thmb`
+  references, and `iprp` with `ipco` (the properties) and `ipma` (the property indices of each
+  item).
 - The reader does not read `iinf`, because libheif already lists the thumbnail items.
 - The `ispe` size needs no decode.
 - A missing 90 or 270 degree rotation changes the shape of a thumbnail. A missing 180 degree
@@ -85,7 +89,8 @@ AGENTS.md holds the rules and the layout of the files.
 - A Photoshop file carries its thumbnail in the image resource 1036 (JPEG RGB).
 - sips takes 0.1 s to 1 s per RAW file. The embedded JPEG decodes in a few milliseconds, so the
   grid shows it without a wait.
-- The files are `decode/embedded_jpeg/` (`mod.rs`, `tiff.rs`, `cr3.rs`, `orf.rs`, `psd.rs`).
+- The files are `pictures/decode/embedded_jpeg/` (`mod.rs`, `tiff.rs`, `cr3.rs`, `orf.rs`,
+  `psd.rs`).
 - `P5048182.ORF` (OM-1): the 3200x2400 preview is found in 1 ms. The grid decodes it in 17 ms
   to 23 ms, against 1.3 s to 1.6 s for `sips -Z 624`. The fullscreen view (box 3392x2052)
   decodes it in 31 ms to 73 ms, against 2.2 s to 7.5 s for sips, under the load of other
@@ -135,7 +140,7 @@ AGENTS.md holds the rules and the layout of the files.
 
 ## Float images (EXR and Radiance HDR)
 
-- These formats go through `decode::tonemap`, not through `decode::hdr`.
+- These formats go through `pictures::decode::tonemap`, not through `pictures::decode::hdr`.
 - A display-referred file keeps its samples in 0..=1. A plain conversion to 8 bit clamps each
   value above 1.0 to white. It also shows the dark parts too dark, because it does not apply the
   sRGB transfer curve.
@@ -144,7 +149,7 @@ AGENTS.md holds the rules and the layout of the files.
 
 ## Color conversion
 
-The code is in `decode/color/`.
+The code is in `pictures/decode/color/`.
 
 ### Why phewr converts
 
@@ -187,7 +192,7 @@ Each decoder reports the color of its pixels.
 - A source that cannot convert converts as sRGB. Examples: an unreadable or non-RGB ICC profile
   and unknown CICP codes.
 - A PQ or HLG source (CICP transfer 16 or 18, also from the `cicp` tag of an ICC profile) gets
-  the tone map of `decode::hdr`, because `moxcms` does not tone-map.
+  the tone map of `pictures::decode::hdr`, because `moxcms` does not tone-map.
 - The "as is" column of the table of `fixtures_match_colorsync` is what phewr sent before the
   color conversion existed.
 
@@ -210,7 +215,7 @@ Each decoder reports the color of its pixels.
 
 ## HDR stills
 
-The code is in `decode/hdr/`.
+The code is in `pictures/decode/hdr/`.
 
 - A PQ still maps with `Decoded::peak`. libheif fills it from `clli` or `mdcv` (deep and 8-bit
   files), a PNG from `cLLI` or `mDCV` (the draft spellings `cLLi` and `mDCv` count too), and a
@@ -248,7 +253,7 @@ The code is in `decode/hdr/`.
 ## JPEG XL
 
 - The facts of the ICC handling and of the XYB limit are in `gotchas.md` ("JPEG XL colors").
-- A PQ or HLG file keeps its 16-bit signal for the tone map of `decode/hdr/`.
+- A PQ or HLG file keeps its 16-bit signal for the tone map of `pictures/decode/hdr/`.
 - On 2026-11-03, 40 public files (27 of the libjxl conformance set, 13 from jpegxl.info,
   convertico.com and libjxl/testdata) went through `real_jxl_matches_reference`. 34 match their
   reference within 4 levels. The six others:

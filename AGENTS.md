@@ -45,6 +45,8 @@ just fmt | lint | doc | deny | outdated   # the single steps
 just dist            # arm64 binary in dist/ (dist profile, ad-hoc codesign, sha256)
 just render          # dist + the filled formula and install.sh in dist/, publishes nothing
 just release         # check + tag + Codeberg release + tap (maintainer only, see below)
+just pictures-sync TARGET   # copy src/pictures/ to TARGET/src/pictures/, write SOURCE, fmt + clippy
+just pictures-check TARGET  # fail when the copy in TARGET drifted from the master copy
 ```
 
 Plain cargo works too. Homebrew's rustup is keg-only, so run
@@ -130,6 +132,9 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
   that the terminal reports (OSC 10).
 - **One formatter, one style.** Use rustfmt with `rustfmt.toml`. The hook runs
   `cargo fmt --check`.
+- **`src/pictures/` is the master copy of the shared picture module.** Change the module only
+  here. The module imports no app module of phewr. A sync into another project needs the go of
+  the session of that project. `docs/picture-refactor.md` holds the plan.
 - **Language:** code, comments and docs are in English.
 
 ### Tests
@@ -138,7 +143,8 @@ is missing and prints a note if ffmpeg or mpv is not on PATH: phewr runs without
 its `make.sh`, and the real-file tests by name.
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module. A long test module
-  moves into `tests.rs` of the module directory (`decode/jxl.rs` and `decode/jxl/tests.rs`).
+  moves into `tests.rs` of the module directory (`pictures/decode/jxl.rs` and
+  `pictures/decode/jxl/tests.rs`).
 - A test that needs a real file is `#[ignore = "..."]` and reads a `PHEWR_TEST_*` variable.
   `just test-real` runs these tests. A test without its variable skips with a note.
   `just test-real` skips the benches (`--skip bench::`), because they set the global color target
@@ -174,27 +180,39 @@ short form:
 - `main.rs`: the module list and a thin `main`. `check_paths`, `apply_cli_overrides`,
   `probe_terminal` and `prepare_app` hold the logic with tests.
 - `cli.rs`: the clap arguments, the start paths and `write_cwd_file` (`--cwd-file`).
-- `terminal.rs`: `TerminalSession`, the start probe in one write (`CSI 16 t`, OSC 10, the Kitty
-  probes and DA1), the cell pixel size and the tty read `read_answer`.
+- `terminal.rs`: `TerminalSession` and the mouse modes. The start probe and `read_answer` are in
+  `pictures/kitty/query.rs`.
 - `run_loop.rs`: `LoopState` (the status note, the `VideoState`), `run`, the background polls,
   `render_images` and `next_timeout`.
 - `keys/`: the key handlers. `mod.rs` routes the overlays and the view modes and holds
   `LateAnswerFilter`. One file per view, and `mouse.rs`.
-- `kitty_output/`: the Kitty writes per frame. Each `render_*` has a `*_to` twin that writes to
-  any `Write`. `grid.rs` holds the thumbnails, `loops.rs` the grid loops, `grid_icons.rs` the SVG
-  icons, `terminal_images.rs` the storage budget.
-- `encoder/`: the Kitty graphics protocol (`KittyBackend`, `Transfer`, `Loops`, `Pixels`).
-  `kitty/probe.rs` holds the start probes.
+- `kitty_output/`: the Kitty writes of phewr per frame. Each `render_*` has a `*_to` twin that
+  writes to any `Write`. `mod.rs` holds the fullscreen image and the video frame, `grid.rs` the
+  thumbnails, `loops.rs` the grid loops, `grid_icons.rs` the SVG icons. The generic part is in
+  `pictures::kitty`.
+- `pictures/`: the shared picture module, the master copy for `just pictures-sync`. It imports
+  no app module.
+  - `decode/`: the decoders and the routes. `Route::for_path` picks the route by extension.
+    `pictures::decode::dimensions` reads the size. `extensions.rs` holds the extension lists
+    and `has_extension`. Submodules: `raster`, `turbo`, `libheif/`, `jxl`, `sips`, `embedded_jpeg/`,
+    `heif_boxes`, `screen/`, `tonemap`, `hdr/` and `color/`.
+  - `resize/`: the `fast_image_resize` helpers and `padding.rs` (the pad to whole cells).
+  - `shape/`: the folder aspect from the headers and `DEFAULT_IMAGE_ASPECT`.
+  - `jobs/`: `pool.rs` (the job bounds and the cache read pool), `queue.rs` (`JobQueue`,
+    `JobSlots`), `thumbnail_cache.rs` (the memory cache) and `disk_cache/`.
+  - `kitty/`: the Kitty graphics protocol (`KittyBackend`, `Transfer`, `Loops`, `Pixels`,
+    `EMIT_PASS_BYTES`). `protocol/` holds the escape sequences, and `protocol/probe.rs` the start
+    probes. `placement.rs` holds the placements, `terminal_images.rs` the storage budget and
+    `query.rs` the start probe and the cell size.
+  - `test_support/`: the test file builders.
 - `app/`: `App`, the whole view state, one file per topic: fullscreen, zoom, marks, folders,
-  scan, slideshow, meta, mouse, the thumbnail jobs (`thumbnails/`), the disk cache
-  (`disk_cache/`), the folder prefetch (`folder_prefetch/`) and the grid loops (`grid_loops/`).
-- `decode/`: the decoders and the routes. `Route::for_path` picks the route by extension.
-  Submodules: `raster`, `turbo`, `libheif/`, `jxl`, `sips`, `embedded_jpeg/`, `heif_boxes`,
-  `shape`, `resize`, `screen/`, `tonemap`, `hdr/` and `color/`.
+  scan, slideshow, meta, mouse, the thumbnail jobs (`thumbnails/`), the loop files of the disk
+  cache (`disk_cache/`), the folder prefetch (`folder_prefetch/`) and the grid loops
+  (`grid_loops/`).
 - `ui/`: the ratatui drawing: `mod.rs` (the views and the info panel), `status.rs`, `grid.rs`,
   `help.rs`.
-- `gallery/`: the grid geometry, the cursor and the in-memory thumbnail cache.
-- `scanner/`: the background scan, the extension lists and the Live Photo pairing (`live/`).
+- `gallery/`: the grid geometry and the cursor.
+- `scanner/`: the background scan, the video extensions and the Live Photo pairing (`live/`).
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
 - `prefetch/`: the decode of the fullscreen neighbors.
 - `search.rs`: the fuzzy filename search on one filter thread (`FilterWorker`).
@@ -235,8 +253,8 @@ decisions. Read the long form before you change the code that an item names.
 - **Slideshow view:** a running or paused slideshow has no status row (`ui::status_rows`), so
   `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal
   scales it to the fill of the box with `r=` or `c=` alone (`filled_placement` in
-  `kitty_output/mod.rs`). Outside a slideshow, an image shows at its own size. A badge at the
-  bottom right shows the play or pause glyph, the interval, the note or the error. The image and
+  `pictures/kitty/placement.rs`). Outside a slideshow, an image shows at its own size. A badge at
+  the bottom right shows the play or pause glyph, the interval, the note or the error. The image and
   the video frame sit below the cell backgrounds (`BELOW_BACKGROUNDS`), so the badge covers them.
 - **Slideshow and videos:** a running slideshow plays a video one time and moves on. Outside a
   slideshow, the clip loops. The mpv window of a slideshow reads the `end-file` reason through
@@ -248,8 +266,8 @@ decisions. Read the long form before you change the code that an item names.
 - **HDR in the terminal:** for HLG and PQ, `player::tone_map` writes a 3D cube into the cache
   directory. `CUBE_VERSION` is the one version for all cube names: change it when the cube output
   changes. HDR keeps 33 points. A PQ video or still maps with its HDR10 peak, rounded up to the
-  buckets 500, 1000, 2000, 4000 or 10000 nits (`decode::hdr::hdr10_peak`). The stills in
-  `decode/hdr/` copy the math of the player cubes, and a test compares both copies.
+  buckets 500, 1000, 2000, 4000 or 10000 nits (`pictures::decode::hdr::hdr10_peak`). The stills
+  in `pictures/decode/hdr/` copy the math of the player cubes, and a test compares both copies.
   `SDR_WHITE_NITS` is 500, and HLG keeps 1000 nits.
 - **Video programs:** phewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
   time, and the tests never do. The probe cache keys each `VideoInfo` by path, mtime and length.
@@ -322,7 +340,8 @@ decisions. Read the long form before you change the code that an item names.
 - **Grid gaps and borders:** the cells have 1-cell gaps, every picture is padded to whole cells
   and placed centered with `c=` and `r=`, and the borders live in the gaps.
 - **Terminal storage:** `TerminalImages` tracks the images that the terminal stores, and the
-  grid trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB).
+  grid trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB,
+  `pictures/kitty/terminal_images.rs`).
 - **Image ids:** the thumbnails count up from 1. The icons start at `ICON_ID_BASE`, the loops at
   `LOOP_ID_BASE` (`1 << 31`), and the video frame is `u32::MAX - 1`. The probes use 31 and 32.
 - **Grid loops:** every visible video, animated and Live cell loops after its still, as a Kitty
@@ -368,8 +387,9 @@ decisions. Read the long form before you change the code that an item names.
   marks the limit. The sample copy reads the private layout of `jxl-render`, so
   `jxl-oxide = "=0.12.6"` and `jxl-render = "=0.12.4"` are exact pins. An update is a deliberate
   step: run `parallel_copy_matches_stream` and a byte comparison on real files.
-- **`image` decoders:** the `image` crate has only the decoders that the scanner lists. If you
-  add a format to the scanner, add the `image` feature too.
+- **`image` decoders:** the `image` crate has only the decoders that
+  `pictures/decode/extensions.rs` lists. If you add a format to these lists, add the `image`
+  feature too.
 - **Embedded HEIC thumbnails:** a cold HEIC cell shows its embedded thumbnail first, then the
   sharp decode. The thumbnail must have the same `irot` and `imir` as the primary image. A
   preview never goes into the disk cache. The sharp jobs of libheif files wait until every
@@ -378,9 +398,9 @@ decisions. Read the long form before you change the code that an item names.
 - **libheif reads through a stream** (`libheif_rs::StreamReader`).
   `HeifContext::read_from_file` copies the whole file first, 30 ms to 40 ms per 24 MP photo.
 - **The `sips` route:** camera RAW, PSD, PDF, SVG and other ImageIO formats. RAW and PSD try the
-  embedded JPEG first (`decode/embedded_jpeg/`). A JPEG that covers the fit of the box is the
-  thumbnail, and sips does not run. sips ignores the orientation of RAF and ARW, so phewr turns
-  or flips the develop (`sips::flip_gap`). A relative path gets `./` in front.
+  embedded JPEG first (`pictures/decode/embedded_jpeg/`). A JPEG that covers the fit of the box is
+  the thumbnail, and sips does not run. sips ignores the orientation of RAF and ARW, so phewr turns
+  or flips the develop (`pictures::decode::sips::flip_gap`). A relative path gets `./` in front.
 - **Embedded JPEG orientation:** the container orientation wins over the EXIF of the embedded
   JPEG. libjpeg-turbo decodes at the smallest of 1/8, 1/4, 1/2 and 1 that covers the fit. The
   other eighths run without NEON and are slower than the full decode.

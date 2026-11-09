@@ -14,11 +14,9 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `prepare_app` hold the logic with tests.
 - `cli.rs`: the clap arguments (`Cli`), the value parsers of `--threads` and `--interval`, the
   start directory and `write_cwd_file` (the folder of the grid for `--cwd-file`).
-- `terminal.rs`: `TerminalSession` (raw mode, the alternate screen), the Kitty probe
-  `query_terminal`, `query_cell_size_and_probe` (`CSI 16 t`, the OSC 10 foreground query, the
-  Kitty probes and the DA1 query in one write, the DA1 answer ends the read) and the cell pixel
-  size. `read_answer` is the poll
-  loop of the tty read, over any fd.
+- `terminal.rs`: `TerminalSession` (raw mode, the alternate screen) and the mouse modes
+  (`enable_mouse`, `disable_mouse`). The start probe and the cell size are in
+  `pictures/kitty/query.rs`.
 - `run_loop.rs`: `LoopState` (the status note and, with the `video` feature, the `VideoState`),
   `run`, the background polls, `render_images` and `next_timeout`. The status note lives here, not
   in `App`. `handle_input` takes one input event. The tests are in `run_loop/tests.rs`.
@@ -29,10 +27,9 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
 - `kitty_output/`: the Kitty writes per frame. Each `render_*` has a `*_to` twin that writes to
   any `Write`, so that the tests read the escape sequences. `App::with_graphics_out` runs a write
   against the graphics output. `mod.rs` holds the fullscreen image and the video frame and
-  re-exports the writes of the grid. `terminal_images.rs` holds `TerminalImages`,
-  `TERMINAL_IMAGE_BUDGET`, `delete_image_to` and `trim_to_budget`. `grid.rs` holds the thumbnail
+  re-exports the writes of the grid. `grid.rs` holds the thumbnail
   writes (`emit_new_thumbnails_to`, `render_gallery_images`, `place_gallery_images_to`,
-  `grid_placement`, `place_at`, `visible_image_ids`, `EMIT_PASS_BYTES`). `loops.rs` holds the
+  `grid_placement`, `place_at`, `visible_image_ids`). `loops.rs` holds the
   grid loops (`play_grid_loops`, `transmit_animation_to`, `swap_loop_frames_to`).
   `grid_icons.rs` holds the SVG icons of the cells as Kitty images (`GridIcons`, `IconCell`,
   `sync_grid_icons`).
@@ -62,8 +59,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `START_ALIGN`, `tick_ends`). `jobs.rs` holds the jobs, their cancel flags and `ResultGuard`.
   `loop_source` gives the file of a loop: the motion of a Live Photo still, else the file itself.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
-- `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields, its construction
-  and `box_px` (the pixel box of a rect). One file per topic: `info_panel.rs` (`view_file`, the
+- `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
+  construction. One file per topic: `info_panel.rs` (`view_file`, the
   file of the info panel and the status row), `grid_zoom.rs` (the cell size and the state file),
   `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter), `cell_shape.rs`,
   `fullscreen.rs` (enter, leave, the steps and the decode, `FullscreenDecode`, the image as a
@@ -76,27 +73,28 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   entries of the grid, `is_parent_entry`, `Enter` into a folder, `go_to_parent`, the tests in
   `folders/tests.rs`), `video.rs` (the terminal player state, the return after a video, the mpv
   window watch), `thumbnails/` (`ThumbnailJobs` in `mod.rs`: the channel, the sharp, preview and
-  cache read slots, the misses and the generation, and `ThumbImage`. `queue.rs` holds `JobQueue`
-  and `JobSlots`, `padding.rs` the padding to whole cells (`pad_for_grid`, `pad_loop_frame`,
-  `thumb_target_px`), `decode.rs` the work of one job (`warm_disk_cache`, the embedded preview,
-  the animation flag)), `disk_cache/` (the thumbnail disk cache: `CacheEntry`, `LazyEntry` and
-  `FileStamp` in `mod.rs`, the loop files in `loop_file.rs`, the temp file write and the prune in
-  `write.rs`). `grid_loops/` is listed above.
-- `decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the route by
-  extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the user waits
-  for. `raster.rs` (the `image` crate, the EXIF orientation and `header_dimensions`, the size from
-  the header for `info::dimensions` and `shape::shown_size`), `turbo.rs` (libjpeg-turbo with DCT
-  scaling), `libheif/` (HEIC, HEIF, AVIF: `mod.rs` the decode and the core share `LibheifSlot`,
-  `thumbnails.rs` the embedded thumbnails and `fitted_size` on `scaled_down_size`, `plane.rs` the
-  interleaved plane), `resize.rs` (`load_and_resize`, Catmull-Rom, `Layout`,
-  `rgb_resize_is_fastest` and `resize_region`, a resize of a region through a view), `screen/`
+  cache read slots, the misses and the generation, and `ThumbImage`. `decode.rs` holds the work of
+  one job (`warm_disk_cache`, the embedded preview, the animation flag)), `disk_cache/` (the loop
+  files in `loop_file.rs`). `grid_loops/` is listed above.
+- `pictures/`: the shared picture module, the master copy for `just pictures-sync`
+  (`docs/picture-refactor.md`). It imports no app module of phewr.
+- `pictures/decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the
+  route by extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the
+  user waits for. `pictures::decode::dimensions` gives the size from the header.
+  `extensions.rs` holds the extension lists (`IMAGE_EXTENSIONS`, `JXL_EXTENSIONS`,
+  `SIPS_EXTENSIONS`, `LIBHEIF_EXTENSIONS`, the one list for the libheif route) and
+  `has_extension(path, list)`, the extension test of the scanner and the decoders, without an
+  allocation. `raster.rs` (the `image` crate, the EXIF orientation and `header_dimensions`, the
+  size from the header for `pictures::decode::dimensions` and `shape::shown_size`), `turbo.rs`
+  (libjpeg-turbo with DCT scaling), `libheif/` (HEIC, HEIF, AVIF: `mod.rs` the decode and the core
+  share `LibheifSlot`, `thumbnails.rs` the embedded thumbnails and `fitted_size` on
+  `scaled_down_size`, `plane.rs` the interleaved plane), `screen/`
   (`ScreenImage` with `Rgb`, `Rgba` and `Opaque`, and `load_for_screen`, the fullscreen decode),
   `jxl.rs` (JPEG XL, ICC profiles through `moxcms`, the sample copy on all cores
   `render_samples`), `sips.rs` (camera RAW, PSD, PDF, SVG and
   other ImageIO formats), `tonemap.rs` (EXR and HDR to 8 bit), `hdr/` (the tone map of PQ and HLG
   stills: `mod.rs` the math of the HDR cube of the player, `primaries.rs` the primaries and the
-  matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir`, `ispe`, `clli` and `mdcv`), `shape.rs`
-  (the image dimensions from the file headers, for the cell shape), `embedded_jpeg/` (the safe
+  matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir`, `ispe`, `clli` and `mdcv`), `embedded_jpeg/` (the safe
   reader for the JPEG inside camera RAW and PSD files: `mod.rs` with RAF and `decode_reference`,
   `tiff.rs`, `cr3.rs`, `orf.rs`,
   `psd.rs`), `color/` (the conversion into the color space of the terminal: `mod.rs` with
@@ -106,6 +104,42 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `Decoded` (the pixels and their `SourceColor`). `Decoded::fit_within` resizes, then converts.
   `decode_image_with_hint` converts at the decoded size. A module directory keeps its long test
   module in `tests.rs`.
+- `pictures/resize/`: `mod.rs` holds `load_and_resize_px`, Catmull-Rom, `Layout`,
+  `rgb_resize_is_fastest`, `scaled_down_size` and `resize_region`, a resize of a region through a
+  view. `padding.rs` holds the padding to whole cells (`pad_for_grid`, `pad_loop_frame`,
+  `thumb_target_px`).
+- `pictures/shape/`: the image dimensions from the file headers, for the cell shape
+  (`folder_aspect`, `shown_size`, `DEFAULT_IMAGE_ASPECT`).
+- `pictures/jobs/`: `pool.rs` holds the job bounds (`MAX_THUMB_JOBS`, `MAX_PREVIEW_JOBS`,
+  `MAX_CACHE_READS`) and `spawn_job`. `queue.rs` holds `JobQueue` and `JobSlots`.
+  `thumbnail_cache.rs` holds the in-memory thumbnail cache (`ThumbnailCache`, `GridPicture`,
+  `ParkKey`) with the parked pictures. `disk_cache/` holds the thumbnail disk cache:
+  `CacheEntry`, `LazyEntry` and `FileStamp` in `mod.rs`, the temp file write and the prune in
+  `write.rs`.
+- `pictures/kitty/`: the Kitty graphics protocol. `mod.rs` holds `KittyBackend`, `Transfer`,
+  `Loops`, `Pixels` and `EMIT_PASS_BYTES`. `protocol/probe.rs` holds the start probes
+  (`detect_backend`, `chosen_loops`, `describe`, `describe_loops`, `is_ssh`).
+  `Transfer` picks the medium: direct,
+  PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
+  the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
+  frame, and `chosen_loops` reads `PHEWR_KITTY_LOOPS` and the config key.
+  `PHEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `Pixels` is a view of RGB or
+  RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
+  every medium. The check and the copy go in chunks of 4096 pixels and stop at the first
+  transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost. `KittyBackend` has
+  `transmit` and `transmit_frame`. The writers without state are free functions of
+  `pictures::kitty::protocol` (`delete_all_to`, `delete_image_to`, `place_by_id_to`,
+  `animate_to`), and `apc` writes each command frame (`ESC _ G ... ESC \`). `placement.rs` holds
+  `box_px` (the pixel box of a rect), `centered` (a box centered in a rect), `native_placement`
+  and `filled_placement`.
+  `terminal_images.rs` holds `TerminalImages`, `TERMINAL_IMAGE_BUDGET`, `delete_image_to` and
+  `trim_to_budget`. `query.rs` holds `query_cell_size_and_probe` (`CSI 16 t`, the OSC 10
+  foreground query, the Kitty probes and the DA1 query in one write, the DA1 answer ends the
+  read) and the cell pixel size. `read_answer` is the poll loop of the tty read, over any fd.
+- `pictures/test_support/` (test only): the builders of the test files that the picture tests and
+  the app tests share. `mod.rs` holds `fixture`, `files.rs` the JPEG, TIFF RAW, CR3, RAF and PSD
+  writers (feature `sips` on macOS), `heif.rs` the HEIF writers (feature `heic`,
+  `write_heif_sized` with a thumbnail of any size).
 - `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
   `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
   view. `status.rs` holds the status row of each view (`draw_status_row`, `error_line`,
@@ -116,16 +150,13 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `HELP_FULLSCREEN_ROWS`), else one column that clips. The gallery, the fullscreen view and the
   video view have no frame. They use the full area minus 1 status row (`content_area`,
   `status_area`). The help popup and the info panel keep their borders.
-- `gallery/`: `mod.rs` holds the grid geometry, the cursor and the two geometry helpers `box_px`
-  (the pixel box of a rect) and `centered` (a box centered in a rect). `thumbnail_cache.rs` holds
-  the in-memory thumbnail cache (`ThumbnailCache`, `GridPicture`, `ParkKey`) with the parked
-  pictures.
+- `gallery/`: `mod.rs` holds the grid geometry and the cursor.
   `update_grid` gives the remainder of the width and the height to the first columns and rows,
   so the grid reaches the edges. `set_cell_shape` picks the column count from the photo aspect
   and the pixel size of a terminal cell.
-- `scanner/`: the background directory scan (`mod.rs`) and the lists of supported extensions
-  (`extensions.rs`). `LIBHEIF_EXTENSIONS` is the one list for the libheif route. `has_extension(path, list)` is the
-  extension test of the scanner and the decoders, without an allocation. `name_key` is the sort
+- `scanner/`: the background directory scan (`mod.rs`) and the test of supported files
+  (`extensions.rs`: `VIDEO_EXTENSIONS` and `is_supported`, on the lists of
+  `pictures/decode/extensions.rs`). `name_key` is the sort
   key of the batches and the folders (the lowercase name, then the path). `read_folder` is the one
   `read_dir` of a folder argument for its folders and its files. `folder_listing` gives the
   subfolders (`..` first) and the sorted files of one folder from one read, without a thread and
@@ -163,24 +194,10 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   first-frame thumbnails and the video extensions.
 - `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
   and the `Runner` trait for the process start.
-- `encoder/`: the Kitty graphics protocol (`KittyBackend` in `kitty/mod.rs`, the types in
-  `mod.rs`). `kitty/probe.rs` holds the start probes (`detect_backend`, `chosen_loops`,
-  `describe`, `describe_loops`, `is_ssh`).
-  `Transfer` picks the medium: direct,
-  PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
-  the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
-  frame, and `chosen_loops` reads `PHEWR_KITTY_LOOPS` and the config key.
-  `PHEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `Pixels` is a view of RGB or
-  RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
-  every medium. The check and the copy go in chunks of 4096 pixels and stop at the first
-  transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost. `KittyBackend` has
-  `transmit` and `transmit_frame`. The writers without state are free functions of
-  `encoder::kitty` (`delete_all_to`, `delete_image_to`, `place_by_id_to`, `animate_to`), and `apc`
-  writes each command frame (`ESC _ G ... ESC \`).
 - `test_support/` (test only): the helpers that the tests of more than one module share.
-  `mod.rs` holds the app builders and the waits, `input.rs` the key and mouse helpers, `files.rs`
-  the JPEG, TIFF RAW, CR3, RAF and PSD writers (feature `sips` on macOS), `heif.rs` the HEIF
-  writers (feature `heic`, `write_heif_sized` with a thumbnail of any size), `kitty.rs` the fake terminal and `video.rs` `FakeRunner`,
+  `mod.rs` holds the app builders and the waits and re-exports `pictures::test_support`.
+  `input.rs` holds the key and mouse helpers, `kitty.rs` the fake terminal and `video.rs`
+  `FakeRunner`,
   `FakeDecoder` and the app builders of the video tests (feature `video`), `live.rs` (feature
   `video`) the synthetic Live Photo pairs, `scanned_app` and `real_live_dir`.
 - `bench/` (test only): the ignored speed benchmarks, one file per group. A bench path is

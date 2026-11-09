@@ -5,8 +5,10 @@ holds the rules and the layout of the files.
 
 ## Thumbnail jobs
 
-The code is in `app/thumbnails/`. `mod.rs` holds `ThumbnailJobs` and the scheduling. `queue.rs`
-holds the queues. `decode.rs` holds the work of one job.
+The code is in `app/thumbnails/`. `mod.rs` holds `ThumbnailJobs` and the scheduling. `decode.rs`
+holds the work of one job. `pictures/jobs/queue.rs` holds the queues, and `pictures/jobs/pool.rs`
+holds the job bounds and the pool of the cache reads. `pictures/jobs/thumbnail_cache.rs` holds the
+memory cache.
 
 ### Slots and limits
 
@@ -27,7 +29,8 @@ holds the queues. `decode.rs` holds the work of one job.
 - A failed thumbnail decode sends `None` and frees its slot.
 - The thumbnail and preview queues are `JobSlots` with an image index per job. A job whose index
   left the list starts nothing.
-- `decode::spawn_foreground` runs a foreground decode on the thread pool and returns its receiver.
+- `pictures::decode::spawn_foreground` runs a foreground decode on the thread pool and returns
+  its receiver.
 
 ### Phases of a job
 
@@ -69,13 +72,13 @@ holds the queues. `decode.rs` holds the work of one job.
   `MAX_PREVIEW_JOBS`. `cache_reads` holds at most `MAX_CACHE_READS`.
 - `park_thumbnails`: the folder switch calls it before it drops the image list.
 - `warm_disk_cache`: the folder prefetch calls it.
-- `pad_for_grid`, `pad_loop_frame` and `thumb_target_px` are in `app/thumbnails/padding.rs`. The
+- `pad_for_grid`, `pad_loop_frame` and `thumb_target_px` are in `pictures/resize/padding.rs`. The
   placement rules are in [Grid and Kitty](grid-and-kitty.md#padding-and-placement).
 
 ## Disk cache
 
-- The code is in `app/disk_cache/`. `mod.rs` holds `FileStamp`, `CacheEntry`, `LazyEntry` and the
-  key. `write.rs` holds the temp file write and the prune.
+- The code is in `pictures/jobs/disk_cache/`. `mod.rs` holds `FileStamp`, `CacheEntry`,
+  `LazyEntry` and the key. `write.rs` holds the temp file write and the prune.
 - The loop files are in `app/disk_cache/loop_file.rs`. The file is `<hash>.loop`. It holds QOI
   frames with their times.
 - The key version of a loop file is `phewr-loop-v1` (`LOOP_CACHE_VERSION`). Change the version
@@ -149,7 +152,7 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
 - The help popup, the info panel and the other views stop the loops.
 - `[gallery] animate = false` turns the loops off.
 - In herdr, the loops take the ticks, and the animation probe does not go out (`chosen_loops`
-  in `encoder/kitty/probe.rs`). herdr 0.9.5 answers the probe itself but plays no Kitty
+  in `pictures/kitty/protocol/probe.rs`). herdr 0.9.5 answers the probe itself but plays no Kitty
   animation. `PHEWR_KITTY_LOOPS` and `[gallery] loops` win over herdr.
 - With `[gallery] animate = false`, the help popup shows `loops: off`.
 - `App::drop_hidden_loops`: the render of the grid calls it, also after a cursor move without a
