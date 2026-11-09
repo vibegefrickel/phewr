@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(decoded.color, SourceColor::AdobeRgb);
 
         let mut missing = open(&jpeg);
-        let gone = Path::new("/nonexistent/phewr/a.jpg");
+        let gone = Path::new("/nonexistent/pictures/a.jpg");
         add_file_color(&mut missing, gone, Some(ImageFormat::Jpeg));
         assert_eq!(missing.color, SourceColor::Srgb);
 

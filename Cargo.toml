@@ -135,8 +135,8 @@ image = { version = "0.25.10", default-features = false, features = ["bmp", "exr
 # An update is a deliberate step: change `jxl-oxide` and set `jxl-render` to the version that
 # this `jxl-oxide` uses. Then run `parallel_copy_matches_stream` and the byte comparison of the
 # decode on the real files.
-jxl-oxide = { version = "=0.12.6", features = ["moxcms"] }
-jxl-render = "=0.12.4"
+jxl-oxide = { version = "=0.12.6", features = ["moxcms"], optional = true }
+jxl-render = { version = "=0.12.4", optional = true }
 kamadak-exif = "0.6"
 libheif-rs = { version = "3", optional = true }
 lru = "0.19"
@@ -164,11 +164,13 @@ unicode-width = "0.2"
 tempfile = "3.27"
 
 [features]
-default = ["turbo", "heic", "video", "sips"]
+default = ["turbo", "heic", "jxl", "video", "sips"]
 # Fast JPEG decoding with DCT downscaling (libjpeg-turbo).
 turbo = ["dep:turbojpeg"]
 # HEIC / HEIF and AVIF through the system libheif (>= 1.19).
 heic = ["dep:libheif-rs"]
+# JPEG XL in pure Rust (jxl-oxide).
+jxl = ["dep:jxl-oxide", "dep:jxl-render"]
 # Video playback and first-frame thumbnails through the `ffmpeg` and `ffprobe` programs on PATH,
 # and the mpv window. phewr links no FFmpeg library.
 video = ["dep:serde_json"]

@@ -152,7 +152,7 @@ fn all_file_cells_sharp(app: &App) -> bool {
         .visible_items()
         .filter(|&(_, index)| !app.is_folder(index))
         .peekable();
-    cells.peek().is_some() && cells.all(|(_, index)| app.thumb_cache.is_sharp(index))
+    cells.peek().is_some() && cells.all(|(_, index)| app.thumb_cache.is_sharp(&index))
 }
 
 /// The first screen after Enter on a folder, with and without the folder prefetch.

@@ -10,6 +10,7 @@ mod math;
 use crate::pictures::decode::color::{ColorTarget, SourceColor};
 use crate::pictures::decode::hdr::Peak;
 use math::{conversion, convert_sdr, rgb_to_xyz, tone_map};
+use moxcms::ColorProfile;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -84,9 +85,7 @@ impl Primaries {
                 12 => Some(Self::DisplayP3),
                 _ => None,
             },
-            SourceColor::Icc(data) => {
-                Self::of_source_color(&crate::pictures::decode::color::icc_known_space(data)?)
-            }
+            SourceColor::Icc(data) => Self::of_source_color(&icc_known_space(data)?),
             SourceColor::AdobeRgb | SourceColor::PngGamma { .. } => None,
         }
     }
@@ -142,6 +141,32 @@ impl Primaries {
             Self::DciP3 => "dcip3",
             Self::Bt2020 => "bt2020",
         }
+    }
+}
+
+/// sRGB, Display P3 or BT.2020 (CICP 9 with the sRGB curve) by the colorants of `data`. The
+/// player has a color cube for each.
+fn icc_known_space(data: &[u8]) -> Option<SourceColor> {
+    let profile = ColorProfile::new_from_slice(data).ok()?;
+    let close = |known: &ColorProfile| {
+        let near = |a: moxcms::Xyzd, b: moxcms::Xyzd| {
+            (a.x - b.x).abs() < 0.003 && (a.y - b.y).abs() < 0.003 && (a.z - b.z).abs() < 0.003
+        };
+        near(profile.red_colorant, known.red_colorant)
+            && near(profile.green_colorant, known.green_colorant)
+            && near(profile.blue_colorant, known.blue_colorant)
+    };
+    if close(&ColorProfile::new_srgb()) {
+        Some(SourceColor::Srgb)
+    } else if close(&ColorProfile::new_display_p3()) {
+        Some(SourceColor::DisplayP3)
+    } else if close(&ColorProfile::new_bt2020()) {
+        Some(SourceColor::Cicp {
+            primaries: 9,
+            transfer: 13,
+        })
+    } else {
+        None
     }
 }
 

@@ -80,7 +80,7 @@ fn prunes_after_write(sequence: u64) -> bool {
     sequence != 0 && sequence.is_multiple_of(64)
 }
 
-/// A write takes milliseconds. An older temp file belongs to a phewr that ended during its
+/// A write takes milliseconds. An older temp file belongs to an app that ended during its
 /// write.
 const STALE_TEMP_AGE: Duration = Duration::from_secs(3600);
 
@@ -111,12 +111,22 @@ fn remove_stale_temp_file(entry: &std::fs::DirEntry) {
 
 /// Remove cache files until the cache takes at most `max_bytes`: the loop files first, then the
 /// stills, each oldest first. A loop takes 3 to 12 times the bytes of its still.
+///
+/// A folder with a subfolder is the cache root of an app, not a thumbnail folder
+/// (`thumbnail_dir_below`). The prune then deletes nothing.
 fn prune_disk_cache(cache_dir: &Path, max_bytes: u64) {
     let Ok(entries) = std::fs::read_dir(cache_dir) else {
         return;
     };
+    let entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
+    if entries
+        .iter()
+        .any(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+    {
+        return;
+    }
     let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = entries
-        .flatten()
+        .into_iter()
         .filter_map(|entry| {
             let path = entry.path();
             let extension = path.extension().and_then(|ext| ext.to_str());
@@ -247,7 +257,6 @@ mod tests {
                 .unwrap();
         }
         fs::write(cache.join("notes.txt"), [0_u8; 500]).unwrap();
-        fs::create_dir(cache.join("folder.qoi")).unwrap();
 
         prune_disk_cache(cache, 1000);
         assert!(
@@ -332,5 +341,61 @@ mod tests {
         assert!(other.exists(), "only the temp files of the cache go");
         assert!(!cube.exists(), "an old partial cube file goes");
         assert!(cube_writing.exists(), "a cube write in progress stays");
+    }
+
+    /// The cache root of an app with its own files: a media folder, a PNG and a QOI file.
+    fn app_cache_root(root: &std::path::Path) -> [std::path::PathBuf; 3] {
+        let media = root.join("media");
+        fs::create_dir_all(&media).unwrap();
+        let files = [
+            media.join("photo.qoi"),
+            root.join("avatar.png"),
+            root.join("export.qoi"),
+        ];
+        for file in &files {
+            fs::write(file, [0_u8; 100]).unwrap();
+        }
+        files
+    }
+
+    #[test]
+    fn prune_touches_only_the_thumbnail_folder() {
+        use std::sync::OnceLock;
+        use std::sync::atomic::AtomicU64;
+
+        let dir = test_dir();
+        let root = dir.path();
+        let app_files = app_cache_root(root);
+        let thumbnails = super::super::thumbnail_dir_below(root);
+        assert_eq!(thumbnails, root.join("thumbnails"));
+        fs::create_dir_all(&thumbnails).unwrap();
+        let old = thumbnails.join("old.png");
+        fs::write(&old, [0_u8; 10]).unwrap();
+        let (pruned, sequence) = (OnceLock::new(), AtomicU64::new(0));
+        for name in ["a.qoi", "b.qoi"] {
+            write_cache_file_with(
+                &thumbnails.join(name),
+                |temp| fs::write(temp, [0_u8; 100]),
+                &pruned,
+                &sequence,
+                &|folder| prune_disk_cache(folder, 0),
+            )
+            .unwrap();
+        }
+        assert!(!old.exists(), "the prune ran in the thumbnail folder");
+        for file in &app_files {
+            assert!(file.exists(), "{} stays", file.display());
+        }
+    }
+
+    #[test]
+    fn prune_refuses_a_folder_with_a_subfolder() {
+        let dir = test_dir();
+        let root = dir.path();
+        let app_files = app_cache_root(root);
+        prune_disk_cache(root, 0);
+        for file in &app_files {
+            assert!(file.exists(), "{} stays", file.display());
+        }
     }
 }

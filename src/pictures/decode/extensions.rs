@@ -9,6 +9,7 @@ pub(crate) const IMAGE_EXTENSIONS: &[&str] = &[
     "tga",
 ];
 
+#[cfg(feature = "jxl")]
 pub(crate) const JXL_EXTENSIONS: &[&str] = &["jxl"];
 
 /// The formats that `sips` reads and the `image` crate does not. `sips --formats` lists them.

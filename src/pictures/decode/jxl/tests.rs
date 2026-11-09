@@ -274,7 +274,7 @@ fn samples_clamp_and_round_like_jxl_oxide() {
 
 #[test]
 fn hdr_gray_ramps_stay_neutral() {
-    // phewr puts SDR white at 500 nits, like the player. libjxl puts it at about 250 nits in
+    // The module puts SDR white at 500 nits, like the player. libjxl puts it at about 250 nits in
     // pq.
     for name in ["pq", "hlg", "pq-icc", "hlg-icc"] {
         assert_gray_ramp(name);
@@ -398,14 +398,14 @@ fn exif_box_reaches_info_panel() {
 }
 
 /// Compare a real file with a djxl rendering into 8-bit sRGB:
-/// `PHEWR_TEST_JXL=a.jxl PHEWR_TEST_JXL_REF=a.png`. The test prints the differences in levels
-/// and fails above 4 levels. `PHEWR_TEST_JXL_MAX` sets another limit, `PHEWR_TEST_JXL_OUT` writes the decode.
+/// `<APP>_TEST_JXL=a.jxl <APP>_TEST_JXL_REF=a.png`. The test prints the differences in levels
+/// and fails above 4 levels. `<APP>_TEST_JXL_MAX` sets another limit, `<APP>_TEST_JXL_OUT` writes the decode.
 #[test]
-#[ignore = "needs PHEWR_TEST_JXL and PHEWR_TEST_JXL_REF, a real file and its rendering"]
+#[ignore = "needs <APP>_TEST_JXL and <APP>_TEST_JXL_REF, a real file and its rendering"]
 fn real_jxl_matches_reference() {
     let (Some(path), Some(reference)) = (
-        crate::pictures::decode::real_test_file("PHEWR_TEST_JXL"),
-        crate::pictures::decode::real_test_file("PHEWR_TEST_JXL_REF"),
+        crate::pictures::names::test_file("JXL"),
+        crate::pictures::names::test_file("JXL_REF"),
     ) else {
         return;
     };
@@ -413,7 +413,7 @@ fn real_jxl_matches_reference() {
         .expect("full decode")
         .to_rgba8();
     let reference = image::open(&reference).expect("reference").to_rgba8();
-    if let Some(out) = std::env::var_os("PHEWR_TEST_JXL_OUT") {
+    if let Some(out) = std::env::var_os(crate::pictures::names::test_variable("JXL_OUT")) {
         decoded.save(out).expect("write the decode");
     }
     assert_eq!(decoded.dimensions(), reference.dimensions(), "size");
@@ -436,7 +436,7 @@ fn real_jxl_matches_reference() {
     let mean = sum as f64 / count.max(1) as f64;
     // clippy.toml allows output in tests.
     eprintln!("REFERENCE largest={largest} mean={mean:.4}");
-    let limit = std::env::var("PHEWR_TEST_JXL_MAX")
+    let limit = std::env::var(crate::pictures::names::test_variable("JXL_MAX"))
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(4);

@@ -146,7 +146,9 @@ fn measure_loops(
             .iter()
             .filter(|&&index| app.loop_plays(index))
             .count();
-        let sharp = visible.iter().all(|&index| app.thumb_cache.is_sharp(index));
+        let sharp = visible
+            .iter()
+            .all(|&index| app.thumb_cache.is_sharp(&index));
         if stills.is_none() && sharp && pending.is_empty() {
             stills = Some(now);
         }

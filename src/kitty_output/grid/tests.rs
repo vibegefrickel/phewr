@@ -293,14 +293,14 @@ fn sharp_thumbnail_deletes_preview() {
     app.images.push(PathBuf::from("/photos/2.heic"));
     app.gallery.filtered_indices.push(2);
     assert!(app.store_thumbnail(2, RgbaImage::new(4, 4), false));
-    let (_, preview_id) = app.thumb_cache.peek(2).unwrap();
+    let (_, preview_id) = app.thumb_cache.peek(&2).unwrap();
     let mut out = Vec::new();
     emit_new_thumbnails_to(&mut app, &mut out).unwrap();
     assert!(!text(&out).contains("\x1b_Ga=d"));
     assert!(app.screen.stores(preview_id));
 
     assert!(app.store_thumbnail(2, RgbaImage::new(4, 4), true));
-    let (_, sharp_id) = app.thumb_cache.peek(2).unwrap();
+    let (_, sharp_id) = app.thumb_cache.peek(&2).unwrap();
     let mut out = Vec::new();
     emit_new_thumbnails_to(&mut app, &mut out).unwrap();
 
@@ -342,7 +342,7 @@ fn redraw_deletes_replaced_previews() {
 #[test]
 fn redraw_deletes_previews_off_the_screen() {
     let mut app = thumbnail_app(1);
-    let (_, sharp) = app.thumb_cache.peek(0).unwrap();
+    let (_, sharp) = app.thumb_cache.peek(&0).unwrap();
     app.stale_image_ids = vec![(0, 91), (5, 92)];
     for id in [91, 92] {
         app.screen.record(id, 16);
@@ -365,14 +365,14 @@ fn deletes_evicted_thumbnail() {
     let mut app = thumbnail_app(2);
     let mut out = Vec::new();
     place_visible(&mut app, &mut out);
-    let (_, old_id) = app.thumb_cache.peek(0).unwrap();
+    let (_, old_id) = app.thumb_cache.peek(&0).unwrap();
     assert!(app.screen.stores(old_id));
 
     // The cache drops the cell 0 when it shrinks to the smallest capacity it has.
     for index in 2..=app.thumb_cache.capacity() {
         app.thumb_cache.insert(index, RgbaImage::new(1, 1));
     }
-    assert!(!app.thumb_cache.contains(0));
+    assert!(!app.thumb_cache.contains(&0));
     out.clear();
     place_visible(&mut app, &mut out);
     assert!(
@@ -407,7 +407,7 @@ fn trims_old_images_but_not_visible() {
     assert_eq!(text(&out).matches("\x1b_Ga=d,d=I,").count(), 15);
     assert_eq!(app.screen.stored_count(), 25);
     for index in 20..40 {
-        let (_, id) = app.thumb_cache.peek(index).unwrap();
+        let (_, id) = app.thumb_cache.peek(&index).unwrap();
         assert!(app.screen.stores(id), "cell {index} stays");
     }
 
@@ -430,7 +430,7 @@ fn scroll_through(app: &mut App, terminal: &mut FakeTerminal, pages: usize) {
             .gallery
             .visible_items()
             .map(|(_, index)| index)
-            .filter(|&index| !app.thumb_cache.contains(index))
+            .filter(|&index| !app.thumb_cache.contains(&index))
             .collect();
         for &index in &fresh {
             assert!(app.store_thumbnail(index, sharp_thumbnail(160, 96), true));
@@ -440,7 +440,7 @@ fn scroll_through(app: &mut App, terminal: &mut FakeTerminal, pages: usize) {
         terminal.feed(&out);
         assert!(terminal.black_cells.is_empty(), "step {step}");
         for (_, index) in app.gallery.visible_items() {
-            let (_, id) = app.thumb_cache.peek(index).unwrap();
+            let (_, id) = app.thumb_cache.peek(&index).unwrap();
             assert!(
                 terminal
                     .placements
@@ -531,7 +531,7 @@ fn settle_grid(app: &mut App, terminal: &mut FakeTerminal, step: &str) {
         .gallery
         .visible_items()
         .map(|(_, index)| index)
-        .filter(|&index| !app.thumb_cache.is_sharp(index))
+        .filter(|&index| !app.thumb_cache.is_sharp(&index))
         .collect();
     for &index in &fresh {
         let image = thumbnail_for_grid(app, index);
@@ -546,7 +546,7 @@ fn settle_grid(app: &mut App, terminal: &mut FakeTerminal, step: &str) {
     assert!(terminal.black_cells.is_empty(), "{step}: black cells");
     assert_eq!(terminal.synchronized_depth, 0, "{step}");
     for (_, index) in app.gallery.visible_items() {
-        let (_, id) = app.thumb_cache.peek(index).unwrap();
+        let (_, id) = app.thumb_cache.peek(&index).unwrap();
         assert!(
             terminal
                 .placements
@@ -665,8 +665,8 @@ fn square_preview_of_wide_photo_keeps_its_shape() {
     let mut app = heic_app(dir.path(), (128, 128));
     // The preview scales up to 96x96 px, 12x6 cells. Its canvas has that shape already.
     wait_for_thumbnail(&mut app);
-    assert!(!app.thumb_cache.is_sharp(0));
-    let (preview, _) = app.thumb_cache.peek(0).unwrap();
+    assert!(!app.thumb_cache.is_sharp(&0));
+    let (preview, _) = app.thumb_cache.peek(&0).unwrap();
     assert_eq!(preview.cells, (12, 6));
     assert_eq!(preview.image.dimensions(), (64, 64));
     assert_close(preview.image.get_pixel(0, 0).0, BLUE);
@@ -681,8 +681,8 @@ fn square_preview_of_wide_photo_keeps_its_shape() {
 
     // The sharp picture takes the cells of its own aspect in the same cell.
     wait_for_thumbnail(&mut app);
-    assert!(app.thumb_cache.is_sharp(0));
-    let (sharp, _) = app.thumb_cache.peek(0).unwrap();
+    assert!(app.thumb_cache.is_sharp(&0));
+    let (sharp, _) = app.thumb_cache.peek(&0).unwrap();
     assert_eq!(sharp.cells, (20, 5));
     assert_eq!(sharp.image.dimensions(), (160, 80));
     assert_close(sharp.image.get_pixel(80, 40).0, RED);
@@ -705,7 +705,7 @@ fn padded_preview_keeps_the_aspect_of_its_cells() {
     // 160x96, so the canvas needs 3 transparent rows: 64x39 px.
     let mut app = heic_app(dir.path(), (128, 72));
     wait_for_thumbnail(&mut app);
-    let (preview, _) = app.thumb_cache.peek(0).unwrap();
+    let (preview, _) = app.thumb_cache.peek(&0).unwrap();
     assert_eq!(preview.cells, (20, 6));
     let image = &preview.image;
     assert_eq!(image.dimensions(), (64, 39));

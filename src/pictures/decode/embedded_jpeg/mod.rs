@@ -365,7 +365,9 @@ mod tests {
         assert_close(rgba.get_pixel(16, 61).0, BLUE);
 
         let small = decode(&path, &jpeg, Some((8, 16))).unwrap().image;
-        assert!(small.width() >= 8 && small.height() >= 16 && small.width() < 32);
+        assert!(small.width() >= 8 && small.height() >= 16);
+        // Only libjpeg-turbo decodes at a part of the size.
+        assert_eq!(small.width() < 32, cfg!(feature = "turbo"));
     }
 
     #[test]

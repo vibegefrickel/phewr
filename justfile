@@ -22,11 +22,16 @@ fmt:
 fmt-check:
     cargo fmt --check
 
-# Clippy with all features and with none, and a cargo check for each single feature; every warning is an error, the lint table is in Cargo.toml.
+# The features of the app without the native and the JPEG XL decoders of src/pictures/: a copy
+# of the module must build and pass its tests without heic, jxl and turbo.
+lean_features := "video,sips"
+
+# Clippy with all features, with none and with the lean set, and a cargo check for each single feature; every warning is an error, the lint table is in Cargo.toml.
 lint:
     cargo clippy --release --all-targets -- -D warnings
     cargo clippy --release --all-targets --no-default-features -- -D warnings
-    for feature in turbo heic video sips; do RUSTFLAGS="-D warnings" cargo check --all-targets --no-default-features --features "$feature" || exit 1; done
+    cargo clippy --release --all-targets --no-default-features --features {{lean_features}} -- -D warnings
+    for feature in turbo heic jxl video sips; do RUSTFLAGS="-D warnings" cargo check --all-targets --no-default-features --features "$feature" || exit 1; done
 
 # Apply the lint and formatting fixes clippy and rustfmt can do on their own.
 fix:
@@ -36,6 +41,10 @@ fix:
 # Tests through nextest (one process per test, better output); falls back to `cargo test`.
 test *ARGS:
     if command -v cargo-nextest >/dev/null; then cargo nextest run --release {{ARGS}}; else cargo test --release {{ARGS}}; fi
+
+# The tests without heic, jxl and turbo: the picture module as a copy without these decoders.
+test-lean *ARGS:
+    just test --no-default-features --features {{lean_features}} {{ARGS}}
 
 # Also decode real files: PHEWR_TEST_JPEG, _HEIC, _AVIF, _JXL, _RAW, _PSD, _HDR_VIDEO and _SDR_VIDEO
 # name one file each.
@@ -76,7 +85,7 @@ outdated:
     cargo outdated --root-deps-only
 
 # The full gate.
-check: fmt-check lint test doc deny
+check: fmt-check lint test test-lean doc deny
 
 # Release build with the default features (turbo, heic, video).
 build:

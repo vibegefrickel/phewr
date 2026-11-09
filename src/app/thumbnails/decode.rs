@@ -9,6 +9,8 @@ use crate::pictures::decode::embedded_jpeg;
 use crate::pictures::decode::libheif::{decode_heif_preview, decodes_with_libheif};
 use crate::pictures::jobs::disk_cache::{CacheEntry, LazyEntry};
 use crate::pictures::resize::load_and_resize_px;
+#[cfg(feature = "video")]
+use crate::player::{animation::has_animation_extension, is_animated};
 use image::RgbaImage;
 use std::io;
 use std::path::Path;
@@ -17,13 +19,12 @@ use std::path::Path;
 ///
 /// The job reads the header, because the draw must read no file. A `known` flag with the same
 /// file stamp opens no file.
-#[cfg(feature = "video")]
 pub(super) fn animation_flag(
     path: &Path,
     entry: &LazyEntry<'_>,
     known: Option<AnimationFlag>,
 ) -> Option<AnimationFlag> {
-    if !crate::player::animation::has_animation_extension(path) {
+    if !has_animation_extension(path) {
         return None;
     }
     let stamp = entry.get().map(|entry| entry.stamp);
@@ -33,21 +34,23 @@ pub(super) fn animation_flag(
     {
         return Some(known);
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "video"))]
     HEADER_READS.add(path);
     Some(AnimationFlag {
-        animated: crate::player::is_animated(path),
+        animated: is_animated(path),
         stamp,
     })
 }
 
+/// Without the player, no file is an animation.
 #[cfg(not(feature = "video"))]
-pub(super) fn animation_flag(
-    _path: &Path,
-    _entry: &LazyEntry<'_>,
-    _known: Option<AnimationFlag>,
-) -> Option<AnimationFlag> {
-    None
+fn has_animation_extension(_path: &Path) -> bool {
+    false
+}
+
+#[cfg(not(feature = "video"))]
+fn is_animated(_path: &Path) -> bool {
+    false
 }
 
 #[cfg(all(test, feature = "video"))]
@@ -209,7 +212,7 @@ mod embedded_jpeg_tests {
             assert!(std::time::Instant::now() < deadline, "no thumbnail arrived");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        app.thumb_cache.peek(0).unwrap().0.image.clone()
+        app.thumb_cache.peek(&0).unwrap().0.image.clone()
     }
 
     fn left_right(image: &RgbaImage) -> ([u8; 4], [u8; 4]) {
@@ -237,13 +240,13 @@ mod embedded_jpeg_tests {
         );
 
         let sharp = wait_for_new_image(&mut app);
-        assert!(app.thumb_cache.is_sharp(0));
+        assert!(app.thumb_cache.is_sharp(&0));
         assert_eq!(
             sharp.dimensions(),
             (32, 16),
             "fitted into the box, 4x1 cells"
         );
-        assert_eq!(app.thumb_cache.peek(0).unwrap().0.cells, (4, 1));
+        assert_eq!(app.thumb_cache.peek(&0).unwrap().0.cells, (4, 1));
         let (left, right) = left_right(&sharp);
         assert_close(left, RED);
         assert_close(right, BLUE);
@@ -267,23 +270,23 @@ mod embedded_jpeg_tests {
         let mut app = grid_app(&path, &cache, Rect::new(0, 0, 20, 10));
 
         let preview = wait_for_new_image(&mut app);
-        assert!(!app.thumb_cache.is_sharp(0));
+        assert!(!app.thumb_cache.is_sharp(&0));
         assert_eq!(preview.dimensions(), (64, 32), "its own resolution");
-        assert_eq!(app.thumb_cache.peek(0).unwrap().0.cells, (20, 5));
+        assert_eq!(app.thumb_cache.peek(&0).unwrap().0.cells, (20, 5));
         let (left, right) = left_right(&preview);
         assert_close(left, RED);
         assert_close(right, BLUE);
         assert!(fs::read_dir(&cache).is_err(), "no preview on disk");
-        let (_, preview_id) = app.thumb_cache.peek(0).unwrap();
+        let (_, preview_id) = app.thumb_cache.peek(&0).unwrap();
 
         let sharp = wait_for_new_image(&mut app);
-        assert!(app.thumb_cache.is_sharp(0));
+        assert!(app.thumb_cache.is_sharp(&0));
         assert_eq!(
             sharp.dimensions(),
             (64, 32),
             "sips does not enlarge the 64x32 PSD"
         );
-        assert_eq!(app.thumb_cache.peek(0).unwrap().0.cells, (8, 2));
+        assert_eq!(app.thumb_cache.peek(&0).unwrap().0.cells, (8, 2));
         let (left, right) = left_right(&sharp);
         assert_close(left, RED);
         assert_close(right, BLUE);
@@ -301,7 +304,7 @@ mod embedded_jpeg_tests {
 
         let first = wait_for_new_image(&mut app);
         assert!(
-            app.thumb_cache.is_sharp(0),
+            app.thumb_cache.is_sharp(&0),
             "the first image is the sharp one"
         );
         assert_eq!(first.dimensions(), (64, 32));
@@ -335,7 +338,7 @@ mod read_count_tests {
         app.spawn_thumb_decode(0, RECT);
         wait_until(|| {
             app.poll_thumbnails();
-            app.thumb_cache.is_sharp(0)
+            app.thumb_cache.is_sharp(&0)
         });
     }
 
@@ -351,7 +354,7 @@ mod read_count_tests {
         app.thumb_jobs.sharp.running.clear();
         wait_until(|| {
             app.poll_thumbnails();
-            app.thumb_cache.is_sharp(0)
+            app.thumb_cache.is_sharp(&0)
         });
         app.forget_thumbnails();
         decode_sharp(app);

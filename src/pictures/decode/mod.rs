@@ -8,6 +8,7 @@ pub(crate) mod extensions;
 pub(crate) mod hdr;
 #[cfg(feature = "heic")]
 pub(crate) mod heif_boxes;
+#[cfg(feature = "jxl")]
 pub(crate) mod jxl;
 #[cfg(feature = "heic")]
 pub(crate) mod libheif;
@@ -36,6 +37,7 @@ use std::sync::mpsc;
 pub(crate) enum Route {
     /// Unknown extensions go here too, and the content decides.
     Raster,
+    #[cfg(feature = "jxl")]
     Jxl,
     #[cfg(all(feature = "sips", target_os = "macos"))]
     Sips,
@@ -48,6 +50,7 @@ impl Route {
         if listed(extensions::IMAGE_EXTENSIONS) {
             return Self::Raster;
         }
+        #[cfg(feature = "jxl")]
         if listed(extensions::JXL_EXTENSIONS) {
             return Self::Jxl;
         }
@@ -66,6 +69,7 @@ pub(crate) fn dimensions(path: &Path) -> Option<(u32, u32)> {
     }
     match Route::for_path(path) {
         Route::Raster => raster::header_dimensions(path),
+        #[cfg(feature = "jxl")]
         Route::Jxl => jxl::dimensions(path),
         #[cfg(all(feature = "sips", target_os = "macos"))]
         Route::Sips => sips::shown_dimensions(path),
@@ -220,6 +224,7 @@ pub(crate) fn decode_image(
 
     match Route::for_path(path) {
         Route::Raster => decode_raster(path, target),
+        #[cfg(feature = "jxl")]
         Route::Jxl => jxl::decode(path, color::target()),
         #[cfg(all(feature = "sips", target_os = "macos"))]
         Route::Sips => sips::decode_with_preview(path, target),
@@ -270,6 +275,7 @@ mod tests {
         assert_eq!(route("a.JPG"), Route::Raster);
         assert_eq!(route("a.exr"), Route::Raster);
         assert_eq!(route("a.APNG"), Route::Raster);
+        #[cfg(feature = "jxl")]
         assert_eq!(route("a.JXL"), Route::Jxl);
         assert_eq!(route("unknown.xyz"), Route::Raster);
         assert_eq!(route("no-extension"), Route::Raster);
@@ -347,11 +353,11 @@ mod tests {
         );
     }
 
-    /// `PHEWR_TEST_JPEG=/path/to/photo.jpg`, orientation 6 or 8.
+    /// `<APP>_TEST_JPEG=/path/to/photo.jpg`, orientation 6 or 8.
     #[test]
-    #[ignore = "needs PHEWR_TEST_JPEG, a real photo"]
+    #[ignore = "needs <APP>_TEST_JPEG, a real photo"]
     fn decodes_jpeg_upright_from_env() {
-        let Some(path) = crate::pictures::decode::real_test_file("PHEWR_TEST_JPEG") else {
+        let Some(path) = crate::pictures::names::test_file("JPEG") else {
             return;
         };
         let path = path.as_path();
@@ -398,7 +404,10 @@ mod tests {
 
     #[test]
     fn unset_variable_skips_real_test() {
-        assert_eq!(super::real_test_file("PHEWR_TEST_UNSET_IN_ANY_RUN"), None);
+        assert_eq!(
+            super::real_test_file("PICTURES_TEST_UNSET_IN_ANY_RUN"),
+            None
+        );
     }
 
     #[cfg(all(feature = "sips", target_os = "macos"))]
@@ -409,11 +418,13 @@ mod tests {
         crate::pictures::test_support::write_psd(&path, true);
         let decoded = super::decode_image(&path, Some((32, 16)), EmbeddedThumbnail::Allow);
         let image = decoded.unwrap().image;
-        assert_eq!(
-            (image.width(), image.height()),
-            (32, 16),
-            "the 64x32 preview, scaled"
-        );
+        // Without libjpeg-turbo, the preview keeps its size.
+        let size = if cfg!(feature = "turbo") {
+            (32, 16)
+        } else {
+            (64, 32)
+        };
+        assert_eq!((image.width(), image.height()), size, "the 64x32 preview");
         assert_close(image.to_rgba8().get_pixel(4, 8).0, RED);
     }
 

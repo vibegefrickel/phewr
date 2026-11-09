@@ -1,7 +1,7 @@
 //! The conversion of decoded pixels into the color space of the terminal.
 //!
 //! Ghostty copies the pixels of a Kitty image into its Display P3 surface without a conversion.
-//! phewr converts every image into the target after the resize. A PQ or HLG source gets the tone
+//! The module converts every image into the target after the resize. A PQ or HLG source gets the tone
 //! map of `decode::hdr`, because `moxcms` does not tone-map.
 
 mod jpeg;
@@ -13,8 +13,6 @@ pub(crate) use jpeg::exif_marks_adobe_rgb;
 pub(crate) use jpeg::jpeg_color;
 #[cfg(test)]
 pub(crate) use jpeg::tests::jpeg_with_color_space;
-#[cfg(feature = "video")]
-pub(crate) use tags::icc_known_space;
 pub(crate) use tags::{png_color, png_peak, tiff_icc_profile};
 
 use super::hdr;

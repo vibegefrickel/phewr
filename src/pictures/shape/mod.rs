@@ -1,6 +1,10 @@
-//! The shape of the photos in a folder, from the file headers. A folder of portraits gets
-//! narrow cells, a folder of landscapes wide ones. A header read costs a fraction of a
-//! millisecond. A file without a cheap header (PDF, video) counts as 3:2.
+//! The shapes of the pictures: the box copies of a place (`copies`, `corners`) and the shape of
+//! the photos in a folder, from the file headers. A folder of portraits gets narrow cells, a
+//! folder of landscapes wide ones. A header read costs a fraction of a millisecond. A file
+//! without a cheap header (PDF, video) counts as 3:2.
+
+pub(crate) mod copies;
+pub(crate) mod corners;
 
 use crate::pictures::decode::Route;
 use std::fs::File;
@@ -72,6 +76,7 @@ pub(crate) fn shown_size(path: &Path) -> Option<(u32, u32)> {
                 Some((width, height))
             }
         }
+        #[cfg(feature = "jxl")]
         Route::Jxl => crate::pictures::decode::jxl::dimensions(path),
         // The embedded JPEG of a RAW or PSD file has the shape of the photo. PDF and SVG count as
         // 3:2.

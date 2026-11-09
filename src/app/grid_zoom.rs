@@ -131,7 +131,7 @@ mod tests {
 
         assert!(app.gallery.show_filenames);
         assert_eq!(app.gallery.thumb_rows, rows_before - 1);
-        assert!(!app.thumb_cache.contains(0), "the taller picture is stale");
+        assert!(!app.thumb_cache.contains(&0), "the taller picture is stale");
         assert!(app.graphics_storage_dirty);
         assert!(app.needs_render);
     }
@@ -144,13 +144,16 @@ mod tests {
         let cols_before = app.gallery.grid_cols;
 
         app.set_cell_px((8, 16));
-        assert!(app.thumb_cache.contains(0), "the same size changes nothing");
+        assert!(
+            app.thumb_cache.contains(&0),
+            "the same size changes nothing"
+        );
         assert!(!app.graphics_storage_dirty);
 
         // Twice as wide cells: a photo takes half the columns, and the grid gets more of them.
         app.set_cell_px((16, 16));
         assert_eq!(app.cell_px, (16, 16));
-        assert!(!app.thumb_cache.contains(0));
+        assert!(!app.thumb_cache.contains(&0));
         assert!(app.graphics_storage_dirty);
         assert!(app.gallery.grid_cols > cols_before);
     }
@@ -175,7 +178,7 @@ mod tests {
             char_key(&mut app, key);
 
             assert_eq!(app.gallery.zoom_rows, limit);
-            assert!(app.thumb_cache.contains(0), "{key}: the thumbnails stay");
+            assert!(app.thumb_cache.contains(&0), "{key}: the thumbnails stay");
             assert!(
                 !app.graphics_storage_dirty,
                 "{key}: no redraw of the pictures"

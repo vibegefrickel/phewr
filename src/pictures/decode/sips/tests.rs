@@ -452,26 +452,26 @@ fn black_check_ignores_alpha() {
     assert!(is_all_black(&DynamicImage::ImageLumaA16(gray)));
 }
 
-/// `PHEWR_TEST_RAW=/path/to/photo.cr2`. A portrait photo must come out upright and not black.
+/// `<APP>_TEST_RAW=/path/to/photo.cr2`. A portrait photo must come out upright and not black.
 #[test]
-#[ignore = "needs PHEWR_TEST_RAW, a real camera RAW file"]
+#[ignore = "needs <APP>_TEST_RAW, a real camera RAW file"]
 fn decodes_raw_from_env() {
-    decodes_real_file("PHEWR_TEST_RAW");
+    decodes_real_file("RAW");
 }
 
-/// `PHEWR_TEST_PSD=/path/to/image.psd`.
+/// `<APP>_TEST_PSD=/path/to/image.psd`.
 #[test]
-#[ignore = "needs PHEWR_TEST_PSD, a real Photoshop file"]
+#[ignore = "needs <APP>_TEST_PSD, a real Photoshop file"]
 fn decodes_psd_from_env() {
-    decodes_real_file("PHEWR_TEST_PSD");
+    decodes_real_file("PSD");
 }
 
-/// `PHEWR_TEST_RAW=/path/to/photo.raf` or `.arw`, upright and unflipped in the file. A copy
+/// `<APP>_TEST_RAW=/path/to/photo.raf` or `.arw`, upright and unflipped in the file. A copy
 /// with the orientation 2, 3 and 4 written by exiftool must show flipped like the original.
 #[test]
-#[ignore = "needs PHEWR_TEST_RAW, a real RAF or ARW file, and exiftool"]
+#[ignore = "needs <APP>_TEST_RAW, a real RAF or ARW file, and exiftool"]
 fn real_flipped_copy_shows_upright() {
-    let Some(path) = crate::pictures::decode::real_test_file("PHEWR_TEST_RAW") else {
+    let Some(path) = crate::pictures::names::test_file("RAW") else {
         return;
     };
     if !crate::pictures::decode::extensions::has_extension(&path, &["raf", "arw"]) {
@@ -514,12 +514,12 @@ fn real_flipped_copy_shows_upright() {
     }
 }
 
-/// `PHEWR_TEST_ORF=/path/to/photo.orf`. Copies with the IFD0 orientation 1 and 6, written by
+/// `<APP>_TEST_ORF=/path/to/photo.orf`. Copies with the IFD0 orientation 1 and 6, written by
 /// exiftool, give the maker note preview, turned like the sips develop.
 #[test]
-#[ignore = "needs PHEWR_TEST_ORF, a real ORF file, and exiftool"]
+#[ignore = "needs <APP>_TEST_ORF, a real ORF file, and exiftool"]
 fn real_orf_preview_turns_like_develop() {
-    let Some(path) = crate::pictures::decode::real_test_file("PHEWR_TEST_ORF") else {
+    let Some(path) = crate::pictures::names::test_file("ORF") else {
         return;
     };
     let dir = test_dir();
@@ -568,8 +568,8 @@ fn real_orf_preview_turns_like_develop() {
     }
 }
 
-fn decodes_real_file(variable: &str) {
-    let Some(path) = crate::pictures::decode::real_test_file(variable) else {
+fn decodes_real_file(name: &str) {
+    let Some(path) = crate::pictures::names::test_file(name) else {
         return;
     };
     let path = path.as_path();

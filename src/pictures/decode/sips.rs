@@ -9,6 +9,7 @@ use crate::pictures::decode::Decoded;
 use crate::pictures::decode::embedded_jpeg::{self, EmbeddedJpeg};
 use crate::pictures::decode::extensions;
 use crate::pictures::decode::raster::{add_file_color, decode_upright};
+use crate::pictures::names::APP_NAME;
 use crate::pictures::resize::scaled_down_size;
 use image::metadata::Orientation;
 use image::{DynamicImage, GenericImageView, GrayImage, ImageFormat, ImageReader, Luma, Rgba};
@@ -176,7 +177,7 @@ pub(crate) fn decode(path: &Path, target: Option<(u32, u32)>) -> io::Result<Deco
     let path = &argument_path(path);
     let max_side = requested_side(path, target)?.map(|side| side.to_string());
     let tiff = tempfile::Builder::new()
-        .prefix("phewr-sips-")
+        .prefix(&format!("{APP_NAME}-sips-"))
         .suffix(".tiff")
         .tempfile()?;
     let mut args = vec![OsStr::new("-s"), OsStr::new("format"), OsStr::new("tiff")];
@@ -199,7 +200,7 @@ pub(crate) fn decode(path: &Path, target: Option<(u32, u32)>) -> io::Result<Deco
     Ok(decoded)
 }
 
-/// sips reads an argument that starts with `-` as a function name (`phewr -- -x.cr2`). A
+/// sips reads an argument that starts with `-` as a function name (`sips -s format tiff -x.cr2`). A
 /// relative path gets `./` in front.
 fn argument_path(path: &Path) -> PathBuf {
     if path.is_absolute() {

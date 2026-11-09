@@ -158,17 +158,12 @@ fn pq_4000_still_rolls_off_later() {
     );
 }
 
-/// AVIF and HEIC need libheif.
+/// AVIF and HEIC need libheif, JPEG XL needs jxl-oxide.
 fn fixtures() -> Vec<&'static str> {
-    let mut names = vec![
-        "pq.jxl",
-        "hlg.jxl",
-        "pq-icc.jxl",
-        "pq.png",
-        "hlg.png",
-        "pq-4000.png",
-        "pq-4000.jxl",
-    ];
+    let mut names = vec!["pq.png", "hlg.png", "pq-4000.png"];
+    if cfg!(feature = "jxl") {
+        names.extend(["pq.jxl", "hlg.jxl", "pq-icc.jxl", "pq-4000.jxl"]);
+    }
     if cfg!(feature = "heic") {
         names.extend([
             "pq.avif",
@@ -301,7 +296,16 @@ fn clli_fixtures_use_own_peak() {
 #[test]
 fn png_and_jxl_use_own_peak() {
     let default = patch_means(&reference("pq.png", ColorTarget::Srgb));
-    for name in ["pq-4000.png", "pq-4000.jxl", "pq-icc-4000.png"] {
+    let decodes = |name: &&str| {
+        cfg!(feature = "jxl")
+            || std::path::Path::new(name)
+                .extension()
+                .is_none_or(|e| e != "jxl")
+    };
+    for name in ["pq-4000.png", "pq-4000.jxl", "pq-icc-4000.png"]
+        .into_iter()
+        .filter(decodes)
+    {
         let image = decode_image(
             &fixture(&format!("hdr/{name}")),
             None,
@@ -312,7 +316,10 @@ fn png_and_jxl_use_own_peak() {
         let mapped = image.tone_mapped(None, ColorTarget::Srgb).image.to_rgba8();
         assert!(patch_means(&mapped)[6][1] + 10.0 < default[6][1], "{name}");
     }
-    for name in ["pq.png", "pq.jxl", "pq-icc.jxl", "hlg.png", "hlg.jxl"] {
+    for name in ["pq.png", "pq.jxl", "pq-icc.jxl", "hlg.png", "hlg.jxl"]
+        .into_iter()
+        .filter(decodes)
+    {
         let image = decode_image(
             &fixture(&format!("hdr/{name}")),
             None,
@@ -406,6 +413,7 @@ fn fixture_gray_ramps_stay_neutral() {
 }
 
 /// The signal of each chart patch, from the lossless PNG of `curve`.
+#[cfg(feature = "jxl")]
 fn chart_signal(curve: &str) -> Vec<[f64; 3]> {
     let path = fixture(&format!("hdr/{curve}.png"));
     let signal = decode_image(&path, None, EmbeddedThumbnail::Deny).unwrap();
@@ -422,6 +430,7 @@ fn chart_signal(curve: &str) -> Vec<[f64; 3]> {
 /// 0.12 clips the linear sRGB of XYB samples before the primaries conversion
 /// (`ColorTransformOp::Clip`). A BT.2020 color outside the sRGB gamut loses saturation, and
 /// libjxl keeps it. The last assert fails when `jxl-oxide` keeps it too.
+#[cfg(feature = "jxl")]
 #[test]
 fn lossy_jxl_matches_cube_in_gamut() {
     for curve in ["pq", "hlg"] {

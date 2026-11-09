@@ -241,7 +241,7 @@ fn measure_live_grid(label: &str, graphics: KittyBackend) {
         let playing = live.iter().filter(|&&index| app.loop_plays(index)).count();
         if stills.is_none()
             && pending.is_empty()
-            && live.iter().all(|&i| app.thumb_cache.is_sharp(i))
+            && live.iter().all(|&i| app.thumb_cache.is_sharp(&i))
         {
             stills = Some(now);
         }

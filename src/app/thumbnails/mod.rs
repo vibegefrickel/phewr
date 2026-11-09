@@ -16,16 +16,32 @@ use self::decode::{
 };
 use super::App;
 use crate::pictures::jobs::disk_cache::{FileStamp, LazyEntry};
-use crate::pictures::jobs::pool::{
-    MAX_CACHE_READS, MAX_PREVIEW_JOBS, MAX_THUMB_JOBS, ThumbPhase, spawn_job,
-};
+use crate::pictures::jobs::pool::{ThumbPhase, spawn_job};
 use crate::pictures::jobs::queue::{JobSlots, ThumbJob};
-use crate::pictures::jobs::thumbnail_cache::{GridPicture, ParkKey};
+use crate::pictures::jobs::thumbnail_cache::{CacheLimits, GridPicture, ParkKey};
 use crate::pictures::resize::padding::{pad_for_grid, thumb_target_px};
+#[cfg(test)]
 use ratatui::layout::Rect;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+
+/// With 4 jobs, each with its share of the cores, the first thumbnail comes after one decode.
+const MAX_THUMB_JOBS: usize = 4;
+
+/// The sharp decodes of the preview formats wait until every preview is out.
+const MAX_PREVIEW_JOBS: usize = 4;
+
+/// A warm grid reads all its cells together, not 4 at a time behind the decode slots.
+const MAX_CACHE_READS: usize = 64;
+
+/// The memory cache of the grid: 512 MB of padded pixels, and at least 200 thumbnails or two
+/// screens of cells.
+pub(super) const THUMB_CACHE_LIMITS: CacheLimits = CacheLimits {
+    bytes: 512 * 1024 * 1024,
+    min_entries: NonZeroUsize::new(200),
+};
 
 /// One flag holds a path and a bool: the map stays below about 10 MB.
 const MAX_ANIMATION_FLAGS: usize = 65_536;
@@ -121,7 +137,7 @@ impl App {
             && !self
                 .gallery
                 .visible_items()
-                .any(|(_, index)| self.thumb_cache.contains(index))
+                .any(|(_, index)| self.thumb_cache.contains(&index))
     }
 
     /// Take the finished thumbnails and start the waiting jobs. Returns the cells with a new image.
@@ -167,7 +183,7 @@ impl App {
         if !self.thumb_jobs.sharp.has_free_slot() {
             return;
         }
-        let reading = self.thumb_jobs.cache_reads.indices();
+        let reading = self.thumb_jobs.cache_reads.keys();
         while self.thumb_jobs.sharp.has_free_slot()
             && let Some(position) = self.next_sharp_job(&reading)
             && let Some(job) = self.thumb_jobs.sharp.waiting.remove(position)
@@ -178,11 +194,11 @@ impl App {
 
     /// A cell that shows nothing goes before a cell with a preview.
     fn next_sharp_job(&self, reading: &HashSet<usize>) -> Option<usize> {
-        let ready = |job: &ThumbJob| !reading.contains(&job.index) && !self.waiting_job_holds(job);
+        let ready = |job: &ThumbJob| !reading.contains(&job.key) && !self.waiting_job_holds(job);
         let waiting = &self.thumb_jobs.sharp.waiting;
         waiting
             .iter()
-            .position(|job| ready(job) && !self.thumb_cache.contains(job.index))
+            .position(|job| ready(job) && !self.thumb_cache.contains(&job.key))
             .or_else(|| waiting.iter().position(ready))
     }
 
@@ -197,7 +213,7 @@ impl App {
     /// True while a waiting sharp job must stay queued for the previews.
     fn waiting_job_holds(&self, job: &ThumbJob) -> bool {
         self.images
-            .get(job.index)
+            .get(job.key)
             .is_some_and(|path| self.sharp_job_waits(path))
     }
 
@@ -214,19 +230,19 @@ impl App {
         sharp: bool,
     ) -> bool {
         if sharp {
-            if self.thumb_cache.is_sharp(index) {
+            if self.thumb_cache.is_sharp(&index) {
                 return false;
             }
-            self.thumb_jobs.sharp.waiting.remove_index(index);
-            self.thumb_jobs.previews.waiting.remove_index(index);
-            self.thumb_jobs.cache_reads.waiting.remove_index(index);
+            self.thumb_jobs.sharp.waiting.remove_key(&index);
+            self.thumb_jobs.previews.waiting.remove_key(&index);
+            self.thumb_jobs.cache_reads.waiting.remove_key(&index);
             self.thumb_jobs.cache_misses.remove(&index);
             if let Some(old_id) = self.thumb_cache.insert(index, picture) {
                 self.stale_image_ids.push((index, old_id));
             }
             return true;
         }
-        if self.thumb_cache.contains(index) {
+        if self.thumb_cache.contains(&index) {
             return false;
         }
         self.thumb_cache.insert_preview(index, picture);
@@ -279,12 +295,19 @@ impl App {
         !self.thumb_jobs.previews.is_idle()
     }
 
-    /// Decode the thumbnail of `index` for the cell `rect`, or queue it. A HEIC, RAW or PSD cell
-    /// without an image gets a preview job first.
+    /// `spawn_thumb_job` with the first rank, for the tests.
+    #[cfg(test)]
     pub(crate) fn spawn_thumb_decode(&mut self, index: usize, rect: Rect) {
+        self.spawn_thumb_job(ThumbJob::new(index, rect));
+    }
+
+    /// Decode the thumbnail of the cell `job` now, or queue it by its rank. A HEIC, RAW or PSD
+    /// cell without an image gets a preview job first.
+    pub(crate) fn spawn_thumb_job(&mut self, job: ThumbJob) {
+        let (index, rect) = (job.key, job.rect);
         if self.is_folder(index)
-            || self.thumb_cache.is_sharp(index)
-            || self.thumb_jobs.sharp.holds(index)
+            || self.thumb_cache.is_sharp(&index)
+            || self.thumb_jobs.sharp.holds(&index)
         {
             return;
         }
@@ -299,16 +322,15 @@ impl App {
             self.store_thumbnail(index, parked, true);
             return;
         }
-        let job = ThumbJob { index, rect };
         if self.wants_preview(index) {
             if self.thumb_jobs.previews.has_free_slot() {
                 self.start_thumb_job(ThumbPhase::Preview, job);
             } else {
-                self.thumb_jobs.previews.waiting.push_back(job);
+                self.thumb_jobs.previews.waiting.push(job);
             }
         }
         if self.waiting_job_holds(&job) || !self.thumb_jobs.sharp.has_free_slot() {
-            self.thumb_jobs.sharp.waiting.push_back(job);
+            self.thumb_jobs.sharp.waiting.push(job);
             self.read_cache_ahead(job);
             return;
         }
@@ -319,16 +341,16 @@ impl App {
     /// nothing. A waiting read always has a waiting sharp job, and only running reads need a
     /// lookup.
     fn read_cache_ahead(&mut self, job: ThumbJob) {
-        if self.thumb_jobs.previews.running.contains(&job.index)
-            || self.thumb_jobs.cache_reads.running.contains(&job.index)
-            || self.thumb_jobs.cache_misses.contains(&job.index)
+        if self.thumb_jobs.previews.running.contains(&job.key)
+            || self.thumb_jobs.cache_reads.running.contains(&job.key)
+            || self.thumb_jobs.cache_misses.contains(&job.key)
         {
             return;
         }
         if self.thumb_jobs.cache_reads.has_free_slot() {
             self.start_thumb_job(ThumbPhase::CacheRead, job);
         } else {
-            self.thumb_jobs.cache_reads.waiting.push_back(job);
+            self.thumb_jobs.cache_reads.waiting.push(job);
         }
     }
 
@@ -336,25 +358,25 @@ impl App {
         self.images
             .get(index)
             .is_some_and(|path| has_embedded_preview(path))
-            && !self.thumb_cache.contains(index)
-            && !self.thumb_jobs.previews.holds(index)
+            && !self.thumb_cache.contains(&index)
+            && !self.thumb_jobs.previews.holds(&index)
     }
 
     /// The job pads the picture off the UI thread. A job whose file left the list starts nothing.
     fn start_thumb_job(&mut self, phase: ThumbPhase, job: ThumbJob) {
-        let Some(path) = self.images.get(job.index).cloned() else {
+        let Some(path) = self.images.get(job.key).cloned() else {
             return;
         };
-        self.slots_of(phase).running.insert(job.index);
+        self.slots_of(phase).running.insert(job.key);
         let tx = self.thumb_jobs.tx.clone();
         let target = thumb_target_px(job.rect, self.cell_px);
         let cell_px = self.cell_px;
         let generation = self.thumb_jobs.generation;
         let cache_dir = self.disk_cache_dir.clone();
-        let missed = self.thumb_jobs.cache_misses.contains(&job.index);
+        let missed = self.thumb_jobs.cache_misses.contains(&job.key);
         let known = self.known_animation_flag(&path);
         // A Live Photo still loops its motion, so it gets the stamp while the loops are on.
-        let rolls = self.grid_loops.enabled && self.is_live(job.index);
+        let rolls = self.grid_loops.enabled && self.is_live(job.key);
         spawn_job(phase, move || {
             let entry = LazyEntry::new(&cache_dir, &path, target);
             let (image, sharp) = match phase {
@@ -386,7 +408,7 @@ impl App {
             )]
             let _ = tx.send(ThumbResult {
                 generation,
-                index: job.index,
+                index: job.key,
                 phase,
                 image: ThumbImage::of(picture, sharp),
                 animated,
@@ -406,7 +428,7 @@ mod folder_switch_tests {
         app.spawn_thumb_decode(index, rect);
         wait_until(|| {
             app.poll_thumbnails();
-            app.thumb_cache.is_sharp(index)
+            app.thumb_cache.is_sharp(&index)
         });
     }
 
@@ -450,7 +472,10 @@ mod folder_switch_tests {
         scan(&mut app, &root);
         let anim = position(&app);
         app.spawn_thumb_decode(anim, rect);
-        assert!(app.thumb_cache.is_sharp(anim), "the parked picture, no job");
+        assert!(
+            app.thumb_cache.is_sharp(&anim),
+            "the parked picture, no job"
+        );
         assert!(!app.thumbnails_pending());
         assert!(
             app.is_animated(anim),
@@ -484,11 +509,11 @@ mod folder_switch_tests {
         let rect = app.gallery.thumb_box();
         decode_sharp(&mut app, a, rect);
         decode_sharp(&mut app, b, rect);
-        let thumbnail = app.thumb_cache.peek(a).unwrap().0.clone();
+        let thumbnail = app.thumb_cache.peek(&a).unwrap().0.clone();
 
         scan(&mut app, &other);
         assert_eq!(app.thumb_cache.parked_count(), 2);
-        assert!(!app.thumb_cache.contains(a), "the grid cache is empty");
+        assert!(!app.thumb_cache.contains(&a), "the grid cache is empty");
         assert!(
             !app.thumbnails_pending(),
             "no job of the old folder runs or waits"
@@ -504,14 +529,14 @@ mod folder_switch_tests {
             "the preview was not parked"
         );
         app.spawn_thumb_decode(a, rect);
-        assert!(app.thumb_cache.is_sharp(a), "the parked picture, no job");
-        assert_eq!(*app.thumb_cache.peek(a).unwrap().0, thumbnail);
+        assert!(app.thumb_cache.is_sharp(&a), "the parked picture, no job");
+        assert_eq!(*app.thumb_cache.peek(&a).unwrap().0, thumbnail);
         assert!(!app.thumbnails_pending());
         assert_eq!(app.thumb_cache.parked_count(), 1);
 
         let larger = Rect::new(0, 0, rect.width + 1, rect.height);
         app.spawn_thumb_decode(b, larger);
-        assert!(!app.thumb_cache.contains(b));
+        assert!(!app.thumb_cache.contains(&b));
         assert!(app.thumbnails_pending());
         assert_eq!(app.thumb_cache.parked_count(), 1);
     }
@@ -551,7 +576,7 @@ mod folder_switch_tests {
             app.poll_thumbnails().is_empty(),
             "a stale thumbnail was stored"
         );
-        assert!(!app.thumb_cache.contains(0));
+        assert!(!app.thumb_cache.contains(&0));
     }
 }
 
@@ -575,7 +600,7 @@ mod live_tests {
             app.poll_thumbnails();
             !app.thumbnails_pending()
         });
-        let image = &app.thumb_cache.peek(index).unwrap().0.image;
+        let image = &app.thumb_cache.peek(&index).unwrap().0.image;
         image.get_pixel(image.width() / 2, image.height() / 2).0
     }
 
@@ -601,6 +626,51 @@ mod slot_tests {
     use crate::test_support::{app_with, app_with_files, test_dir, wait_until};
     use ratatui::layout::Rect;
     use std::path::PathBuf;
+
+    /// A grid of 4 rows of 5 cells, with the cursor on the cell 13.
+    fn grid_with_cursor() -> crate::app::App {
+        let names: Vec<String> = (0..20)
+            .map(|index| format!("/photos/{index}.jpg"))
+            .collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut app = app_with(&names);
+        app.gallery.zoom_rows = 4;
+        app.gallery.update_grid(Rect::new(0, 0, 106, 29));
+        app.shape_requested = true;
+        app.gallery.cursor = 13;
+        app
+    }
+
+    #[test]
+    fn the_cursor_cell_decodes_first() {
+        let mut app = grid_with_cursor();
+        crate::kitty_output::render_gallery_images(&mut app).unwrap();
+        assert!(app.thumb_jobs.sharp.running.contains(&13), "a free slot");
+        let waiting: Vec<usize> = app
+            .thumb_jobs
+            .sharp
+            .waiting
+            .iter()
+            .map(|job| job.key)
+            .collect();
+        assert_eq!(waiting[..3], [3, 4, 5], "then the screen order");
+        assert!(!waiting.contains(&13));
+
+        let mut full = grid_with_cursor();
+        full.thumb_jobs
+            .sharp
+            .running
+            .extend(100..100 + MAX_THUMB_JOBS);
+        crate::kitty_output::render_gallery_images(&mut full).unwrap();
+        let waiting: Vec<usize> = full
+            .thumb_jobs
+            .sharp
+            .waiting
+            .iter()
+            .map(|job| job.key)
+            .collect();
+        assert_eq!(waiting[..3], [13, 0, 1], "the cursor cell waits first");
+    }
 
     /// A late result of the old generation must not free the slot of the new job.
     #[test]
@@ -647,33 +717,27 @@ mod slot_tests {
         let reads = 200..200 + MAX_CACHE_READS;
         app.thumb_jobs.cache_reads.running.extend(reads);
         app.spawn_thumb_decode(0, rect);
-        assert_eq!(app.thumb_jobs.sharp.waiting, [ThumbJob { index: 0, rect }]);
-        assert_eq!(
-            app.thumb_jobs.cache_reads.waiting,
-            [ThumbJob { index: 0, rect }]
-        );
+        assert_eq!(app.thumb_jobs.sharp.waiting, [ThumbJob::new(0, rect)]);
+        assert_eq!(app.thumb_jobs.cache_reads.waiting, [ThumbJob::new(0, rect)]);
 
         app.thumb_jobs.sharp.running.clear();
         app.thumb_jobs.cache_reads.running.clear();
         app.poll_thumbnails();
         assert!(app.thumb_jobs.cache_reads.running.contains(&0));
         assert!(app.thumb_jobs.cache_reads.waiting.is_empty());
-        assert_eq!(app.thumb_jobs.sharp.waiting, [ThumbJob { index: 0, rect }]);
+        assert_eq!(app.thumb_jobs.sharp.waiting, [ThumbJob::new(0, rect)]);
         wait_until(|| {
             app.poll_thumbnails();
             !app.thumbnails_pending()
         });
-        assert!(app.thumb_cache.is_sharp(0));
+        assert!(app.thumb_cache.is_sharp(&0));
     }
 
     #[test]
     fn job_of_removed_file_starts_nothing() {
         let mut app = app_with(&["a.png"]);
         let rect = Rect::new(0, 0, 1, 1);
-        app.thumb_jobs
-            .sharp
-            .waiting
-            .push_back(ThumbJob { index: 5, rect });
+        app.thumb_jobs.sharp.waiting.push(ThumbJob::new(5, rect));
         assert!(app.poll_thumbnails().is_empty());
         assert!(app.thumb_jobs.sharp.waiting.is_empty());
         assert!(app.thumb_jobs.sharp.running.is_empty());

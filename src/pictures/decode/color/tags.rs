@@ -2,8 +2,6 @@
 //! `cicp` tag of an ICC profile.
 
 use super::SourceColor;
-#[cfg(feature = "video")]
-use moxcms::ColorProfile;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -152,33 +150,6 @@ pub(crate) fn tiff_icc_profile(path: &Path) -> Option<Vec<u8>> {
         return Some(profile);
     }
     None
-}
-
-/// sRGB, Display P3 or BT.2020 (CICP 9 with the sRGB curve) by the colorants of `data`. The
-/// player has a color cube for each.
-#[cfg(feature = "video")]
-pub(crate) fn icc_known_space(data: &[u8]) -> Option<SourceColor> {
-    let profile = ColorProfile::new_from_slice(data).ok()?;
-    let close = |known: &ColorProfile| {
-        let near = |a: moxcms::Xyzd, b: moxcms::Xyzd| {
-            (a.x - b.x).abs() < 0.003 && (a.y - b.y).abs() < 0.003 && (a.z - b.z).abs() < 0.003
-        };
-        near(profile.red_colorant, known.red_colorant)
-            && near(profile.green_colorant, known.green_colorant)
-            && near(profile.blue_colorant, known.blue_colorant)
-    };
-    if close(&ColorProfile::new_srgb()) {
-        Some(SourceColor::Srgb)
-    } else if close(&ColorProfile::new_display_p3()) {
-        Some(SourceColor::DisplayP3)
-    } else if close(&ColorProfile::new_bt2020()) {
-        Some(SourceColor::Cicp {
-            primaries: 9,
-            transfer: 13,
-        })
-    } else {
-        None
-    }
 }
 
 /// The primaries and transfer of the `cicp` tag (ICC.1:2022), without a full profile parse.

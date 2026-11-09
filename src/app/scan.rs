@@ -330,7 +330,8 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "video")]
+    /// A `.HEIC` still is a file of the list only with libheif.
+    #[cfg(all(feature = "video", feature = "heic"))]
     #[test]
     fn edited_copy_pairs_only_with_its_motion() {
         use crate::config::Config;

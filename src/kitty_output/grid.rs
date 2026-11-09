@@ -4,6 +4,7 @@
 use super::loops::{place_loop_frame, send_grid_loops_to};
 use crate::app::App;
 use crate::gallery::GalleryState;
+use crate::pictures::jobs::queue::{Priority, ThumbJob};
 use crate::pictures::kitty::Pixels;
 use crate::pictures::kitty::placement::centered;
 use crate::pictures::kitty::screen::{Placements, Update};
@@ -64,7 +65,7 @@ pub(super) fn write_grid_to<W: Write + ?Sized>(
         |id| match stills.get(&id) {
             Some(&index) => app
                 .thumb_cache
-                .peek(index)
+                .peek(&index)
                 .map(|(picture, _)| Pixels::from(&picture.image)),
             None => app.grid_icons.pixels(id),
         },
@@ -110,7 +111,7 @@ fn grid_frame(
         }
         let still = app
             .thumb_cache
-            .peek(img_idx)
+            .peek(&img_idx)
             .map(|(picture, id)| (picture.cells, id));
         if let Some(now_started) = place_loop_frame(app, &mut frame, vis_idx, img_idx, tick) {
             started |= now_started;
@@ -152,7 +153,7 @@ pub(super) fn grid_placement(gallery: &GalleryState, vis_idx: usize, cells: (u16
 pub(super) fn visible_image_ids(app: &App) -> HashSet<u32> {
     let mut ids = HashSet::new();
     for (_, img_idx) in app.gallery.visible_items() {
-        if let Some((_, id)) = app.thumb_cache.peek(img_idx) {
+        if let Some((_, id)) = app.thumb_cache.peek(&img_idx) {
             ids.insert(id);
         }
         if let Some(cell_loop) = app.grid_loops.loops.get(&img_idx) {
@@ -172,13 +173,27 @@ pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
         .set_visible(app.gallery.visible_items().map(|(_, index)| index));
     for position in app.gallery.visible_range() {
         app.thumb_cache
-            .touch(app.gallery.filtered_indices[position]);
+            .touch(&app.gallery.filtered_indices[position]);
     }
     app.drop_hidden_loops();
     if !app.cell_shape_pending() {
-        for position in app.gallery.visible_range() {
-            let img_idx = app.gallery.filtered_indices[position];
-            app.spawn_thumb_decode(img_idx, app.gallery.thumb_box());
+        // The cell at the cursor decodes first, then the other cells from the top left. A free
+        // slot starts a job at once, so the cursor cell also spawns first.
+        let cursor = app.gallery.cursor;
+        let visible = app.gallery.visible_range();
+        let others = visible.clone().filter(|&position| position != cursor);
+        let order: Vec<usize> = visible
+            .contains(&cursor)
+            .then_some(cursor)
+            .into_iter()
+            .chain(others)
+            .collect();
+        for position in order {
+            app.spawn_thumb_job(ThumbJob {
+                key: app.gallery.filtered_indices[position],
+                rect: app.gallery.thumb_box(),
+                priority: Priority::on_screen(position, Some(cursor)),
+            });
         }
     }
 

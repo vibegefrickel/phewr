@@ -97,7 +97,7 @@ fn tick_swaps_placement_without_pixels() {
     let mut app = clip_app(3);
     let mut terminal = FakeTerminal::new();
     place_stills(&mut app, &mut terminal);
-    let (_, still) = app.thumb_cache.peek(1).unwrap();
+    let (_, still) = app.thumb_cache.peek(&1).unwrap();
     let ids = add_loop(&mut app, 1, 3);
     assert!(app.loops_to_send());
     assert!(!app.loop_plays(1));
@@ -160,7 +160,7 @@ fn animation_replaces_still_once() {
     let mut app = animation_app(3);
     let mut terminal = FakeTerminal::new();
     place_stills(&mut app, &mut terminal);
-    let (_, still) = app.thumb_cache.peek(1).unwrap();
+    let (_, still) = app.thumb_cache.peek(&1).unwrap();
     let ids = add_loop(&mut app, 1, 3);
     assert_eq!(ids.len(), 1, "one id for the whole animation");
     let id = ids[0];
@@ -267,7 +267,7 @@ fn redraw_places_running_animation() {
     let mut app = animation_app(3);
     let mut terminal = FakeTerminal::new();
     place_stills(&mut app, &mut terminal);
-    let (_, still) = app.thumb_cache.peek(1).unwrap();
+    let (_, still) = app.thumb_cache.peek(&1).unwrap();
     let ids = add_loop(&mut app, 1, 3);
     terminal.feed(play_at(&mut app, 0).0.as_bytes());
 
@@ -514,7 +514,7 @@ fn lost_frame_falls_back_to_still() {
     let mut app = clip_app(3);
     let mut terminal = FakeTerminal::new();
     place_stills(&mut app, &mut terminal);
-    let (_, still) = app.thumb_cache.peek(1).unwrap();
+    let (_, still) = app.thumb_cache.peek(&1).unwrap();
     let ids = add_loop(&mut app, 1, 3);
     terminal.feed(play_at(&mut app, 0).0.as_bytes());
     assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
@@ -583,7 +583,7 @@ fn redraw_places_current_frame() {
     let mut app = clip_app(3);
     let mut terminal = FakeTerminal::new();
     place_stills(&mut app, &mut terminal);
-    let (_, still) = app.thumb_cache.peek(1).unwrap();
+    let (_, still) = app.thumb_cache.peek(&1).unwrap();
     let ids = add_loop(&mut app, 1, 3);
     terminal.feed(play_at(&mut app, 0).0.as_bytes());
 
@@ -669,7 +669,7 @@ fn live_still_gives_way_to_its_loop() {
     )]));
     let mut terminal = FakeTerminal::new();
     place_stills(&mut app, &mut terminal);
-    let (_, still) = app.thumb_cache.peek(1).unwrap();
+    let (_, still) = app.thumb_cache.peek(&1).unwrap();
     assert_eq!(placed(&terminal, &[still]), vec![still], "the still shows");
 
     let ids = add_loop(&mut app, 1, 3);

@@ -16,6 +16,13 @@ mod keys;
 mod kitty_output;
 #[cfg(feature = "video")]
 mod mpv;
+// The shared picture module holds no lint level of its own: each project sets it here. phewr
+// calls neither the box copies nor `thumbnail_dir_below`. The tests call them, and clippy with
+// `--all-targets` still finds a module item without any caller.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "phewr calls no box copy of the shared module")
+)]
 mod pictures;
 #[cfg(feature = "video")]
 mod player;
@@ -53,6 +60,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use terminal::TerminalSession;
 use yazi::{reveal_in_yazi, run_briefly};
+
+/// Skips the probe of the Kitty transfer: `direct`, `png` or `file`.
+const TRANSFER_OVERRIDE: &str = "PHEWR_KITTY_TRANSFER";
+/// Fixes the loop path: `animation` or `ticks`. It wins over `[gallery] loops`.
+const LOOPS_OVERRIDE: &str = "PHEWR_KITTY_LOOPS";
 
 /// Give the terminal back in the order of `TerminalSession::restore`. Every step runs, and the
 /// first error returns. A failed picture delete cannot leave the shell in raw mode.
@@ -259,16 +271,12 @@ fn main() -> io::Result<()> {
     let mut session = TerminalSession::enter(config.mouse)?;
 
     let loops = pictures::kitty::protocol::chosen_loops(
-        std::env::var(pictures::kitty::protocol::LOOPS_OVERRIDE)
-            .ok()
-            .as_deref(),
+        std::env::var(LOOPS_OVERRIDE).ok().as_deref(),
         config.loops,
         pictures::kitty::protocol::is_herdr(),
     );
     let probe = probe_terminal(
-        std::env::var(pictures::kitty::protocol::TRANSFER_OVERRIDE)
-            .ok()
-            .as_deref(),
+        std::env::var(TRANSFER_OVERRIDE).ok().as_deref(),
         loops,
         pictures::kitty::protocol::is_ssh(),
         query_cell_size_and_probe,

@@ -89,10 +89,10 @@ fn shown_files(app: &App) -> (Vec<PathBuf>, (u32, u32)) {
 }
 
 fn queue_grid_job(app: &mut App) {
-    app.thumb_jobs.sharp.waiting.push_back(ThumbJob {
-        index: 0,
-        rect: Rect::new(0, 0, 10, 5),
-    });
+    app.thumb_jobs
+        .sharp
+        .waiting
+        .push(ThumbJob::new(0, Rect::new(0, 0, 10, 5)));
 }
 
 #[test]
@@ -309,10 +309,10 @@ fn grid_cache_read_holds_start() {
     let app = &mut tree.app;
     let a = tree.root.join("a");
     let start = Instant::now();
-    app.thumb_jobs.cache_reads.waiting.push_back(ThumbJob {
-        index: 0,
-        rect: Rect::new(0, 0, 10, 5),
-    });
+    app.thumb_jobs
+        .cache_reads
+        .waiting
+        .push(ThumbJob::new(0, Rect::new(0, 0, 10, 5)));
     app.tick_folder_prefetch(start);
     let due = start + FOLDER_PREFETCH_DELAY;
     app.tick_folder_prefetch(due);

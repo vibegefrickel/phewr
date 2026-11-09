@@ -268,11 +268,11 @@ fn heif_boxes_list_thumbnail() {
     assert!(!items.thumbnail_matches_primary(primary.item_id()));
 }
 
-/// `PHEWR_TEST_AVIF=/path/to/image.avif`.
+/// `<APP>_TEST_AVIF=/path/to/image.avif`.
 #[test]
-#[ignore = "needs PHEWR_TEST_AVIF, a real AVIF file"]
+#[ignore = "needs <APP>_TEST_AVIF, a real AVIF file"]
 fn decodes_avif_from_env() {
-    let Some(path) = crate::pictures::decode::real_test_file("PHEWR_TEST_AVIF") else {
+    let Some(path) = crate::pictures::names::test_file("AVIF") else {
         return;
     };
     let path = path.as_path();
@@ -284,14 +284,14 @@ fn decodes_avif_from_env() {
     let peak = decode_image(path, None, EmbeddedThumbnail::Deny)
         .expect("full decode")
         .peak;
-    println!("PHEWR_TEST_AVIF: HDR10 peak {peak:?}");
+    println!("{}: HDR10 peak {peak:?}", path.display());
 }
 
-/// `PHEWR_TEST_HEIC=/path/to/photo.heic`. The grid uses the embedded thumbnail.
+/// `<APP>_TEST_HEIC=/path/to/photo.heic`. The grid uses the embedded thumbnail.
 #[test]
-#[ignore = "needs PHEWR_TEST_HEIC, a real photo"]
+#[ignore = "needs <APP>_TEST_HEIC, a real photo"]
 fn heic_thumbnail_from_env() {
-    let Some(path) = crate::pictures::decode::real_test_file("PHEWR_TEST_HEIC") else {
+    let Some(path) = crate::pictures::names::test_file("HEIC") else {
         return;
     };
     let path = path.as_path();

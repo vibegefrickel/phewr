@@ -44,7 +44,7 @@ fn grid_app(path: &Path, cache: &Path) -> App {
 /// Poll until the cell 0 gets a new image, for at most 2 s.
 fn wait_for_new_image(app: &mut App) -> RgbaImage {
     wait_until(|| app.poll_thumbnails() == vec![0]);
-    app.thumb_cache.peek(0).unwrap().0.image.clone()
+    app.thumb_cache.peek(&0).unwrap().0.image.clone()
 }
 
 fn rgba_center(image: &RgbaImage) -> [u8; 4] {
@@ -70,7 +70,7 @@ fn decode_once_then_read_cache() {
         !arrived.is_empty()
     });
     assert_eq!(arrived, vec![0]);
-    assert!(app.thumb_cache.contains(0));
+    assert!(app.thumb_cache.contains(&0));
     let cached = get_cache_file_path(&cache, &path, (24, 32)).unwrap();
     assert!(cached.is_file());
     app.spawn_thumb_decode(0, rect);
@@ -88,7 +88,7 @@ fn decode_once_then_read_cache() {
         !arrived.is_empty()
     });
     assert_eq!(
-        fresh.thumb_cache.peek(0).unwrap().0.image.dimensions(),
+        fresh.thumb_cache.peek(&0).unwrap().0.image.dimensions(),
         (8, 16),
         "the 8x8 image padded to one cell of 8x16 px"
     );
@@ -177,11 +177,11 @@ fn cache_hit_skips_decode_slots() {
     });
 
     assert_eq!(arrived, vec![4], "the hit comes while the slots are full");
-    assert!(app.thumb_cache.is_sharp(4));
+    assert!(app.thumb_cache.is_sharp(&4));
     assert_eq!(app.thumb_jobs.sharp.running.len(), 4, "the cold cap holds");
     assert_eq!(
         app.thumb_jobs.sharp.waiting,
-        [ThumbJob { index: 5, rect }],
+        [ThumbJob::new(5, rect)],
         "the miss waits for a decode slot, the hit needs none"
     );
     // A new render of the grid reads the missed cell again only after its decode.
@@ -195,20 +195,14 @@ fn cache_hit_skips_decode_slots() {
 fn waiting_decode_follows_cache_read() {
     let mut app = app_with(&["a.png", "b.png"]);
     let rect = Rect::new(0, 0, 1, 1);
-    app.thumb_jobs
-        .sharp
-        .waiting
-        .push_back(ThumbJob { index: 0, rect });
-    app.thumb_jobs
-        .sharp
-        .waiting
-        .push_back(ThumbJob { index: 1, rect });
+    app.thumb_jobs.sharp.waiting.push(ThumbJob::new(0, rect));
+    app.thumb_jobs.sharp.waiting.push(ThumbJob::new(1, rect));
     app.thumb_jobs.cache_reads.running.insert(0);
 
     app.poll_thumbnails();
     assert_eq!(
         app.thumb_jobs.sharp.waiting,
-        [ThumbJob { index: 0, rect }],
+        [ThumbJob::new(0, rect)],
         "the cell without a cache read starts first"
     );
     assert!(app.thumb_jobs.sharp.running.contains(&1));
@@ -254,26 +248,17 @@ fn missed_cache_read_is_not_repeated() {
 fn sharp_drops_waiting_preview_and_read() {
     let mut app = app_with(&["a.heic", "b.heic"]);
     let rect = Rect::new(0, 0, 1, 1);
-    app.thumb_jobs
-        .previews
-        .waiting
-        .push_back(ThumbJob { index: 0, rect });
-    app.thumb_jobs
-        .previews
-        .waiting
-        .push_back(ThumbJob { index: 1, rect });
+    app.thumb_jobs.previews.waiting.push(ThumbJob::new(0, rect));
+    app.thumb_jobs.previews.waiting.push(ThumbJob::new(1, rect));
     app.thumb_jobs.cache_misses.insert(0);
 
     app.thumb_jobs
         .cache_reads
         .waiting
-        .push_back(ThumbJob { index: 0, rect });
+        .push(ThumbJob::new(0, rect));
 
     assert!(app.store_thumbnail(0, RgbaImage::new(1, 1), true));
-    assert_eq!(
-        app.thumb_jobs.previews.waiting,
-        [ThumbJob { index: 1, rect }]
-    );
+    assert_eq!(app.thumb_jobs.previews.waiting, [ThumbJob::new(1, rect)]);
     assert!(
         app.thumb_jobs.cache_reads.waiting.is_empty(),
         "the read is not needed"
@@ -299,8 +284,8 @@ fn drops_old_generation_results() {
         .unwrap();
 
     assert_eq!(app.poll_thumbnails(), vec![1]);
-    assert!(!app.thumb_cache.contains(0));
-    assert!(app.thumb_cache.contains(1));
+    assert!(!app.thumb_cache.contains(&0));
+    assert!(app.thumb_cache.contains(&1));
 }
 
 #[test]
@@ -339,8 +324,11 @@ fn old_preview_dropped_and_slot_freed() {
         .unwrap();
 
     assert_eq!(app.poll_thumbnails(), vec![1]);
-    assert!(!app.thumb_cache.contains(0), "the stale preview is dropped");
-    assert!(app.thumb_cache.contains(1) && !app.thumb_cache.is_sharp(1));
+    assert!(
+        !app.thumb_cache.contains(&0),
+        "the stale preview is dropped"
+    );
+    assert!(app.thumb_cache.contains(&1) && !app.thumb_cache.is_sharp(&1));
     assert!(!app.has_pending_work(), "a failed decode frees its slot");
 }
 
@@ -356,7 +344,7 @@ fn no_ffmpeg_video_frees_slot() {
         app.poll_thumbnails();
         !app.has_pending_work()
     });
-    assert!(!app.thumb_cache.contains(0));
+    assert!(!app.thumb_cache.contains(&0));
     assert!(app.is_video(0), "the cell shows the play icon");
 }
 
@@ -395,22 +383,16 @@ fn sharp_result_replaces_preview() {
     let mut app = app_with(&["a.heic", "b.heic"]);
     let rect = Rect::new(0, 0, 1, 1);
     assert!(app.store_thumbnail(0, RgbaImage::new(1, 1), false));
-    let (_, preview_id) = app.thumb_cache.peek(0).unwrap();
-    app.thumb_jobs
-        .sharp
-        .waiting
-        .push_back(ThumbJob { index: 0, rect });
-    app.thumb_jobs
-        .sharp
-        .waiting
-        .push_back(ThumbJob { index: 1, rect });
+    let (_, preview_id) = app.thumb_cache.peek(&0).unwrap();
+    app.thumb_jobs.sharp.waiting.push(ThumbJob::new(0, rect));
+    app.thumb_jobs.sharp.waiting.push(ThumbJob::new(1, rect));
 
     assert!(
         !app.store_thumbnail(0, RgbaImage::new(1, 1), false),
         "a second preview changes nothing"
     );
     assert!(app.store_thumbnail(0, RgbaImage::new(2, 2), true));
-    assert!(app.thumb_cache.is_sharp(0));
+    assert!(app.thumb_cache.is_sharp(&0));
     assert_eq!(app.stale_image_ids, vec![(0, preview_id)]);
     assert_eq!(
         app.thumb_jobs.sharp.waiting.len(),
@@ -422,7 +404,7 @@ fn sharp_result_replaces_preview() {
         "a second sharp image changes nothing"
     );
     assert_eq!(
-        app.thumb_cache.peek(0).unwrap().0.image.dimensions(),
+        app.thumb_cache.peek(&0).unwrap().0.image.dimensions(),
         (2, 2)
     );
 }
@@ -448,29 +430,29 @@ fn heic_shows_preview_then_sharp() {
     );
 
     let preview = wait_for_new_image(&mut app);
-    assert!(!app.thumb_cache.is_sharp(0));
+    assert!(!app.thumb_cache.is_sharp(&0));
     assert_eq!(
         preview.dimensions(),
         (64, 32),
         "the 64x32 thumbnail has the shape of the 160x80 sharp image: no padding"
     );
-    assert_eq!(app.thumb_cache.peek(0).unwrap().0.cells, (20, 5));
+    assert_eq!(app.thumb_cache.peek(&0).unwrap().0.cells, (20, 5));
     assert_close(rgba_center(&preview), BLUE);
     assert_eq!(
         fs::read_dir(&cache).unwrap().count(),
         0,
         "no preview on disk"
     );
-    let (_, preview_id) = app.thumb_cache.peek(0).unwrap();
+    let (_, preview_id) = app.thumb_cache.peek(&0).unwrap();
 
     let sharp = wait_for_new_image(&mut app);
-    assert!(app.thumb_cache.is_sharp(0));
+    assert!(app.thumb_cache.is_sharp(&0));
     assert_eq!(
         sharp.dimensions(),
         (160, 80),
         "20x5 whole cells, no padding"
     );
-    assert_eq!(app.thumb_cache.peek(0).unwrap().0.cells, (20, 5));
+    assert_eq!(app.thumb_cache.peek(&0).unwrap().0.cells, (20, 5));
     assert_close(rgba_center(&sharp), RED);
     assert_eq!(
         fs::read_dir(&cache).unwrap().count(),
@@ -482,7 +464,7 @@ fn heic_shows_preview_then_sharp() {
 
     let mut warm = grid_app(&path, &cache);
     let first = wait_for_new_image(&mut warm);
-    assert!(warm.thumb_cache.is_sharp(0));
+    assert!(warm.thumb_cache.is_sharp(&0));
     assert_close(rgba_center(&first), RED);
     assert!(warm.stale_image_ids.is_empty());
     wait_until(|| {
@@ -516,10 +498,10 @@ fn heic_preview_skips_cache_key() {
     assert_eq!(KEY_COMPUTATIONS.of(&path), 1, "the missed cache read");
     app.thumb_jobs.previews.running.clear();
     wait_until(|| app.poll_thumbnails() == vec![0]);
-    assert!(!app.thumb_cache.is_sharp(0), "the preview comes first");
+    assert!(!app.thumb_cache.is_sharp(&0), "the preview comes first");
     wait_until(|| {
         app.poll_thumbnails();
-        app.thumb_cache.is_sharp(0)
+        app.thumb_cache.is_sharp(&0)
     });
 
     assert_eq!(
@@ -545,7 +527,7 @@ fn other_transform_gives_no_preview() {
     let mut app = grid_app(&path, dir.path());
     let first = wait_for_new_image(&mut app);
     assert!(
-        app.thumb_cache.is_sharp(0),
+        app.thumb_cache.is_sharp(&0),
         "the first image is the sharp one"
     );
     assert_eq!(
@@ -553,7 +535,7 @@ fn other_transform_gives_no_preview() {
         (80, 160),
         "10x10 whole cells, no padding"
     );
-    assert_eq!(app.thumb_cache.peek(0).unwrap().0.cells, (10, 10));
+    assert_eq!(app.thumb_cache.peek(&0).unwrap().0.cells, (10, 10));
     assert_close(rgba_center(&first), RED);
     assert!(app.stale_image_ids.is_empty());
 }
@@ -588,7 +570,7 @@ fn empty_cells_start_before_heic() {
         app.thumb_jobs
             .sharp
             .waiting
-            .push_back(ThumbJob { index, rect });
+            .push(ThumbJob::new(index, rect));
     }
     app.thumb_jobs.sharp.running.extend(10..13);
 

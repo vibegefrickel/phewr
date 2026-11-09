@@ -64,7 +64,7 @@ pub(super) fn draw_thumbnail_cells(
         };
         if app.is_folder(img_idx) {
             draw_folder_cell(frame, app, vis_idx, img_idx, look, &mut grid);
-        } else if !app.thumb_cache.contains(img_idx) {
+        } else if !app.thumb_cache.contains(&img_idx) {
             let icon = if app.is_video(img_idx) {
                 Icon::Video
             } else {

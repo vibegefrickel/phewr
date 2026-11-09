@@ -106,7 +106,7 @@ impl App {
     /// a job.
     fn wants_loop(&self, index: usize) -> bool {
         let loops = &self.grid_loops;
-        self.thumb_cache.is_sharp(index)
+        self.thumb_cache.is_sharp(&index)
             && !loops.loops.contains_key(&index)
             && !loops.running.contains_key(&index)
             && !loops.failed.contains(&index)

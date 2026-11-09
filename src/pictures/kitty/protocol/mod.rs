@@ -1,6 +1,7 @@
 //! The Kitty graphics writes: the transmit through each medium, the frames, the deletes and the
 //! placements.
 use super::{BELOW_BACKGROUNDS, DisplayOptions, Pixels, Transfer};
+use crate::pictures::names::APP_NAME;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -14,10 +15,7 @@ mod probe;
 
 #[cfg(test)]
 pub(crate) use probe::detect_transfer;
-pub(crate) use probe::{
-    LOOPS_OVERRIDE, TRANSFER_OVERRIDE, chosen_loops, describe, describe_loops, detect_backend,
-    is_herdr, is_ssh,
-};
+pub(crate) use probe::{chosen_loops, describe, describe_loops, detect_backend, is_herdr, is_ssh};
 
 const CHUNK_SIZE: usize = 4096;
 /// The protocol reads a temp file only if its name holds this marker.
@@ -159,7 +157,7 @@ pub(crate) fn write_pixels<W: Write + ?Sized>(
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             write_direct(out, keys, 100, &STANDARD.encode(&png_buf))
         }
-        // A full or read-only temp dir must not stop phewr. The pixels go through the pty.
+        // A full or read-only temp dir must not stop the app. The pixels go through the pty.
         Transfer::TempFile => match write_temp_file(pixels.data, temp_dir) {
             Ok(path) => write_temp_file_reference(out, keys, raw_format(pixels), &path),
             Err(_) => write_pixels(out, pixels, keys, Transfer::Direct, temp_dir),
@@ -247,7 +245,7 @@ fn write_temp_file(pixels: &[u8], temp_dir: &Path) -> io::Result<PathBuf> {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let path = temp_dir.join(format!(
-        "{TEMP_FILE_MARKER}-phewr-{}-{sequence}.raw",
+        "{TEMP_FILE_MARKER}-{APP_NAME}-{}-{sequence}.raw",
         std::process::id()
     ));
     if let Err(error) = std::fs::write(&path, pixels) {

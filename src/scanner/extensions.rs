@@ -1,18 +1,24 @@
 //! The supported extensions of the scanner. The extensions of the decoders and the extension
 //! test live in `crate::pictures::decode::extensions`.
 
+#[cfg(feature = "jxl")]
+use crate::pictures::decode::extensions::JXL_EXTENSIONS;
 #[cfg(feature = "heic")]
 use crate::pictures::decode::extensions::LIBHEIF_EXTENSIONS;
 #[cfg(all(feature = "sips", target_os = "macos"))]
 use crate::pictures::decode::extensions::SIPS_EXTENSIONS;
-use crate::pictures::decode::extensions::{IMAGE_EXTENSIONS, JXL_EXTENSIONS, has_extension};
+use crate::pictures::decode::extensions::{IMAGE_EXTENSIONS, has_extension};
 use std::path::Path;
 
 #[cfg(feature = "video")]
 pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
 
 pub(crate) fn is_supported(path: &Path) -> bool {
-    if has_extension(path, IMAGE_EXTENSIONS) || has_extension(path, JXL_EXTENSIONS) {
+    if has_extension(path, IMAGE_EXTENSIONS) {
+        return true;
+    }
+    #[cfg(feature = "jxl")]
+    if has_extension(path, JXL_EXTENSIONS) {
         return true;
     }
     #[cfg(all(feature = "sips", target_os = "macos"))]
@@ -63,10 +69,15 @@ mod tests {
     }
 
     #[test]
-    fn supports_image_and_jxl() {
-        for name in ["a.exr", "a.HDR", "a.qoi", "a.tga", "a.jxl", "a.APNG"] {
+    fn supports_image_formats() {
+        for name in ["a.exr", "a.HDR", "a.qoi", "a.tga", "a.APNG"] {
             assert!(is_supported(Path::new(name)), "{name}");
         }
+    }
+
+    #[test]
+    fn jxl_needs_jxl_feature() {
+        assert_eq!(is_supported(Path::new("a.jxl")), cfg!(feature = "jxl"));
     }
 
     #[cfg(all(feature = "sips", target_os = "macos"))]

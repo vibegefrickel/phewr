@@ -117,7 +117,7 @@ fn decode_deep(
         .map_or(16, |plane| plane.bits_per_pixel);
     let ((w, h), bytes) = heif_plane_pixels(&image, target, layout)?;
     // libheif writes little-endian samples, and `fast_image_resize` keeps the machine byte order,
-    // little-endian on each phewr target.
+    // little-endian on each target of the module.
     let samples: Vec<u16> = bytes
         .par_chunks_exact(2)
         .map(|pair| widen(u16::from_le_bytes([pair[0], pair[1]]), bits))

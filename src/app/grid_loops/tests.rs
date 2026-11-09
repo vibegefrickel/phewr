@@ -48,7 +48,7 @@ fn finish_jobs(app: &mut App) {
 fn jobs_wait_for_stills() {
     let dir = test_dir();
     let mut app = grid_app(dir.path(), &["a.jpg", "clip.mp4"], &Config::default());
-    let still = app.thumb_cache.peek(1).unwrap().0.clone();
+    let still = app.thumb_cache.peek(&1).unwrap().0.clone();
     app.thumb_cache.clear();
     app.thumb_cache.insert(1, still);
     app.spawn_thumb_decode(0, Rect::new(0, 0, 20, 6));

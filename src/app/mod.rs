@@ -30,7 +30,6 @@ use crate::image_list::SharedImageList;
 use crate::info::ImageInfo;
 use crate::kitty_output::GridIcons;
 use crate::pictures::decode::ScreenImage;
-use crate::pictures::jobs::disk_cache::default_disk_cache_dir;
 use crate::pictures::jobs::thumbnail_cache::ThumbnailCache;
 use crate::pictures::kitty::screen::Screen;
 use crate::pictures::kitty::{GraphicsOutput, KittyBackend};
@@ -223,13 +222,13 @@ impl App {
             info_cache: LruCache::new(INFO_CACHE_CAPACITY),
             state_file,
             state_writer: config::StateWriter::default(),
-            disk_cache_dir: default_disk_cache_dir(),
+            disk_cache_dir: disk_cache::default_disk_cache_dir(),
             slideshow: None,
             slideshow_interval: Duration::from_secs_f64(config.slideshow_interval),
             slideshow_loop: config.slideshow_loop,
             slideshow_autostart: false,
             gallery,
-            thumb_cache: ThumbnailCache::new(),
+            thumb_cache: ThumbnailCache::new(thumbnails::THUMB_CACHE_LIMITS),
             selection: HashSet::new(),
             current_dir: None,
             initial_dir: None,

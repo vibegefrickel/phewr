@@ -448,7 +448,7 @@ fn animated_still_carries_play_stamp() {
     });
     // Both fixtures are 16x12 and yellow. The stamp turns the middle of the animation white.
     let middle = |index: usize| {
-        let (picture, _) = app.thumb_cache.peek(index).unwrap();
+        let (picture, _) = app.thumb_cache.peek(&index).unwrap();
         let image = &picture.image;
         image.get_pixel(image.width() / 2, image.height() / 2).0
     };

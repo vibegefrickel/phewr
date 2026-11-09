@@ -231,11 +231,11 @@ fn measure_grid(app: &mut App) -> GridTimes {
         if first.is_none() && transmitted {
             first = Some(now);
         }
-        let shown = pending.is_empty() && visible.iter().all(|&idx| app.thumb_cache.contains(idx));
+        let shown = pending.is_empty() && visible.iter().all(|&idx| app.thumb_cache.contains(&idx));
         if shown && all_shown.is_none() {
             all_shown = Some(now);
         }
-        if shown && visible.iter().all(|&idx| app.thumb_cache.is_sharp(idx)) {
+        if shown && visible.iter().all(|&idx| app.thumb_cache.is_sharp(&idx)) {
             return GridTimes {
                 first: first.unwrap_or_default(),
                 all_shown: all_shown.unwrap_or_default(),

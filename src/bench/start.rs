@@ -130,14 +130,14 @@ fn start_once(dir: &Path, cache_dir: &Path) -> StartTimes {
             .collect();
         let shown = !times.first_picture.is_zero()
             && pending.is_empty()
-            && cells.iter().all(|&index| app.thumb_cache.contains(index));
+            && cells.iter().all(|&index| app.thumb_cache.contains(&index));
         if shown && times.all_shown.is_zero() {
             times.all_shown = now;
         }
         // The next start begins without the decodes of this one.
         if shown
             && !app.has_pending_work()
-            && cells.iter().all(|&index| app.thumb_cache.is_sharp(index))
+            && cells.iter().all(|&index| app.thumb_cache.is_sharp(&index))
         {
             times.all_sharp = now;
             return times;

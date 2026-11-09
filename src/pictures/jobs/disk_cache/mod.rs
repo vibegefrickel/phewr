@@ -3,14 +3,14 @@
 mod write;
 
 pub(crate) use self::write::write_cache_file;
-use directories::ProjectDirs;
 use image::RgbaImage;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Change it when the thumbnail output changes.
-const THUMBNAIL_CACHE_VERSION: &str = "phewr-thumbnail-v21";
+/// Change it when the thumbnail output changes. The package name keeps the keys of two apps
+/// apart.
+const THUMBNAIL_CACHE_VERSION: &str = concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v21");
 
 /// QOI decodes twice as fast as PNG at the same file size.
 pub(crate) const CACHE_FORMAT: image::ImageFormat = image::ImageFormat::Qoi;
@@ -23,12 +23,16 @@ const OLD_CACHE_EXTENSION: &str = "png";
 /// The extension of the loop files of the grid. The prune removes them before the stills.
 pub(crate) const LOOP_EXTENSION: &str = "loop";
 
-/// The cache below the user's cache directory, or a temp directory without one.
-pub(crate) fn default_disk_cache_dir() -> PathBuf {
-    ProjectDirs::from("", "", "phewr").map_or_else(
-        || std::env::temp_dir().join("phewr-cache"),
-        |dirs| dirs.cache_dir().to_path_buf(),
-    )
+/// The name of the thumbnail folder below the cache root of an app.
+const THUMBNAIL_FOLDER: &str = "thumbnails";
+
+/// The folder of the thumbnail cache below `cache_root`, the cache folder of the app.
+///
+/// The module offers no default folder: the app passes the folder of its thumbnails. The prune
+/// deletes the cache files at the top of that folder, so the thumbnails must not share it with
+/// other files of the app. The prune also refuses a folder that holds a subfolder.
+pub(crate) fn thumbnail_dir_below(cache_root: &Path) -> PathBuf {
+    cache_root.join(THUMBNAIL_FOLDER)
 }
 
 /// The length and the modification time of a source file, hashed into the cache key.
@@ -58,13 +62,7 @@ impl FileStamp {
 #[derive(Debug)]
 pub(crate) struct CacheEntry {
     file: PathBuf,
-    #[cfg_attr(
-        not(feature = "video"),
-        expect(
-            dead_code,
-            reason = "only the animation flag of the video feature reads it"
-        )
-    )]
+    /// The stamp of the source file. A job that reads the cache gets it without a second `stat`.
     pub(crate) stamp: FileStamp,
 }
 

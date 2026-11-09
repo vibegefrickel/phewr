@@ -1,54 +1,106 @@
-//! The queues of the thumbnail jobs and the slots of each phase.
+//! The queues of the picture jobs and the slots of each phase. A job waits in the order of its
+//! priority, and each phase runs at most the bound of parallel jobs that the app sets.
 
 use ratatui::layout::Rect;
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::Hash;
 
-/// A thumbnail job: the image index and its grid cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ThumbJob {
-    pub(crate) index: usize,
-    pub(crate) rect: Rect,
+/// The rank of a waiting job: a lower rank starts first, and equal ranks keep their push order.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Priority(usize);
+
+impl Priority {
+    /// The cell at `position` in the order of the screen. The cell at the `cursor` goes first.
+    pub(crate) fn on_screen(position: usize, cursor: Option<usize>) -> Self {
+        if cursor == Some(position) {
+            Self(0)
+        } else {
+            Self(position.saturating_add(1))
+        }
+    }
 }
 
-/// The waiting jobs of one phase in grid order, with a count per image index.
+/// A picture job: the key of the picture in the app, its cells and its rank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ThumbJob<K = usize> {
+    pub(crate) key: K,
+    pub(crate) rect: Rect,
+    pub(crate) priority: Priority,
+}
+
+/// A job with the first rank, for the tests.
+#[cfg(test)]
+impl<K> ThumbJob<K> {
+    pub(crate) fn new(key: K, rect: Rect) -> Self {
+        Self {
+            key,
+            rect,
+            priority: Priority::default(),
+        }
+    }
+}
+
+/// The waiting jobs of one phase in the order of their priority, with a count per key.
 ///
 /// `holds` runs per visible cell per draw, and the membership test must not scan the queue.
-#[derive(Debug, Default)]
-pub(crate) struct JobQueue {
-    jobs: VecDeque<ThumbJob>,
-    members: HashMap<usize, usize>,
+#[derive(Debug)]
+pub(crate) struct JobQueue<K = usize> {
+    jobs: VecDeque<ThumbJob<K>>,
+    members: HashMap<K, usize>,
 }
 
-impl JobQueue {
-    pub(crate) fn push_back(&mut self, job: ThumbJob) {
-        *self.members.entry(job.index).or_default() += 1;
-        self.jobs.push_back(job);
+impl<K> Default for JobQueue<K> {
+    fn default() -> Self {
+        Self {
+            jobs: VecDeque::new(),
+            members: HashMap::new(),
+        }
+    }
+}
+
+impl<K: Clone + Eq + Hash> JobQueue<K> {
+    /// Queue `job` behind every job with the same or a lower rank.
+    pub(crate) fn push(&mut self, job: ThumbJob<K>) {
+        *self.members.entry(job.key.clone()).or_default() += 1;
+        let position = self
+            .jobs
+            .partition_point(|waiting| waiting.priority <= job.priority);
+        self.jobs.insert(position, job);
     }
 
-    pub(crate) fn pop_front(&mut self) -> Option<ThumbJob> {
+    pub(crate) fn pop_front(&mut self) -> Option<ThumbJob<K>> {
         let job = self.jobs.pop_front()?;
-        self.forget(job.index);
+        self.forget(&job.key);
         Some(job)
     }
 
-    pub(crate) fn remove(&mut self, position: usize) -> Option<ThumbJob> {
+    pub(crate) fn remove(&mut self, position: usize) -> Option<ThumbJob<K>> {
         let job = self.jobs.remove(position)?;
-        self.forget(job.index);
+        self.forget(&job.key);
         Some(job)
     }
 
-    /// Drop every waiting job of the image `index`.
-    pub(crate) fn remove_index(&mut self, index: usize) {
-        if self.members.remove(&index).is_some() {
-            self.jobs.retain(|job| job.index != index);
+    /// Drop every waiting job of the picture `key`.
+    pub(crate) fn remove_key<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if self.members.remove(key).is_some() {
+            self.jobs.retain(|job| job.key.borrow() != key);
         }
     }
 
-    pub(crate) fn contains(&self, index: usize) -> bool {
-        self.members.contains_key(&index)
+    pub(crate) fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.members.contains_key(key)
     }
 
-    pub(crate) fn iter(&self) -> std::collections::vec_deque::Iter<'_, ThumbJob> {
+    pub(crate) fn iter(&self) -> std::collections::vec_deque::Iter<'_, ThumbJob<K>> {
         self.jobs.iter()
     }
 
@@ -66,31 +118,32 @@ impl JobQueue {
         self.members.clear();
     }
 
-    fn forget(&mut self, index: usize) {
-        if let Some(count) = self.members.get_mut(&index) {
+    fn forget(&mut self, key: &K) {
+        if let Some(count) = self.members.get_mut(key) {
             *count -= 1;
             if *count == 0 {
-                self.members.remove(&index);
+                self.members.remove(key);
             }
         }
     }
 }
 
 #[cfg(test)]
-impl<const N: usize> PartialEq<[ThumbJob; N]> for JobQueue {
-    fn eq(&self, other: &[ThumbJob; N]) -> bool {
+impl<K: PartialEq, const N: usize> PartialEq<[ThumbJob<K>; N]> for JobQueue<K> {
+    fn eq(&self, other: &[ThumbJob<K>; N]) -> bool {
         self.jobs == *other
     }
 }
 
-/// The slots of one decode phase: at most `limit` running jobs, and the waiting jobs.
-pub(crate) struct JobSlots {
-    pub(crate) running: HashSet<usize>,
-    pub(crate) waiting: JobQueue,
+/// The slots of one decode phase: at most `limit` running jobs, and the waiting jobs. The app
+/// sets the limit of each phase.
+pub(crate) struct JobSlots<K = usize> {
+    pub(crate) running: HashSet<K>,
+    pub(crate) waiting: JobQueue<K>,
     limit: usize,
 }
 
-impl JobSlots {
+impl<K: Clone + Eq + Hash> JobSlots<K> {
     pub(crate) fn new(limit: usize) -> Self {
         Self {
             running: HashSet::new(),
@@ -103,14 +156,18 @@ impl JobSlots {
         self.running.len() < self.limit
     }
 
-    pub(crate) fn holds(&self, index: usize) -> bool {
-        self.running.contains(&index) || self.waiting.contains(index)
+    pub(crate) fn holds<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.running.contains(key) || self.waiting.contains(key)
     }
 
-    /// The running and waiting images as one set, for many lookups.
-    pub(crate) fn indices(&self) -> HashSet<usize> {
-        let waiting = self.waiting.members.keys().copied();
-        self.running.iter().copied().chain(waiting).collect()
+    /// The running and waiting pictures as one set, for many lookups.
+    pub(crate) fn keys(&self) -> HashSet<K> {
+        let waiting = self.waiting.members.keys().cloned();
+        self.running.iter().cloned().chain(waiting).collect()
     }
 
     pub(crate) fn is_idle(&self) -> bool {
@@ -125,7 +182,7 @@ impl JobSlots {
 
 #[cfg(test)]
 mod tests {
-    use super::{JobQueue, ThumbJob};
+    use super::{JobQueue, JobSlots, Priority, ThumbJob};
     use ratatui::layout::Rect;
 
     /// 3x2 cells of 8x16 px: a box of 24x32 px.
@@ -133,23 +190,66 @@ mod tests {
 
     #[test]
     fn queue_tracks_members_and_order() {
-        let job = |index| ThumbJob { index, rect: RECT };
+        let job = |key| ThumbJob::new(key, RECT);
         let mut queue = JobQueue::default();
-        for index in [3, 1, 4, 1, 5] {
-            queue.push_back(job(index));
+        for key in [3, 1, 4, 1, 5] {
+            queue.push(job(key));
         }
-        assert!([3, 1, 4, 5].into_iter().all(|index| queue.contains(index)));
-        assert!(!queue.contains(2));
+        assert!([3, 1, 4, 5].iter().all(|key| queue.contains(key)));
+        assert!(!queue.contains(&2));
 
         assert_eq!(queue.pop_front(), Some(job(3)));
-        assert!(!queue.contains(3));
+        assert!(!queue.contains(&3));
         assert_eq!(queue.remove(0), Some(job(1)));
-        assert!(queue.contains(1), "the second job of 1 still waits");
-        queue.remove_index(1);
-        assert!(!queue.contains(1));
+        assert!(queue.contains(&1), "the second job of 1 still waits");
+        queue.remove_key(&1);
+        assert!(!queue.contains(&1));
         assert_eq!(queue, [job(4), job(5)]);
 
         queue.clear();
-        assert!(queue.is_empty() && !queue.contains(4));
+        assert!(queue.is_empty() && !queue.contains(&4));
+    }
+
+    #[test]
+    fn the_cursor_cell_starts_first_and_the_screen_order_follows() {
+        let mut queue = JobQueue::default();
+        let cursor = Some(2);
+        for position in [3, 0, 2, 1] {
+            queue.push(ThumbJob {
+                key: position,
+                rect: RECT,
+                priority: Priority::on_screen(position, cursor),
+            });
+        }
+        let order: Vec<usize> = queue.iter().map(|job| job.key).collect();
+        assert_eq!(order, [2, 0, 1, 3]);
+        let without_cursor = Priority::on_screen(0, None);
+        assert!(without_cursor > Priority::on_screen(5, Some(5)));
+        assert!(without_cursor < Priority::on_screen(1, None));
+    }
+
+    #[test]
+    fn jobs_with_equal_rank_keep_their_push_order() {
+        let mut queue = JobQueue::default();
+        for key in ["b", "a", "c"] {
+            queue.push(ThumbJob::new(key.to_owned(), RECT));
+        }
+        let order: Vec<&str> = queue.iter().map(|job| job.key.as_str()).collect();
+        assert_eq!(order, ["b", "a", "c"], "string keys work too");
+        assert!(queue.contains("a"), "a &str finds a String key");
+    }
+
+    #[test]
+    fn slots_run_at_most_their_limit() {
+        let mut slots = JobSlots::new(2);
+        slots.running.extend([7, 8]);
+        assert!(!slots.has_free_slot());
+        slots.waiting.push(ThumbJob::new(9, RECT));
+        assert!(slots.holds(&7) && slots.holds(&9) && !slots.holds(&1));
+        assert_eq!(slots.keys().len(), 3);
+        slots.running.remove(&7);
+        assert!(slots.has_free_slot() && !slots.is_idle());
+        slots.clear();
+        assert!(slots.is_idle());
     }
 }

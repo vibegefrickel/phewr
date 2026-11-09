@@ -1,6 +1,6 @@
 //! The resize filters and the color conversion.
 
-use super::{fine_millis, millis, report, test_dir};
+use super::{millis, report, test_dir};
 use crate::pictures::decode::color;
 use crate::pictures::decode::color::ColorTarget;
 use crate::pictures::decode::hdr::Peak;
@@ -134,6 +134,7 @@ fn color_conversion() {
 /// The JPEG XL decode of `PHEWR_TEST_JXL` into Display P3, and its sample copy through the
 /// one-thread `ImageStream` and through `render_samples` (median of 7). A file with patches or
 /// layers copies through the stream in both columns.
+#[cfg(feature = "jxl")]
 #[test]
 #[ignore = "needs PHEWR_TEST_JXL, a real JPEG XL file"]
 fn jpeg_xl() {
@@ -160,9 +161,9 @@ fn jpeg_xl() {
         } else {
             "through the stream"
         },
-        fine_millis(super::median(&mut decode)),
-        fine_millis(super::median(&mut copy.render)),
-        fine_millis(super::median(&mut copy.stream)),
-        fine_millis(super::median(&mut copy.parallel)),
+        super::fine_millis(super::median(&mut decode)),
+        super::fine_millis(super::median(&mut copy.render)),
+        super::fine_millis(super::median(&mut copy.stream)),
+        super::fine_millis(super::median(&mut copy.parallel)),
     ));
 }

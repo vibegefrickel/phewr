@@ -7,6 +7,7 @@
 pub(crate) mod decode;
 pub(crate) mod jobs;
 pub(crate) mod kitty;
+pub(crate) mod names;
 pub(crate) mod resize;
 pub(crate) mod shape;
 #[cfg(test)]

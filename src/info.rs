@@ -1,6 +1,8 @@
 //! File and EXIF metadata for the info panel.
 
-use crate::pictures::decode::{self, Route, dimensions};
+use crate::pictures::decode;
+#[cfg(feature = "jxl")]
+use crate::pictures::decode::Route;
 use chrono::{DateTime, Local};
 use exif::{In, Tag};
 use std::fs::File;
@@ -37,7 +39,7 @@ pub(crate) fn load(path: &Path) -> ImageInfo {
             ));
         }
     }
-    if let Some((w, h)) = dimensions(path) {
+    if let Some((w, h)) = decode::dimensions(path) {
         rows.push((
             "Dimensions".to_owned(),
             format!("{w} x {h} ({})", megapixels(w, h)),
@@ -171,6 +173,7 @@ pub(crate) fn date_taken(path: &Path) -> Option<String> {
 
 /// JPEG, TIFF (with the TIFF-based RAW formats), HEIF, PNG, WebP and JPEG XL.
 fn read_exif(path: &Path) -> Option<exif::Exif> {
+    #[cfg(feature = "jxl")]
     if Route::for_path(path) == Route::Jxl {
         return exif::Reader::new().read_raw(decode::jxl::exif(path)?).ok();
     }
@@ -524,6 +527,7 @@ mod tests {
     }
 
     /// Decode a real JPEG XL file: `PHEWR_TEST_JXL=/path/to/image.jxl`.
+    #[cfg(feature = "jxl")]
     #[test]
     #[ignore = "needs PHEWR_TEST_JXL, a real JPEG XL file"]
     fn decodes_jxl_from_env() {

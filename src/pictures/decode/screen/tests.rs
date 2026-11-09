@@ -106,7 +106,11 @@ fn grid_picture_matches_rgba_path() {
             checked += 1;
         }
     }
-    let least = if cfg!(feature = "heic") { 150 } else { 140 };
+    let least = match (cfg!(feature = "jxl"), cfg!(feature = "heic")) {
+        (true, true) => 150,
+        (true, false) => 140,
+        (false, _) => 88,
+    };
     assert!(checked >= least, "{checked} fixtures and boxes");
 }
 
@@ -155,7 +159,8 @@ fn wire_bytes_match_rgba_path() {
             checked += 1;
         }
     }
-    assert!(checked >= 60, "{checked} fixtures and targets");
+    let least = if cfg!(feature = "jxl") { 60 } else { 44 };
+    assert!(checked >= least, "{checked} fixtures and targets");
 }
 
 #[test]

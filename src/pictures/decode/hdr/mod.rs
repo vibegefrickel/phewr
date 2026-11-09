@@ -7,7 +7,7 @@
 
 mod primaries;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jxl"))]
 use primaries::apply;
 use primaries::{Primaries, conversion, rgb_to_xyz};
 
@@ -52,17 +52,14 @@ impl Peak {
             .unwrap_or(Self(10_000))
     }
 
-    #[cfg_attr(
-        not(any(test, feature = "video")),
-        expect(dead_code, reason = "only the cube names of the player show the peak")
-    )]
+    /// The peak in nits, for the names of the color cubes of an app.
     pub(crate) fn nits(self) -> u32 {
         self.0
     }
 
     /// The peak over SDR white: at least 1, so the curve never maps a pixel above its own level.
     fn over_sdr_white(self) -> f64 {
-        f64::from(self.0) / SDR_WHITE_NITS
+        f64::from(self.nits()) / SDR_WHITE_NITS
     }
 }
 
@@ -130,6 +127,13 @@ impl Curve {
 }
 
 /// `moxcms` cannot convert a PQ or HLG signal.
+#[cfg_attr(
+    not(any(test, feature = "heic", feature = "jxl")),
+    expect(
+        dead_code,
+        reason = "only the libheif and the JPEG XL routes carry a PQ or HLG signal"
+    )
+)]
 pub(crate) fn is_hdr(source: &SourceColor) -> bool {
     matches!(source, SourceColor::Cicp { transfer, .. } if Curve::of_transfer(*transfer).is_some())
 }
