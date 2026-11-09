@@ -266,11 +266,11 @@ mod tests {
     fn handlers_write_to_app_output() {
         const DELETE_ALL: &[u8] = b"\x1b_Ga=d,d=A,q=2\x1b\\";
         let mut app = gallery_app(3);
-        app.terminal_images.insert(5, 16);
+        app.screen.record(5, 16);
 
         char_key(&mut app, '?');
         assert_eq!(app.graphics_out.take_bytes(), DELETE_ALL);
-        assert!(app.terminal_images.is_empty());
+        assert_eq!(app.screen.stored_count(), 0);
         char_key(&mut app, 'x');
         assert!(
             app.graphics_out.take_bytes().is_empty(),

@@ -1,16 +1,19 @@
 //! The SVG icons of the grid cells without a thumbnail. Each icon is one Kitty image per pixel
-//! size of the icon box, and every cell places it with its own placement id. The draw records
-//! the icons that the cells need, and `sync_grid_icons` writes only the placements that changed.
+//! size of the icon box, and the frame engine gives every cell its own placement. The draw
+//! records the icons that the cells need, and `sync_grid_icons` writes a grid pass when they
+//! changed.
 
-use crate::app::App;
+use super::grid::write_grid_to;
+use crate::app::{App, ViewMode};
 use crate::icons::{self, Icon};
-use crate::pictures::kitty::{self, protocol};
-use crossterm::{cursor, queue};
+use crate::pictures::kitty::Pixels;
+use crate::pictures::kitty::screen::Update;
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::io::{self, Write};
+use std::time::Instant;
 
 /// The image ids of each icon. The first grid rows get the spare rows, so one grid can need two
 /// sizes of an icon, and a zoom brings two more.
@@ -36,10 +39,10 @@ pub(crate) struct GridIcons {
     color: Option<[u8; 3]>,
     /// The icons that the last draw asked for.
     pub(crate) wanted: Vec<IconCell>,
-    /// The placements in the terminal with their image ids, by visible cell.
-    placed: HashMap<usize, (IconCell, u32)>,
-    /// The pixel size of each icon image that the terminal stores, by image id.
-    stored: HashMap<u32, (u32, u32)>,
+    /// The icons of the last grid pass.
+    flushed: Vec<IconCell>,
+    /// The icon and the pixel size of the picture under each image id.
+    stored: HashMap<u32, (Icon, (u32, u32))>,
     rendered: HashMap<(Icon, (u32, u32)), RgbaImage>,
 }
 
@@ -54,37 +57,62 @@ impl GridIcons {
         self.color.is_some()
     }
 
-    /// After `d=a`: the terminal keeps the images, but the placements are gone.
-    pub(crate) fn forget_placements(&mut self) {
-        self.placed.clear();
-    }
-
     /// After `d=A`: the terminal stores no icon.
     pub(crate) fn forget_images(&mut self) {
-        self.placed.clear();
+        self.flushed.clear();
         self.stored.clear();
     }
 
     fn in_sync(&self) -> bool {
-        self.placed.len() == self.wanted.len()
-            && self.wanted.iter().all(|wanted| {
-                self.placed.get(&wanted.cell).map(|(placed, _)| placed) == Some(wanted)
-            })
+        self.wanted == self.flushed
     }
 
-    /// The image of `icon` that the terminal stores at `size`.
+    /// The image id and the area of each wanted icon that renders, in the order of the cells.
+    /// An id that takes a new size goes into `replaced`, so the terminal gets its new pixels.
+    pub(crate) fn resolve(
+        &mut self,
+        cell_px: (u32, u32),
+        replaced: &mut Vec<u32>,
+    ) -> Vec<(usize, u32, Rect)> {
+        let wanted = self.wanted.clone();
+        let mut places = Vec::with_capacity(wanted.len());
+        for cell in &wanted {
+            let size = icon_px(cell.area, cell_px);
+            let id = self.stored_id(cell.icon, size).unwrap_or_else(|| {
+                let id = self.free_id(cell.icon, &wanted, cell_px);
+                if self.stored.insert(id, (cell.icon, size)).is_some() {
+                    replaced.push(id);
+                }
+                id
+            });
+            if self.picture(cell.icon, size).is_some() {
+                places.push((cell.cell, id, cell.area));
+            }
+        }
+        places.sort_by_key(|&(cell, ..)| cell);
+        self.flushed = wanted;
+        places
+    }
+
+    /// The pixels of the icon image `id`, when it rendered.
+    pub(crate) fn pixels(&self, id: u32) -> Option<Pixels<'_>> {
+        let key = self.stored.get(&id)?;
+        self.rendered.get(key).map(Pixels::from)
+    }
+
+    /// The image of `icon` at `size`.
     fn stored_id(&self, icon: Icon, size: (u32, u32)) -> Option<u32> {
-        image_ids(icon).find(|id| self.stored.get(id) == Some(&size))
+        image_ids(icon).find(|id| self.stored.get(id) == Some(&(icon, size)))
     }
 
     /// The image id for a new size of `icon`: a free one, else one of a size that no wanted cell
     /// needs.
     fn free_id(&self, icon: Icon, wanted: &[IconCell], cell_px: (u32, u32)) -> u32 {
         let needed = |id: &u32| {
-            self.stored.get(id).is_some_and(|size| {
+            self.stored.get(id).is_some_and(|&(_, size)| {
                 wanted
                     .iter()
-                    .any(|cell| cell.icon == icon && icon_px(cell.area, cell_px) == *size)
+                    .any(|cell| cell.icon == icon && icon_px(cell.area, cell_px) == size)
             })
         };
         image_ids(icon)
@@ -121,116 +149,27 @@ fn icon_px(area: Rect, cell_px: (u32, u32)) -> (u32, u32) {
     )
 }
 
-/// A placement id is not zero.
-fn placement_id(cell: usize) -> u32 {
-    u32::try_from(cell).map_or(u32::MAX, |cell| cell.saturating_add(1))
-}
-
-/// Bring the icon placements in line with the last draw. Without a change, nothing goes out.
-pub(crate) fn sync_grid_icons(app: &mut App) -> io::Result<()> {
-    if app.grid_icons.in_sync() {
+/// Write a grid pass when the icons of the last draw changed and no other pass is due. The
+/// visible cells whose picture waits come back in `pending`.
+pub(crate) fn sync_grid_icons(app: &mut App, pending: &mut Vec<usize>) -> io::Result<()> {
+    // A waiting picture brings the next pass at once, and that pass writes the icons too: one
+    // run-loop pass writes one grid pass.
+    if app.mode != ViewMode::Gallery || !pending.is_empty() || app.grid_icons.in_sync() {
         return Ok(());
     }
-    app.with_graphics_out(sync_grid_icons_to)
+    app.with_graphics_out(|app, out| {
+        *pending = sync_grid_icons_to(app, out)?;
+        Ok(())
+    })
 }
 
-fn sync_grid_icons_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
-    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-
-    queue!(out, BeginSynchronizedUpdate)?;
-    let wanted = std::mem::take(&mut app.grid_icons.wanted);
-    // A changed cell can need another image, so its old placement goes first.
-    let changed: Vec<(IconCell, u32)> = app
-        .grid_icons
-        .placed
-        .values()
-        .filter(|(placed, _)| !wanted.contains(placed))
-        .copied()
-        .collect();
-    for (placed, id) in changed {
-        unplace(app, out, placed.cell, id)?;
-    }
-    for cell in &wanted {
-        if !app.grid_icons.placed.contains_key(&cell.cell) {
-            place(app, out, *cell, &wanted)?;
-        }
-    }
-    app.grid_icons.wanted = wanted;
-    queue!(out, EndSynchronizedUpdate)?;
-    out.flush()
-}
-
-fn unplace(app: &mut App, out: &mut impl Write, cell: usize, id: u32) -> io::Result<()> {
-    protocol::delete_placement_to(out, id, placement_id(cell))?;
-    app.grid_icons.placed.remove(&cell);
-    Ok(())
-}
-
-/// Place the icon of `cell`, and send its image first when the terminal has no image of that size.
-fn place(
-    app: &mut App,
-    out: &mut impl Write,
-    cell: IconCell,
-    wanted: &[IconCell],
-) -> io::Result<()> {
-    let size = icon_px(cell.area, app.cell_px);
-    let id = if let Some(id) = app.grid_icons.stored_id(cell.icon, size) {
-        id
-    } else {
-        let id = app.grid_icons.free_id(cell.icon, wanted, app.cell_px);
-        if !store(app, out, cell.icon, size, id)? {
-            return Ok(());
-        }
-        id
-    };
-    queue!(out, cursor::MoveTo(cell.area.x, cell.area.y))?;
-    protocol::place_as_to(
-        out,
-        id,
-        placement_id(cell.cell),
-        (cell.area.width, cell.area.height),
-    )?;
-    app.grid_icons.placed.insert(cell.cell, (cell, id));
-    Ok(())
-}
-
-/// Send the picture of `icon` at `size` as the image `id`. The new image replaces the old one,
-/// so the placements of the old one go first. `false` when the icon does not render.
-fn store(
-    app: &mut App,
-    out: &mut impl Write,
-    icon: Icon,
-    size: (u32, u32),
-    id: u32,
-) -> io::Result<bool> {
-    let old: Vec<usize> = app
-        .grid_icons
-        .placed
-        .iter()
-        .filter(|(_, (_, placed_id))| *placed_id == id)
-        .map(|(cell, _)| *cell)
-        .collect();
-    for cell in old {
-        unplace(app, out, cell, id)?;
-    }
-    let Some(picture) = app.grid_icons.picture(icon, size) else {
-        return Ok(false);
-    };
-    app.graphics.transmit(
-        out,
-        picture.into(),
-        &kitty::DisplayOptions {
-            id: Some(id),
-            cell_box: None,
-            transmit_only: true,
-            columns: None,
-            rows: None,
-            below_backgrounds: false,
-            transient: false,
-        },
-    )?;
-    app.grid_icons.stored.insert(id, size);
-    Ok(true)
+/// One grid pass for the icons, in one synchronized update. Returns the visible cells whose
+/// picture waits.
+fn sync_grid_icons_to(app: &mut App, out: &mut impl Write) -> io::Result<Vec<usize>> {
+    let mut update = Update::new(out);
+    let pass = write_grid_to(app, &mut update, Instant::now(), Vec::new(), false)?;
+    update.finish()?;
+    Ok(pass.waiting)
 }
 
 #[cfg(test)]

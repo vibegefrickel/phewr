@@ -245,11 +245,12 @@ pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io
             false
         }
         // The loops write in a pass without new thumbnails.
-        ViewMode::Gallery => play_grid_loops(app, Instant::now())?,
+        ViewMode::Gallery => play_grid_loops(app, Instant::now(), pending_emits)?,
         _ => false,
     };
-    // After the thumbnails: a cell that got its picture loses its icon in the same pass.
-    sync_grid_icons(app)?;
+    // A pass without the icons of the last draw writes them. A cell that got its picture loses
+    // its icon in the same pass.
+    sync_grid_icons(app, pending_emits)?;
     Ok(chrome_again)
 }
 

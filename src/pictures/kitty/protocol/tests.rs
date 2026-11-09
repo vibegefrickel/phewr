@@ -1,8 +1,7 @@
 //! The tests of the Kitty writes: the transmit through each medium and the animation frames.
 use super::{
-    TEMP_FILE_MARKER, Transfer, animate_to, clear_placements_to, delete_all_to,
-    delete_placements_to, place_by_id_to, temp_file_paths, transmit_frame_to, transmit_in,
-    transmit_to,
+    TEMP_FILE_MARKER, Transfer, animate_to, clear_placements_to, delete_all_to, delete_image_to,
+    delete_placement_to, place_as_to, temp_file_paths, transmit_frame_to, transmit_in, transmit_to,
 };
 use crate::pictures::kitty::{DisplayOptions, Pixels};
 use base64::Engine;
@@ -40,11 +39,11 @@ fn management_sequences_match_protocol() {
     let mut output = Vec::new();
     delete_all_to(&mut output).unwrap();
     clear_placements_to(&mut output).unwrap();
-    place_by_id_to(&mut output, 42, None).unwrap();
-    delete_placements_to(&mut output, 42).unwrap();
+    delete_image_to(&mut output, 42).unwrap();
+    delete_placement_to(&mut output, 42, 3).unwrap();
     assert_eq!(
             output,
-            b"\x1b_Ga=d,d=A,q=2\x1b\\\x1b_Ga=d,d=a,q=2\x1b\\\x1b_Ga=p,q=2,C=1,i=42\x1b\\\x1b_Ga=d,d=i,i=42,q=2\x1b\\"
+            b"\x1b_Ga=d,d=A,q=2\x1b\\\x1b_Ga=d,d=a,q=2\x1b\\\x1b_Ga=d,d=I,i=42,q=2\x1b\\\x1b_Ga=d,d=i,i=42,p=3,q=2\x1b\\"
         );
 }
 
@@ -78,6 +77,7 @@ fn transmit_names_cell_box() {
         &RgbaImage::new(2, 3),
         &DisplayOptions {
             id: None,
+            placement: None,
             cell_box: Some((4, 2)),
             columns: None,
             rows: None,
@@ -92,8 +92,12 @@ fn transmit_names_cell_box() {
     assert!(!encoded.contains(",Y="));
 
     let mut output = Vec::new();
-    place_by_id_to(&mut output, 42, Some((4, 2))).unwrap();
-    assert_eq!(output, b"\x1b_Ga=p,q=2,C=1,i=42,c=4,r=2\x1b\\");
+    place_as_to(&mut output, 42, 2, (4, 2), false).unwrap();
+    place_as_to(&mut output, 42, 3, (4, 2), true).unwrap();
+    assert_eq!(
+        output,
+        b"\x1b_Ga=p,q=2,C=1,i=42,p=2,c=4,r=2\x1b\\\x1b_Ga=p,q=2,C=1,i=42,p=3,c=4,r=2,z=-1073741825\x1b\\"
+    );
 }
 
 #[test]
@@ -214,7 +218,7 @@ fn splits_large_payload_into_chunks() {
             "first header should request more chunks"
         );
         assert!(
-            encoded.contains("\x1b_Gm=0;"),
+            encoded.contains("\x1b_Gq=2,m=0;"),
             "last chunk should not request more"
         );
     }

@@ -175,6 +175,10 @@ fn raw_format(pixels: Pixels<'_>) -> u32 {
 fn header_keys(pixels: Pixels<'_>, opts: &DisplayOptions, format: u32) -> String {
     let (w, h) = pixels.dimensions();
     let id_part = opts.id.map(|id| format!(",i={id}")).unwrap_or_default();
+    let placement_part = opts
+        .placement
+        .map(|placement| format!(",p={placement}"))
+        .unwrap_or_default();
     let box_part = match (opts.cell_box, opts.columns, opts.rows) {
         (None, Some(columns), _) => format!(",c={columns}"),
         (None, None, Some(rows)) => format!(",r={rows}"),
@@ -187,7 +191,9 @@ fn header_keys(pixels: Pixels<'_>, opts: &DisplayOptions, format: u32) -> String
     } else {
         String::new()
     };
-    format!("a={action},q=2,C=1,f={format},s={w},v={h}{id_part}{box_part}{layer}{hint}")
+    format!(
+        "a={action},q=2,C=1,f={format},s={w},v={h}{id_part}{placement_part}{box_part}{layer}{hint}"
+    )
 }
 
 fn cell_box_keys(cell_box: Option<(u16, u16)>) -> String {
@@ -211,7 +217,9 @@ fn write_direct<W: Write + ?Sized>(
         if i == 0 {
             apc(out, format_args!("{first},m={more}"), chunk)?;
         } else {
-            apc(out, format_args!("{}m={more}", keys.chunk), chunk)?;
+            // Some terminals take `q` from the last chunk, so each chunk repeats it. Else an
+            // `OK` answer can arrive on stdin as keys.
+            apc(out, format_args!("{}q=2,m={more}", keys.chunk), chunk)?;
         }
     }
 
@@ -289,11 +297,6 @@ pub(crate) fn delete_image_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Re
     apc(out, format_args!("a=d,d=I,i={id},q=2"), b"")
 }
 
-/// Delete the placements of the image `id` and keep its pixels (`d=i`).
-pub(crate) fn delete_placements_to<W: Write + ?Sized>(out: &mut W, id: u32) -> io::Result<()> {
-    apc(out, format_args!("a=d,d=i,i={id},q=2"), b"")
-}
-
 /// Delete the placement `placement` of the image `id` and keep its pixels.
 pub(crate) fn delete_placement_to<W: Write + ?Sized>(
     out: &mut W,
@@ -305,32 +308,25 @@ pub(crate) fn delete_placement_to<W: Write + ?Sized>(
 
 /// Place a stored image at the cursor as the placement `placement`, scaled to `cell_box`. A
 /// second place with the same ids moves the placement. `C=1` keeps the text cursor fixed.
+/// `below_backgrounds` puts the picture under the cell backgrounds ([`BELOW_BACKGROUNDS`]).
 pub(crate) fn place_as_to<W: Write + ?Sized>(
     out: &mut W,
     id: u32,
     placement: u32,
     cell_box: (u16, u16),
+    below_backgrounds: bool,
 ) -> io::Result<()> {
+    let layer = if below_backgrounds {
+        format!(",z={BELOW_BACKGROUNDS}")
+    } else {
+        String::new()
+    };
     apc(
         out,
         format_args!(
-            "a=p,q=2,C=1,i={id},p={placement}{}",
+            "a=p,q=2,C=1,i={id},p={placement}{}{layer}",
             cell_box_keys(Some(cell_box))
         ),
-        b"",
-    )
-}
-
-/// Place a stored image by its id at the cursor, scaled to `cell_box`. `C=1` keeps the text
-/// cursor fixed: a large placement never scrolls the grid.
-pub(crate) fn place_by_id_to<W: Write + ?Sized>(
-    out: &mut W,
-    id: u32,
-    cell_box: Option<(u16, u16)>,
-) -> io::Result<()> {
-    apc(
-        out,
-        format_args!("a=p,q=2,C=1,i={id}{}", cell_box_keys(cell_box)),
         b"",
     )
 }

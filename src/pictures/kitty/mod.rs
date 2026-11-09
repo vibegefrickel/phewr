@@ -1,7 +1,9 @@
-//! The Kitty graphics output: the writer, the transfer medium, the loop path and the pixels.
+//! The Kitty graphics output: the writer, the transfer medium, the loop path, the pixels and the
+//! frame engine ([`screen`]).
 pub(crate) mod placement;
 pub(crate) mod protocol;
 pub(crate) mod query;
+pub(crate) mod screen;
 pub(crate) mod terminal_images;
 
 use image::{RgbImage, RgbaImage};
@@ -66,6 +68,9 @@ impl Write for GraphicsOutput {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct DisplayOptions {
     pub id: Option<u32>,
+    /// The placement id (`p=`) of the placement that a transmit with a place makes. A second
+    /// place with the same ids moves the placement.
+    pub placement: Option<u32>,
     /// The cell box (`c=`, `r=`) that the terminal scales the picture to.
     pub cell_box: Option<(u16, u16)>,
     /// Scale to this many columns (`c=`), and the terminal takes the rows from the aspect ratio.
@@ -224,10 +229,10 @@ pub(crate) struct KittyBackend {
 }
 
 impl KittyBackend {
-    pub(crate) fn new(transfer: Transfer) -> Self {
+    pub(crate) const fn new(transfer: Transfer) -> Self {
         Self {
             transfer,
-            loops: Loops::default(),
+            loops: Loops::Ticks,
         }
     }
 
@@ -375,6 +380,7 @@ mod tests {
                 (&image).into(),
                 &DisplayOptions {
                     id: Some(7),
+                    placement: None,
                     cell_box: Some((5, 3)),
                     columns: None,
                     rows: None,
@@ -386,14 +392,14 @@ mod tests {
             .unwrap();
         protocol::delete_all_to(&mut out).unwrap();
         protocol::clear_placements_to(&mut out).unwrap();
-        protocol::place_by_id_to(&mut out, 9, None).unwrap();
+        protocol::place_as_to(&mut out, 9, 1, (2, 1), false).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(",i=7,"));
         assert!(text.contains(",c=5,r=3,"));
         assert!(text.contains("\x1b_Ga=d,d=A,q=2\x1b\\"));
         assert!(text.contains("\x1b_Ga=d,d=a,q=2\x1b\\"));
-        assert!(text.contains("\x1b_Ga=p,q=2,C=1,i=9\x1b\\"));
+        assert!(text.contains("\x1b_Ga=p,q=2,C=1,i=9,p=1,c=2,r=1\x1b\\"));
     }
 
     #[test]

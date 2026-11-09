@@ -72,7 +72,7 @@ fn fullscreen_centers_image() {
     let mut app = App::new((8, 16), SharedImageList::new());
     app.loaded = Some(RgbaImage::new(16, 32).into());
     app.image_rect = Rect::new(2, 1, 10, 10);
-    app.terminal_images.insert(7, 4);
+    app.screen.record(7, 4);
     let mut out = Vec::new();
 
     render_fullscreen_image_to(&mut app, &mut out).unwrap();
@@ -85,7 +85,7 @@ fn fullscreen_centers_image() {
     assert!(text.contains(TRANSMIT));
     assert!(!text.contains(",X="), "no pixel offset: {text}");
     assert!(!text.contains(",Y="), "no pixel offset: {text}");
-    assert!(app.terminal_images.is_empty());
+    assert_eq!(app.screen.stored_count(), 0);
 }
 
 /// A slideshow scales the image to the fill of its box with one side, so it never stretches.

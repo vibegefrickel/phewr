@@ -1,5 +1,5 @@
 //! The tests of the grid icons: one image per icon, one placement per cell, and the deletes.
-use super::{ICON_ID_BASE, first_id, image_ids, sync_grid_icons_to};
+use super::{ICON_ID_BASE, first_id, image_ids, sync_grid_icons, sync_grid_icons_to};
 use crate::app::App;
 use crate::icons::Icon;
 use crate::kitty_output::tests::{grid_app, sharp_thumbnail};
@@ -45,7 +45,7 @@ fn one_image_serves_every_cell() {
 
     let out = draw_and_sync(&mut app, &mut terminal);
 
-    assert_eq!(out.matches("a=t,").count(), 1, "one transmit: {out:?}");
+    assert_eq!(out.matches("a=T,").count(), 1, "one transmit: {out:?}");
     assert_eq!(terminal.stored_ids(), vec![first_id(Icon::Loading)]);
     assert_eq!(placements_of(&terminal, Icon::Loading), vec![1, 2, 3]);
     assert_eq!(terminal.synchronized_depth, 0);
@@ -62,7 +62,7 @@ fn unchanged_draw_writes_nothing() {
     draw_and_sync(&mut app, &mut terminal);
 
     draw_frame(&mut app, 106, 30);
-    super::sync_grid_icons(&mut app).unwrap();
+    sync_grid_icons(&mut app, &mut Vec::new()).unwrap();
 
     assert_eq!(
         text(&app.graphics_out.take_bytes()),
@@ -81,7 +81,11 @@ fn thumbnail_removes_only_its_icon() {
     let out = draw_and_sync(&mut app, &mut terminal);
 
     assert!(out.contains("a=d,d=i,i="), "{out:?}");
-    assert!(!out.contains("a=t,"), "the image stays: {out:?}");
+    assert_eq!(
+        out.matches("a=T,").count(),
+        1,
+        "the thumbnail goes out, and the icon image stays: {out:?}"
+    );
     assert_eq!(placements_of(&terminal, Icon::Loading), vec![1, 3]);
 }
 
@@ -135,7 +139,7 @@ fn delete_all_sends_the_image_again() {
     terminal.feed(&out);
     let out = draw_and_sync(&mut app, &mut terminal);
 
-    assert_eq!(out.matches("a=t,").count(), 1, "{out:?}");
+    assert_eq!(out.matches("a=T,").count(), 1, "{out:?}");
     assert_eq!(placements_of(&terminal, Icon::Loading), vec![1, 2]);
     assert!(terminal.black_cells.is_empty());
 }
@@ -150,7 +154,7 @@ fn new_size_replaces_the_image() {
     app.gallery.zoom_rows = 2;
     let out = draw_and_sync(&mut app, &mut terminal);
 
-    assert_eq!(out.matches("a=t,").count(), 1, "{out:?}");
+    assert_eq!(out.matches("a=T,").count(), 1, "{out:?}");
     assert_eq!(placements_of(&terminal, Icon::Loading), vec![1, 2]);
     assert!(
         terminal
@@ -211,4 +215,37 @@ fn icon_ids_sit_below_the_loops() {
     assert_eq!(ids.len(), 16);
     assert!(ids.iter().all(|id| (ICON_ID_BASE..1 << 31).contains(id)));
     assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "no id twice");
+}
+
+#[test]
+fn a_waiting_icon_comes_back_as_its_cell() {
+    let mut app = icon_app(3);
+    // Two thumbnails of 2 MB fill the pass, and the icon of cell 2 waits.
+    for index in 0..2 {
+        let picture = crate::pictures::jobs::thumbnail_cache::GridPicture {
+            image: image::RgbaImage::new(1024, 512),
+            cells: (20, 6),
+        };
+        app.thumb_cache.insert(index, picture);
+    }
+    draw_frame(&mut app, 106, 30);
+    let mut out = Vec::new();
+    let waiting = sync_grid_icons_to(&mut app, &mut out).unwrap();
+    assert_eq!(waiting, vec![2], "{}", text(&out));
+    assert!(!text(&out).contains(&format!(",i={},", first_id(Icon::Loading))));
+    assert!(
+        app.grid_icons.in_sync(),
+        "the next pass writes the icon, not a second pass now"
+    );
+
+    let mut pending = waiting;
+    draw_frame(&mut app, 106, 30);
+    sync_grid_icons(&mut app, &mut pending).unwrap();
+    assert!(
+        app.graphics_out.take_bytes().is_empty(),
+        "a waiting picture brings the next pass, so the icons write nothing now"
+    );
+    let mut out = Vec::new();
+    assert!(sync_grid_icons_to(&mut app, &mut out).unwrap().is_empty());
+    assert!(text(&out).contains(&format!(",i={},p=1,", first_id(Icon::Loading))));
 }

@@ -32,7 +32,7 @@ use crate::kitty_output::GridIcons;
 use crate::pictures::decode::ScreenImage;
 use crate::pictures::jobs::disk_cache::default_disk_cache_dir;
 use crate::pictures::jobs::thumbnail_cache::ThumbnailCache;
-use crate::pictures::kitty::terminal_images::TerminalImages;
+use crate::pictures::kitty::screen::Screen;
 use crate::pictures::kitty::{GraphicsOutput, KittyBackend};
 use crate::prefetch::Prefetcher;
 use crate::scanner::LivePhotos;
@@ -163,8 +163,8 @@ pub(crate) struct App {
     /// The animation flag of each file that a thumbnail job read. The draw reads no file header.
     pub(crate) animated: HashMap<PathBuf, bool>,
 
-    /// The images that the terminal stores. A cell places a stored image by its id.
-    pub(crate) terminal_images: TerminalImages,
+    /// The pictures that the terminal stores and the placements of the grid.
+    pub(crate) screen: Screen,
     /// The SVG icons of the cells without a thumbnail, as Kitty images.
     pub(crate) grid_icons: GridIcons,
     pub(crate) grid_loops: grid_loops::GridLoops,
@@ -277,7 +277,7 @@ impl App {
             thumb_jobs: thumbnails::ThumbnailJobs::new(),
             stale_image_ids: Vec::new(),
             animated: HashMap::new(),
-            terminal_images: TerminalImages::new(),
+            screen: Screen::default(),
             grid_icons: GridIcons::default(),
             grid_loops: grid_loops::GridLoops::new(config.animate),
             graphics_storage_dirty: false,
@@ -302,8 +302,7 @@ impl App {
     }
 
     pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
-        crate::pictures::kitty::protocol::delete_all_to(out)?;
-        self.terminal_images.clear();
+        self.screen.wipe(out)?;
         self.grid_icons.forget_images();
         self.grid_loops.forget_placements();
         Ok(())
@@ -355,20 +354,20 @@ mod tests {
     #[test]
     fn delete_all_forgets_transmitted_ids() {
         let mut app = app();
-        app.terminal_images.insert(7, 16);
+        app.screen.record(7, 16);
         let mut out = Vec::new();
         app.graphics_delete_all_to(&mut out).unwrap();
         assert!(!out.is_empty());
-        assert!(app.terminal_images.is_empty());
+        assert_eq!(app.screen.stored_count(), 0);
 
-        app.terminal_images.insert(8, 16);
+        app.screen.record(8, 16);
         app.graphics_delete_all().unwrap();
         assert_eq!(
             app.graphics_out.take_bytes(),
             out,
             "the test buffer, not stdout"
         );
-        assert!(app.terminal_images.is_empty());
-        assert_eq!(app.terminal_images.bytes(), 0);
+        assert_eq!(app.screen.stored_count(), 0);
+        assert_eq!(app.screen.stored_bytes(), 0);
     }
 }

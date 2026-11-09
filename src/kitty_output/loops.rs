@@ -1,57 +1,66 @@
-//! The grid loops of the video and animated cells: the frames or the Kitty animation, the
-//! placement and the swaps on the ticks.
+//! The grid loops of the video and animated cells: the transfer of the frames or of the Kitty
+//! animation, and the loop frame that a cell shows at a tick. The frame engine swaps the
+//! placements.
 
-use super::grid::{place_at, visible_image_ids};
+use super::grid::{GridPass, grid_placement, visible_image_ids, write_grid_to};
 use crate::app::App;
 use crate::pictures::kitty;
 use crate::pictures::kitty::EMIT_PASS_BYTES;
 use crate::pictures::kitty::protocol;
-use crate::pictures::kitty::terminal_images::trim_to_budget;
-use crossterm::queue;
+use crate::pictures::kitty::screen::{Placements, Update};
 use std::io::{self, Write};
 use std::time::Instant;
 
-/// Place the loop frame of `img_idx` at `tick` when the terminal stores every frame. Returns
-/// `false` when the cell shows its still.
-pub(super) fn place_loop_frame_to(
+/// Put the loop frame of `img_idx` at `tick` into `frame` when the terminal stores every frame
+/// of the loop, and keep the other frames. Returns `None` when the cell shows its still, else
+/// whether the loop started now.
+pub(super) fn place_loop_frame(
     app: &mut App,
-    out: &mut impl Write,
+    frame: &mut Placements,
     vis_idx: usize,
     img_idx: usize,
     tick: u64,
-) -> io::Result<bool> {
+) -> Option<bool> {
     let shown = app.grid_loops_shown();
-    let Some(cell_loop) = app.grid_loops.loops.get_mut(&img_idx) else {
-        return Ok(false);
+    let cell_loop = app.grid_loops.loops.get_mut(&img_idx)?;
+    for &id in &cell_loop.ids {
+        frame.keep(id);
+    }
+    // A running loop needs only its frame of this tick. A lost frame breaks the loop: the cell
+    // shows its still, and the loop goes out again.
+    let started = cell_loop.placed.is_none();
+    let stored = if started {
+        cell_loop.ids.iter().all(|&id| app.screen.stores(id))
+    } else {
+        app.screen.stores(cell_loop.id_at(tick))
     };
-    if !shown
-        || !cell_loop
-            .ids
-            .iter()
-            .all(|&id| app.terminal_images.contains(id))
-    {
-        return Ok(false);
+    if !shown || !stored {
+        cell_loop.placed = None;
+        return None;
     }
     cell_loop.start_at(tick);
     let id = cell_loop.id_at(tick);
     cell_loop.placed = Some(id);
-    for &frame in &cell_loop.ids {
-        app.terminal_images.touch(frame);
-    }
-    let cells = cell_loop.cells();
-    place_at(app, out, vis_idx, cells, id)?;
-    Ok(true)
+    frame.place(id, grid_placement(&app.gallery, vis_idx, cell_loop.cells()));
+    Some(started)
 }
 
 /// Write the new loops at `now`, then the due frames. Returns `true` when a cell started its
-/// loop and the draw drops its marker.
-pub(crate) fn play_grid_loops(app: &mut App, now: Instant) -> io::Result<bool> {
+/// loop and the draw drops its marker. The visible cells whose still waits come back in
+/// `pending`.
+pub(crate) fn play_grid_loops(
+    app: &mut App,
+    now: Instant,
+    pending: &mut Vec<usize>,
+) -> io::Result<bool> {
     if !app.loops_to_send() && !app.loop_frames_due(now) {
         return Ok(false);
     }
     let mut started = false;
     app.with_graphics_out(|app, out| {
-        started = play_grid_loops_to(app, out, now)?;
+        let pass = play_grid_loops_to(app, out, now)?;
+        started = pass.started;
+        *pending = pass.waiting;
         Ok(())
     })?;
     Ok(started)
@@ -62,67 +71,62 @@ pub(crate) fn play_grid_loops_to(
     app: &mut App,
     out: &mut impl Write,
     now: Instant,
-) -> io::Result<bool> {
-    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-
+) -> io::Result<GridPass> {
     if !app.grid_loops_shown() {
-        return Ok(false);
+        return Ok(GridPass {
+            waiting: Vec::new(),
+            started: false,
+        });
     }
-    let tick = app.grid_loops.tick_at(now);
-    queue!(out, BeginSynchronizedUpdate)?;
-    let started = start_grid_loops_to(app, out, tick)?;
-    swap_loop_frames_to(app, out, tick)?;
-    queue!(out, EndSynchronizedUpdate)?;
-    out.flush()?;
-    Ok(started)
+    let mut update = Update::new(out);
+    let pass = write_grid_to(app, &mut update, now, Vec::new(), true)?;
+    update.finish()?;
+    Ok(pass)
 }
 
 /// Send the waiting loops of the visible cells in grid order, as frames without a placement
-/// (`a=t`) or as one Kitty animation. Then the loop takes the place of the still.
+/// (`a=t`) or as one Kitty animation. The frame of the pass then puts the loop in place of the
+/// still.
 ///
 /// A pass sends up to `EMIT_PASS_BYTES`. A loop that does not fit the terminal budget goes, and
 /// its cell keeps the still.
-fn start_grid_loops_to(app: &mut App, out: &mut impl Write, tick: u64) -> io::Result<bool> {
-    let mut kept = visible_image_ids(app);
-    let mut kept_bytes: usize = kept
-        .iter()
-        .map(|&id| app.terminal_images.bytes_of(id))
-        .sum();
-    let mut written = 0;
-    let mut started = false;
-    let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
-    for (vis_idx, img_idx) in visible {
+pub(super) fn send_grid_loops_to<W: Write + ?Sized>(
+    app: &mut App,
+    update: &mut Update<'_, W>,
+) -> io::Result<()> {
+    // The bytes of the visible pictures, counted only when a loop goes out.
+    let mut kept_bytes: Option<usize> = None;
+    let visible: Vec<usize> = app
+        .gallery
+        .visible_items()
+        .map(|(_, index)| index)
+        .collect();
+    for img_idx in visible {
         let Some(cell_loop) = app.grid_loops.loops.get(&img_idx) else {
             continue;
         };
-        if cell_loop.placed.is_some() {
+        if cell_loop.placed.is_some() || cell_loop.ids.iter().all(|&id| app.screen.stores(id)) {
             continue;
         }
-        if !cell_loop
-            .ids
-            .iter()
-            .all(|&id| app.terminal_images.contains(id))
-        {
-            if written >= EMIT_PASS_BYTES {
-                continue;
-            }
-            let bytes = cell_loop.bytes();
-            if kept_bytes + bytes > app.terminal_images.budget {
-                app.grid_loops.drop_over_budget(img_idx);
-                continue;
-            }
-            transmit_loop_to(app, out, img_idx)?;
-            written += bytes;
-            kept_bytes += bytes;
+        if update.pixel_bytes() >= EMIT_PASS_BYTES {
+            continue;
         }
-        if let Some((_, still)) = app.thumb_cache.peek(img_idx) {
-            protocol::delete_placements_to(out, still)?;
+        let kept = *kept_bytes.get_or_insert_with(|| {
+            visible_image_ids(app)
+                .iter()
+                .map(|&id| app.screen.bytes_of(id))
+                .sum()
+        });
+        let bytes = cell_loop.bytes();
+        if kept + bytes > app.screen.budget() {
+            app.grid_loops.drop_over_budget(img_idx);
+            continue;
         }
-        kept.extend(start_loop_to(app, out, vis_idx, img_idx, tick)?);
-        started = true;
+        transmit_loop_to(app, update, img_idx)?;
+        update.add_pixel_bytes(bytes);
+        kept_bytes = Some(kept + bytes);
     }
-    trim_to_budget(&mut app.terminal_images, out, &kept)?;
-    Ok(started)
+    Ok(())
 }
 
 /// Send each loop frame of `img_idx` that the terminal does not store, without a placement.
@@ -134,7 +138,7 @@ fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::
         return transmit_animation_to(app, out, img_idx);
     }
     for (frame, &id) in cell_loop.frames.iter().zip(&cell_loop.ids) {
-        if app.terminal_images.contains(id) {
+        if app.screen.stores(id) {
             continue;
         }
         app.graphics.transmit(
@@ -142,6 +146,7 @@ fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::
             (&frame.image).into(),
             &kitty::DisplayOptions {
                 id: Some(id),
+                placement: None,
                 cell_box: None,
                 columns: None,
                 rows: None,
@@ -150,7 +155,7 @@ fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::
                 transient: true,
             },
         )?;
-        app.terminal_images.insert(id, frame.image.as_raw().len());
+        app.screen.record(id, frame.image.as_raw().len());
     }
     Ok(())
 }
@@ -169,6 +174,7 @@ fn transmit_animation_to(app: &mut App, out: &mut impl Write, img_idx: usize) ->
         (&root.image).into(),
         &kitty::DisplayOptions {
             id: Some(id),
+            placement: None,
             cell_box: None,
             columns: None,
             rows: None,
@@ -182,52 +188,7 @@ fn transmit_animation_to(app: &mut App, out: &mut impl Write, img_idx: usize) ->
             .transmit_frame(out, (&picture.image).into(), id, cell_loop.gap_ms(frame))?;
     }
     protocol::animate_to(out, id, cell_loop.gap_ms(0))?;
-    app.terminal_images.insert(id, cell_loop.bytes());
-    Ok(())
-}
-
-/// Place the loop frame of `img_idx` at `tick` and start the loop clock. Returns the frame ids.
-fn start_loop_to(
-    app: &mut App,
-    out: &mut impl Write,
-    vis_idx: usize,
-    img_idx: usize,
-    tick: u64,
-) -> io::Result<Vec<u32>> {
-    let Some(cell_loop) = app.grid_loops.loops.get_mut(&img_idx) else {
-        return Ok(Vec::new());
-    };
-    cell_loop.start_at(tick);
-    let id = cell_loop.id_at(tick);
-    cell_loop.placed = Some(id);
-    let (cells, ids) = (cell_loop.cells(), cell_loop.ids.clone());
-    place_at(app, out, vis_idx, cells, id)?;
-    Ok(ids)
-}
-
-/// Swap each placed loop whose next frame is due at `tick`: delete the old placement (`d=i`,
-/// the pixels stay) and place the new frame by its id.
-fn swap_loop_frames_to(app: &mut App, out: &mut impl Write, tick: u64) -> io::Result<()> {
-    let mut swaps = Vec::new();
-    for (vis_idx, img_idx) in app.gallery.visible_items() {
-        let Some(cell_loop) = app.grid_loops.loops.get(&img_idx) else {
-            continue;
-        };
-        let Some(old) = cell_loop.placed else {
-            continue;
-        };
-        let new = cell_loop.id_at(tick);
-        if new != old {
-            swaps.push((vis_idx, img_idx, old, new, cell_loop.cells()));
-        }
-    }
-    for (vis_idx, img_idx, old, new, cells) in swaps {
-        protocol::delete_placements_to(out, old)?;
-        place_at(app, out, vis_idx, cells, new)?;
-        if let Some(cell_loop) = app.grid_loops.loops.get_mut(&img_idx) {
-            cell_loop.placed = Some(new);
-        }
-    }
+    app.screen.record(id, cell_loop.bytes());
     Ok(())
 }
 

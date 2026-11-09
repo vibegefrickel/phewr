@@ -143,24 +143,14 @@ impl FakeTerminal {
                 let id = number("i").unwrap_or(0);
                 let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
                 self.store(id, bytes);
-                self.place(id, cell_box);
+                self.place_as(id, number("p"), cell_box);
             }
             Some("t") => {
                 let id = number("i").unwrap_or(0);
                 let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
                 self.store(id, bytes);
             }
-            Some("p") => {
-                let (id, placement) = (number("i").unwrap_or(0), number("p"));
-                if placement.is_some() {
-                    self.placements
-                        .retain(|old| (old.id, old.number) != (id, placement));
-                }
-                self.place(id, cell_box);
-                if let Some(last) = self.placements.last_mut().filter(|last| last.id == id) {
-                    last.number = placement;
-                }
-            }
+            Some("p") => self.place_as(number("i").unwrap_or(0), number("p"), cell_box),
             Some("f") => {
                 let id = number("i").unwrap_or(0);
                 let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
@@ -244,7 +234,12 @@ impl FakeTerminal {
         animation.gaps.push(gap);
     }
 
-    fn place(&mut self, id: u32, cell_box: Option<(u16, u16)>) {
+    /// Place `id` at the cursor. A placement id replaces the old placement with the same ids.
+    fn place_as(&mut self, id: u32, placement: Option<u32>, cell_box: Option<(u16, u16)>) {
+        if placement.is_some() {
+            self.placements
+                .retain(|old| (old.id, old.number) != (id, placement));
+        }
         if !self.stores(id) {
             self.black_cells.push(id);
             return;
@@ -253,7 +248,7 @@ impl FakeTerminal {
             id,
             cell: self.cursor,
             cell_box,
-            number: None,
+            number: placement,
         });
     }
 }

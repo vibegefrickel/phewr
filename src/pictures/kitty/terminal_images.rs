@@ -1,16 +1,15 @@
-//! The images that the terminal stores for phewr, and the deletes that keep them in budget.
+//! The images that the terminal stores for the app, and the budget of their pixel bytes.
 
-use super::protocol;
 use lru::LruCache;
 use std::collections::HashSet;
-use std::io::{self, Write};
 
-/// The RGBA bytes that phewr leaves in the terminal at most. Ghostty evicts at 320 MB, and herdr
-/// stores each image twice.
+/// The RGBA bytes that the app leaves in the terminal at most. Ghostty evicts pictures without a
+/// placement at 320 MB without a notice, and herdr stores each image twice.
 pub(crate) const TERMINAL_IMAGE_BUDGET: usize = 128 * 1024 * 1024;
 
 /// The images that the terminal stores, newest last, with their pixel bytes. A stored image
 /// can be placed again by its id (`a=p`).
+#[derive(Debug)]
 pub(crate) struct TerminalImages {
     stored: LruCache<u32, usize>,
     bytes: usize,
@@ -69,14 +68,22 @@ impl TerminalImages {
         self.stored.is_empty()
     }
 
-    #[cfg(test)]
-    pub(crate) fn bytes(&self) -> usize {
+    pub(crate) const fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    /// The stored ids, the oldest first.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "an app uses a part of the interface")
+    )]
+    pub(crate) fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.stored.iter().rev().map(|(&id, _)| id)
     }
 
     /// The oldest ids that must go to fit the budget. An id in `keep` stays, and the search goes
     /// on past it, because a shown image can be older than a hidden one.
-    fn over_budget(&mut self, keep: &HashSet<u32>) -> Vec<u32> {
+    pub(crate) fn over_budget(&mut self, keep: &HashSet<u32>) -> Vec<u32> {
         let mut excess = self.bytes.saturating_sub(self.budget);
         let mut dropped = Vec::new();
         for (&id, &bytes) in self.stored.iter().rev() {
@@ -93,31 +100,6 @@ impl TerminalImages {
         }
         dropped
     }
-}
-
-/// Delete the image `id` if the terminal stores it.
-pub(crate) fn delete_image_to(
-    images: &mut TerminalImages,
-    out: &mut impl Write,
-    id: u32,
-) -> io::Result<()> {
-    if images.contains(id) {
-        protocol::delete_image_to(out, id)?;
-        images.remove(id);
-    }
-    Ok(())
-}
-
-/// Delete the oldest hidden images until the stored bytes fit the budget.
-pub(crate) fn trim_to_budget(
-    images: &mut TerminalImages,
-    out: &mut impl Write,
-    shown: &HashSet<u32>,
-) -> io::Result<()> {
-    for id in images.over_budget(shown) {
-        protocol::delete_image_to(out, id)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

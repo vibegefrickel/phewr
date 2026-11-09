@@ -79,7 +79,7 @@ fn place_stills(app: &mut App, terminal: &mut FakeTerminal) {
 fn play_at(app: &mut App, tick: u64) -> (String, bool) {
     let mut out = Vec::new();
     let now = app.grid_loops.instant_of(tick);
-    let started = play_grid_loops_to(app, &mut out, now).unwrap();
+    let started = play_grid_loops_to(app, &mut out, now).unwrap().started;
     (text(&out), started)
 }
 
@@ -126,7 +126,7 @@ fn tick_swaps_placement_without_pixels() {
         tick.contains(&format!("\x1b_Ga=d,d=i,i={},", ids[0])),
         "{tick:?} {ids:?}"
     );
-    assert!(tick.contains(&format!("\x1b_Ga=p,q=2,C=1,i={},c=20,r=6", ids[1])));
+    assert!(tick.contains(&format!("\x1b_Ga=p,q=2,C=1,i={},p=1,c=20,r=6", ids[1])));
     assert!(
         tick.len() < 150,
         "{} bytes for one cell: {tick:?}",
@@ -138,12 +138,15 @@ fn tick_swaps_placement_without_pixels() {
     // In the middle of a frame, nothing is due, and the pass writes nothing.
     let now = app.grid_loops.instant_of(FRAME_TICKS + 3);
     assert!(!app.loop_frames_due(now));
-    assert!(!play_grid_loops(&mut app, now).unwrap());
+    assert!(!play_grid_loops(&mut app, now, &mut Vec::new()).unwrap());
     assert!(app.graphics_out.take_bytes().is_empty());
 
     // After the last frame, the loop starts again.
     let (again, _) = play_at(&mut app, 3 * FRAME_TICKS);
-    assert!(again.contains(&format!("i={},c=20,r=6", ids[0])), "{again}");
+    assert!(
+        again.contains(&format!("i={},p=1,c=20,r=6", ids[0])),
+        "{again}"
+    );
 }
 
 fn animation_app(count: usize) -> App {
@@ -186,7 +189,7 @@ fn animation_replaces_still_once() {
         ))
         .unwrap();
     let place = first
-        .find(&format!("\x1b_Ga=p,q=2,C=1,i={id},c=20,r=6"))
+        .find(&format!("\x1b_Ga=p,q=2,C=1,i={id},p=1,c=20,r=6"))
         .unwrap();
     let unplace = first.find(&format!("\x1b_Ga=d,d=i,i={still},")).unwrap();
     assert!(
@@ -204,7 +207,7 @@ fn animation_replaces_still_once() {
     assert!(terminal.orphan_frames.is_empty());
     assert_eq!(placed(&terminal, &ids), vec![id]);
     assert!(placed(&terminal, &[still]).is_empty());
-    assert_eq!(app.terminal_images.bytes_of(id), 3 * FRAME_BYTES);
+    assert_eq!(app.screen.bytes_of(id), 3 * FRAME_BYTES);
     assert_eq!(terminal.stored_bytes(), 3 * STILL_BYTES + 3 * FRAME_BYTES);
     assert!(app.loop_plays(1));
     assert!(!app.loops_to_send());
@@ -222,11 +225,11 @@ fn animation_needs_no_tick() {
         let now = app.grid_loops.instant_of(tick);
         assert!(!app.loop_frames_due(now), "tick {tick}");
         assert_eq!(app.grid_loop_timeout(now), None, "tick {tick}");
-        assert!(!play_grid_loops(&mut app, now).unwrap());
+        assert!(!play_grid_loops(&mut app, now, &mut Vec::new()).unwrap());
         assert!(app.graphics_out.take_bytes().is_empty(), "tick {tick}");
         let (out, started) = play_at(&mut app, tick);
         assert!(!started);
-        assert_eq!(out, format!("{BEGIN_SYNC}{END_SYNC}"), "tick {tick}");
+        assert_eq!(out, "", "tick {tick}");
     }
     assert!(!app.loops_to_send());
     assert_eq!(
@@ -254,7 +257,7 @@ fn animation_off_screen_deletes_image() {
         out.matches(&format!("\x1b_Ga=d,d=I,i={},", ids[0])).count(),
         1
     );
-    assert!(!app.terminal_images.contains(ids[0]));
+    assert!(!app.screen.stores(ids[0]));
     assert!(!terminal.stores(ids[0]));
     assert!(app.grid_loops.loops.is_empty());
 }
@@ -292,7 +295,7 @@ fn redraw_places_running_animation() {
     let (again, started) = play_at(&mut app, FRAME_TICKS);
     terminal.feed(again.as_bytes());
     assert!(started);
-    assert_eq!(again.matches("\x1b_Ga=f,q=2,").count(), 2, "{again}");
+    assert_eq!(again.matches("\x1b_Ga=f,q=2,f=").count(), 2, "{again}");
     assert_eq!(placed(&terminal, &ids), ids);
     assert!(terminal.animation(ids[0]).is_some());
 }
@@ -301,7 +304,8 @@ fn redraw_places_running_animation() {
 fn animation_over_budget_keeps_still() {
     let mut app = animation_app(3);
     let mut terminal = FakeTerminal::new();
-    app.terminal_images.budget = 3 * STILL_BYTES + 2 * FRAME_BYTES;
+    app.screen =
+        crate::pictures::kitty::screen::Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
     place_stills(&mut app, &mut terminal);
     add_loop(&mut app, 0, 3);
 
@@ -321,10 +325,7 @@ fn animation_over_budget_keeps_still() {
     assert!(started, "an animation that fits plays");
     assert_eq!(placed(&terminal, &ids), ids);
     assert_eq!(terminal.animation(ids[0]).map(|a| a.gaps.len()), Some(2));
-    assert_eq!(
-        app.terminal_images.bytes(),
-        3 * STILL_BYTES + 2 * FRAME_BYTES
-    );
+    assert_eq!(app.screen.stored_bytes(), 3 * STILL_BYTES + 2 * FRAME_BYTES);
 }
 
 #[test]
@@ -356,7 +357,7 @@ fn help_popup_restarts_animation() {
     terminal.feed(again.as_bytes());
     assert!(started);
     assert_eq!(again.matches("\x1b_Ga=t,").count(), 1, "{again}");
-    assert_eq!(again.matches("\x1b_Ga=f,q=2,").count(), 2, "{again}");
+    assert_eq!(again.matches("\x1b_Ga=f,q=2,f=").count(), 2, "{again}");
     assert!(again.contains(&format!("\x1b_Ga=a,q=2,i={},s=3,v=1", ids[0])));
     assert_eq!(placed(&terminal, &ids), ids);
     assert_eq!(terminal.animation(ids[0]).map(|a| a.gaps.len()), Some(3));
@@ -432,7 +433,8 @@ fn run_loop_sleeps_until_next_frame() {
 fn loop_over_budget_keeps_still() {
     let mut app = clip_app(3);
     let mut terminal = FakeTerminal::new();
-    app.terminal_images.budget = 3 * STILL_BYTES + 2 * FRAME_BYTES;
+    app.screen =
+        crate::pictures::kitty::screen::Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
     place_stills(&mut app, &mut terminal);
     add_loop(&mut app, 0, 3);
 
@@ -451,7 +453,7 @@ fn loop_over_budget_keeps_still() {
     terminal.feed(out.as_bytes());
     assert!(started, "a loop that fits plays");
     assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
-    assert!(app.terminal_images.bytes() <= app.terminal_images.budget);
+    assert!(app.screen.stored_bytes() <= app.screen.budget());
 }
 
 #[test]
@@ -461,14 +463,14 @@ fn loop_off_screen_deletes_frames() {
     place_stills(&mut app, &mut terminal);
     let ids = add_loop(&mut app, 0, 3);
     play_at(&mut app, 0);
-    assert!(ids.iter().all(|&id| app.terminal_images.contains(id)));
+    assert!(ids.iter().all(|&id| app.screen.stores(id)));
 
     app.gallery.move_to_last();
     render_gallery_images(&mut app).unwrap();
     let out = text(&app.graphics_out.take_bytes());
     for id in &ids {
         assert!(out.contains(&format!("\x1b_Ga=d,d=I,i={id},")), "{id}");
-        assert!(!app.terminal_images.contains(*id));
+        assert!(!app.screen.stores(*id));
     }
     assert!(app.grid_loops.loops.is_empty());
 }
@@ -479,7 +481,7 @@ fn transmits(output: &str) -> Vec<&str> {
         .split("\x1b_G")
         .skip(1)
         .map(|command| command.split(';').next().unwrap_or_default())
-        .filter(|keys| keys.contains("q=2"))
+        .filter(|keys| keys.contains("q=2") && keys.contains(",f="))
         .filter(|keys| ["a=T,", "a=t,", "a=f,"].iter().any(|a| keys.starts_with(a)))
         .collect()
 }
@@ -521,14 +523,25 @@ fn lost_frame_falls_back_to_still() {
     let mut out = Vec::new();
     protocol::delete_image_to(&mut out, ids[2]).unwrap();
     terminal.feed(&out);
-    app.terminal_images.remove(ids[2]);
-    place_stills(&mut app, &mut terminal);
+    app.screen.lost(ids[2]);
+    let (broken, _) = play_at(&mut app, 2 * FRAME_TICKS);
+    terminal.feed(broken.as_bytes());
 
     assert!(
         placed(&terminal, &ids).is_empty(),
         "no frame of a broken loop"
     );
     assert_eq!(placed(&terminal, &[still]), vec![still], "the still shows");
+    assert!(terminal.black_cells.is_empty());
+    assert!(app.loops_to_send(), "the loop goes out again");
+    let (again, started) = play_at(&mut app, 3 * FRAME_TICKS);
+    terminal.feed(again.as_bytes());
+    assert!(started);
+    assert_eq!(
+        again.matches("\x1b_Ga=t,").count(),
+        1,
+        "only the lost frame: {again}"
+    );
     assert!(terminal.black_cells.is_empty());
 }
 
@@ -558,8 +571,8 @@ fn due_loops_swap_in_grid_order() {
     let old_second = position(format!("\x1b_Ga=d,d=i,i={},", second[0]));
     let new_second = position(format!("\x1b_Ga=p,q=2,C=1,i={},", second[1]));
     assert!(
-        old_first < new_first && new_first < old_second && old_second < new_second,
-        "grid order: {tick:?}"
+        old_first < old_second && old_second < new_first && new_first < new_second,
+        "the deletes first, then the places in grid order: {tick:?}"
     );
     assert_eq!(placed(&terminal, &first), vec![first[1]]);
     assert_eq!(placed(&terminal, &second), vec![second[1]]);

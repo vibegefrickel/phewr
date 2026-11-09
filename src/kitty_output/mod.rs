@@ -66,7 +66,7 @@ pub(crate) fn render_video_frame(app: &mut App) -> io::Result<()> {
     app.with_graphics_out(|app, out| {
         if render_video_frame_to(app, out, clear)? && clear {
             app.clear_before_video = false;
-            app.grid_icons.forget_placements();
+            app.screen.forget_placements();
         }
         Ok(())
     })
@@ -109,6 +109,7 @@ pub(crate) fn render_video_frame_to(
         pixels,
         &kitty::DisplayOptions {
             id: Some(VIDEO_IMAGE_ID),
+            placement: None,
             cell_box: Some((cells.width, cells.height)),
             transmit_only: false,
             columns: None,

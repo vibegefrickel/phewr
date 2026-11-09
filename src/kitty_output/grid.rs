@@ -1,117 +1,140 @@
-//! The grid thumbnails: the new ones of each pass, the placements of a redraw and the deletes.
+//! The grid pictures: one frame of the visible cells per pass (the thumbnails, the previews, the
+//! loop frames and the icons), written by the frame engine of `pictures::kitty::screen`.
 
-use super::loops::place_loop_frame_to;
+use super::loops::{place_loop_frame, send_grid_loops_to};
 use crate::app::App;
-use crate::pictures::kitty;
-use crate::pictures::kitty::EMIT_PASS_BYTES;
+use crate::gallery::GalleryState;
+use crate::pictures::kitty::Pixels;
 use crate::pictures::kitty::placement::centered;
-use crate::pictures::kitty::protocol;
-use crate::pictures::kitty::terminal_images::{delete_image_to, trim_to_budget};
-use crossterm::{cursor, queue};
+use crate::pictures::kitty::screen::{Placements, Update};
 use ratatui::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::time::Instant;
 
-/// Write the new thumbnails of `pending` that fit one pass, and keep the visible rest.
+/// The result of one grid pass.
+pub(crate) struct GridPass {
+    /// The visible cells whose picture waits for a later pass, in grid order.
+    pub(crate) waiting: Vec<usize>,
+    /// True when a cell started its loop, and the draw drops its marker.
+    pub(crate) started: bool,
+}
+
+/// Write one grid pass. The visible cells whose picture waits for the byte cap come back.
 pub(crate) fn emit_new_thumbnails(app: &mut App, pending: &mut Vec<usize>) -> io::Result<()> {
     app.with_graphics_out(|app, out| {
-        *pending = emit_new_thumbnails_to(app, pending, out)?;
+        *pending = emit_new_thumbnails_to(app, out)?;
         Ok(())
     })
 }
 
-/// Write the new thumbnails in grid order, in one synchronized update. After `EMIT_PASS_BYTES`,
-/// the visible rest comes back for the next pass.
-fn emit_new_thumbnails_to(
+/// One grid pass without new loops, in one synchronized update. After `EMIT_PASS_BYTES`, the
+/// visible rest comes back for the next pass.
+pub(super) fn emit_new_thumbnails_to(
     app: &mut App,
-    new_indices: &[usize],
     out: &mut impl Write,
 ) -> io::Result<Vec<usize>> {
-    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-
-    queue!(out, BeginSynchronizedUpdate)?;
-    delete_evicted_images_to(app, out)?;
-    let new_indices: HashSet<usize> = new_indices.iter().copied().collect();
-    let shown = visible_image_ids(app);
-    let mut written = 0;
-    let mut left = Vec::new();
-    let mut sent = HashSet::new();
-    for (vis_idx, position) in app.gallery.visible_range().enumerate() {
-        let img_idx = app.gallery.filtered_indices[position];
-        if !new_indices.contains(&img_idx) {
-            continue;
-        }
-        if written >= EMIT_PASS_BYTES {
-            left.push(img_idx);
-            continue;
-        }
-        written += transmit_cell(app, out, vis_idx, img_idx)?;
-        sent.insert(img_idx);
-    }
-    // The cells left for the next pass keep their previews until their sharp image goes out.
-    delete_stale_images_to(app, out, |cell| sent.contains(&cell))?;
-    trim_to_budget(&mut app.terminal_images, out, &shown)?;
-    queue!(out, EndSynchronizedUpdate)?;
-    out.flush()?;
-    Ok(left)
+    let mut update = Update::new(out);
+    let pass = write_grid_to(app, &mut update, Instant::now(), Vec::new(), false)?;
+    update.finish()?;
+    Ok(pass.waiting)
 }
 
-/// Transmit the thumbnail of `img_idx` into the visible cell `vis_idx`. Returns its bytes.
-fn transmit_cell(
+/// One grid pass into `update`: the loops that start (with `send_loops`), then the frame of the
+/// visible cells. `deleted` names the pictures that the terminal must drop.
+pub(super) fn write_grid_to<W: Write + ?Sized>(
     app: &mut App,
-    out: &mut impl Write,
-    vis_idx: usize,
-    img_idx: usize,
-) -> io::Result<usize> {
-    let Some((picture, id)) = app.thumb_cache.peek(img_idx) else {
-        return Ok(0);
-    };
-    let bytes = picture.image.as_raw().len();
-    let area = grid_placement(app, vis_idx, picture.cells);
-    queue!(out, cursor::MoveTo(area.x, area.y))?;
-    app.graphics.transmit(
-        out,
-        (&picture.image).into(),
-        &kitty::DisplayOptions {
-            id: Some(id),
-            cell_box: Some((area.width, area.height)),
-            transmit_only: false,
-            columns: None,
-            rows: None,
-            below_backgrounds: false,
-            transient: false,
+    update: &mut Update<'_, W>,
+    now: Instant,
+    mut deleted: Vec<u32>,
+    send_loops: bool,
+) -> io::Result<GridPass> {
+    if send_loops {
+        send_grid_loops_to(app, update)?;
+    }
+    deleted.extend(app.thumb_cache.take_evicted_ids());
+    deleted.append(&mut app.grid_loops.stale_ids);
+    let tick = app.grid_loops.tick_at(now);
+    let (mut frame, stills, icon_cells, started) = grid_frame(app, tick, &mut deleted);
+    app.screen.write_frame(
+        update,
+        app.graphics,
+        &mut frame,
+        &deleted,
+        |id| match stills.get(&id) {
+            Some(&index) => app
+                .thumb_cache
+                .peek(index)
+                .map(|(picture, _)| Pixels::from(&picture.image)),
+            None => app.grid_icons.pixels(id),
         },
     )?;
-    app.terminal_images.insert(id, bytes);
-    Ok(bytes)
-}
-
-/// Delete the previews that a sharp thumbnail replaced, for the cells that `select` picks. The
-/// sharp image has a new id.
-fn delete_stale_images_to(
-    app: &mut App,
-    out: &mut impl Write,
-    select: impl Fn(usize) -> bool,
-) -> io::Result<()> {
-    // Remove in place and keep the order. A pass allocates no `Vec` per cell.
-    while let Some(position) = app
-        .stale_image_ids
+    // A preview goes when its sharp picture shows, and the engine deletes it.
+    app.stale_image_ids.retain(|&(_, id)| app.screen.stores(id));
+    // An icon that waits counts as its cell, so the next pass comes without a delay.
+    let mut waiting: Vec<usize> = app
+        .screen
+        .waiting()
         .iter()
-        .position(|&(cell, _)| select(cell))
-    {
-        let (_, id) = app.stale_image_ids.remove(position);
-        delete_image_to(&mut app.terminal_images, out, id)?;
-    }
-    Ok(())
+        .filter_map(|id| stills.get(id).or_else(|| icon_cells.get(id)).copied())
+        .collect();
+    waiting.dedup();
+    Ok(GridPass { waiting, started })
 }
 
-/// Delete the images of the thumbnails that the cache dropped.
-fn delete_evicted_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
-    for id in app.thumb_cache.take_evicted_ids() {
-        delete_image_to(&mut app.terminal_images, out, id)?;
+/// The cell of each thumbnail id or icon id of a frame.
+type Cells = HashMap<u32, usize>;
+
+/// The frame of the visible cells in grid order: the loop frame or the thumbnail of each cell,
+/// and the icons. Returns the frame, the cell of each thumbnail id, the first cell of each icon
+/// id and whether a loop started.
+fn grid_frame(
+    app: &mut App,
+    tick: u64,
+    deleted: &mut Vec<u32>,
+) -> (Placements, Cells, Cells, bool) {
+    let mut frame = Placements::default();
+    let mut stills = HashMap::new();
+    let mut icon_cells = HashMap::new();
+    let mut started = false;
+    let mut icons = app
+        .grid_icons
+        .resolve(app.cell_px, deleted)
+        .into_iter()
+        .peekable();
+    let visible: Vec<(usize, usize)> = app.gallery.visible_items().collect();
+    for (vis_idx, img_idx) in visible {
+        while let Some((_, id, area)) = icons.next_if(|&(cell, ..)| cell <= vis_idx) {
+            frame.place(id, area);
+            icon_cells.entry(id).or_insert(img_idx);
+        }
+        let still = app
+            .thumb_cache
+            .peek(img_idx)
+            .map(|(picture, id)| (picture.cells, id));
+        if let Some(now_started) = place_loop_frame(app, &mut frame, vis_idx, img_idx, tick) {
+            started |= now_started;
+            // The still stays for the next overlay.
+            if let Some((_, id)) = still {
+                frame.keep(id);
+            }
+        } else if let Some((cells, id)) = still {
+            let area = grid_placement(&app.gallery, vis_idx, cells);
+            match app
+                .stale_image_ids
+                .iter()
+                .find(|&&(cell, _)| cell == img_idx)
+            {
+                Some(&(_, earlier)) => frame.place_over(id, earlier, area),
+                None => frame.place(id, area),
+            }
+            stills.insert(id, img_idx);
+        }
     }
-    Ok(())
+    for (_, id, area) in icons {
+        frame.place(id, area);
+    }
+    (frame, stills, icon_cells, started)
 }
 
 /// The cell box of a picture of `cells` in the thumbnail area of `vis_idx`, centered.
@@ -119,23 +142,10 @@ fn delete_evicted_images_to(app: &mut App, out: &mut impl Write) -> io::Result<(
 /// Every grid picture is padded to whole cells: a sharp thumbnail at its pixel size, a preview
 /// at its own size in the shape of those cells. `c=` and `r=` fit both to the same cells. No
 /// picture needs a pixel offset. A relaying multiplexer gets offsets wrong.
-fn grid_placement(app: &App, vis_idx: usize, cells: (u16, u16)) -> Rect {
-    let cols = cells.0.clamp(1, app.gallery.thumb_cols.max(1));
-    let rows = cells.1.clamp(1, app.gallery.thumb_rows.max(1));
-    centered(app.gallery.thumb_rect(vis_idx), cols, rows)
-}
-
-/// Place the stored image `id` centered in the visible cell `vis_idx`, without a transmit.
-pub(super) fn place_at(
-    app: &App,
-    out: &mut impl Write,
-    vis_idx: usize,
-    cells: (u16, u16),
-    id: u32,
-) -> io::Result<()> {
-    let area = grid_placement(app, vis_idx, cells);
-    queue!(out, cursor::MoveTo(area.x, area.y))?;
-    protocol::place_by_id_to(out, id, Some((area.width, area.height)))
+pub(super) fn grid_placement(gallery: &GalleryState, vis_idx: usize, cells: (u16, u16)) -> Rect {
+    let cols = cells.0.clamp(1, gallery.thumb_cols.max(1));
+    let rows = cells.1.clamp(1, gallery.thumb_rows.max(1));
+    centered(gallery.thumb_rect(vis_idx), cols, rows)
 }
 
 /// The ids that the visible cells need: the stills and their loop frames.
@@ -175,55 +185,36 @@ pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
     app.with_graphics_out(place_gallery_images_to)
 }
 
-/// Write the visible thumbnails in one synchronized update.
+/// Write the visible thumbnails in one synchronized update, without a byte cap: a redraw shows
+/// every visible picture in one step, as the return from another view expects. After a new list
+/// or cell size, a `d=A` deletes every old picture first.
 pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
-    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-
-    queue!(out, BeginSynchronizedUpdate)?;
+    let mut update = Update::uncapped(out);
+    let mut deleted = Vec::new();
     if app.graphics_storage_dirty {
-        app.graphics_delete_all_to(out)?;
+        app.graphics_delete_all_to(&mut update)?;
         app.graphics_storage_dirty = false;
         app.stale_image_ids.clear();
         app.grid_loops.stale_ids.clear();
         app.thumb_cache.take_evicted_ids();
     } else {
-        // The terminal keeps the pixels. A stored thumbnail goes out again as an `a=p`.
-        protocol::clear_placements_to(out)?;
-        app.grid_loops.forget_placements();
-        app.grid_icons.forget_placements();
-        delete_stale_images_to(app, out, |_| true)?;
-        delete_evicted_images_to(app, out)?;
-        for id in std::mem::take(&mut app.grid_loops.stale_ids) {
-            delete_image_to(&mut app.terminal_images, out, id)?;
-        }
+        // A preview of a cell off the screen goes. A visible one keeps its place until its
+        // sharp picture shows.
+        let visible: HashSet<usize> = app
+            .gallery
+            .visible_items()
+            .map(|(_, index)| index)
+            .collect();
+        app.stale_image_ids.retain(|&(cell, id)| {
+            let keep = visible.contains(&cell);
+            if !keep {
+                deleted.push(id);
+            }
+            keep
+        });
     }
-
-    let shown = visible_image_ids(app);
-    let tick = app.grid_loops.tick_at(Instant::now());
-    for (vis_idx, position) in app.gallery.visible_range().enumerate() {
-        let img_idx = app.gallery.filtered_indices[position];
-        let Some((cells, id)) = app
-            .thumb_cache
-            .peek(img_idx)
-            .map(|(picture, id)| (picture.cells, id))
-        else {
-            continue;
-        };
-        if place_loop_frame_to(app, out, vis_idx, img_idx, tick)? {
-            // The still stays for the next overlay, and the trim keeps the newest images.
-            app.terminal_images.touch(id);
-            continue;
-        }
-        if app.terminal_images.contains(id) {
-            place_at(app, out, vis_idx, cells, id)?;
-            app.terminal_images.touch(id);
-        } else {
-            transmit_cell(app, out, vis_idx, img_idx)?;
-        }
-    }
-    trim_to_budget(&mut app.terminal_images, out, &shown)?;
-    queue!(out, EndSynchronizedUpdate)?;
-    out.flush()
+    write_grid_to(app, &mut update, Instant::now(), deleted, false)?;
+    update.finish()
 }
 
 #[cfg(test)]
