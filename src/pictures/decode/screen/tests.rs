@@ -8,7 +8,8 @@ use crate::pictures::kitty::Pixels;
 use crate::pictures::resize::{Layout, fit_rgba_within, resize_region};
 use crate::pictures::test_support::{fixture, test_dir};
 use image::{DynamicImage, Rgb, RgbImage, Rgba, RgbaImage};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Every checked-in SDR still that the build decodes. The HDR files resize in 16 bit before the
 /// tone map, and `decode::hdr` tests them.
@@ -26,6 +27,25 @@ fn still_fixtures() -> Vec<PathBuf> {
         .collect();
     paths.sort();
     paths
+}
+
+/// The decode of `path` for each box hint, one time per test, cloned for each use. Both paths of
+/// a test compare the same decode. Without `heic`, a HEIC or AVIF fixture decodes through sips,
+/// and each run costs about 0.12 s.
+fn decodes(path: &Path, thumbnail: EmbeddedThumbnail) -> impl FnMut(Option<(u32, u32)>) -> Decoded {
+    let path = path.to_path_buf();
+    let mut done: HashMap<Option<(u32, u32)>, Decoded> = HashMap::new();
+    move |hint| {
+        let decoded = done
+            .entry(hint)
+            .or_insert_with(|| decode_image(&path, hint, thumbnail).unwrap());
+        Decoded {
+            image: decoded.image.clone(),
+            color: decoded.color.clone(),
+            opaque: decoded.opaque,
+            peak: decoded.peak,
+        }
+    }
 }
 
 /// The alpha flag and the bytes that the Kitty write sends.
@@ -94,14 +114,12 @@ fn screen_zoom(
 /// its version.
 #[test]
 fn grid_picture_matches_rgba_path() {
-    let decode = |path: &PathBuf, box_px| {
-        decode_image(path, Some(box_px), EmbeddedThumbnail::Allow).unwrap()
-    };
     let mut checked = 0;
     for path in still_fixtures() {
+        let mut decode = decodes(&path, EmbeddedThumbnail::Allow);
         for box_px in [(16, 16), (40, 30), (7, 5), (200, 200)] {
-            let before = rgba_fullscreen(decode(&path, box_px), box_px, color::target());
-            let after = decode(&path, box_px).fit_within(box_px.0, box_px.1);
+            let before = rgba_fullscreen(decode(Some(box_px)), box_px, color::target());
+            let after = decode(Some(box_px)).fit_within(box_px.0, box_px.1);
             assert_eq!(after, before, "{path:?} {box_px:?}");
             checked += 1;
         }
@@ -116,14 +134,14 @@ fn grid_picture_matches_rgba_path() {
 
 #[test]
 fn wire_bytes_match_rgba_path() {
-    let decode = |path: &PathBuf, hint| decode_image(path, hint, EmbeddedThumbnail::Deny).unwrap();
     let mut checked = 0;
     for path in still_fixtures() {
+        let mut decode = decodes(&path, EmbeddedThumbnail::Deny);
         for target in [ColorTarget::DisplayP3, ColorTarget::Srgb] {
             for box_px in [(0, 0), (40, 40), (7, 5)] {
                 let hint = (box_px.0 > 0).then_some(box_px);
-                let before = rgba_fullscreen(decode(&path, hint), box_px, target);
-                let after = screen_fullscreen(decode(&path, hint), box_px, target);
+                let before = rgba_fullscreen(decode(hint), box_px, target);
+                let after = screen_fullscreen(decode(hint), box_px, target);
                 assert_eq!(
                     after.dimensions(),
                     before.dimensions(),
@@ -137,7 +155,7 @@ fn wire_bytes_match_rgba_path() {
                     "{path:?} {box_px:?}"
                 );
             }
-            let image = decode(&path, None).image;
+            let image = decode(None).image;
             let (w, h) = (image.width(), image.height());
             let crops = [(0, 0, w, h), (w / 4, h / 4, w / 2, h / 2), (1, 0, w - 1, h)];
             for crop in crops {
@@ -146,8 +164,8 @@ fn wire_bytes_match_rgba_path() {
                     (crop.2 * 3, crop.3 * 2),
                     ((crop.2 / 3).max(1), (crop.3 / 2).max(1)),
                 ] {
-                    let before = rgba_zoom(decode(&path, None), crop, dst, target);
-                    let after = screen_zoom(decode(&path, None), crop, dst, target);
+                    let before = rgba_zoom(decode(None), crop, dst, target);
+                    let after = screen_zoom(decode(None), crop, dst, target);
                     assert_eq!(after.dimensions(), dst, "{path:?}");
                     assert_eq!(
                         wire((&after).into()),
