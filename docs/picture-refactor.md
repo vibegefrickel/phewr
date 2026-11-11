@@ -4,10 +4,10 @@ Status (2026-11-09): phases 1, 2, 3, 4 and 4b are done (`6b7482a`, `36ecdea`, `6
 schnattr `8f45abc`, `455ac6f`). Step 2 of phase 4b is done too: schnattr runs the module of
 `da45195` with `kitty-flush`, `kitty-events`, `kitty-layers` and `kitty-overlay`, moxcms 0.9.2 and
 no `allow` on `mod pictures;`. Phase 5 is done (`caa87b3`, 2026-11-11): the self check of the
-Kitty placements, and 0 lost cells in herdr after ten scrolls. The copies of phase 5 are in
-schnattr and youtr. The module tests of `b6bf116` (2026-11-11) are not synced yet:
-`just pictures-check` names five files in each copy. Phase 6 runs in the youtr session
-(uncommitted on 2026-11-11).
+Kitty placements, and 0 lost cells in herdr after ten scrolls. Phase 6 is done (youtr `a5d338e`,
+2026-11-11): youtr runs the module, and the schnattr frame is synced into youtr again (youtr
+`31fbeba`). Both copies match the master `3030ce5` (`just pictures-check`). Phase 7, the test
+matrix of the maintainer, is next.
 Phase 0 holds the bench numbers of phewr (2026-11-11). The maintainer measures the memory in a real
 terminal.
 This file in phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
