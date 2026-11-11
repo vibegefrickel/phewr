@@ -51,8 +51,8 @@ just pictures-check TARGET  # fail when the copy or its fixtures in TARGET drift
 
 Plain cargo works too. Homebrew's rustup is keg-only, so run
 `export PATH="/opt/homebrew/opt/rustup/bin:$PATH"` first. The justfile does this itself.
-The justfile also sets the `TURBOJPEG_*` variables, so turbojpeg-sys links Homebrew's
-libjpeg-turbo statically and does not build it with cmake.
+turbojpeg-sys finds the Homebrew libjpeg-turbo through pkgconf (feature `pkg-config`, no
+`cmake`), so a plain `cargo build` needs no `TURBOJPEG_*` variables.
 
 The repository pins the toolchain, the formatter and the lints:
 

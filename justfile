@@ -4,11 +4,6 @@
 set shell := ["zsh", "-euo", "pipefail", "-c"]
 export PATH := "/opt/homebrew/opt/rustup/bin:" + env("PATH")
 
-# turbojpeg-sys links Homebrew's libjpeg-turbo (static) instead of building it with cmake.
-export TURBOJPEG_SOURCE      := env("TURBOJPEG_SOURCE", "explicit")
-export TURBOJPEG_LIB_DIR     := env("TURBOJPEG_LIB_DIR", "/opt/homebrew/opt/jpeg-turbo/lib")
-export TURBOJPEG_INCLUDE_DIR := env("TURBOJPEG_INCLUDE_DIR", "/opt/homebrew/opt/jpeg-turbo/include")
-
 prefix := env("PREFIX", env("HOME") + "/.local")
 
 # Everything a commit must pass: formatting, lints, tests, docs, dependency policy.

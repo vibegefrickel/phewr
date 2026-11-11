@@ -157,7 +157,9 @@ serde_json = { version = "1", optional = true }
 # The temp TIFF of the `sips` route.
 tempfile = { version = "3.27", optional = true }
 toml = "1"
-turbojpeg = { version = "1.5", optional = true }
+# Without the default feature `cmake`, turbojpeg-sys finds the Homebrew libjpeg-turbo through
+# pkgconf and never builds it from source.
+turbojpeg = { version = "1.5", default-features = false, features = ["pkg-config", "require-simd"], optional = true }
 unicode-width = "0.2"
 
 [dev-dependencies]
