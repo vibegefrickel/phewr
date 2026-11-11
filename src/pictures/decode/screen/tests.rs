@@ -353,3 +353,24 @@ fn libheif_rgb_matches_rgba() {
         assert_eq!(rows(RgbChroma::Rgb, 3), rows(RgbChroma::Rgba, 4), "{name}");
     }
 }
+
+/// A crop past the edge keeps the part inside the image, as `crop_imm` does, in every layout.
+#[test]
+fn crop_past_edge_keeps_inside_part() {
+    let opaque = ScreenImage::Opaque(RgbaImage::from_pixel(4, 4, Rgba([1, 2, 3, 255])));
+    let cropped = opaque.crop_resized((2, 2, 4, 4), (4, 4));
+    assert!(
+        matches!(cropped, ScreenImage::Rgb(_)),
+        "an opaque crop is RGB"
+    );
+    assert_eq!(cropped.dimensions(), (2, 2));
+
+    let rgb = ScreenImage::Rgb(RgbImage::from_pixel(4, 4, Rgb([1, 2, 3])));
+    let enlarged = rgb.crop_resized((2, 2, 4, 4), (8, 8));
+    assert!(matches!(enlarged, ScreenImage::Rgb(_)));
+    assert_eq!(
+        enlarged.dimensions(),
+        (2, 2),
+        "no resize of a crop past the edge"
+    );
+}

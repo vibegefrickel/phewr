@@ -552,6 +552,44 @@ mod tests {
         assert!(cache.contains(&0) && cache.contains(&3));
     }
 
+    /// A full cache that shrinks names every dropped picture and frees its bytes. A second park
+    /// of the same file and key replaces the first picture.
+    #[test]
+    fn shrink_and_second_park_keep_bytes_right() {
+        use super::ParkKey;
+
+        let mut cache = ThumbnailCache::new(LIMITS);
+        cache.fit_capacity(150);
+        assert_eq!(cache.capacity(), 300);
+        for index in 0..300 {
+            cache.insert(index, image::RgbaImage::new(1, 1));
+        }
+        assert_eq!(cache.bytes(), 300 * 4);
+        cache.fit_capacity(10);
+        assert_eq!(cache.capacity(), 200);
+        assert_eq!(cache.take_evicted_ids().len(), 100);
+        assert_eq!(cache.bytes(), 200 * 4);
+        assert!(
+            !cache.contains(&99) && cache.contains(&100),
+            "the oldest went"
+        );
+
+        let key = ParkKey {
+            target: (160, 96),
+            cell_px: (8, 16),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let paths = vec![dir.path().join("a.jpg")];
+        std::fs::write(&paths[0], b"jpeg").unwrap();
+        let mut cache = ThumbnailCache::new(LIMITS);
+        for _ in 0..2 {
+            cache.insert(0, image::RgbaImage::new(2, 2));
+            cache.park(&paths, key);
+        }
+        assert_eq!(cache.parked_count(), 1);
+        assert_eq!(cache.bytes(), 16, "one parked 2x2 picture");
+    }
+
     #[test]
     fn changed_file_drops_parked_picture() {
         use super::ParkKey;

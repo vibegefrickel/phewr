@@ -276,6 +276,34 @@ mod tests {
             .map(|(_, value)| value.as_str())
     }
 
+    /// The date of the shot wins over the date of the file change. A date that is no text or no
+    /// date gives no date.
+    #[test]
+    fn date_taken_prefers_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let date_of = |name: &str, fields: &[Field]| {
+            let path = dir.path().join(name);
+            jpeg_with_exif(&path, fields);
+            date_taken(&path)
+        };
+        let changed = ascii(Tag::DateTime, "2024:05:06 07:08:09");
+        let original = ascii(Tag::DateTimeOriginal, "2023:01:02 03:04:05");
+        assert_eq!(
+            date_of("both.jpg", &[changed.clone(), original]).as_deref(),
+            Some("2023-01-02 03:04")
+        );
+        assert_eq!(
+            date_of("changed.jpg", &[changed]).as_deref(),
+            Some("2024-05-06 07:08")
+        );
+        assert_eq!(date_of("not-text.jpg", &[short(Tag::DateTime, 2024)]), None);
+        assert_eq!(
+            date_of("not-a-date.jpg", &[ascii(Tag::DateTime, "yesterday")]),
+            None
+        );
+        assert_eq!(date_of("none.jpg", &[short(Tag::Orientation, 1)]), None);
+    }
+
     #[test]
     fn human_size_scales_units() {
         assert_eq!(human_size(0), "0 B");

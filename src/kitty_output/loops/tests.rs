@@ -149,6 +149,25 @@ fn tick_swaps_placement_without_pixels() {
     );
 }
 
+/// The pass of the run loop writes into the graphics output of the app and reports the start
+/// of a loop. The cells whose still waits come back in `pending`.
+#[test]
+fn run_loop_pass_writes_graphics_output() {
+    let mut app = clip_app(3);
+    let mut terminal = FakeTerminal::new();
+    place_stills(&mut app, &mut terminal);
+    let ids = add_loop(&mut app, 1, 3);
+    let mut pending = vec![99];
+
+    let now = app.grid_loops.instant_of(0);
+    assert!(play_grid_loops(&mut app, now, &mut pending).unwrap());
+    let written = text(&app.graphics_out.take_bytes());
+    terminal.feed(written.as_bytes());
+    assert!(written.starts_with(BEGIN_SYNC) && written.ends_with(END_SYNC));
+    assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
+    assert!(pending.is_empty(), "every still is out: {pending:?}");
+}
+
 fn animation_app(count: usize) -> App {
     let mut app = clip_app(count);
     app.graphics = KittyBackend::new(Transfer::Direct).with_loops(Loops::Animation);

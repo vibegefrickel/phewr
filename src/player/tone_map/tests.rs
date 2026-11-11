@@ -458,3 +458,36 @@ fn write_the_player_hdr_cubes() {
         }
     }
 }
+
+/// Each cube source maps back to its primaries. An ICC profile maps by its colorants, and a
+/// source without a cube maps to `None`.
+#[test]
+fn source_colors_map_to_primaries() {
+    use Primaries::{Bt470Bg, Bt709, Bt2020, DciP3, DisplayP3, Smpte170m};
+    use moxcms::ColorProfile;
+    let of = Primaries::of_source_color;
+    for primaries in [Bt709, Smpte170m, Bt470Bg, DisplayP3, DciP3, Bt2020] {
+        assert_eq!(of(&primaries.source_color()), Some(primaries));
+    }
+    let cicp = |primaries| SourceColor::Cicp {
+        primaries,
+        transfer: 13,
+    };
+    assert_eq!(of(&cicp(1)), Some(Bt709));
+    assert_eq!(of(&cicp(7)), Some(Smpte170m));
+    assert_eq!(of(&cicp(12)), Some(DisplayP3));
+    assert_eq!(of(&cicp(2)), None, "unspecified primaries");
+    assert_eq!(of(&SourceColor::AdobeRgb), None);
+    let png = SourceColor::PngGamma {
+        gamma: Some(45_455),
+        chromaticities: None,
+    };
+    assert_eq!(of(&png), None);
+
+    let icc = |profile: ColorProfile| SourceColor::Icc(profile.encode().unwrap().into());
+    assert_eq!(of(&icc(ColorProfile::new_srgb())), Some(Bt709));
+    assert_eq!(of(&icc(ColorProfile::new_display_p3())), Some(DisplayP3));
+    assert_eq!(of(&icc(ColorProfile::new_bt2020())), Some(Bt2020));
+    assert_eq!(of(&icc(ColorProfile::new_adobe_rgb())), None);
+    assert_eq!(of(&SourceColor::Icc(b"no profile".as_slice().into())), None);
+}

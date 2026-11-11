@@ -16,7 +16,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-11: `just check` passes with 1052 tests with the default features and 979 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-11: `just check` passes with 1064 tests with the default features and 989 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 

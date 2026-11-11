@@ -1,5 +1,8 @@
 //! The tests of the grid icons: one image per icon, one placement per cell, and the deletes.
-use super::{ICON_ID_BASE, first_id, image_ids, sync_grid_icons, sync_grid_icons_to};
+use super::{
+    GridIcons, ICON_ID_BASE, IconCell, MAX_RENDERED, first_id, image_ids, sync_grid_icons,
+    sync_grid_icons_to,
+};
 use crate::app::App;
 use crate::icons::Icon;
 use crate::kitty_output::tests::{grid_app, sharp_thumbnail};
@@ -248,4 +251,34 @@ fn a_waiting_icon_comes_back_as_its_cell() {
     let mut out = Vec::new();
     assert!(sync_grid_icons_to(&mut app, &mut out).unwrap().is_empty());
     assert!(text(&out).contains(&format!(",i={},p=1,", first_id(Icon::Loading))));
+}
+
+/// More sizes of one icon than its image ids: the last size takes the first id and names it in
+/// `replaced`. Above `MAX_RENDERED` sizes, the cache of renders starts again.
+#[test]
+fn more_sizes_than_ids_reuse_an_id() {
+    let mut icons = GridIcons::default();
+    icons.set_color(Some(WHITE));
+    let cells = |count: u16| {
+        (0..count)
+            .map(|index| IconCell {
+                cell: usize::from(index),
+                icon: Icon::Loading,
+                area: ratatui::layout::Rect::new(0, 0, index + 1, 2),
+            })
+            .collect::<Vec<_>>()
+    };
+    icons.wanted = cells(5);
+    let mut replaced = Vec::new();
+    let places = icons.resolve((8, 16), &mut replaced);
+    assert_eq!(places.len(), 5);
+    assert_eq!(replaced, vec![first_id(Icon::Loading)]);
+
+    icons.wanted = cells(70);
+    icons.resolve((8, 16), &mut Vec::new());
+    assert!(
+        icons.rendered.len() <= MAX_RENDERED,
+        "{}",
+        icons.rendered.len()
+    );
 }

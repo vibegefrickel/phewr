@@ -166,7 +166,7 @@ pub(super) fn resize_region(
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_rgba_within, load_and_resize_px};
+    use super::{fit_deep_within, fit_rgba_within, load_and_resize_px};
     use crate::pictures::decode::EmbeddedThumbnail;
     use crate::pictures::test_support::test_dir;
     use image::{DynamicImage, RgbaImage};
@@ -202,5 +202,34 @@ mod tests {
         );
         let image = DynamicImage::new_rgba8(10, 0);
         assert_eq!(fit_decoded_within(&image, 4, 4).dimensions(), (10, 0));
+    }
+
+    /// A 16-bit image keeps its layout and its 16 bits. An 8-bit image or a box that it fits
+    /// comes back as it is.
+    #[test]
+    fn deep_fit_keeps_sixteen_bits() {
+        let rgba = DynamicImage::ImageRgba16(image::ImageBuffer::from_pixel(
+            64,
+            32,
+            image::Rgba([40_000_u16, 20_000, 1_000, 65_535]),
+        ));
+        let fitted = fit_deep_within(rgba, 16, 16);
+        assert!(matches!(fitted, DynamicImage::ImageRgba16(_)));
+        assert_eq!((fitted.width(), fitted.height()), (16, 8));
+        let DynamicImage::ImageRgba16(pixels) = &fitted else {
+            unreachable!()
+        };
+        assert_eq!(pixels.get_pixel(8, 4).0, [40_000, 20_000, 1_000, 65_535]);
+
+        let rgb = DynamicImage::ImageRgb16(image::ImageBuffer::new(64, 32));
+        let fitted = fit_deep_within(rgb, 16, 16);
+        assert!(matches!(fitted, DynamicImage::ImageRgb16(_)));
+        assert_eq!((fitted.width(), fitted.height()), (16, 8));
+
+        let small = fit_deep_within(DynamicImage::new_rgba16(8, 4), 16, 16);
+        assert_eq!((small.width(), small.height()), (8, 4));
+        let eight_bit = fit_deep_within(DynamicImage::new_rgba8(64, 32), 16, 16);
+        assert!(matches!(eight_bit, DynamicImage::ImageRgba8(_)));
+        assert_eq!((eight_bit.width(), eight_bit.height()), (64, 32));
     }
 }

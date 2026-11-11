@@ -356,6 +356,17 @@ mod tests {
         out
     }
 
+    /// A box with a 16-byte header: the size 1, then the size in 64 bits.
+    fn large(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
+        let size = u64::try_from(body.len()).unwrap() + 16;
+        [&[0, 0, 0, 1], &kind[..], &size.to_be_bytes()[..], body].concat()
+    }
+
+    /// A box with the size 0: it runs to the end of its parent or of the file.
+    fn to_end(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
+        [&[0, 0, 0, 0], &kind[..], body].concat()
+    }
+
     /// A full box: version 0, no flags.
     fn full(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
         bx(kind, &[&[0, 0, 0, 0], body].concat())
@@ -501,5 +512,63 @@ mod tests {
         assert_eq!(read_meta(&mut Cursor::new(file)).unwrap(), Some(body));
         let without = [bx(*b"ftyp", b"heic"), bx(*b"mdat", &[0; 10])].concat();
         assert_eq!(read_meta(&mut Cursor::new(without)).unwrap(), None);
+    }
+
+    /// The sizes 0 (to the end of the file) and 1 (64 bits), and sizes that cannot be right.
+    #[test]
+    fn meta_search_reads_every_size_form() {
+        let body = meta(1, &[], &[1]);
+        let read = |file: Vec<u8>| read_meta(&mut Cursor::new(file)).unwrap();
+        let ftyp = bx(*b"ftyp", b"heic");
+        let after_large = [ftyp.clone(), large(*b"free", &[0; 20]), bx(*b"meta", &body)].concat();
+        assert_eq!(read(after_large), Some(body.clone()));
+        assert_eq!(
+            read([ftyp.clone(), large(*b"meta", &body)].concat()),
+            Some(body.clone())
+        );
+        assert_eq!(
+            read([ftyp.clone(), to_end(*b"meta", &body)].concat()),
+            Some(body.clone())
+        );
+        assert_eq!(read([ftyp, to_end(*b"mdat", &[0; 10])].concat()), None);
+
+        let below_header = [&[0, 0, 0, 4], &b"free"[..], &bx(*b"meta", &body)].concat();
+        assert_eq!(read(below_header), None, "a size below the header");
+        let huge =
+            |kind: &[u8; 4]| [&[0, 0, 0, 1], &kind[..], &u64::MAX.to_be_bytes()[..]].concat();
+        assert_eq!(read(huge(b"meta")), None, "a meta box above MAX_META_BYTES");
+        assert_eq!(read(huge(b"free")), None, "a skip beyond i64");
+    }
+
+    /// Child boxes with the sizes 0 and 1, an unknown box in `iprp`, and an `ipma` of version 1
+    /// with 32-bit item ids and 16-bit property indices.
+    #[test]
+    fn child_boxes_take_every_size_form() {
+        let ispe = large(*b"ispe", &[0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 4]);
+        let ipco = [ispe, to_end(*b"irot", &[1])].concat();
+        // Version 1 and the flag 1, one item, two properties: 1 (essential) and 2.
+        let ipma = [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0x80, 1, 0, 2];
+        let iprp = bx(
+            *b"iprp",
+            &[
+                bx(*b"ipco", &ipco),
+                bx(*b"free", &[0; 4]),
+                bx(*b"ipma", &ipma),
+            ]
+            .concat(),
+        );
+        let data = [
+            vec![0, 0, 0, 0],
+            full(*b"hdlr", b"pict"),
+            full(*b"pitm", &[0, 1]),
+            iprp,
+        ]
+        .concat();
+        let items = HeifItems::parse_meta(&data).unwrap();
+        assert_eq!(
+            items.primary_size(),
+            Some((4, 8)),
+            "8x4, turned by 90 degrees"
+        );
     }
 }

@@ -220,3 +220,116 @@ pub(super) fn ifd0_orientation<R: Read + Seek>(source: &mut Source<R>) -> Option
     let (order, first) = tiff_order(source, 0)?;
     read_ifd(source, 0, first, order)?.orientation(order)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Entry, Source, find_in_tiff, find_in_tiff_by, read_ifd, tiff_order};
+    use crate::pictures::test_support::red_left_blue_right_jpeg;
+    use std::io::Cursor;
+
+    /// A big-endian IFD: the entries `(tag, kind, count, value)`, then the next IFD.
+    fn ifd(entries: &[(u16, u16, u32, [u8; 4])], next: u32) -> Vec<u8> {
+        let mut out = u16::try_from(entries.len()).unwrap().to_be_bytes().to_vec();
+        for &(tag, kind, count, value) in entries {
+            out.extend_from_slice(&tag.to_be_bytes());
+            out.extend_from_slice(&kind.to_be_bytes());
+            out.extend_from_slice(&count.to_be_bytes());
+            out.extend_from_slice(&value);
+        }
+        out.extend_from_slice(&next.to_be_bytes());
+        out
+    }
+
+    fn source(bytes: Vec<u8>) -> Source<Cursor<Vec<u8>>> {
+        Source::from_reader(Cursor::new(bytes)).unwrap()
+    }
+
+    /// A Panasonic-like file in big endian: IFD0 holds the orientation 6, a 64x32 `JpgFromRaw`
+    /// (0x2E) and one inline `SubIFD`, which holds a 16x8 JPEG. `sub_kind` is the type of the
+    /// `SubIFD` entry.
+    fn big_endian_raw(sub_kind: u16) -> Vec<u8> {
+        let (large, small) = (
+            red_left_blue_right_jpeg(64, 32),
+            red_left_blue_right_jpeg(16, 8),
+        );
+        let len = |data: &[u8]| u32::try_from(data.len()).unwrap();
+        // IFD0 at 8 has 3 entries (42 bytes), the SubIFD at 50 has 2 (30 bytes), data at 80.
+        let (sub, large_at) = (50_u32, 80_u32);
+        let small_at = large_at + len(&large);
+        [
+            vec![b'M', b'M', 0, 42, 0, 0, 0, 8],
+            ifd(
+                &[
+                    (0x112, 3, 1, [0, 6, 0, 0]),
+                    (0x2E, Entry::UNDEFINED, len(&large), large_at.to_be_bytes()),
+                    (0x14A, sub_kind, 1, sub.to_be_bytes()),
+                ],
+                0,
+            ),
+            ifd(
+                &[
+                    (0x201, Entry::LONG, 1, small_at.to_be_bytes()),
+                    (0x202, Entry::LONG, 1, len(&small).to_be_bytes()),
+                ],
+                0,
+            ),
+            large,
+            small,
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn big_endian_raw_gives_largest_jpeg() {
+        let jpeg = find_in_tiff(&mut source(big_endian_raw(Entry::LONG)), 0).unwrap();
+        assert_eq!((jpeg.width, jpeg.height), (64, 32), "the JpgFromRaw");
+        assert_eq!(jpeg.orientation, Some(6));
+
+        let mut raw = source(big_endian_raw(Entry::LONG));
+        let (order, first) = tiff_order(&mut raw, 0).unwrap();
+        let ifd0 = read_ifd(&mut raw, 0, first, order).unwrap();
+        assert_eq!(
+            ifd0.scalar(0x2E, order),
+            None,
+            "no scalar for many undefined bytes"
+        );
+        assert_eq!(ifd0.scalar(0x14A, order), Some(50));
+    }
+
+    /// A `SubIFD` entry of type SHORT names no IFD. With the smallest JPEG as the rule, the 16x8
+    /// JPEG of the `SubIFD` wins only when the reader visits it.
+    #[test]
+    fn short_sub_ifd_entry_is_ignored() {
+        let smallest = |kind| {
+            let found = find_in_tiff_by(&mut source(big_endian_raw(kind)), 0, |found, best| {
+                found.pixels() < best.pixels()
+            });
+            found.map(|jpeg| (jpeg.width, jpeg.height))
+        };
+        assert_eq!(smallest(Entry::LONG), Some((16, 8)));
+        assert_eq!(smallest(3), Some((64, 32)));
+    }
+
+    #[test]
+    fn broken_headers_give_no_jpeg() {
+        let mut wrong_magic = big_endian_raw(Entry::LONG);
+        wrong_magic[3] = 43;
+        let mut wrong_order = big_endian_raw(Entry::LONG);
+        wrong_order[..2].copy_from_slice(b"XX");
+        let empty_ifd = [vec![b'M', b'M', 0, 42, 0, 0, 0, 8], ifd(&[], 0)].concat();
+        // The SubIFDs: 2 offsets at an offset beyond the end of the file.
+        let far_sub_ifds = [
+            vec![b'M', b'M', 0, 42, 0, 0, 0, 8],
+            ifd(&[(0x14A, Entry::LONG, 2, 9_999_u32.to_be_bytes())], 0),
+        ]
+        .concat();
+        for (case, bytes) in [
+            ("a wrong magic", wrong_magic),
+            ("an unknown byte order", wrong_order),
+            ("an IFD without entries", empty_ifd),
+            ("SubIFDs beyond the end", far_sub_ifds),
+        ] {
+            assert!(find_in_tiff(&mut source(bytes), 0).is_none(), "{case}");
+        }
+    }
+}
