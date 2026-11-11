@@ -16,7 +16,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-11: `just check` passes with 1064 tests with the default features and 989 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-11: `just check` passes with 1064 tests with the default features and 989 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
@@ -48,7 +48,7 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
    - HEIC: a real file with an embedded thumbnail of another aspect.
    - Live Photos: a pair that a camera wrote as a pair (`docs/live-photos.md`, question 1).
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
-4. Dependencies: all direct dependencies are at their newest version (2026-11-09). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
+4. Dependencies: resvg 0.50.0 is out (2026-11-11, phewr has 0.49.0). The other direct dependencies are at their newest version. `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
 5. Self check of the placements, measured on 2026-11-11: ten fast scrolls through `~/Pictures/phewr-test/01-mixed-big` in a herdr pane gave 0 missing cells (2 to 5 before the self check). The scroll in herdr is slower than in plain Ghostty (the herdr performance note). Open: a placement that herdr drops without an `ENOENT` stays gone until its next move. The fallback of phase 5, step 3 (a resend when a scroll stops) is not needed now.
 
 ## Later

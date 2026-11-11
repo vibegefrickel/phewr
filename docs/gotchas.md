@@ -346,7 +346,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   mtime, the target size and the color target. The version is
   `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v22")`, so phewr hashes `phewr-thumbnail-v22` as
   before (v21 since the DCT scale follows the fit). When the thumbnail output changes, increase
-  the `v21` part. If several workers change the thumbnail output at the same time, each takes its
+  the `v22` part. If several workers change the thumbnail output at the same time, each takes its
   own version, higher than main and than every branch in flight. `thumbnail_entry` in
   `pictures/jobs/disk_cache/mod.rs` computes the key, and `CacheEntry` holds the file and the
   stamp (the length and the mtime). A job computes it at most one time, and the folder prefetch

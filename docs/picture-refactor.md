@@ -4,8 +4,10 @@ Status (2026-11-09): phases 1, 2, 3, 4 and 4b are done (`6b7482a`, `36ecdea`, `6
 schnattr `8f45abc`, `455ac6f`). Step 2 of phase 4b is done too: schnattr runs the module of
 `da45195` with `kitty-flush`, `kitty-events`, `kitty-layers` and `kitty-overlay`, moxcms 0.9.2 and
 no `allow` on `mod pictures;`. Phase 5 is done (`caa87b3`, 2026-11-11): the self check of the
-Kitty placements, and 0 lost cells in herdr after ten scrolls. Next: the sync of phase 5 into
-schnattr, and phase 6 in youtr.
+Kitty placements, and 0 lost cells in herdr after ten scrolls. The copies of phase 5 are in
+schnattr and youtr. The module tests of `b6bf116` (2026-11-11) are not synced yet:
+`just pictures-check` names five files in each copy. Phase 6 runs in the youtr session
+(uncommitted on 2026-11-11).
 Phase 0 is open: the maintainer measures the baseline in a real terminal and fills the herdr note.
 This file in phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
 

@@ -369,7 +369,7 @@ decisions. Read the long form before you change the code that an item names.
 - **Thumbnail cache key:** the key hashes `THUMBNAIL_CACHE_VERSION`, the path, the size, the
   mtime, the target size and the color target. The version is
   `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v22")`. When the thumbnail output changes,
-  increase the `v21` part. If several workers change the output at the same time, each takes its
+  increase the `v22` part. If several workers change the output at the same time, each takes its
   own version, higher than main and than every branch in flight.
 - **Thumbnail cache folder:** the thumbnails of phewr sit at the top of `~/Library/Caches/phewr`
   (`default_disk_cache_dir`). Do not move them. The prune refuses a folder that holds a
