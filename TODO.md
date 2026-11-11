@@ -16,7 +16,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-09: `just check` passes with 1022 tests with the default features and 949 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-11: `just check` passes with 1052 tests with the default features and 979 tests in the lean set (`just test-lean`). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
@@ -49,8 +49,7 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
    - Live Photos: a pair that a camera wrote as a pair (`docs/live-photos.md`, question 1).
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
 4. Dependencies: all direct dependencies are at their newest version (2026-11-09). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
-5. Shared picture module: step 2 of phase 4b, the sync into schnattr, is open (`docs/picture-refactor.md`). The sync needs the go of the schnattr session. schnattr turns on `kitty-flush`, `kitty-events`, `kitty-layers` and `kitty-overlay`, moves to moxcms `0.9.2`, and deletes its `allow(unfulfilled_lint_expectations)`. The sync also carries phase 5: `place_as_to` has a sixth argument, schnattr turns the self check on with `Screen::with_self_check(true)` and runs `AnswerKeys` before its key handling, with a time release after its drain.
-6. Self check of the placements, the measurement of the maintainer: ten fast scrolls through `~/Pictures/phewr-test/01-mixed-big` in a herdr pane. The goal is 0 missing cells. A run with `PHEWR_KITTY_SELF_CHECK=0` gives the old count for a comparison (2 to 5 cells on 2026-11-11). Open: a placement that herdr drops without an `ENOENT` stays gone until its next move. The fallback of phase 5, step 3 (a resend when a scroll stops, in herdr only) is not built.
+5. Self check of the placements, measured on 2026-11-11: ten fast scrolls through `~/Pictures/phewr-test/01-mixed-big` in a herdr pane gave 0 missing cells (2 to 5 before the self check). The scroll in herdr is slower than in plain Ghostty (the herdr performance note). Open: a placement that herdr drops without an `ENOENT` stays gone until its next move. The fallback of phase 5, step 3 (a resend when a scroll stops) is not needed now.
 
 ## Later
 

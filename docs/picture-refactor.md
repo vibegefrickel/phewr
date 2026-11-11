@@ -3,7 +3,9 @@
 Status (2026-11-09): phases 1, 2, 3, 4 and 4b are done (`6b7482a`, `36ecdea`, `688dc4e`,
 schnattr `8f45abc`, `455ac6f`). Step 2 of phase 4b is done too: schnattr runs the module of
 `da45195` with `kitty-flush`, `kitty-events`, `kitty-layers` and `kitty-overlay`, moxcms 0.9.2 and
-no `allow` on `mod pictures;`. Phase 5 is next.
+no `allow` on `mod pictures;`. Phase 5 is done (`caa87b3`, 2026-11-11): the self check of the
+Kitty placements, and 0 lost cells in herdr after ten scrolls. Next: the sync of phase 5 into
+schnattr, and phase 6 in youtr.
 Phase 0 is open: the maintainer measures the baseline in a real terminal and fills the herdr note.
 This file in phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
 
@@ -390,6 +392,26 @@ the measurement in herdr also decides for phewr: `d=A` on an overlay and a resiz
 3. If the self check works, turn it on by default. If it does not work, the layer sends the
    pictures on screen again when a scroll stops (300 ms without a change of the placements),
    inside herdr only (`HERDR_ENV` or `TERM_PROGRAM=herdr`).
+
+Result (`caa87b3`, 2026-11-11):
+
+- The measurement before the change: phewr lost 2 to 5 cells in a herdr pane after ten fast
+  scrolls, at each window size and zoom level, and 0 in plain Ghostty. schnattr lost 0 in both.
+  A probe showed that herdr passes the `ENOENT` answer of the terminal through
+  (`herdr-issue-kitty-graphics-lost-pictures.md`, "Actual result").
+- With the self check on, the engine places with `q=1`. `Screen::with_self_check(bool)` turns it
+  on (off by default in the module). `Screen::answer(&Answer)` forgets a lost picture, and the
+  next flush sends it again. `Screen::has_lost()` says that a loss waits.
+- `pictures::kitty::answers` reads the answers: `AnswerReader` from raw bytes, `AnswerKeys` from
+  the key events of crossterm, which turns an answer into Alt+`_`, `G`, ... `AnswerKeys` holds
+  the events at most `ANSWER_WAIT` (50 ms) and drops a started answer without its end.
+- phewr turns the self check on by default. `PHEWR_KITTY_SELF_CHECK=0` turns it off.
+  `LateAnswerFilter` counts whole Kitty answers, so a self-check answer is never swallowed.
+- phewr keeps `d=A` on an overlay, a resize and the quit (the decision of the overlay question).
+- The bench stays within 5 %, except two loop values of 1 and 2.5 ms in the bimodal bench.
+- The measurement after the merge (2026-11-11): ten fast scrolls in a herdr pane, 0 cells
+  missing. The scroll in herdr is slower than in plain Ghostty, as the herdr performance note
+  describes. Step 3 (the resend when a scroll stops) is not needed. Phase 5 is done.
 
 Done when the "lost pictures" count of phase 0 is 0 in herdr for each app.
 
