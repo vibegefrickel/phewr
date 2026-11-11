@@ -50,6 +50,21 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
 4. Dependencies: all direct dependencies are at their newest version (2026-11-11). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
 5. Self check of the placements, measured on 2026-11-11: ten fast scrolls through `~/Pictures/phewr-test/01-mixed-big` in a herdr pane gave 0 missing cells (2 to 5 before the self check). The scroll in herdr is slower than in plain Ghostty (the herdr performance note). Open: a placement that herdr drops without an `ENOENT` stays gone until its next move. The fallback of phase 5, step 3 (a resend when a scroll stops) is not needed now.
+6. Notes of the youtr session for the master copy of the picture module (2026-11-11, no action
+   needed now):
+   - `AnswerKeys::read` (`src/pictures/kitty/answers.rs`): an event without answer bytes calls
+     `release`, which resets the reader. If a `Resize`, `FocusGained` or `FocusLost` event lands
+     between the key events of a started answer, the rest of the answer (`i=1,p=1;ENOENT: image
+     not found` and Alt+`\`) reaches the app as plain key presses. A youtr worker reproduced it
+     with a test. youtr sends these three events past the reader as a workaround. Fix in the
+     master: keep the reader state for such an event while an answer is started, or add a method
+     that passes an event through without a release.
+   - youtr wanted a full-size `DynamicImage` from a path. `Decoded::into_display` and
+     `decode_image_with_hint` are `#[cfg(test)]`, so youtr calls `load_for_screen(path, (0, 0))`
+     and maps the `ScreenImage` back itself. A `ScreenImage::into_dynamic` in the module would
+     remove that helper. `ScreenImage` has `From<&ScreenImage> for Pixels<'_>`, and `Bitmap`
+     (`shape/copies.rs`) has no such conversion, so youtr builds `Pixels` by hand in its flush.
+   - youtr keeps `Placing::EveryFrame` until the maintainer tests the self check under herdr.
 
 ## Later
 
