@@ -8,7 +8,8 @@ Kitty placements, and 0 lost cells in herdr after ten scrolls. The copies of pha
 schnattr and youtr. The module tests of `b6bf116` (2026-11-11) are not synced yet:
 `just pictures-check` names five files in each copy. Phase 6 runs in the youtr session
 (uncommitted on 2026-11-11).
-Phase 0 is open: the maintainer measures the baseline in a real terminal and fills the herdr note.
+Phase 0 holds the bench numbers of phewr (2026-11-11). The maintainer measures the memory in a real
+terminal.
 This file in phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
 
 phewr, schnattr and youtr each decode, shape and send pictures to the terminal. phewr does this
@@ -163,6 +164,25 @@ that owns the change. Each phase is done when `just check` passes in each projec
    existing notes. It describes the lost pictures after a scroll with inline transfers, with a
    short Python script that reproduces it, as the performance note has.
 4. Commit all trees: phewr, schnattr, youtr.
+
+Result for phewr without a terminal (2026-11-11, `just bench ... bench::start` and `bench::grid`
+on `01-mixed-big`, 36 visible cells of 51 images, medians of 3 runs at a load of 8 to 14, so the
+numbers are an upper bound). A `TestBackend` stands in for the terminal: the probe round trips
+are not in the numbers.
+
+| Measure | cold cache | warm disk cache |
+|---|---|---|
+| process start to `main` | 25 ms | 25 ms |
+| first picture | 32 ms | 14 ms |
+| all cells shown | 159 ms | 29 ms |
+| all cells sharp | 3385 ms | 29 ms |
+| Kitty bytes for one screen | 44.2 MB | 24.6 MB |
+
+The cold screen sends more bytes, because a HEIC cell sends its embedded preview and then the
+sharp picture. Open for the maintainer, in a real terminal: the memory of Ghostty and of herdr
+after one scroll, and the measures of schnattr and youtr. The lost-pictures count is done in
+phase 5. `~/Projects/dev/kitty-frames-ack.py` measures the display side of the transfers
+(`q=1`) in any terminal.
 
 ### Phase 1: the module in phewr (pure motion)
 
