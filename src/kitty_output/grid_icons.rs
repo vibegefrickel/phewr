@@ -149,12 +149,13 @@ fn icon_px(area: Rect, cell_px: (u32, u32)) -> (u32, u32) {
     )
 }
 
-/// Write a grid pass when the icons of the last draw changed and no other pass is due. The
-/// visible cells whose picture waits come back in `pending`.
+/// Write a grid pass when the icons of the last draw changed or the terminal lost a picture,
+/// and no other pass is due. The visible cells whose picture waits come back in `pending`.
 pub(crate) fn sync_grid_icons(app: &mut App, pending: &mut Vec<usize>) -> io::Result<()> {
     // A waiting picture brings the next pass at once, and that pass writes the icons too: one
     // run-loop pass writes one grid pass.
-    if app.mode != ViewMode::Gallery || !pending.is_empty() || app.grid_icons.in_sync() {
+    let due = !app.grid_icons.in_sync() || app.screen.has_lost();
+    if app.mode != ViewMode::Gallery || !pending.is_empty() || !due {
         return Ok(());
     }
     app.with_graphics_out(|app, out| {

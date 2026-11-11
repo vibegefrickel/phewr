@@ -7,6 +7,8 @@ use crate::kitty_output::tests::{
     BEGIN_SYNC, BOX_PX, DELETE_ALL, END_SYNC, TRANSMIT, grid_app, sharp_thumbnail, thumbnail_app,
 };
 use crate::pictures::jobs::thumbnail_cache::GridPicture;
+use crate::pictures::kitty::answers::AnswerReader;
+use crate::pictures::kitty::screen::Screen;
 use crate::pictures::resize::padding::pad_for_grid;
 use crate::pictures::resize::padding::thumb_target_px;
 use crate::test_support::char_key;
@@ -393,7 +395,7 @@ fn deletes_evicted_thumbnail() {
 #[test]
 fn trims_old_images_but_not_visible() {
     let mut app = thumbnail_app(40);
-    app.screen = crate::pictures::kitty::screen::Screen::with_budget(25 * BOX_BYTES);
+    app.screen = Screen::with_budget(25 * BOX_BYTES);
     let mut out = Vec::new();
     place_visible(&mut app, &mut out);
     assert_eq!(app.screen.stored_count(), 20);
@@ -462,7 +464,7 @@ fn scroll_through(app: &mut App, terminal: &mut FakeTerminal, pages: usize) {
 fn scrolling_leaves_no_black_cell() {
     let pages = 10;
     let mut app = grid_app(20 * pages);
-    app.screen = crate::pictures::kitty::screen::Screen::with_budget(40 * BOX_BYTES);
+    app.screen = Screen::with_budget(40 * BOX_BYTES);
     let mut terminal = FakeTerminal::with_limit(60 * BOX_BYTES);
 
     scroll_through(&mut app, &mut terminal, pages);
@@ -475,7 +477,7 @@ fn scrolling_leaves_no_black_cell() {
 fn without_budget_terminal_drops_pages() {
     let pages = 10;
     let mut app = grid_app(20 * pages);
-    app.screen = crate::pictures::kitty::screen::Screen::with_budget(usize::MAX);
+    app.screen = Screen::with_budget(usize::MAX);
     let mut terminal = FakeTerminal::with_limit(60 * BOX_BYTES);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -486,6 +488,108 @@ fn without_budget_terminal_drops_pages() {
         result.is_err(),
         "the fake terminal evicts, so a cell goes black"
     );
+}
+
+/// The run loop passes after the answers of the terminal: each `ENOENT` goes to the screen, and
+/// the next pass sends the lost picture again. Returns the count of lost pictures.
+fn answer_losses(app: &mut App, terminal: &mut FakeTerminal) -> usize {
+    let mut lost = 0;
+    let mut reader = AnswerReader::default();
+    while !terminal.answers.is_empty() {
+        let mut keys = Vec::new();
+        for answer in reader.read(&std::mem::take(&mut terminal.answers), &mut keys) {
+            lost += usize::from(app.screen.answer(&answer));
+        }
+        assert!(keys.is_empty());
+        let mut pending = Vec::new();
+        crate::run_loop::render_images(app, &mut pending).unwrap();
+        terminal.feed(&app.graphics_out.take_bytes());
+        while !pending.is_empty() {
+            let mut out = Vec::new();
+            pending = emit_new_thumbnails_to(app, &mut out).unwrap();
+            terminal.feed(&out);
+        }
+    }
+    lost
+}
+
+#[test]
+fn self_check_sends_lost_pictures_again() {
+    let pages = 10;
+    let mut app = grid_app(20 * pages);
+    app.needs_render = false;
+    app.screen = Screen::with_budget(40 * BOX_BYTES).with_self_check(true);
+    let mut terminal = FakeTerminal::with_limit(60 * BOX_BYTES);
+    let mut lost = 0;
+    for step in 0..2 * pages {
+        render_gallery_images(&mut app).unwrap();
+        terminal.feed(&app.graphics_out.take_bytes());
+        let fresh: Vec<usize> = app
+            .gallery
+            .visible_items()
+            .map(|(_, index)| index)
+            .filter(|&index| !app.thumb_cache.contains(&index))
+            .collect();
+        for &index in &fresh {
+            assert!(app.store_thumbnail(index, sharp_thumbnail(160, 96), true));
+        }
+        let mut out = Vec::new();
+        emit_new_thumbnails_to(&mut app, &mut out).unwrap();
+        terminal.feed(&out);
+        lost += answer_losses(&mut app, &mut terminal);
+        for (_, index) in app.gallery.visible_items() {
+            let (_, id) = app.thumb_cache.peek(&index).unwrap();
+            assert!(
+                terminal
+                    .placements
+                    .iter()
+                    .any(|placement| placement.id == id),
+                "step {step}: the cell {index} shows nothing"
+            );
+        }
+        // On the way up, herdr drops stored pictures off the screen when it resets its
+        // delivery. The page above comes back with placements of pictures that it lost.
+        if step + 1 >= pages {
+            let visible: Vec<u32> = app
+                .gallery
+                .visible_items()
+                .filter_map(|(_, index)| app.thumb_cache.peek(&index).map(|(_, id)| id))
+                .collect();
+            let off_screen: Vec<u32> = (0..app.images.len())
+                .filter_map(|index| app.thumb_cache.peek(&index).map(|(_, id)| id))
+                .filter(|id| app.screen.stores(*id) && !visible.contains(id))
+                .collect();
+            for id in off_screen.into_iter().step_by(4) {
+                terminal.lose(id);
+            }
+        }
+        if step + 1 < pages {
+            app.gallery.move_page_down();
+        } else {
+            app.gallery.move_page_up();
+        }
+    }
+    assert!(lost > 0, "the terminal lost pictures on the way back");
+    assert_eq!(terminal.synchronized_depth, 0);
+}
+
+#[test]
+fn without_self_check_a_lost_picture_stays_gone() {
+    let mut app = thumbnail_app(3);
+    app.graphics_storage_dirty = true;
+    let mut terminal = FakeTerminal::new();
+    let mut out = Vec::new();
+    place_visible(&mut app, &mut out);
+    terminal.feed(&out);
+    let (_, id) = app.thumb_cache.peek(&1).unwrap();
+    terminal.lose(id);
+    app.screen.forget_placements();
+    out.clear();
+    place_visible(&mut app, &mut out);
+    terminal.feed(&out);
+
+    assert!(terminal.answers.is_empty(), "q=2 asks for no answer");
+    assert_eq!(terminal.black_cells, vec![id]);
 }
 
 /// The maintainer's gallery: a 5K screen in Ghostty, cells of 18x43 px, a grid of 280x50 cells,

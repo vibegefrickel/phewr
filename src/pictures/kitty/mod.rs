@@ -1,5 +1,6 @@
 //! The Kitty graphics output: the writer, the transfer medium, the loop path, the pixels and the
-//! frame engine ([`screen`]).
+//! frame engine ([`screen`]), and the answers of the terminal for its self check ([`answers`]).
+pub(crate) mod answers;
 pub(crate) mod placement;
 pub(crate) mod protocol;
 pub(crate) mod query;
@@ -392,7 +393,7 @@ mod tests {
             .unwrap();
         protocol::delete_all_to(&mut out).unwrap();
         protocol::clear_placements_to(&mut out).unwrap();
-        protocol::place_as_to(&mut out, 9, 1, (2, 1), false).unwrap();
+        protocol::place_as_to(&mut out, 9, 1, (2, 1), false, false).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(",i=7,"));

@@ -324,6 +324,7 @@ pub(crate) fn state_with_decoder(
     LoopState {
         status: None,
         late_answers: crate::keys::LateAnswerFilter::default(),
+        answers: crate::pictures::kitty::answers::AnswerKeys::default(),
         cell_size_from_terminal: false,
         mouse: true,
         mouse_captured: true,

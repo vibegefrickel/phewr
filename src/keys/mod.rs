@@ -22,6 +22,11 @@ use video::handle_video_key;
 /// and Alt+`\\`, and a late `ESC ] 10 ; rgb:... BEL` as Alt+`]`, `1`, `0`, ... and Ctrl+`g`.
 /// Unfiltered, those keys zoom, jump and open the info panel. Nothing in phewr uses Alt+`_` or
 /// Alt+`]`, and a key that fits no answer ends the swallow.
+///
+/// The run loop reads every Kitty answer with `AnswerKeys` first, so the self check gets each
+/// `ENOENT`. Each Kitty answer that it read counts here as one late answer less
+/// ([`LateAnswerFilter::kitty_answers_came`]). A terminal answers in order, so the late probe
+/// answers come before the answers of the self check.
 #[derive(Debug, Default)]
 pub(crate) struct LateAnswerFilter {
     /// The answers that can still come late. Each one ends with Alt+`\\`, an OSC answer also
@@ -63,6 +68,11 @@ impl LateAnswerFilter {
                 false
             }
         }
+    }
+
+    /// `count` Kitty answers came through `AnswerKeys`: as many answers less are owed.
+    pub(crate) fn kitty_answers_came(&mut self, count: usize) {
+        self.owed = self.owed.saturating_sub(count);
     }
 
     /// The last key of an answer: one answer less is owed.

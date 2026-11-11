@@ -2,10 +2,13 @@
 use super::{
     BUSY_POLL, CACHE_READ_POLL, FIRST_PICTURE_POLL, IDLE_POLL, LoopState, SHAPE_POLL,
     SHAPE_POLL_WINDOW, clears_status, draw_ui, handle_input, mouse_capture_wanted, next_timeout,
-    sync_mouse_capture, waits_for_a_fast_shape, window_open,
+    release_held, sync_mouse_capture, waits_for_a_fast_shape, window_open,
 };
 use crate::app::ViewMode;
 use crate::config::Config;
+use crate::pictures::kitty::answers::ANSWER_WAIT;
+use crate::pictures::kitty::screen::Screen;
+use crate::pictures::test_support::key_events;
 use crate::test_support::{app, app_with, app_with_files, gallery_app, test_dir, wait_until};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
@@ -324,6 +327,105 @@ fn late_answer_keeps_note() {
     let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
     assert!(!handle_input(&mut app, &mut state, &alt_underscore).unwrap());
     assert_eq!(state.status.as_deref(), Some("note"));
+}
+
+#[test]
+fn answer_marks_a_lost_picture_and_keys_pass() {
+    let mut app = gallery_app(3);
+    app.screen = Screen::default().with_self_check(true);
+    let mut state = LoopState::new(&Config::default());
+    app.screen.record(7, 16);
+    let mut input = b"\x1b_Gi=7,p=1;ENOENT: image not found\x1b\\".to_vec();
+    input.extend_from_slice(b"\x1b_Gi=9;OK\x1b\\");
+    for event in key_events(&input) {
+        assert!(!handle_input(&mut app, &mut state, &event).unwrap());
+    }
+    assert!(app.screen.has_lost());
+    assert!(!app.screen.stores(7));
+    assert_eq!(
+        app.gallery.cursor, 0,
+        "no key of the answers moved the cursor"
+    );
+    let q = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+    assert!(handle_input(&mut app, &mut state, &q).unwrap());
+}
+
+#[test]
+fn a_broken_answer_goes_when_the_input_is_quiet() {
+    let mut app = gallery_app(30);
+    let mut state = LoopState::new(&Config::default());
+    // A cut answer whose letters are keys of phewr: `j` moves, `q` quits.
+    for event in key_events(b"\x1b_Gi=1;jjq") {
+        assert!(!handle_input(&mut app, &mut state, &event).unwrap());
+    }
+    let wait = state.answers.wait(Instant::now()).unwrap();
+    assert!(wait <= ANSWER_WAIT);
+    assert!(!release_held(&mut app, &mut state, Instant::now() + ANSWER_WAIT).unwrap());
+    assert_eq!(state.answers.wait(Instant::now()), None);
+    assert_eq!(app.gallery.cursor, 0, "no key of the cut answer ran");
+    let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+    assert!(!handle_input(&mut app, &mut state, &j).unwrap());
+    assert_ne!(app.gallery.cursor, 0, "the next key runs");
+}
+
+#[test]
+fn a_quiet_input_gives_a_lone_alt_key_back() {
+    let mut app = gallery_app(3);
+    let mut state = LoopState::new(&Config::default());
+    for event in key_events(b"\x1b_") {
+        assert!(!handle_input(&mut app, &mut state, &event).unwrap());
+    }
+    assert!(state.answers.wait(Instant::now()).is_some(), "Alt+_ waits");
+    assert!(!release_held(&mut app, &mut state, Instant::now() + ANSWER_WAIT).unwrap());
+    assert_eq!(state.answers.wait(Instant::now()), None);
+}
+
+#[test]
+fn self_check_answer_wins_over_an_owed_probe_answer() {
+    let mut app = gallery_app(3);
+    app.screen = Screen::default().with_self_check(true);
+    app.screen.record(7, 16);
+    let mut state = LoopState::new(&Config::default());
+    // The probe answer timed out and never comes. The first Kitty answer is an ENOENT.
+    state.late_answers = crate::keys::LateAnswerFilter::new(1);
+    for event in key_events(b"\x1b_Gi=7,p=1;ENOENT: image not found\x1b\\") {
+        assert!(!handle_input(&mut app, &mut state, &event).unwrap());
+    }
+    assert!(app.screen.has_lost(), "the screen gets the answer");
+    // The answer counted as the owed one: the filter swallows no later Alt+`_` sequence.
+    for event in key_events(b"\x1b_x") {
+        assert!(!handle_input(&mut app, &mut state, &event).unwrap());
+    }
+    let q = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+    assert!(handle_input(&mut app, &mut state, &q).unwrap());
+}
+
+#[test]
+fn late_probe_answer_then_self_check_answer() {
+    let mut app = gallery_app(3);
+    app.screen = Screen::default().with_self_check(true);
+    app.screen.record(7, 16);
+    let mut state = LoopState::new(&Config::default());
+    state.late_answers = crate::keys::LateAnswerFilter::new(1);
+    let mut input = b"\x1b_Gi=31;OK\x1b\\".to_vec();
+    input.extend_from_slice(b"\x1b_Gi=7,p=1;ENOENT: image not found\x1b\\");
+    for event in key_events(&input) {
+        assert!(!handle_input(&mut app, &mut state, &event).unwrap());
+    }
+    assert!(app.screen.has_lost());
+    assert_eq!(app.gallery.cursor, 0);
+}
+
+#[test]
+fn held_keys_come_back_with_the_next_event() {
+    let mut app = gallery_app(3);
+    let mut state = LoopState::new(&Config::default());
+    // Alt+`_` can start an answer. The `q` after it quits.
+    for event in key_events(b"\x1b_") {
+        assert!(!handle_input(&mut app, &mut state, &event).unwrap());
+    }
+    let q = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+    assert!(handle_input(&mut app, &mut state, &q).unwrap());
 }
 
 #[test]

@@ -74,6 +74,18 @@ use yazi::{reveal_in_yazi, run_briefly, select_in_yazi};
 const TRANSFER_OVERRIDE: &str = "PHEWR_KITTY_TRANSFER";
 /// Fixes the loop path: `animation` or `ticks`. It wins over `[gallery] loops`.
 const LOOPS_OVERRIDE: &str = "PHEWR_KITTY_LOOPS";
+/// `0` turns the self check of the Kitty placements off, for a comparison. It is on by default.
+const SELF_CHECK_OVERRIDE: &str = "PHEWR_KITTY_SELF_CHECK";
+
+/// True unless the override turns the self check off with `0`, `off`, `false` or `no`.
+fn self_check_on(override_value: Option<&str>) -> bool {
+    !override_value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "false" | "no"
+        )
+    })
+}
 
 /// Give the terminal back in the order of `TerminalSession::restore`. Every step runs, and the
 /// first error returns. A failed picture delete cannot leave the shell in raw mode.
@@ -234,15 +246,18 @@ fn probe_terminal(
     }
 }
 
-/// Point the app at the start folder: its zoom level, the cursor target and the slideshow.
+/// Point the app at the start folder: its zoom level, the cursor target and the slideshow. The
+/// screen gets the self check of its placements.
 fn prepare_app(
     app: &mut App,
     graphics: KittyBackend,
+    self_check: bool,
     initial_dir: &Path,
     cursor_target: Option<PathBuf>,
     slideshow: bool,
 ) {
     app.graphics = graphics;
+    app.screen = std::mem::take(&mut app.screen).with_self_check(self_check);
     let initial_dir = canonicalize_or_self(initial_dir);
     app.initial_dir = Some(initial_dir.clone());
     app.current_dir = Some(initial_dir.clone());
@@ -300,6 +315,7 @@ fn main() -> io::Result<()> {
     prepare_app(
         &mut app,
         probe.graphics,
+        self_check_on(std::env::var(SELF_CHECK_OVERRIDE).ok().as_deref()),
         &initial_dir,
         cursor_target,
         cli.slideshow,
@@ -340,7 +356,7 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::{
         apply_cli_overrides, check_paths, default_paths, prepare_app, probe_terminal,
-        release_terminal_to,
+        release_terminal_to, self_check_on,
     };
     use crate::config::Config;
     use crate::pictures::kitty::query::StartAnswers;
@@ -456,6 +472,7 @@ mod tests {
         prepare_app(
             &mut app,
             KittyBackend::new(Transfer::TempFile),
+            true,
             dir.path(),
             Some(dir.path().join("photo.jpg")),
             true,
@@ -465,5 +482,16 @@ mod tests {
         assert_eq!(app.initial_dir.as_deref(), Some(canonical.as_path()));
         assert_eq!(app.current_dir.as_deref(), Some(canonical.as_path()));
         assert!(app.slideshow_autostart);
+        assert!(app.screen.self_checks());
+    }
+
+    #[test]
+    fn self_check_is_on_unless_the_override_turns_it_off() {
+        assert!(self_check_on(None));
+        assert!(self_check_on(Some("1")));
+        assert!(self_check_on(Some("on")));
+        for off in ["0", "off", "false", "no", " OFF "] {
+            assert!(!self_check_on(Some(off)), "{off}");
+        }
     }
 }

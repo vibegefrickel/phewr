@@ -6,6 +6,7 @@ mod files;
 #[cfg(feature = "heic")]
 mod heif;
 
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 #[cfg(all(feature = "sips", target_os = "macos"))]
 pub(crate) use files::*;
 #[cfg(feature = "heic")]
@@ -15,6 +16,34 @@ use tempfile::TempDir;
 
 pub(crate) const RED: [u8; 3] = [255, 0, 0];
 pub(crate) const BLUE: [u8; 3] = [0, 0, 255];
+
+/// The key events that crossterm reads for the input `bytes`: an `ESC` and a key is Alt and that
+/// key, and an upper case letter has Shift. The bytes hold no other escape sequence.
+pub(crate) fn key_events(bytes: &[u8]) -> Vec<Event> {
+    let mut events = Vec::new();
+    let mut alt = false;
+    for &byte in bytes {
+        if byte == 0x1b {
+            alt = true;
+            continue;
+        }
+        let character = char::from(byte);
+        let mut modifiers = if alt {
+            KeyModifiers::ALT
+        } else {
+            KeyModifiers::NONE
+        };
+        if character.is_ascii_uppercase() {
+            modifiers |= KeyModifiers::SHIFT;
+        }
+        events.push(Event::Key(KeyEvent::new(
+            KeyCode::Char(character),
+            modifiers,
+        )));
+        alt = false;
+    }
+    events
+}
 
 pub(crate) fn test_dir() -> TempDir {
     tempfile::tempdir().unwrap()

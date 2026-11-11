@@ -1,8 +1,9 @@
 //! The frame engine with a fake writer: the bytes of a send and a place, the diff, the deletes,
 //! the recovery after a clear and after a focus gain, the budget, the byte cap of a pass, the
-//! order of the screen, the pixel format, the layers and both placement policies.
+//! order of the screen, the pixel format, the layers, both placement policies and the self check.
 
 use super::{Placements, Placing, Screen, Update};
+use crate::pictures::kitty::answers::{Answer, AnswerReader};
 use crate::pictures::kitty::protocol::temp_file_paths;
 use crate::pictures::kitty::{KittyBackend, Pixels, Transfer};
 use ratatui::layout::Rect;
@@ -729,4 +730,70 @@ fn an_uncapped_update_sends_every_picture() {
     update.finish().unwrap();
     assert_eq!(sent_ids(&String::from_utf8(out).unwrap()), [1, 2, 3]);
     assert!(screen.waiting().is_empty());
+}
+
+/// The `ENOENT` answer of the terminal for the placement `placement` of the picture `id`.
+fn missing(id: u32, placement: u32) -> Answer {
+    let bytes = format!("\x1b_Gi={id},p={placement};ENOENT: image not found\x1b\\");
+    let mut keys = Vec::new();
+    let answers = AnswerReader::default().read(bytes.as_bytes(), &mut keys);
+    assert!(keys.is_empty());
+    answers.into_iter().next().unwrap()
+}
+
+#[test]
+fn the_self_check_places_with_error_answers() {
+    let mut screen = Screen::default().with_self_check(true);
+    let cells = Rect::new(4, 2, 10, 5);
+    assert_eq!(
+        update(&mut screen, &[(7, cells)], &[]),
+        format!("{BEGIN}{}{END}", sent(7, 1, cells)),
+        "a transfer stays silent"
+    );
+    let moved = Rect::new(4, 9, 10, 5);
+    assert_eq!(
+        update(&mut screen, &[(7, moved)], &[]),
+        format!("{BEGIN}{}{END}", placed(7, 1, moved).replace("q=2", "q=1")),
+        "a placement asks for the error answers"
+    );
+}
+
+#[test]
+fn a_missing_picture_goes_out_again_at_the_next_flush() {
+    let mut screen = Screen::default().with_self_check(true);
+    let cells = Rect::new(0, 0, 4, 2);
+    let other = Rect::new(5, 0, 4, 2);
+    update(&mut screen, &[(7, cells), (8, other)], &[]);
+    let moved = Rect::new(0, 3, 4, 2);
+    update(&mut screen, &[(7, moved), (8, other)], &[]);
+    assert!(!screen.has_lost());
+
+    assert!(screen.answer(&missing(7, 1)), "the terminal lost 7");
+    assert!(screen.has_lost());
+    assert!(!screen.stores(7));
+    assert_eq!(
+        update(&mut screen, &[(7, moved), (8, other)], &[]),
+        format!("{BEGIN}{}{END}", sent(7, 1, moved)),
+        "only the lost picture goes out, with its place"
+    );
+    assert!(!screen.has_lost(), "the flush wrote the frame");
+    assert_eq!(update(&mut screen, &[(7, moved), (8, other)], &[]), "");
+}
+
+#[test]
+fn an_answer_for_an_unknown_picture_changes_nothing() {
+    let mut screen = Screen::default().with_self_check(true);
+    let cells = Rect::new(0, 0, 4, 2);
+    update(&mut screen, &[(7, cells)], &[]);
+    update(&mut screen, &[], &[7]);
+
+    assert!(!screen.answer(&missing(7, 1)), "the screen deleted 7");
+    assert!(!screen.answer(&missing(9, 1)), "the screen never held 9");
+    assert!(!screen.has_lost());
+    let mut other_error = missing(8, 1);
+    other_error.error = "EINVAL: bad placement".to_owned();
+    update(&mut screen, &[(8, cells)], &[]);
+    assert!(!screen.answer(&other_error), "only ENOENT marks a loss");
+    assert!(screen.stores(8));
+    assert_eq!(update(&mut screen, &[(8, cells)], &[]), "");
 }

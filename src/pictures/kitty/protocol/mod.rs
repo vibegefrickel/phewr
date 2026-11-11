@@ -307,22 +307,26 @@ pub(crate) fn delete_placement_to<W: Write + ?Sized>(
 /// Place a stored image at the cursor as the placement `placement`, scaled to `cell_box`. A
 /// second place with the same ids moves the placement. `C=1` keeps the text cursor fixed.
 /// `below_backgrounds` puts the picture under the cell backgrounds ([`BELOW_BACKGROUNDS`]).
+/// With `errors`, the terminal answers an error (`q=1`), for example `ENOENT` for an image that
+/// it does not hold. Else it answers nothing (`q=2`).
 pub(crate) fn place_as_to<W: Write + ?Sized>(
     out: &mut W,
     id: u32,
     placement: u32,
     cell_box: (u16, u16),
     below_backgrounds: bool,
+    errors: bool,
 ) -> io::Result<()> {
     let layer = if below_backgrounds {
         format!(",z={BELOW_BACKGROUNDS}")
     } else {
         String::new()
     };
+    let quiet = if errors { 1 } else { 2 };
     apc(
         out,
         format_args!(
-            "a=p,q=2,C=1,i={id},p={placement}{}{layer}",
+            "a=p,q={quiet},C=1,i={id},p={placement}{}{layer}",
             cell_box_keys(Some(cell_box))
         ),
         b"",

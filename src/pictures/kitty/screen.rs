@@ -11,7 +11,13 @@
 //! The terminal keeps each sent picture until a delete. Above the budget of the store, the
 //! engine deletes the oldest pictures that the frame does not show. After a clear, a resize or a
 //! focus gain, the next flushes send the pictures of the frame again.
+//!
+//! The self check ([`Screen::with_self_check`]) places with `q=1`. The terminal then answers an
+//! error for a placement of a picture that it does not hold. The app reads the answers
+//! ([`super::answers`]) and hands each one to [`Screen::answer`]. The next flush sends the lost
+//! picture again.
 
+use super::answers::Answer;
 use super::protocol;
 use super::terminal_images::{TERMINAL_IMAGE_BUDGET, TerminalImages};
 use super::{DisplayOptions, EMIT_PASS_BYTES, KittyBackend, Pixels};
@@ -253,6 +259,10 @@ pub(crate) struct Screen {
     pass_bytes: usize,
     /// The pictures of the last flush that wait for a later pass, in the order of the frame.
     waiting: Vec<u32>,
+    /// The placements ask for the error answers of the terminal (`q=1`).
+    self_check: bool,
+    /// The terminal lost a picture since the last flush.
+    lost_any: bool,
 }
 
 impl Default for Screen {
@@ -277,7 +287,34 @@ impl Screen {
             placing: Placing::default(),
             pass_bytes: EMIT_PASS_BYTES,
             waiting: Vec::new(),
+            self_check: false,
+            lost_any: false,
         }
+    }
+
+    /// The same screen with the self check on or off. With the self check, each placement asks
+    /// for the error answers of the terminal (`q=1`), and the app hands them to
+    /// [`Screen::answer`]. A transfer stays silent (`q=2`), else each one gets an `OK`.
+    pub(crate) const fn with_self_check(mut self, on: bool) -> Self {
+        self.self_check = on;
+        self
+    }
+
+    /// Reads an answer of the terminal. An `ENOENT` for a stored picture marks it lost, and the
+    /// next flush that places it sends its pixels again. An answer for a picture that the screen
+    /// no longer stores changes nothing. Returns `true` when the screen lost a picture.
+    pub(crate) fn answer(&mut self, answer: &Answer) -> bool {
+        if !answer.is_missing() || !self.store.contains(answer.id) {
+            return false;
+        }
+        self.forget_lost(answer.id);
+        true
+    }
+
+    /// True when the terminal lost a picture since the last flush. The app then writes a frame
+    /// soon, so the lost picture shows again.
+    pub(crate) const fn has_lost(&self) -> bool {
+        self.lost_any
     }
 
     /// `Screen::flush` (feature `kitty-flush`) into an update that the app opened, after its own
@@ -291,6 +328,7 @@ impl Screen {
         pixels: impl FnMut(u32) -> Option<Pixels<'a>>,
     ) -> io::Result<()> {
         let frame = std::mem::take(frame);
+        self.lost_any = false;
         for &id in deleted {
             let stored = self.forget(id);
             let maybe_stored = self.maybe_stored.remove(&id);
@@ -499,6 +537,7 @@ impl Screen {
                 placement,
                 (cells.width, cells.height),
                 below_backgrounds,
+                self.self_check,
             )?;
         }
         self.store.touch(id);
@@ -527,6 +566,12 @@ impl Screen {
     /// The pixel bytes that the terminal stores at most.
     pub(crate) const fn budget(&self) -> usize {
         self.store.budget
+    }
+
+    /// True when the placements ask for the error answers of the terminal.
+    #[cfg(test)]
+    pub(crate) const fn self_checks(&self) -> bool {
+        self.self_check
     }
 
     /// The pictures that the terminal stores now.
@@ -561,6 +606,12 @@ impl Screen {
         self.resend.clear();
         self.placed.clear();
         self.waiting.clear();
+    }
+
+    /// Forgets the picture `id` that the terminal lost, so the next flush sends it again.
+    fn forget_lost(&mut self, id: u32) {
+        self.forget(id);
+        self.lost_any = true;
     }
 
     /// Removes the picture `id` and its placements from the record. Returns `false` when the
@@ -673,7 +724,7 @@ impl Screen {
     /// that places it sends it again.
     #[cfg(any(test, feature = "kitty-store"))]
     pub(crate) fn lost(&mut self, id: u32) {
-        self.forget(id);
+        self.forget_lost(id);
     }
 }
 

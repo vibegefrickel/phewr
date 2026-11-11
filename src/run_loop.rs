@@ -11,6 +11,7 @@ use crate::kitty_output::{
 };
 #[cfg(feature = "video")]
 use crate::mpv;
+use crate::pictures::kitty::answers::AnswerKeys;
 use crate::pictures::kitty::query::query_cell_pixel_size;
 use crate::terminal::{disable_mouse, enable_mouse};
 use crate::ui;
@@ -42,6 +43,8 @@ pub(crate) struct LoopState {
     /// A one-line note for the status row. The next key press clears it.
     pub(crate) status: Option<String>,
     pub(crate) late_answers: LateAnswerFilter,
+    /// The answers of the terminal for the self check of the screen, read from the keys.
+    pub(crate) answers: AnswerKeys,
     /// `[gallery] mouse`.
     pub(crate) mouse: bool,
     /// True while the terminal reports the mouse.
@@ -57,6 +60,7 @@ impl LoopState {
         Self {
             status: None,
             late_answers: LateAnswerFilter::default(),
+            answers: AnswerKeys::default(),
             cell_size_from_terminal: false,
             mouse: config.mouse,
             mouse_captured: config.mouse,
@@ -81,6 +85,9 @@ pub(crate) fn run(
                 return Ok(());
             }
         }
+        if release_held(app, state, Instant::now())? {
+            return Ok(());
+        }
 
         #[cfg(feature = "video")]
         poll_mpv_window(app, state);
@@ -99,15 +106,45 @@ pub(crate) fn run(
         // After the render: the grid jobs of this pass pause the folder prefetch.
         app.tick_folder_prefetch(Instant::now());
 
-        event::poll(next_timeout(app, &pending_emits))?;
+        let timeout = next_timeout(app, &pending_emits);
+        let wait = state.answers.wait(Instant::now());
+        event::poll(wait.map_or(timeout, |wait| timeout.min(wait)))?;
     }
 }
 
 /// Take one input event. Returns `true` when the event quits phewr.
+///
+/// The Kitty answers go first, also a late probe answer. The answers of the self check go to
+/// the screen, and the next grid pass sends a lost picture again. An event that can belong to
+/// an answer waits for the next event or for [`release_held`].
 fn handle_input(app: &mut App, state: &mut LoopState, event: &Event) -> io::Result<bool> {
-    if state.late_answers.swallows(event) {
-        return Ok(false);
+    let read = state.answers.read(event.clone(), Instant::now());
+    state.late_answers.kitty_answers_came(read.ends);
+    for answer in &read.answers {
+        app.screen.answer(answer);
     }
+    handle_events(app, state, &read.events)
+}
+
+/// Ends a hold of key events that waited `ANSWER_WAIT` for the end of an answer, after the
+/// input went quiet. Returns `true` when an event that comes back quits phewr.
+fn release_held(app: &mut App, state: &mut LoopState, now: Instant) -> io::Result<bool> {
+    let events = state.answers.release_stale(now);
+    handle_events(app, state, &events)
+}
+
+/// The events that belong to no Kitty answer: a late OSC answer goes, the rest goes to the app.
+fn handle_events(app: &mut App, state: &mut LoopState, events: &[Event]) -> io::Result<bool> {
+    for event in events {
+        if !state.late_answers.swallows(event) && handle_app_event(app, state, event)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Take one event of the user or the terminal. Returns `true` when the event quits phewr.
+fn handle_app_event(app: &mut App, state: &mut LoopState, event: &Event) -> io::Result<bool> {
     if clears_status(event) {
         state.status = None;
         app.scan_error = None;

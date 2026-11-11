@@ -92,12 +92,19 @@ fn transmit_names_cell_box() {
     assert!(!encoded.contains(",Y="));
 
     let mut output = Vec::new();
-    place_as_to(&mut output, 42, 2, (4, 2), false).unwrap();
-    place_as_to(&mut output, 42, 3, (4, 2), true).unwrap();
+    place_as_to(&mut output, 42, 2, (4, 2), false, false).unwrap();
+    place_as_to(&mut output, 42, 3, (4, 2), true, false).unwrap();
     assert_eq!(
         output,
         b"\x1b_Ga=p,q=2,C=1,i=42,p=2,c=4,r=2\x1b\\\x1b_Ga=p,q=2,C=1,i=42,p=3,c=4,r=2,z=-1073741825\x1b\\"
     );
+}
+
+#[test]
+fn a_placement_with_errors_asks_for_the_error_answers() {
+    let mut output = Vec::new();
+    place_as_to(&mut output, 42, 2, (4, 2), false, true).unwrap();
+    assert_eq!(output, b"\x1b_Ga=p,q=1,C=1,i=42,p=2,c=4,r=2\x1b\\");
 }
 
 #[test]

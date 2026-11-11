@@ -39,6 +39,9 @@ pub(crate) struct FakeTerminal {
     pub orphan_frames: Vec<u32>,
     /// True while a chunked transmission waits for its next chunk (`m=1`).
     in_chunks: bool,
+    /// The answers on the input of the app: an `ENOENT` for each placement with `q=1` of an
+    /// image that the terminal does not store.
+    pub answers: Vec<u8>,
 }
 
 impl FakeTerminal {
@@ -54,6 +57,7 @@ impl FakeTerminal {
             animations: HashMap::new(),
             orphan_frames: Vec::new(),
             in_chunks: false,
+            answers: Vec::new(),
         }
     }
 
@@ -75,6 +79,13 @@ impl FakeTerminal {
 
     pub(crate) fn animation(&self, id: u32) -> Option<&Animation> {
         self.animations.get(&id).filter(|_| self.stores(id))
+    }
+
+    /// Drops the image `id` and its placements without a delete, as herdr does when it resets
+    /// its delivery.
+    pub(crate) fn lose(&mut self, id: u32) {
+        self.stored.retain(|_, (stored, _)| *stored != id);
+        self.placements.retain(|placement| placement.id != id);
     }
 
     /// Read every sequence in `bytes`.
@@ -150,7 +161,16 @@ impl FakeTerminal {
                 let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
                 self.store(id, bytes);
             }
-            Some("p") => self.place_as(number("i").unwrap_or(0), number("p"), cell_box),
+            Some("p") => {
+                let id = number("i").unwrap_or(0);
+                if number("q") == Some(1) && !self.stores(id) {
+                    let placement = number("p").map(|p| format!(",p={p}")).unwrap_or_default();
+                    self.answers.extend_from_slice(
+                        format!("\x1b_Gi={id}{placement};ENOENT: image not found\x1b\\").as_bytes(),
+                    );
+                }
+                self.place_as(id, number("p"), cell_box);
+            }
             Some("f") => {
                 let id = number("i").unwrap_or(0);
                 let bytes = (number("s").unwrap_or(0) * number("v").unwrap_or(0) * 4) as usize;
