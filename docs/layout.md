@@ -17,11 +17,17 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen) and the mouse modes
   (`enable_mouse`, `disable_mouse`). The start probe and the cell size are in
   `pictures/kitty/query.rs`.
-- `run_loop.rs`: `LoopState` (the status note and, with the `video` feature, the `VideoState`),
-  `run`, the background polls, `render_images` and `next_timeout`. The status note lives here, not
-  in `App`. `handle_input` takes one input event. The tests are in `run_loop/tests.rs`.
+- `run_loop.rs`: `LoopState` (the status note, `answers` (an `AnswerKeys`), `late_answers` (the
+  `LateAnswerFilter`) and, with the `video` feature, the `VideoState`), `run`, the background
+  polls, `render_images` and `next_timeout`. The status note lives here, not in `App`.
+  `handle_input` takes one input event: it runs `AnswerKeys` first, hands each answer to
+  `Screen::answer` and calls `handle_events`. `handle_events` drops a late probe answer and calls
+  `handle_app_event` for the rest (the status note, the cell size after a resize, `handle_event`).
+  `release_held` ends a hold of key events after `ANSWER_WAIT`, and the poll of `run` wakes for
+  it. The tests are in `run_loop/tests.rs`.
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
-  `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
+  `match` that routes the overlays and the view modes, and `LateAnswerFilter` (the late probe
+  answers, with `kitty_answers_came`). One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `video.rs` (feature `video`).
   `mouse.rs` holds the mouse handler per view.
 - `kitty_output/`: the Kitty writes per frame. Each `render_*` has a `*_to` twin that writes to
@@ -123,17 +129,24 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   has no default cache folder.
 - `pictures/kitty/`: the Kitty graphics protocol. `mod.rs` holds `KittyBackend`, `Transfer`,
   `Loops`, `Pixels` and `EMIT_PASS_BYTES`. `screen.rs` holds the frame engine (`Placements`,
-  `Screen`, `Update`, `Placing`, `Layer`), and `screen/tests.rs` its fake writer tests. `protocol/probe.rs` holds the start probes
+  `Screen`, `Update`, `Placing`, `Layer`, the self check `with_self_check`, `answer` and
+  `has_lost`), and `screen/tests.rs` its fake writer tests. `answers.rs` holds the answers of the
+  terminal for the self check: `Answer`, `AnswerReader` (bytes), `AnswerKeys` (the key events of
+  crossterm, with `KeyRead`), `ANSWER_WAIT` and `MAX_ANSWER_BYTES`. Its tests are in
+  `answers/tests.rs`. `protocol/probe.rs` holds the start probes
   (`detect_backend`, `chosen_loops`, `describe`, `describe_loops`, `is_ssh`).
   `Transfer` picks the medium: direct,
   PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
   the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
   frame, and `chosen_loops` reads the override value and the config key. `main.rs` reads
   `PHEWR_KITTY_LOOPS` and `PHEWR_KITTY_TRANSFER` and passes the values in.
-  `PHEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `Pixels` is a view of RGB or
-  RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`) through
-  every medium. The check and the copy go in chunks of 4096 pixels and stop at the first
-  transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost. `KittyBackend` has
+  `PHEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `main.rs` also reads
+  `PHEWR_KITTY_SELF_CHECK` (`SELF_CHECK_OVERRIDE`, `self_check_on`): `0`, `off`, `false` or `no`
+  turns the self check of `Screen` off, else `prepare_app` turns it on. `Pixels` is a view of
+  RGB or RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`)
+  through every medium. The check and the copy go in chunks of 4096 pixels and stop at the
+  first transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost.
+  `KittyBackend` has
   `transmit` and `transmit_frame`. The writers without state are free functions of
   `pictures::kitty::protocol` (`delete_all_to`, `delete_image_to`, `place_by_id_to`,
   `animate_to`), and `apc` writes each command frame (`ESC _ G ... ESC \`). `placement.rs` holds
@@ -144,7 +157,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   foreground query, the Kitty probes and the DA1 query in one write, the DA1 answer ends the
   read) and the cell pixel size. `read_answer` is the poll loop of the tty read, over any fd.
 - `pictures/test_support/` (test only): the builders of the test files that the picture tests and
-  the app tests share. `mod.rs` holds `fixture`, `files.rs` the JPEG, TIFF RAW, CR3, RAF and PSD
+  the app tests share. `mod.rs` holds `fixture` and `key_events` (the crossterm key events of
+  input bytes, a model of the crossterm parse), `files.rs` the JPEG, TIFF RAW, CR3, RAF and PSD
   writers (feature `sips` on macOS), `heif.rs` the HEIF writers (feature `heic`,
   `write_heif_sized` with a thumbnail of any size).
 - `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
@@ -203,7 +217,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   and the `Runner` trait for the process start.
 - `test_support/` (test only): the helpers that the tests of more than one module share.
   `mod.rs` holds the app builders and the waits and re-exports `pictures::test_support`.
-  `input.rs` holds the key and mouse helpers, `kitty.rs` the fake terminal and `video.rs`
+  `input.rs` holds the key and mouse helpers, `kitty.rs` the fake terminal (`FakeTerminal`, with
+  the `ENOENT` answers of the self check in `answers` and `lose`) and `video.rs`
   `FakeRunner`,
   `FakeDecoder` and the app builders of the video tests (feature `video`), `live.rs` (feature
   `video`) the synthetic Live Photo pairs, `scanned_app` and `real_live_dir`.

@@ -187,7 +187,9 @@ short form:
   - `kitty/`: the Kitty graphics protocol (`KittyBackend`, `Transfer`, `Loops`, `Pixels`,
     `EMIT_PASS_BYTES`). `protocol/` holds the escape sequences, and `protocol/probe.rs` the start
     probes. `placement.rs` holds the placements, `terminal_images.rs` the storage budget and
-    `query.rs` the start probe and the cell size.
+    `query.rs` the start probe and the cell size. `answers.rs` holds the answers of the terminal
+    for the self check: `AnswerReader` reads bytes, and `AnswerKeys` reads the key events of
+    crossterm.
   - `test_support/`: the test file builders.
 - `app/`: `App`, the whole view state, one file per topic: fullscreen, zoom, marks, folders,
   scan, slideshow, meta, mouse, the thumbnail jobs and their bounds (`thumbnails/`), the cache
@@ -344,7 +346,15 @@ decisions. Read the long form before you change the code that an item names.
   answers neither the probes nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time.
 - **Late probe answer:** the read ends at the DA1 answer or when every owed answer came. After a
   timeout of the whole round trip, `LateAnswerFilter` drops the key events of the late Kitty
-  answers and of a late OSC 10 answer.
+  answers and of a late OSC 10 answer. `AnswerKeys` reads every Kitty answer first, also a late
+  probe answer. Each one lowers the owed count of the filter (`kitty_answers_came`). The filter
+  sees only the rest, in practice a late OSC 10 answer.
+- **Self check:** the engine places with `q=1` (`Screen::with_self_check`). phewr turns it on,
+  and `PHEWR_KITTY_SELF_CHECK=0` turns it off. A transfer keeps `q=2`, else each transfer gets an
+  `OK`. `handle_input` runs `AnswerKeys` first, then `LateAnswerFilter`. An `ENOENT` goes to
+  `Screen::answer`, and `sync_grid_icons` writes a grid pass while `Screen::has_lost` is true. A
+  hold of key events ends after 50 ms of quiet input (`ANSWER_WAIT`). phewr drops the keys of a
+  started answer that never ends.
 - **Mouse:** phewr enables only the mouse modes 1000, 1002 and 1006, never 1003. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. A test that needs the screen
   regions calls `test_support::draw_frame` first. The double-click uses `handle_event_at` with a

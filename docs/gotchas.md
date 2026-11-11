@@ -232,10 +232,13 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Cell size:** `query_cell_pixel_size` asks with `CSI 16 t`, because TIOCGWINSZ includes the
   window padding of Ghostty (2258 px / 52 rows = 43.42 px). If the terminal answered at
   start, the run loop asks again after each resize. The read takes every byte of the tty, so
-  a key typed in that millisecond is lost. At the start, the query goes out together with the
-  Kitty probes and the DA1 query, in one round trip. A terminal that answers neither the probes
-  nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time. `PHEWR_KITTY_LOOPS` or `[gallery] loops` skips
-  the animation probe. SSH and `PHEWR_KITTY_TRANSFER` skip only the transfer probe.
+  a key typed in that millisecond is lost. After a resize, that read can also take an `ENOENT`
+  of the last grid pass. This costs nothing: the resize sets `graphics_storage_dirty`, and the
+  next grid write sends `d=A` and every picture again. At the start, the query goes out
+  together with the Kitty probes and the DA1 query, in one round trip. A terminal that answers
+  neither the probes nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time. `PHEWR_KITTY_LOOPS` or
+  `[gallery] loops` skips the animation probe. SSH and `PHEWR_KITTY_TRANSFER` skip only the
+  transfer probe.
 - **Mouse:** phewr enables only the mouse modes 1000, 1002 and 1006 (`terminal::enable_mouse`),
   never 1003, so a pointer move without a button does not wake the run loop. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. `[gallery] mouse = false` turns
@@ -255,7 +258,26 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   trip. It drops the key events of each owed late answer: a Kitty answer from Alt+`_` to
   Alt+`\`, and the OSC 10 answer from Alt+`]` to Ctrl+`g` (BEL) or Alt+`\`. A missing OSC 10
   answer counts as owed after a timeout. A late DA1 answer is no key press: crossterm keeps it
-  as an internal event.
+  as an internal event. Since the self check (2026-11-11), `AnswerKeys` reads every Kitty answer
+  before the filter, also a late probe answer. Each whole Kitty answer lowers the owed count of
+  the filter (`LateAnswerFilter::kitty_answers_came`), so the filter never swallows an answer of
+  the self check. A terminal answers in order, so the late probe answers come before the answers
+  of the self check. The filter sees only the rest, in practice a late OSC 10 answer.
+- **Self check (2026-11-11):** when the self check is on, the engine places with `q=1`
+  (`Screen::with_self_check`, the argument `errors` of `place_as_to`). The terminal then answers
+  an error for a placement of a picture that it does not hold, `ENOENT: image not found`. A
+  transfer keeps `q=2`, else each transfer gets an `OK`. phewr turns the self check on by
+  default, and `PHEWR_KITTY_SELF_CHECK=0` turns it off (`SELF_CHECK_OVERRIDE` in `main.rs`).
+  crossterm reads an answer as key events (Alt+`_`, `G`, `i`, `=`, ... and Alt+`\`).
+  `AnswerKeys` (`pictures/kitty/answers.rs`) rebuilds the bytes from the events and holds the
+  events of a possible answer for at most 50 ms (`ANSWER_WAIT`). The run loop wakes at the end
+  of the hold (`release_held`). phewr drops the events of a started answer that never ends,
+  because their letters run the actions of their keys. `handle_input` runs `AnswerKeys` first,
+  then `LateAnswerFilter`. An `ENOENT` goes to `Screen::answer`, and the screen forgets the
+  picture and its placements. While `Screen::has_lost` is true, `sync_grid_icons` writes a grid
+  pass, and that pass sends the lost picture again. The measurement of 2026-11-11: after ten
+  scrolls in a herdr pane, phewr lost 2 to 5 cells before the self check, schnattr 0 and plain
+  Ghostty 0. A placement that herdr drops without an `ENOENT` stays gone until its next move.
 - **Grid zoom:** the grid shows 2 to 12 rows (`MIN_VISIBLE_ROWS`, `MAX_VISIBLE_ROWS`). A 2x2
   grid is the largest thumbnail size. The fullscreen view is the larger view. The config key
   and the state file clamp to that range on load. A terminal too small for 2 rows keeps the

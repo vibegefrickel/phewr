@@ -93,12 +93,45 @@ loops stay in `kitty_output/`.
   | `kitty-pass-bytes` | `Screen::with_pass_bytes` |
   | `kitty-store` | `Screen::lost`, `Screen::stored_bytes` |
 
+  `Screen::with_self_check`, `Screen::answer`, `Screen::has_lost` and `pictures::kitty::answers`
+  have no feature gate, because phewr calls them.
+
 - `Loops`, `transmit_frame_to` and `animate_to` stay in `pictures::kitty`, because the usage hint
   `N=1` depends on the probe result. The loop logic of phewr stays in `kitty_output/loops.rs`.
   It writes the frames into the update of the pass and calls `Screen::record`.
 - A lost frame of a visible loop gives the still and a new transfer of the loop. Nothing calls
   `Screen::lost` (`kitty-store`) today, and the trim keeps every frame of a visible loop. So
-  this path has no trigger yet.
+  this path has no trigger yet. `Screen::answer` takes the same path for a lost picture of the
+  self check, and `Screen::lost` sets `has_lost` too.
+
+#### Self check
+
+- With `Screen::with_self_check(true)`, each `a=p` goes out with `q=1`, and a transfer keeps
+  `q=2`. The terminal then answers only an error, for example
+  `ESC _ G i=7,p=1;ENOENT: image not found ESC \` for a picture that it does not hold. Without
+  the self check, a placement is `q=2` too. phewr turns the self check on by default, and
+  `PHEWR_KITTY_SELF_CHECK=0` turns it off.
+- The app hands each answer to `Screen::answer`. An `ENOENT` for a stored picture forgets the
+  picture and its placements, and the method returns `true`. An answer for a picture that the
+  screen no longer stores, and every other error, change nothing. `Screen::has_lost` is true
+  from a loss until the next `write_frame` or `flush`, so the app writes a frame soon. That
+  frame sends the pixels of the lost picture again.
+- `pictures/kitty/answers.rs` holds two readers. `AnswerReader::read` finds the answers in the
+  input bytes, gives the other bytes back in their order and keeps a split answer for the next
+  read. It ignores an `OK` and counts each whole answer (`ends`). Above `MAX_ANSWER_BYTES`
+  (1024), it gives an unterminated APC back as keys, so a broken answer cannot eat the keys
+  forever. A lone `ESC` at the end of a read is a key, as crossterm reads it.
+- phewr reads key events, not bytes, because crossterm owns the tty read. crossterm turns an
+  answer into the keys Alt+`_`, `G`, `i`, `=`, ... and Alt+`\`. `AnswerKeys::read` rebuilds the
+  bytes of each event for an `AnswerReader` and holds the events while an answer can still
+  come. An event that cannot belong to an answer, for example an arrow, releases the held
+  events. The hold ends after `ANSWER_WAIT` (50 ms) of quiet input (`release_stale`, `wait`).
+  The events of a started answer that never ends go, and the other held events come back, for
+  example a lone Alt+`_`.
+- `KeyRead::ends` counts the whole Kitty answers of an event, `OK` included. `LateAnswerFilter`
+  lowers its owed count by that number, so it never swallows an answer of the self check.
+- A placement that the terminal drops without an `ENOENT` stays gone until its next move. herdr
+  can do that. The fallback of phase 5, step 3 (a resend when a scroll stops) is open.
 
 ### Writers and pixels
 

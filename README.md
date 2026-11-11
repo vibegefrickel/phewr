@@ -246,7 +246,8 @@ phewr uses the colors of your terminal theme. It has no color settings.
 At start, phewr asks the terminal how it accepts images. If the terminal reads temp files, phewr
 sends only a file path, which is the fastest way. The last row of the help (`?`) shows the result.
 `PHEWR_KITTY_TRANSFER=direct|png|file` forces one way, and `PHEWR_KITTY_LOOPS=animation|ticks`
-forces the way that the grid loops play.
+forces the way that the grid loops play. phewr asks the terminal for an error per placement and
+sends a lost picture again. `PHEWR_KITTY_SELF_CHECK=0` turns off the self check of the placements.
 
 ## Formats
 

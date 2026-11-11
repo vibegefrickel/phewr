@@ -82,6 +82,13 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   engine has its own fake writer tests in `pictures/kitty/screen/tests.rs`: the bytes of each
   rule, the byte cap over several passes, the recovery after a clear and a focus gain, and both
   placement policies.
+- `FakeTerminal` models the self check. For a placement with `q=1` of an image that it does not
+  store, it writes an `ENOENT` answer into `FakeTerminal::answers`, the input of the app.
+  `FakeTerminal::lose` drops an image and its placements without a delete, as herdr does when
+  it resets its delivery. `pictures::test_support::key_events` gives the crossterm key events of
+  input bytes: an `ESC` and a key is Alt and that key, and an upper case letter has Shift. It is
+  a model of the crossterm parse. The tests of `AnswerKeys` (`pictures/kitty/answers/tests.rs`)
+  and of the run loop (`run_loop/tests.rs`) feed the answers through it.
 - A test app writes the Kitty sequences to a buffer (`GraphicsOutput::Buffer`). Read them with
   `app.graphics_out.take_bytes()`. A test that needs a config uses `App::new_with_config`, never
   `App::with_config`.
