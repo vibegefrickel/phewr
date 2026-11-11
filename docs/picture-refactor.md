@@ -1,9 +1,9 @@
 # The shared picture pipeline: refactor plan
 
 Status (2026-11-09): phases 1, 2, 3, 4 and 4b are done (`6b7482a`, `36ecdea`, `688dc4e`,
-schnattr `8f45abc`, `455ac6f`). Next is the sync of phase 4b into schnattr (step 2 of phase 4b).
-schnattr turns on `kitty-flush`, `kitty-events`, `kitty-layers` and `kitty-overlay`. It moves to
-moxcms 0.9.2 and deletes its `allow(unfulfilled_lint_expectations)`. Phase 5 comes after that.
+schnattr `8f45abc`, `455ac6f`). Step 2 of phase 4b is done too: schnattr runs the module of
+`da45195` with `kitty-flush`, `kitty-events`, `kitty-layers` and `kitty-overlay`, moxcms 0.9.2 and
+no `allow` on `mod pictures;`. Phase 5 is next.
 Phase 0 is open: the maintainer measures the baseline in a real terminal and fills the herdr note.
 This file in phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
 
