@@ -3,7 +3,7 @@ name = "phewr"
 version = "0.2.0"
 edition = "2024"
 
-# Not on crates.io: releases are Apple Silicon macOS binaries on Codeberg (`just release`).
+# Not on crates.io: users clone the repository and build phewr with `just install`.
 publish = false
 description = "Terminal image and video gallery for the Kitty graphics protocol: thumbnail grid, slideshow, EXIF, HEIC"
 license = "MIT"

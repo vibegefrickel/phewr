@@ -33,7 +33,7 @@ All features are on by default. To build without some of them, use cargo directl
 
 | Feature | Needs |
 |---------|-------|
-| `turbo` | libjpeg-turbo, for fast JPEG decoding |
+| `turbo` | libjpeg-turbo, the JPEG decoder with DCT scaling |
 | `heic` | libheif 1.19 or later, for HEIC, HEIF and AVIF |
 | `video` | `ffmpeg` and `ffprobe` 7 or later on `PATH` at run time |
 | `sips` | macOS `/usr/bin/sips`, for camera RAW, PSD, PDF, SVG and other formats |
@@ -236,7 +236,7 @@ player = "terminal"   # "terminal" (no sound) or "window" (mpv with sound)
 colorspace = "display-p3"   # "display-p3" (Ghostty on macOS) or "srgb"
 ```
 
-phewr uses the colors of your terminal theme. It has no color settings.
+phewr uses the colors of your terminal theme. It has no color options.
 
 | Path | Content |
 |------|---------|

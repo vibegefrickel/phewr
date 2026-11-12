@@ -63,6 +63,18 @@ impl ScreenImage {
         }
     }
 
+    /// The `DynamicImage` for an edit of the picture. An opaque picture becomes RGB, so a later
+    /// Kitty write sends 3 bytes per pixel without a scan.
+    pub(crate) fn into_dynamic(self) -> DynamicImage {
+        match self {
+            Self::Rgb(rgb) => DynamicImage::ImageRgb8(rgb),
+            Self::Rgba(rgba) => DynamicImage::ImageRgba8(rgba),
+            Self::Opaque(rgba) => {
+                DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(rgba).into_rgb8())
+            }
+        }
+    }
+
     /// The grid padding needs the alpha channel.
     pub(crate) fn into_rgba(self) -> RgbaImage {
         match self {

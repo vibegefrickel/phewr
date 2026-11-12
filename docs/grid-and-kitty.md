@@ -125,7 +125,10 @@ loops stay in `kitty_output/`.
   answer into the keys Alt+`_`, `G`, `i`, `=`, ... and Alt+`\`. `AnswerKeys::read` rebuilds the
   bytes of each event for an `AnswerReader` and holds the events while an answer can still
   come. An event that cannot belong to an answer, for example an arrow, releases the held
-  events. The hold ends after `ANSWER_WAIT` (50 ms) of quiet input (`release_stale`, `wait`).
+  events. A `Resize`, `FocusGained` or `FocusLost` event passes through alone and keeps the
+  hold, because crossterm makes it from a signal or from a sequence of its own, so it can land
+  between the key events of one answer (found by a youtr worker, 2026-11-11). The hold ends
+  after `ANSWER_WAIT` (50 ms) of quiet input (`release_stale`, `wait`).
   The events of a started answer that never ends go, and the other held events come back, for
   example a lone Alt+`_`.
 - `KeyRead::ends` counts the whole Kitty answers of an event, `OK` included. `LateAnswerFilter`

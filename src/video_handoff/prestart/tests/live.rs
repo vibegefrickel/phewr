@@ -165,7 +165,7 @@ fn long_wait_ends_motion_player() {
     assert!(!app.video_prestart.running());
     assert!(!decoder.streaming(), "ffmpeg ends");
 
-    // Enter after the end starts the motion as before.
+    // Enter after the end starts the motion again.
     press(&mut app, KeyCode::Enter);
     let mut state = terminal(&decoder);
     let (_log, mut runner) = fake_runner();

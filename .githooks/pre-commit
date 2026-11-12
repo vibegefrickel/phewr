@@ -1,6 +1,6 @@
 #!/bin/sh
-# Pre-commit: formatting and lints must pass before anything is committed.
-# Enable with `just hooks` (git config core.hooksPath .githooks); skip once with `git commit -n`.
+# Pre-commit: the formatting and the lints must pass before a commit.
+# Enable it with `just hooks` (git config core.hooksPath .githooks). `git commit -n` skips it once.
 set -eu
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 

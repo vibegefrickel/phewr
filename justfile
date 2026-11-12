@@ -1,4 +1,4 @@
-# Task runner. `just` lists the recipes; `just check` is what a commit has to pass.
+# Task runner. `just` lists the recipes. `just check` is the gate of a commit.
 # Homebrew's rustup is keg-only, so the toolchain shims are put on PATH here.
 
 set shell := ["zsh", "-euo", "pipefail", "-c"]
@@ -25,7 +25,10 @@ lean_features := "video,sips"
 # turns none of them on, but each copy of the module must build with them.
 kitty_features := "kitty-flush,kitty-events,kitty-layers,kitty-overlay,kitty-placing,kitty-pass-bytes,kitty-store"
 
-# Clippy with the default features, with the engine parts on top, with none and with the lean set, a cargo check for each single feature, and one for each engine part on top of the default features (the subset that an app turns on); every warning is an error, the lint table is in Cargo.toml.
+# Clippy with the default features, with the engine parts on top, with none and with the lean set.
+# Then a cargo check for each single feature, and one for each engine part on top of the default
+# features (the subset that an app turns on). Every warning is an error. The lint table is in
+# Cargo.toml.
 lint:
     cargo clippy --release --all-targets -- -D warnings
     cargo clippy --release --all-targets --features {{kitty_features}} -- -D warnings
@@ -39,7 +42,7 @@ fix:
     cargo clippy --release --all-targets --fix --allow-dirty --allow-staged
     cargo fmt
 
-# Tests through nextest (one process per test, better output); falls back to `cargo test`.
+# Tests through nextest (one process per test, better output). Without nextest, `cargo test` runs.
 test *ARGS:
     if command -v cargo-nextest >/dev/null; then cargo nextest run --release {{ARGS}}; else cargo test --release {{ARGS}}; fi
 

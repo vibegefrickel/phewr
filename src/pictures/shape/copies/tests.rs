@@ -1,4 +1,5 @@
 use super::{Bitmap, Kind, TILE_INSET, boxed, capped, dimmed};
+use crate::pictures::kitty::Pixels;
 use image::{DynamicImage, Rgb, RgbImage, Rgba, RgbaImage};
 
 /// The picture of a message from another person.
@@ -129,6 +130,19 @@ fn a_bitmap_has_the_bytes_of_its_format() {
     let deep = Bitmap::of(DynamicImage::new_rgb16(3, 2));
     assert_eq!(deep.bytes().len(), 3 * 2 * 3, "16 bits become 8");
     assert_eq!(deep.dimensions(), (3, 2));
+}
+
+#[test]
+fn a_bitmap_turns_into_the_pixels_of_a_transmit() {
+    let rgb = Bitmap::Rgb(RgbImage::from_pixel(3, 2, Rgb([1, 2, 3])));
+    let pixels = Pixels::from(&rgb);
+    assert_eq!(pixels.dimensions(), (3, 2));
+    assert!(!pixels.alpha && !pixels.keep_alpha);
+    assert_eq!(pixels.data, rgb.bytes());
+    let rgba = Bitmap::Rgba(RgbaImage::from_pixel(3, 2, Rgba([1, 2, 3, 4])));
+    let pixels = Pixels::from(&rgba);
+    assert!(pixels.alpha);
+    assert_eq!(pixels.data.len(), 3 * 2 * 4);
 }
 
 #[test]

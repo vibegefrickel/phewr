@@ -203,6 +203,31 @@ fn a_broken_answer_goes_and_other_keys_come_back_in_order() {
 }
 
 #[test]
+fn a_resize_or_a_focus_event_inside_an_answer_keeps_the_hold() {
+    for between in [Event::Resize(80, 24), Event::FocusGained, Event::FocusLost] {
+        let mut reader = AnswerKeys::default();
+        let (head, tail) = MISSING.split_at(12);
+        let mut input = key_events(head);
+        input.push(between.clone());
+        input.extend(key_events(tail));
+        input.extend(key_events(b"k"));
+        let (events, answers) = read_events(&mut reader, input);
+        assert_eq!(
+            answers,
+            vec![missing(4_000_000_001, Some(1))],
+            "{between:?}: the answer comes whole"
+        );
+        let mut expected = vec![between.clone()];
+        expected.extend(key_events(b"k"));
+        assert_eq!(
+            events, expected,
+            "{between:?}: the event goes alone, at once"
+        );
+        assert_eq!(reader.wait(Instant::now()), None);
+    }
+}
+
+#[test]
 fn a_quiet_input_ends_the_hold() {
     let start = Instant::now();
     let mut reader = AnswerKeys::default();

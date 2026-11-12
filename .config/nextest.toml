@@ -1,4 +1,4 @@
-# nextest settings for `just test`.
+# The nextest configuration for `just test`.
 
 [profile.default]
 # A test that hangs is a failure, not a stuck gate.

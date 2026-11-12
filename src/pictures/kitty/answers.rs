@@ -159,8 +159,11 @@ fn parse(body: &[u8]) -> Option<Answer> {
 /// can still come.
 ///
 /// The events of a started answer (`ESC _ G`) that never ends go: an arrow, a mouse event, the
-/// cap or [`ANSWER_WAIT`] ends them. Their letters would run the actions of their keys. Other
+/// cap or [`ANSWER_WAIT`] ends them. As key presses, their letters run the actions of their keys. Other
 /// held events come back, for example a lone Alt+`_`.
+///
+/// A resize or a focus event passes through and keeps the hold: crossterm makes it from a signal
+/// or from a sequence of its own, so it can land between the key events of one answer.
 #[derive(Debug, Default)]
 pub(crate) struct AnswerKeys {
     reader: AnswerReader,
@@ -186,10 +189,14 @@ pub(crate) struct KeyRead {
 
 impl AnswerKeys {
     /// Reads one event at `now`. An event that cannot be part of an answer gives the held events
-    /// back first.
+    /// back first, except a resize or a focus event: it goes alone, and the hold stays.
     pub(crate) fn read(&mut self, event: Event, now: Instant) -> KeyRead {
         let Some(bytes) = answer_bytes(&event) else {
-            let mut events = self.release();
+            let mut events = if passes_the_hold(&event) {
+                Vec::new()
+            } else {
+                self.release()
+            };
             events.push(event);
             return KeyRead {
                 events,
@@ -269,6 +276,15 @@ fn kept_events(events: Vec<Event>) -> Vec<Event> {
     } else {
         events
     }
+}
+
+/// True for an event that is no input of the user and no byte of the tty: a resize comes from a
+/// signal, and a focus report is a sequence of its own.
+fn passes_the_hold(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Resize(..) | Event::FocusGained | Event::FocusLost
+    )
 }
 
 /// The bytes of a key event that can be part of an answer: a printable ASCII key, or `ESC` and

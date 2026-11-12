@@ -377,7 +377,8 @@ Result of step 1 (`455ac6f`, 2026-11-09). Step 2 is open.
   `expect(dead_code)` on its `mod pictures;` line.
   - `Screen::forget_placements` and `protocol::clear_placements_to`. Without `kitty-overlay`, the
     module does not call them. phewr calls them only with `video`.
-  - The box copies and the corners (`shape::copies`, `shape::corners`) and `thumbnail_dir_below`.
+  - The box copies and the corners (`shape::copies`, `shape::corners`), `thumbnail_dir_below`
+    and `ScreenImage::into_dynamic` (the `DynamicImage` for an edit, as youtr makes it).
   - Each gated part of a `kitty-*` feature that the app turns on but does not call.
 - The fixture sync: `just pictures-sync` and `just pictures-check` also cover the module
   fixtures (`pictures_fixtures` in the justfile). The sync copies `color/`, `hdr/`, `jxl/` and

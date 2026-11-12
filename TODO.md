@@ -1,11 +1,20 @@
 # TODO
 
+## Handoff
+
+- Date: 2026-11-12
+- Commit: dba018b
+- Done: turbojpeg links the Homebrew libjpeg-turbo through pkgconf, without cmake (`dba018b`). The three youtr notes for the master copy are fixed in `src/pictures/` (uncommitted): the hold of `AnswerKeys` survives a resize or focus event, `ScreenImage::into_dynamic`, `From<&Bitmap> for Pixels`.
+- Open (agent): the sync of the master copy into `../youtr` and `../schnattr` ("Next", item 6), after the commit and with the go of each sibling session.
+- Open (user): commit the picture fixes. The maintainer tests in Ghostty and herdr ("Now", from step 3). The `kitty-frames-ack.py` measurement for the RGBA fast path ("Next", item 1).
+- Health: `just check` passes on 2026-11-12 (1067 tests, 992 in the lean set, `cargo deny` reports only the known duplicate versions). The copies in `../schnattr` and `../youtr` match the master (`just pictures-check`, 2026-11-12). No workers, no branches, no stashes.
+
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
 
 Scope:
 
 - Speed comes first: every change must make opening, scrolling or switching files faster, or it must add a common image/video format.
-- Full mouse support is a first-class input method, on par with the keyboard. Every view and overlay must be usable with the mouse.
+- Full mouse support is an input method equal to the keyboard. Every view and overlay must be usable with the mouse.
 - Viewer only: phewr does not trash, delete, move, rename or otherwise modify files.
 - Target terminal: Ghostty on macOS Apple Silicon, using the Kitty graphics protocol.
 - Measure speed changes with `just bench` on `PHEWR_TEST_DIR`.
@@ -50,21 +59,11 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
 4. Dependencies: all direct dependencies are at their newest version (2026-11-11). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
 5. Self check of the placements, measured on 2026-11-11: ten fast scrolls through `~/Pictures/phewr-test/01-mixed-big` in a herdr pane gave 0 missing cells (2 to 5 before the self check). The scroll in herdr is slower than in plain Ghostty (the herdr performance note). Open: a placement that herdr drops without an `ENOENT` stays gone until its next move. The fallback of phase 5, step 3 (a resend when a scroll stops) is not needed now.
-6. Notes of the youtr session for the master copy of the picture module (2026-11-11, no action
-   needed now):
-   - `AnswerKeys::read` (`src/pictures/kitty/answers.rs`): an event without answer bytes calls
-     `release`, which resets the reader. If a `Resize`, `FocusGained` or `FocusLost` event lands
-     between the key events of a started answer, the rest of the answer (`i=1,p=1;ENOENT: image
-     not found` and Alt+`\`) reaches the app as plain key presses. A youtr worker reproduced it
-     with a test. youtr sends these three events past the reader as a workaround. Fix in the
-     master: keep the reader state for such an event while an answer is started, or add a method
-     that passes an event through without a release.
-   - youtr wanted a full-size `DynamicImage` from a path. `Decoded::into_display` and
-     `decode_image_with_hint` are `#[cfg(test)]`, so youtr calls `load_for_screen(path, (0, 0))`
-     and maps the `ScreenImage` back itself. A `ScreenImage::into_dynamic` in the module would
-     remove that helper. `ScreenImage` has `From<&ScreenImage> for Pixels<'_>`, and `Bitmap`
-     (`shape/copies.rs`) has no such conversion, so youtr builds `Pixels` by hand in its flush.
-   - youtr keeps `Placing::EveryFrame` until the maintainer tests the self check under herdr.
+6. The sync of the master copy into `../youtr` and `../schnattr` after the fixes of 2026-11-12
+   (see Done). youtr can then drop its `read_event` workaround (`src/tui/session/mod.rs`), its
+   `dynamic` helper (`src/thumbs/load.rs`) and the `Pixels` it builds by hand in its flush
+   (`src/thumbs/mod.rs`). A sync needs the go of the session of that project. youtr keeps
+   `Placing::EveryFrame` until the maintainer tests the self check under herdr.
 
 ## Later
 
@@ -78,6 +77,8 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Done
 
+- Picture module, the youtr notes (2026-11-12): `AnswerKeys::read` passes a `Resize`, `FocusGained` or `FocusLost` event through and keeps the hold, so an answer that such an event splits comes whole (before, its rest reached the app as key presses). `ScreenImage::into_dynamic` gives the `DynamicImage` for an edit (an opaque picture as RGB). `Bitmap` converts into `Pixels` like `ScreenImage`. Three tests cover the three items.
+- turbojpeg through pkgconf (2026-11-11, `dba018b`): turbojpeg-sys links the Homebrew libjpeg-turbo with the features `pkg-config` and `require-simd`, without `cmake`. The justfile sets no `TURBOJPEG_*` variables anymore, and a plain `cargo build` finds the library too.
 - resvg 0.50.0 (2026-11-11): the update brought no API change for the grid icons, and `just check` passes.
 - Shared picture module, phase 5 (2026-11-11, `caa87b3`): the self check of the Kitty placements. phewr places with `q=1`, reads the `ENOENT` answers of the terminal through `AnswerKeys` (`pictures/kitty/answers.rs`) and sends a lost picture again in the next grid pass. The self check is on by default, and `PHEWR_KITTY_SELF_CHECK=0` turns it off. `LateAnswerFilter` lowers its owed count by whole Kitty answers, so it never swallows a self-check answer. Measured on 2026-11-11: after ten scrolls in a herdr pane, phewr lost 2 to 5 cells before the self check, schnattr 0 and plain Ghostty 0. Decision of 2026-11-11: phewr keeps `d=A` on an overlay, a resize and the quit, and it has no `hide()` and no focus reports. `Cargo.toml` did not change.
 - Shared picture module, phase 4b, step 1 (2026-11-09, `455ac6f`): seven `kitty-*` features gate the engine parts that phewr does not call, and phewr turns none of them on. `just pictures-sync` and `just pictures-check` also cover the module fixtures. A file with an extension that `IMAGE_EXTENSIONS` does not list tries sips after a failed raster decode. A sips run gets 10 s (`SIPS_TIMEOUT`), and then a kill.

@@ -41,11 +41,11 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   picture above the text, so the still and the video frame of a slideshow go out with
   `z=-1073741825` (`BELOW_BACKGROUNDS`): Ghostty draws them below every cell with a background
   color, and the cells with the default background show the picture. The badge has a background
-  color (`STYLES.badge`, black on ANSI gray, like the active tab of herdr). The image goes out at its decoded size and
-  the terminal scales it to the fill of `image_rect` (`filled_placement` in
-  `kitty_output/mod.rs`): a portrait image gets `r=` with the rows of the box, a landscape image
-  `c=` with the columns, and the terminal takes the other side from the aspect, so the picture
-  never stretches. The decode does not upscale: the terminal scale costs no payload and no CPU.
+  color (`STYLES.badge`, black on ANSI gray, like the active tab of herdr). The image goes out at
+  its decoded size, and the terminal scales it to the fill of `image_rect` (`filled_placement` in
+  `kitty_output/mod.rs`). A portrait image gets `r=` with the rows of the box, a landscape image
+  `c=` with the columns. The terminal takes the other side from the aspect, so the picture never
+  stretches. The decode does not upscale: the terminal scale costs no payload and no CPU.
   The start of a slideshow changes `image_rect` by one row, so the current image decodes again
   one time. Outside a slideshow, an image shows at its own size, centered.
 - **Slideshow and videos:** a running slideshow that is not paused plays a video one time. The
@@ -88,12 +88,12 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   Apple HDR10 example clip (MaxCLL 1375) is the real test file. A PQ PNG reads
   `cLLI`, else `mDCV`, also with a PQ `iCCP` profile. A PQ JPEG XL reads `intensity_target`. Its
   values 255 (the header default) and 10000 (cjxl writes it for each PQ file) count as unset, so
-  a JPEG XL really mastered at 10000 nits maps with 1000 nits. An 8-bit PQ HEIF reads `clli` and
+  a JPEG XL that is mastered at 10000 nits maps with 1000 nits. An 8-bit PQ HEIF reads `clli` and
   `mdcv` too, and the 8-bit path maps through `color::convert`. A PQ or HLG still
   (AVIF, HEIC, JPEG XL, 16-bit PNG with `cICP`) maps with a copy of the same math in
-  `pictures/decode/hdr/`, per pixel and without a cube, after the resize: the primaries are BT.2020,
-  Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a file in
-  16 bit. A test compares the still map with each point of the player cubes, so a change of one
+  `pictures/decode/hdr/`, per pixel and without a cube, after the resize. The primaries are
+  BT.2020, Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a
+  file in 16 bit. A test compares the still map with each point of the player cubes, so a change of one
   copy fails it.
 - **Live Photos:** one folder scan hides the motion `.mov` of each Live Photo still
   (`scanner::spawn_with`, `[gallery] live_photos`, on by default). The pass runs on the sorted

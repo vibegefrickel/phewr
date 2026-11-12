@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn same_aspect_takes_the_smallest_covering_fast_scale() {
-        // 4000x3000 into 1500x1125: 3/8 would cover it, but 1/2 is the next fast scale.
+        // 4000x3000 into 1500x1125: 3/8 covers it, but 1/2 is the next fast scale.
         assert_eq!(picked((4000, 3000), (1500, 1125)), (2000, 1500));
         assert_eq!(picked((4000, 3000), (500, 375)), (500, 375));
         assert_eq!(picked((4000, 3000), (2100, 1575)), (4000, 3000));

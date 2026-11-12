@@ -227,6 +227,26 @@ fn transparent_pixel_keeps_rgba() {
 }
 
 #[test]
+fn into_dynamic_keeps_rgb_and_rgba_and_turns_opaque_into_rgb() {
+    let rgb = RgbImage::from_pixel(2, 2, Rgb([9, 8, 7]));
+    assert_eq!(
+        ScreenImage::Rgb(rgb.clone()).into_dynamic(),
+        DynamicImage::ImageRgb8(rgb.clone())
+    );
+    let rgba = RgbaImage::from_pixel(2, 2, Rgba([9, 8, 7, 100]));
+    assert_eq!(
+        ScreenImage::Rgba(rgba).into_dynamic(),
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(2, 2, Rgba([9, 8, 7, 100])))
+    );
+    let opaque = RgbaImage::from_pixel(2, 2, Rgba([9, 8, 7, 255]));
+    assert_eq!(
+        ScreenImage::Opaque(opaque).into_dynamic(),
+        DynamicImage::ImageRgb8(rgb),
+        "3 bytes per pixel"
+    );
+}
+
+#[test]
 fn other_pixel_types_turn_8_bit() {
     let gray =
         DynamicImage::ImageLuma16(image::ImageBuffer::from_pixel(2, 2, image::Luma([257 * 9])));

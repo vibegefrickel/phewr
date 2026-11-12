@@ -219,7 +219,7 @@ The code is in `pictures/decode/hdr/`.
   JPEG XL from `intensity_target`. The 500 bucket has no roll-off, for content at or below SDR
   white. The 8-bit HDR path maps through `color::convert`.
 - cjxl writes an intensity target of 10000 nits into each PQ file. phewr counts 255 and 10000 as
-  unset. A JPEG XL that really is mastered at 10000 nits maps with the 1000 nit bucket and clips
+  unset. A JPEG XL that is mastered at 10000 nits maps with the 1000 nit bucket and clips
   its highlights above about 1000 nits.
 - The libavif test stills: `colors_hdr_rec2020.avif` (MaxCLL 470, bucket 500) gets brighter, its
   mean level goes from 151.6 to 172.2. `seine_hdr_rec2020.avif` (MaxCLL 703, bucket 1000) stays

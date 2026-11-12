@@ -77,7 +77,7 @@ fn median(times: &mut [Duration]) -> Duration {
     times.get(times.len() / 2).copied().unwrap_or_default()
 }
 
-/// Delete the temp files that `out` names, as the terminal would. Returns their bytes.
+/// Delete the temp files that `out` names, as the terminal does. Returns their bytes.
 fn remove_temp_files(out: &[u8]) -> u64 {
     crate::pictures::kitty::protocol::temp_file_paths(out)
         .iter()
@@ -159,7 +159,7 @@ fn keep_files_only(app: &mut App, deadline: Instant) {
     app.needs_render = true;
 }
 
-/// One run loop pass. It sets the fullscreen box that `ui::draw` would set.
+/// One run loop pass. It sets the fullscreen box that `ui::draw` sets.
 fn run_pass(app: &mut App, pending: &mut Vec<usize>) {
     poll_background(app, pending);
     app.fullscreen_box = fullscreen_rect();

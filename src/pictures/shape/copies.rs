@@ -7,6 +7,7 @@
 //! Each resize goes through `fast_image_resize` with the filter of `resize`.
 
 use super::corners::round_corners;
+use crate::pictures::kitty::Pixels;
 use crate::pictures::resize::{Layout, resize_region, scaled_down_size};
 use image::{DynamicImage, ImageBuffer, Pixel, RgbImage, RgbaImage};
 
@@ -111,6 +112,19 @@ impl Bitmap {
     }
 }
 
+impl<'a> From<&'a Bitmap> for Pixels<'a> {
+    fn from(bitmap: &'a Bitmap) -> Self {
+        let (width, height) = bitmap.dimensions();
+        Self {
+            width,
+            height,
+            alpha: bitmap.has_alpha(),
+            data: bitmap.bytes(),
+            keep_alpha: false,
+        }
+    }
+}
+
 /// The copy of `source` for a box of `size` pixels. A chat picture gets the rounded corners and
 /// a transparent inset (`chat_copy`). A message picture shrinks into the box with its aspect.
 /// A tile is the middle of the picture in a transparent inset (`tile_copy`).
@@ -169,7 +183,7 @@ fn inset_in(picture: RgbaImage, (box_width, box_height): (u32, u32), inset: u32)
 }
 
 /// The middle part of `source` with the shape of the box, at the exact size of the box. The
-/// terminal fills the cells of a placement, so a picture with another shape would be squished.
+/// terminal fills the cells of a placement, so the terminal squeezes a picture with another shape.
 fn cover(source: &DynamicImage, size: (u32, u32)) -> Bitmap {
     let whole = (source.width(), source.height());
     resized(source, middle_cut(whole, size), size)

@@ -318,7 +318,7 @@ fn hdr_reserve_is_the_real_need() {
     assert_eq!(hdr_bytes_per_pixel(PixelFormat::Rgba), 8);
     assert_eq!(hdr_bytes_per_pixel(PixelFormat::Gray), 8);
     assert_eq!(hdr_bytes_per_pixel(PixelFormat::Graya), 12);
-    // 80 MP in RGB passes the limit of the `image` route, as before the gray path.
+    // 80 MP in RGB passes the limit of the `image` route.
     let bytes = 80_000_000 * hdr_bytes_per_pixel(PixelFormat::Rgb) as u64;
     assert!(image::Limits::default().reserve(bytes).is_ok());
 }

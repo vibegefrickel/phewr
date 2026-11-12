@@ -72,7 +72,7 @@ fn reports_broken_symlink() {
     assert!(errors[0].contains("gone.png"), "{errors:?}");
 }
 
-/// One entry fails with `kind`; the other two entries must reach the list.
+/// One entry fails with `kind`. The other two entries must reach the list.
 fn scan_with_file_type_error(kind: std::io::ErrorKind) -> (Vec<String>, Vec<String>) {
     let root = tempfile::tempdir().unwrap();
     let gone = root.path().join("gone.png");

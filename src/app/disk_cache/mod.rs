@@ -24,7 +24,7 @@ mod tests {
     use super::default_disk_cache_dir;
     use std::path::PathBuf;
 
-    /// The folder of the existing caches: a move would drop every thumbnail of the user.
+    /// The folder of the existing caches: a move drops every thumbnail of the user.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_cache_folder_stays_where_it_was() {

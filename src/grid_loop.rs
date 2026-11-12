@@ -41,7 +41,7 @@ const MAX_LOOP_FPS: f64 = 12.0;
 /// The most keyframes that a keyframe run keeps in memory, see [`Spread`].
 const KEPT_KEYFRAMES: usize = 4 * VIDEO_LOOP_FRAMES;
 
-/// One frame per minute. A container that claims a length of years gives no longer frame time.
+/// The lowest rate is one frame per minute, also for a container that claims a length of years.
 const MIN_ANIMATION_FPS: f64 = 1.0 / 60.0;
 
 const CANCEL_POLL: Duration = Duration::from_millis(20);

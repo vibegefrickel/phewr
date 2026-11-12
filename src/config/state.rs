@@ -103,8 +103,8 @@ impl StateChange {
     }
 }
 
-/// Apply the changes in order to one read of the file, and write once if the state differs. A
-/// broken file stays as it is.
+/// Apply the changes, in their order, to one read of the file. If the state differs, write it
+/// once. A broken file stays as it is.
 fn apply_changes(path: &Path, changes: &[StateChange]) {
     let Some(mut state) = read_state_to_change(path) else {
         return;

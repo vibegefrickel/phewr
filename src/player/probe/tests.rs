@@ -291,7 +291,7 @@ fn real_hdr10_peak_sources() {
         assert_eq!((info.width, info.height), (64, 64), "{name}");
     }
     // The stream probe alone, without the frame fallback: the frames of the container file
-    // also carry the values, so `probe` would hide a broken stream path.
+    // also carry the values, so `probe` hides a broken stream path.
     for (name, peak) in [
         ("video/hdr10-container.mp4", Some(4000.0)),
         ("video/hdr10-sei.mp4", None),
