@@ -7,7 +7,8 @@ no `allow` on `mod pictures;`. Phase 5 is done (`caa87b3`, 2026-11-11): the self
 Kitty placements, and 0 lost cells in herdr after ten scrolls. Phase 6 is done (youtr `a5d338e`,
 2026-11-11): youtr runs the module, and the schnattr frame is synced into youtr again (youtr
 `31fbeba`). Both copies match the master `3030ce5` (`just pictures-check`). Phase 7, the test
-matrix of the maintainer, is next.
+matrix of the maintainer, runs: youtr passed in Ghostty and in Ghostty inside herdr
+(2026-11-16). phewr and schnattr are open.
 Phase 0 holds the bench numbers of phewr (2026-11-11). The maintainer measures the memory in a real
 terminal.
 This file in phewr is the master of the plan. schnattr keeps a copy of the draft of 2026-11-09.
@@ -462,6 +463,32 @@ Each app, in each terminal, with each scenario:
   is equal to or better than the baseline.
 
 The maintainer runs the scenarios that need a real terminal. The workers write the rest as tests.
+
+Results:
+
+- youtr (2026-11-16, youtr M14, the module copy of youtr `c7f2ece`): every scenario passed in
+  Ghostty and in Ghostty inside herdr. The scenario with more than 500 pictures was the `All`
+  entry, scrolled to its end. The maintainer decided not to test Kitty and WezTerm in youtr.
+  Terminal.app and SSH are not tested. The measures of phase 0 were not taken. Before the run,
+  youtr dropped its own skip of the answer reader for a resize and a focus event, because
+  `AnswerKeys` passes these events itself now.
+- phewr and schnattr: open.
+
+Open notes for the module, from the youtr review of 2026-11-16. Neither note showed in the
+test matrix.
+
+- **A focus gain sends every picture again.** `Screen::focus_gained` marks every stored picture
+  for a new transmit, also in Ghostty, which keeps them. The cost is the pixels of each picture
+  on the screen, spread over a few updates by the 4 MB cap. A possible fix: with the self
+  check on, a focus gain sends only the placements again (`forget_placements`). The terminal
+  then answers `ENOENT` for each lost picture, and only those pictures go out again. First
+  make sure that herdr answers `ENOENT` for a picture that it dropped while another app had
+  the focus. If herdr stays silent, the current resend is necessary.
+- **An error other than `ENOENT` hides a picture until it moves.** The screen keeps such a
+  picture as placed, and the default placing policy sends nothing until the picture moves or
+  the window gets a resize. A realistic trigger is `ENOSPC`, when the storage quota of the
+  terminal is full. A possible fix: mark the picture lost for a storage error, so it gets one
+  more transmit. Do not do that for `EINVAL`, because the same transmit fails again.
 
 ## Risks
 

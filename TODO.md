@@ -2,12 +2,12 @@
 
 ## Handoff
 
-- Date: 2026-11-12
-- Commit: dba018b
-- Done: turbojpeg links the Homebrew libjpeg-turbo through pkgconf, without cmake (`dba018b`). The three youtr notes for the master copy are fixed in `src/pictures/` (uncommitted): the hold of `AnswerKeys` survives a resize or focus event, `ScreenImage::into_dynamic`, `From<&Bitmap> for Pixels`.
-- Open (agent): the sync of the master copy into `../youtr` and `../schnattr` ("Next", item 6), after the commit and with the go of each sibling session.
-- Open (user): commit the picture fixes. The maintainer tests in Ghostty and herdr ("Now", from step 3). The `kitty-frames-ack.py` measurement for the RGBA fast path ("Next", item 1).
-- Health: `just check` passes on 2026-11-12 (1067 tests, 992 in the lean set, `cargo deny` reports only the known duplicate versions). The copies in `../schnattr` and `../youtr` match the master (`just pictures-check`, 2026-11-12). No workers, no branches, no stashes.
+- Date: 2026-11-16
+- Commit: 26f3dd5
+- Done: `26f3dd5` commits the three youtr fixes of the master copy and an STE pass over the comments and the docs. The copies in `../youtr` and `../schnattr` match the master, so the sync is done.
+- Open (agent): no agent work is ready. The next items wait for the maintainer test or for a measurement.
+- Open (user): the maintainer tests in Ghostty and herdr ("Now", from step 3). The `kitty-frames-ack.py` measurement for the RGBA fast path ("Next", item 1).
+- Health: `just check` passes on 2026-11-16 (1067 tests, 992 in the lean set, `cargo deny` reports only the known duplicate versions). `just pictures-check` passes for `../youtr` and `../schnattr` (2026-11-16). No workers, no branches, no stashes.
 
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
 
@@ -25,7 +25,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-11: `just check` passes with 1064 tests with the default features and 989 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-16: `just check` passes with 1067 tests with the default features and 992 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
@@ -59,11 +59,6 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 3. Hidden tab (mode 2033): stop the loops, the player and the slideshow while the tab is hidden. Stopped on 2026-10-30: crossterm 0.27 to 0.29 never end the report sequence and lose all input after it. Continue when a crossterm release fixes it.
 4. Dependencies: all direct dependencies are at their newest version (2026-11-11). `image` and `jxl-oxide` still pull moxcms 0.8, and ratatui pulls lru 0.18.
 5. Self check of the placements, measured on 2026-11-11: ten fast scrolls through `~/Pictures/phewr-test/01-mixed-big` in a herdr pane gave 0 missing cells (2 to 5 before the self check). The scroll in herdr is slower than in plain Ghostty (the herdr performance note). Open: a placement that herdr drops without an `ENOENT` stays gone until its next move. The fallback of phase 5, step 3 (a resend when a scroll stops) is not needed now.
-6. The sync of the master copy into `../youtr` and `../schnattr` after the fixes of 2026-11-12
-   (see Done). youtr can then drop its `read_event` workaround (`src/tui/session/mod.rs`), its
-   `dynamic` helper (`src/thumbs/load.rs`) and the `Pixels` it builds by hand in its flush
-   (`src/thumbs/mod.rs`). A sync needs the go of the session of that project. youtr keeps
-   `Placing::EveryFrame` until the maintainer tests the self check under herdr.
 
 ## Later
 
@@ -77,6 +72,7 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Done
 
+- Sync of the master copy (2026-11-16): `../youtr` and `../schnattr` match the master after the fixes of 2026-11-12. youtr still holds its `read_event` workaround (`src/tui/session/mod.rs`) and its `dynamic` helper (`src/thumbs/load.rs`). Their removal is work of the youtr session. youtr keeps `Placing::EveryFrame` until the maintainer tests the self check under herdr.
 - Picture module, the youtr notes (2026-11-12): `AnswerKeys::read` passes a `Resize`, `FocusGained` or `FocusLost` event through and keeps the hold, so an answer that such an event splits comes whole (before, its rest reached the app as key presses). `ScreenImage::into_dynamic` gives the `DynamicImage` for an edit (an opaque picture as RGB). `Bitmap` converts into `Pixels` like `ScreenImage`. Three tests cover the three items.
 - turbojpeg through pkgconf (2026-11-11, `dba018b`): turbojpeg-sys links the Homebrew libjpeg-turbo with the features `pkg-config` and `require-simd`, without `cmake`. The justfile sets no `TURBOJPEG_*` variables anymore, and a plain `cargo build` finds the library too.
 - resvg 0.50.0 (2026-11-11): the update brought no API change for the grid icons, and `just check` passes.
