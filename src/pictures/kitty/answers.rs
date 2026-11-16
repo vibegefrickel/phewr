@@ -159,8 +159,8 @@ fn parse(body: &[u8]) -> Option<Answer> {
 /// can still come.
 ///
 /// The events of a started answer (`ESC _ G`) that never ends go: an arrow, a mouse event, the
-/// cap or [`ANSWER_WAIT`] ends them. As key presses, their letters run the actions of their keys. Other
-/// held events come back, for example a lone Alt+`_`.
+/// cap or [`ANSWER_WAIT`] ends them. As key presses, their letters run the actions of their
+/// keys. Other held events come back, for example a lone Alt+`_`.
 ///
 /// A resize or a focus event passes through and keeps the hold: crossterm makes it from a signal
 /// or from a sequence of its own, so it can land between the key events of one answer.

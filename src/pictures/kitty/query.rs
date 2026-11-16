@@ -1,10 +1,19 @@
 //! The tty queries at the start and after a resize: the cell size (`CSI 16 t`), the foreground
 //! color (OSC 10), the Kitty probe and the device attributes (DA1), and the read of the answers.
+//!
+//! Most terminals answer in the order of the queries, so DA1 comes last. Ghostty 1.4 sends DA1
+//! before the OSC 10 answer and before the Kitty answers. For this reason, the start read waits
+//! a short grace after DA1 for the answers that are still missing.
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// The longest wait after DA1 for the OSC 10 answer and the Kitty answers. Ghostty 1.4 sends
+/// them after DA1. 100 ms covers a slow or remote terminal. A terminal without the Kitty
+/// protocol or without OSC 10 pays this wait once at the start.
+const LATE_ANSWER_GRACE: Duration = Duration::from_millis(100);
 
 /// The answers at the start. `None` for an answer that did not come in time.
 pub(crate) struct StartAnswers {
@@ -18,35 +27,65 @@ pub(crate) struct StartAnswers {
     pub(crate) foreground: Option<[u8; 3]>,
 }
 
-/// The primary device attributes query (DA1). Every terminal answers it after the queries
-/// before it.
+/// The primary device attributes query (DA1). Every terminal answers it. Most terminals answer
+/// it after the queries before it, but Ghostty 1.4 answers it before OSC 10 and the Kitty probe.
 const DEVICE_ATTRIBUTES_QUERY: &[u8] = b"\x1b[c";
 
 /// OSC 10 asks for the foreground color. The answer ends with BEL like the query, so it never
 /// counts as a Kitty answer.
 const FOREGROUND_QUERY: &[u8] = b"\x1b]10;?\x07";
 
-/// Send the cell size query, the foreground query, the Kitty `probe` and DA1 in one write, and wait for the cell size
-/// and for `answers` Kitty answers.
+/// Send the cell size query, the foreground query, the Kitty `probe` and DA1 in one write, and
+/// wait for the cell size and for `answers` Kitty answers.
 ///
-/// A terminal answers in order. The DA1 answer ends the wait even when the terminal skips a
-/// Kitty answer. Only a terminal that answers neither costs `PROBE_TIMEOUT`.
+/// The DA1 answer ends the wait even when the terminal skips an answer. Ghostty 1.4 sends DA1
+/// before the OSC 10 answer and the Kitty answers, so after DA1 the read waits at most
+/// `LATE_ANSWER_GRACE` for the missing answers. Only a terminal that answers neither the
+/// queries nor DA1 costs `PROBE_TIMEOUT`.
 ///
 /// The answers must not reach crossterm. It reads them as key presses. The function runs
 /// before the first `event::poll` and reads the tty itself.
 pub(crate) fn query_cell_size_and_probe(probe: &[u8], answers: usize) -> StartAnswers {
-    let sequence = start_sequence(probe);
     let mut answer = Vec::new();
     // After a timeout, `answer` holds the answers that came in time.
-    query_terminal_into(&sequence, &mut answer, |answer| {
-        start_answers_end(answer, answers)
-    });
+    if let Some(mut tty) = send_to_tty(&start_sequence(probe)) {
+        read_start_answers(
+            &mut tty,
+            &mut answer,
+            answers,
+            Instant::now() + PROBE_TIMEOUT,
+        );
+    }
     start_answers(&answer, answers)
 }
 
+/// Read the start answers until `deadline`. A separate function, so that a test can drive the
+/// two reads with a socket pair.
+///
+/// The first read ends at DA1 and keeps every byte. When an answer is still missing after DA1,
+/// the second read waits for it at most `LATE_ANSWER_GRACE`, and never after `deadline`.
+fn read_start_answers(
+    source: &mut (impl io::Read + std::os::fd::AsFd),
+    answer: &mut Vec<u8>,
+    answers: usize,
+    deadline: Instant,
+) {
+    let read = read_answer(source, answer, deadline, |answer| {
+        start_answers_end(answer, answers)
+    });
+    let missing =
+        device_attributes_end(answer).is_some() && all_answers_end(answer, answers).is_none();
+    if read.is_some() && missing {
+        let grace = deadline.min(Instant::now() + LATE_ANSWER_GRACE);
+        // After the grace, `answer` keeps the answers that came.
+        read_answer(source, answer, grace, |answer| {
+            all_answers_end(answer, answers)
+        });
+    }
+}
+
 /// The cell size query, the foreground query, the Kitty `probe` and DA1, in the order of the
-/// answers. The foreground answer comes before the Kitty answers, so the read waits for it
-/// without an end condition of its own.
+/// answers of most terminals.
 fn start_sequence(probe: &[u8]) -> Vec<u8> {
     let mut sequence = CELL_SIZE_QUERY.to_vec();
     sequence.extend_from_slice(FOREGROUND_QUERY);
@@ -56,16 +95,43 @@ fn start_sequence(probe: &[u8]) -> Vec<u8> {
 }
 
 /// The length of the start answers once all are complete, in any order. The DA1 answer ends
-/// them early.
+/// the first read. When an answer is still missing after DA1, the length is every byte so far,
+/// so that the grace read continues with the complete start of each late answer.
 fn start_answers_end(answer: &[u8], answers: usize) -> Option<usize> {
-    if let Some(attributes) = device_attributes_end(answer) {
-        let others = [
-            cell_size_report_end(answer),
-            string_terminator_ends(answer).last(),
-        ];
-        return Some(others.into_iter().flatten().fold(attributes, usize::max));
+    if device_attributes_end(answer).is_some() {
+        return Some(all_answers_end(answer, answers).unwrap_or(answer.len()));
     }
     Some(cell_size_report_end(answer)?.max(string_terminators_end(answer, answers)?))
+}
+
+/// The end of the last start answer once DA1, the OSC 10 answer and `answers` Kitty answers are
+/// there. Ghostty 1.4 sends the last two after DA1.
+fn all_answers_end(answer: &[u8], answers: usize) -> Option<usize> {
+    let required = [
+        device_attributes_end(answer)?,
+        foreground_end(answer)?,
+        string_terminators_end(answer, answers)?,
+    ];
+    let others = [
+        cell_size_report_end(answer),
+        string_terminator_ends(answer).last(),
+    ];
+    Some(
+        others
+            .into_iter()
+            .flatten()
+            .chain(required)
+            .fold(0, usize::max),
+    )
+}
+
+/// The end of the OSC 10 answer, with BEL or with the string terminator `ESC \`.
+fn foreground_end(answer: &[u8]) -> Option<usize> {
+    let start = find(answer, b"\x1b]10;")?;
+    let body = &answer[start..];
+    let bell = body.iter().position(|&byte| byte == 0x07).map(|at| at + 1);
+    let terminator = find(body, b"\x1b\\").map(|at| at + 2);
+    Some(start + bell.into_iter().chain(terminator).min()?)
 }
 
 fn start_answers(answer: &[u8], answers: usize) -> StartAnswers {
@@ -166,6 +232,12 @@ fn query_terminal_into(
     answer: &mut Vec<u8>,
     end: impl Fn(&[u8]) -> Option<usize>,
 ) -> Option<()> {
+    let mut tty = send_to_tty(sequence)?;
+    read_answer(&mut tty, answer, Instant::now() + PROBE_TIMEOUT, end)
+}
+
+/// Open the tty and send `sequence`. The tty stays open, so that several reads take the answers.
+fn send_to_tty(sequence: &[u8]) -> Option<std::fs::File> {
     let mut tty = std::fs::File::options()
         .read(true)
         .write(true)
@@ -173,7 +245,7 @@ fn query_terminal_into(
         .ok()?;
     tty.write_all(sequence).ok()?;
     tty.flush().ok()?;
-    read_answer(&mut tty, answer, Instant::now() + PROBE_TIMEOUT, end)
+    Some(tty)
 }
 
 /// Read into `answer` until `end` finds the complete answer. `None` at `deadline` or at the end
@@ -259,14 +331,18 @@ fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CELL_SIZE_QUERY, DEVICE_ATTRIBUTES_QUERY, FOREGROUND_QUERY, cell_pixel_size,
-        cell_size_report_end, parse_cell_size_report, parse_foreground, read_answer, start_answers,
+        CELL_SIZE_QUERY, DEVICE_ATTRIBUTES_QUERY, FOREGROUND_QUERY, LATE_ANSWER_GRACE,
+        PROBE_TIMEOUT, all_answers_end, cell_pixel_size, cell_size_report_end, foreground_end,
+        parse_cell_size_report, parse_foreground, read_answer, read_start_answers, start_answers,
         start_answers_end, start_sequence,
     };
     use crossterm::terminal::WindowSize;
     use std::io::Write;
     use std::os::unix::net::UnixStream;
     use std::time::{Duration, Instant};
+
+    /// The OSC 10 answer of a terminal with a light gray foreground.
+    const FOREGROUND: &[u8] = b"\x1b]10;rgb:e6e6/d5d5/c2c2\x1b\\";
 
     #[test]
     fn cell_size_query_follows_xterm() {
@@ -354,6 +430,7 @@ mod tests {
         // The terminal does not answer the animation frame.
         let answer = [cell, transfer, attributes].concat();
         assert_eq!(start_answers_end(&answer, 2), Some(answer.len()));
+        assert_eq!(all_answers_end(&answer, 2), None, "the grace read follows");
         let answers = start_answers(&answer, 2);
         assert_eq!(answers.cell_px, Some((18, 43)));
         assert_eq!(answers.late_answers, 0, "no Kitty answer can come late");
@@ -362,8 +439,16 @@ mod tests {
             Some([cell, transfer].concat().as_slice())
         );
 
-        let typed = [cell, attributes, b"j"].concat();
-        assert_eq!(start_answers_end(&typed, 2), Some(typed.len() - 1));
+        let missing = [cell, attributes, b"j"].concat();
+        assert_eq!(
+            start_answers_end(&missing, 2),
+            Some(missing.len()),
+            "the first read keeps every byte after DA1"
+        );
+        let animation = b"\x1b_Gi=32;OK\x1b\\".as_slice();
+        let complete = [cell, FOREGROUND, transfer, animation, attributes].concat();
+        let typed = [complete.as_slice(), b"j"].concat();
+        assert_eq!(start_answers_end(&typed, 2), Some(complete.len()));
         assert_eq!(
             start_answers_end(b"\x1b[?62;22", 2),
             None,
@@ -374,6 +459,59 @@ mod tests {
             None,
             "the second Kitty answer or the device attributes are missing"
         );
+    }
+
+    #[test]
+    fn ghostty_order_waits_after_da1() {
+        let cell = b"\x1b[6;43;18t".as_slice();
+        let attributes = b"\x1b[?62;22;52c".as_slice();
+        let probe = b"\x1b_Gi=31;OK\x1b\\".as_slice();
+        // Ghostty 1.4 sends DA1 before the OSC 10 answer and the Kitty answer.
+        let answer = [cell, attributes, FOREGROUND, probe].concat();
+        assert_eq!(start_answers_end(&answer, 1), Some(answer.len()));
+        assert_eq!(all_answers_end(&answer, 1), Some(answer.len()));
+        let typed = [answer.as_slice(), b"j"].concat();
+        assert_eq!(all_answers_end(&typed, 1), Some(answer.len()));
+        let answers = start_answers(&answer, 1);
+        assert_eq!(answers.cell_px, Some((18, 43)));
+        assert!(answers.foreground.is_some());
+        assert_eq!(answers.probe.as_deref(), Some(answer.as_slice()));
+        assert_eq!(answers.late_answers, 0);
+
+        let before_foreground = [cell, attributes].concat();
+        assert_eq!(
+            start_answers_end(&before_foreground, 1),
+            Some(before_foreground.len())
+        );
+        assert_eq!(all_answers_end(&before_foreground, 1), None);
+        let half_probe = [cell, attributes, FOREGROUND, b"\x1b_Gi=31;"].concat();
+        assert_eq!(
+            start_answers_end(&half_probe, 1),
+            Some(half_probe.len()),
+            "the first read keeps the start of the probe answer"
+        );
+        assert_eq!(all_answers_end(&half_probe, 1), None);
+    }
+
+    #[test]
+    fn da1_alone_waits_for_missing_answers() {
+        let attributes = b"\x1b[?62;22;52c".as_slice();
+        assert_eq!(start_answers_end(attributes, 1), Some(attributes.len()));
+        assert_eq!(all_answers_end(attributes, 1), None);
+        assert_eq!(all_answers_end(attributes, 0), None, "OSC 10 is missing");
+        let answers = start_answers(attributes, 1);
+        assert_eq!((answers.cell_px, answers.probe), (None, None));
+        assert_eq!(answers.late_answers, 0, "DA1 came");
+    }
+
+    #[test]
+    fn foreground_end_takes_either_terminator() {
+        assert_eq!(foreground_end(FOREGROUND), Some(FOREGROUND.len()));
+        let terminated = b"\x1b]10;rgb:ff/ff/ff\x1b\\".as_slice();
+        assert_eq!(foreground_end(terminated), Some(terminated.len()));
+        assert_eq!(foreground_end(b"x\x1b]10;rgb:ff\x07j"), Some(13));
+        assert_eq!(foreground_end(b"\x1b]10;rgb:ff/ff"), None);
+        assert_eq!(foreground_end(b"\x1b]11;rgb:ff/ff/ff\x07"), None);
     }
 
     #[test]
@@ -497,5 +635,65 @@ mod tests {
             read_answer(&mut tty, &mut answer, past, cell_size_report_end),
             None
         );
+    }
+
+    #[test]
+    fn start_read_takes_answers_after_da1() {
+        let early = b"\x1b[6;43;18t\x1b[?62;22;52c".as_slice();
+        let late = [FOREGROUND, b"\x1b_Gi=31;OK\x1b\\"].concat();
+        let (mut terminal, mut tty) = UnixStream::pair().unwrap();
+        terminal.write_all(early).unwrap();
+        let writer = std::thread::spawn({
+            let late = late.clone();
+            move || {
+                std::thread::sleep(Duration::from_millis(20));
+                terminal.write_all(&late).unwrap();
+                terminal.write_all(b"j").unwrap();
+                terminal
+            }
+        });
+        let mut answer = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        read_start_answers(&mut tty, &mut answer, 1, deadline);
+        drop(writer.join().unwrap());
+        assert_eq!(answer, [early, late.as_slice()].concat());
+        let answers = start_answers(&answer, 1);
+        assert!(answers.foreground.is_some());
+        assert!(answers.probe.unwrap().ends_with(b"\x1b_Gi=31;OK\x1b\\"));
+    }
+
+    #[test]
+    fn start_read_ends_after_grace() {
+        let attributes = b"\x1b[?62;22;52c".as_slice();
+        let (mut terminal, mut tty) = UnixStream::pair().unwrap();
+        terminal.write_all(attributes).unwrap();
+        let mut answer = Vec::new();
+        let start = Instant::now();
+        read_start_answers(&mut tty, &mut answer, 1, start + PROBE_TIMEOUT);
+        let waited = start.elapsed();
+        assert_eq!(answer, attributes);
+        assert!(waited >= LATE_ANSWER_GRACE, "{waited:?}");
+        assert!(
+            waited + Duration::from_millis(50) < PROBE_TIMEOUT,
+            "{waited:?}"
+        );
+    }
+
+    #[test]
+    fn start_read_in_order_skips_grace() {
+        let answer = [
+            b"\x1b[6;43;18t".as_slice(),
+            FOREGROUND,
+            b"\x1b_Gi=31;OK\x1b\\",
+            b"\x1b[?62;22;52c",
+        ]
+        .concat();
+        let (mut terminal, mut tty) = UnixStream::pair().unwrap();
+        terminal.write_all(&answer).unwrap();
+        let mut read = Vec::new();
+        let start = Instant::now();
+        read_start_answers(&mut tty, &mut read, 1, start + Duration::from_secs(2));
+        assert_eq!(read, answer);
+        assert!(start.elapsed() < LATE_ANSWER_GRACE, "{:?}", start.elapsed());
     }
 }
