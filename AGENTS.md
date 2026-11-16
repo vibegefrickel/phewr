@@ -344,8 +344,9 @@ decisions. Read the long form before you change the code that an item names.
   of Ghostty. If the terminal answered at start, the run loop asks again after each resize. The
   read takes every byte of the tty, so a key typed in that millisecond is lost. A terminal that
   answers neither the probes nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time.
-- **Late probe answer:** the read ends at the DA1 answer or when every owed answer came. After a
-  timeout of the whole round trip, `LateAnswerFilter` drops the key events of the late Kitty
+- **Late probe answer:** the read ends when every owed answer came, or at the DA1 answer. Ghostty
+  1.4 sends DA1 before the OSC 10 answer and the Kitty answers. So when an answer is missing at
+  DA1, a second read waits at most `LATE_ANSWER_GRACE` (100 ms) for it. After a timeout of the whole round trip, `LateAnswerFilter` drops the key events of the late Kitty
   answers and of a late OSC 10 answer. `AnswerKeys` reads every Kitty answer first, also a late
   probe answer. Each one lowers the owed count of the filter (`kitty_answers_came`). The filter
   sees only the rest, in practice a late OSC 10 answer.

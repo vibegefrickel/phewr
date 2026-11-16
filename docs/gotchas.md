@@ -253,16 +253,20 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   (`ESC ] 10 ; ? BEL`), the `a=q` transfer probe,
   the animation probe and the DA1 query `ESC [ c`. The animation probe is a silent 1x1 image
   (`a=t,q=2,i=32`), one frame `a=f,i=32` that the terminal answers, and `a=d,d=I,i=32`. The read
-  ends at the DA1 answer, or when every owed answer came. After either, no Kitty answer can come
-  late. `LateAnswerFilter` in `keys/mod.rs` is armed only after a timeout of the whole round
+  ends when every owed answer came, or at the DA1 answer. Since 2026-11-16, an answer that is
+  missing at DA1 gets a second read of at most `LATE_ANSWER_GRACE` (100 ms): Ghostty 1.4 sends
+  DA1 before the OSC 10 answer and the Kitty answers. Without the grace, the temp-file probe saw
+  no `OK` and picked `t=d`, and the late answers reached the keys as text. An OSC 10 answer that
+  comes after the grace still reaches the keys, because the read owes nothing after DA1.
+  `LateAnswerFilter` in `keys/mod.rs` is armed only after a timeout of the whole round
   trip. It drops the key events of each owed late answer: a Kitty answer from Alt+`_` to
   Alt+`\`, and the OSC 10 answer from Alt+`]` to Ctrl+`g` (BEL) or Alt+`\`. A missing OSC 10
   answer counts as owed after a timeout. A late DA1 answer is no key press: crossterm keeps it
   as an internal event. Since the self check (2026-11-11), `AnswerKeys` reads every Kitty answer
   before the filter, also a late probe answer. Each whole Kitty answer lowers the owed count of
   the filter (`LateAnswerFilter::kitty_answers_came`), so the filter never swallows an answer of
-  the self check. A terminal answers in order, so the late probe answers come before the answers
-  of the self check. The filter sees only the rest, in practice a late OSC 10 answer.
+  the self check. A terminal answers the Kitty commands in order, so the late probe answers come
+  before the answers of the self check. The filter sees only the rest, in practice a late OSC 10 answer.
 - **Self check (2026-11-11):** when the self check is on, the engine places with `q=1`
   (`Screen::with_self_check`, the argument `errors` of `place_as_to`). The terminal then answers
   an error for a placement of a picture that it does not hold, `ENOENT: image not found`. A
