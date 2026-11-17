@@ -7,6 +7,7 @@ use super::{
 use crate::app::ViewMode;
 use crate::config::Config;
 use crate::pictures::kitty::answers::ANSWER_WAIT;
+use crate::pictures::kitty::query::LateAnswers;
 use crate::pictures::kitty::screen::Screen;
 use crate::pictures::test_support::key_events;
 use crate::test_support::{app, app_with, app_with_files, gallery_app, test_dir, wait_until};
@@ -318,11 +319,19 @@ fn state_starts_without_status() {
     assert_eq!(state.video.player, crate::config::VideoPlayer::Window);
 }
 
+/// A filter that owes one late Kitty answer and no OSC 10 answer.
+fn owing_kitty_answer() -> crate::keys::LateAnswerFilter {
+    crate::keys::LateAnswerFilter::new(LateAnswers {
+        kitty: 1,
+        foreground: false,
+    })
+}
+
 #[test]
 fn late_answer_keeps_note() {
     let mut app = gallery_app(3);
     let mut state = LoopState::new(&Config::default());
-    state.late_answers = crate::keys::LateAnswerFilter::new(1);
+    state.late_answers = owing_kitty_answer();
     state.status = Some("note".into());
     let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
     assert!(!handle_input(&mut app, &mut state, &alt_underscore).unwrap());
@@ -387,7 +396,7 @@ fn self_check_answer_wins_over_an_owed_probe_answer() {
     app.screen.record(7, 16);
     let mut state = LoopState::new(&Config::default());
     // The probe answer timed out and never comes. The first Kitty answer is an ENOENT.
-    state.late_answers = crate::keys::LateAnswerFilter::new(1);
+    state.late_answers = owing_kitty_answer();
     for event in key_events(b"\x1b_Gi=7,p=1;ENOENT: image not found\x1b\\") {
         assert!(!handle_input(&mut app, &mut state, &event).unwrap());
     }
@@ -406,7 +415,7 @@ fn late_probe_answer_then_self_check_answer() {
     app.screen = Screen::default().with_self_check(true);
     app.screen.record(7, 16);
     let mut state = LoopState::new(&Config::default());
-    state.late_answers = crate::keys::LateAnswerFilter::new(1);
+    state.late_answers = owing_kitty_answer();
     let mut input = b"\x1b_Gi=31;OK\x1b\\".to_vec();
     input.extend_from_slice(b"\x1b_Gi=7,p=1;ENOENT: image not found\x1b\\");
     for event in key_events(&input) {
@@ -414,6 +423,32 @@ fn late_probe_answer_then_self_check_answer() {
     }
     assert!(app.screen.has_lost());
     assert_eq!(app.gallery.cursor, 0);
+}
+
+#[test]
+fn self_check_answer_leaves_a_late_foreground_owed() {
+    let mut app = gallery_app(3);
+    app.screen = Screen::default().with_self_check(true);
+    app.screen.record(7, 16);
+    let mut state = LoopState::new(&Config::default());
+    state.late_answers = crate::keys::LateAnswerFilter::new(LateAnswers {
+        kitty: 0,
+        foreground: true,
+    });
+    // An ENOENT that nobody owes, then the late OSC 10 answer. Its `/` opens the search.
+    let mut input = b"\x1b_Gi=7,p=1;ENOENT: image not found\x1b\\".to_vec();
+    input.extend_from_slice(b"\x1b]10;rgb:ff/ff/ff\x1b\\");
+    for event in key_events(&input) {
+        assert!(!handle_input(&mut app, &mut state, &event).unwrap());
+    }
+    assert!(!release_held(&mut app, &mut state, Instant::now() + ANSWER_WAIT).unwrap());
+    assert!(app.screen.has_lost());
+    assert!(!app.gallery.search_active, "no key of the answer ran");
+    let q = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+    assert!(
+        handle_input(&mut app, &mut state, &q).unwrap(),
+        "the answer ended"
+    );
 }
 
 #[test]

@@ -24,6 +24,16 @@ use super::{DisplayOptions, EMIT_PASS_BYTES, KittyBackend, Pixels};
 use ratatui::layout::Rect;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
+
+/// The most losses of one picture within `LOSS_WINDOW` that the screen answers with a new
+/// transfer. When the store of the terminal is smaller than the budget, each transfer can evict
+/// another picture on the screen, and its `ENOENT` would bring the next transfer at the speed of
+/// the round trip.
+const MAX_LOSSES: usize = 3;
+
+/// The time within which `MAX_LOSSES` losses of one picture stop its new transfers.
+const LOSS_WINDOW: Duration = Duration::from_secs(10);
 
 /// The start and the end of a synchronized update: the terminal shows the bytes between them in
 /// one step. The mode is not a counter, so an app can put one update around the cells of a frame
@@ -263,6 +273,11 @@ pub(crate) struct Screen {
     self_check: bool,
     /// The terminal lost a picture since the last flush.
     lost_any: bool,
+    /// The times of the recent losses by picture id, within `LOSS_WINDOW`.
+    losses: BTreeMap<u32, Vec<Instant>>,
+    /// The pictures whose `ENOENT` the loss limit ignored, with the end of their window. After
+    /// that end, [`Screen::release_held_losses`] marks them lost, and the next flush sends them.
+    held: BTreeMap<u32, Instant>,
 }
 
 impl Default for Screen {
@@ -289,6 +304,8 @@ impl Screen {
             waiting: Vec::new(),
             self_check: false,
             lost_any: false,
+            losses: BTreeMap::new(),
+            held: BTreeMap::new(),
         }
     }
 
@@ -304,11 +321,46 @@ impl Screen {
     /// next flush that places it sends its pixels again. An answer for a picture that the screen
     /// no longer stores changes nothing. Returns `true` when the screen lost a picture.
     pub(crate) fn answer(&mut self, answer: &Answer) -> bool {
+        self.answer_at(answer, Instant::now())
+    }
+
+    /// `Screen::answer` with the clock of the loss limit. After `MAX_LOSSES` losses of a picture
+    /// within `LOSS_WINDOW`, its next `ENOENT` changes nothing, so a test needs no sleep.
+    pub(crate) fn answer_at(&mut self, answer: &Answer, now: Instant) -> bool {
         if !answer.is_missing() || !self.store.contains(answer.id) {
             return false;
         }
+        self.losses.retain(|_, times| {
+            times.retain(|&at| now.saturating_duration_since(at) < LOSS_WINDOW);
+            !times.is_empty()
+        });
+        let times = self.losses.entry(answer.id).or_default();
+        if let Some(&oldest) = times.first()
+            && times.len() >= MAX_LOSSES
+        {
+            self.held.insert(answer.id, oldest + LOSS_WINDOW);
+            return false;
+        }
+        times.push(now);
         self.forget_lost(answer.id);
         true
+    }
+
+    /// Marks each picture lost whose `ENOENT` the loss limit ignored and whose window ended at
+    /// `now`. Without this, the cell stays empty until a new placement brings a new `ENOENT`.
+    pub(crate) fn release_held_losses(&mut self, now: Instant) {
+        let due: Vec<u32> = self
+            .held
+            .iter()
+            .filter(|&(_, &end)| end <= now)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in due {
+            self.held.remove(&id);
+            if self.store.contains(id) {
+                self.forget_lost(id);
+            }
+        }
     }
 
     /// True when the terminal lost a picture since the last flush. The app then writes a frame
@@ -619,6 +671,7 @@ impl Screen {
     fn forget(&mut self, id: u32) -> bool {
         self.placed.retain(|&(placed, _), _| placed != id);
         self.resend.remove(&id);
+        self.held.remove(&id);
         let stored = self.store.contains(id);
         self.store.remove(id);
         stored

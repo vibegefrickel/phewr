@@ -2,12 +2,13 @@
 //! the recovery after a clear and after a focus gain, the budget, the byte cap of a pass, the
 //! order of the screen, the pixel format, the layers, both placement policies and the self check.
 
-use super::{Placements, Placing, Screen, Update};
+use super::{LOSS_WINDOW, MAX_LOSSES, Placements, Placing, Screen, Update};
 use crate::pictures::kitty::answers::{Answer, AnswerReader};
 use crate::pictures::kitty::protocol::temp_file_paths;
 use crate::pictures::kitty::{KittyBackend, Pixels, Transfer};
 use ratatui::layout::Rect;
 use std::io::Write;
+use std::time::{Duration, Instant};
 
 const RGB: [u8; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const BEGIN: &str = "\x1b[?2026h\x1b7";
@@ -796,4 +797,83 @@ fn an_answer_for_an_unknown_picture_changes_nothing() {
     assert!(!screen.answer(&other_error), "only ENOENT marks a loss");
     assert!(screen.stores(8));
     assert_eq!(update(&mut screen, &[(8, cells)], &[]), "");
+}
+
+/// Loses the picture 7 on `cells` `MAX_LOSSES` times, one second apart from `start`, and sends
+/// it again after each loss. Returns the time of the last loss.
+fn lose_to_the_limit(screen: &mut Screen, cells: Rect, start: Instant) -> Instant {
+    let mut now = start;
+    for loss in 0..MAX_LOSSES {
+        if loss > 0 {
+            now += Duration::from_secs(1);
+        }
+        assert!(screen.answer_at(&missing(7, 1), now), "loss {loss}");
+        assert_eq!(
+            update(screen, &[(7, cells)], &[]),
+            format!("{BEGIN}{}{END}", sent(7, 1, cells)),
+            "loss {loss} sends 7 again"
+        );
+    }
+    now
+}
+
+#[test]
+fn a_picture_that_keeps_getting_lost_stops_going_out() {
+    let mut screen = Screen::default().with_self_check(true);
+    let cells = Rect::new(0, 0, 4, 2);
+    update(&mut screen, &[(7, cells)], &[]);
+    let last = lose_to_the_limit(&mut screen, cells, Instant::now());
+
+    let next = last + Duration::from_secs(1);
+    assert!(!screen.answer_at(&missing(7, 1), next), "above the limit");
+    assert!(!screen.has_lost());
+    assert!(screen.stores(7));
+    assert_eq!(
+        update(&mut screen, &[(7, cells)], &[]),
+        "",
+        "no new transfer"
+    );
+}
+
+#[test]
+fn a_loss_after_the_window_sends_again() {
+    let mut screen = Screen::default().with_self_check(true);
+    let cells = Rect::new(0, 0, 4, 2);
+    update(&mut screen, &[(7, cells)], &[]);
+    let start = Instant::now();
+    lose_to_the_limit(&mut screen, cells, start);
+
+    assert!(
+        screen.answer_at(&missing(7, 1), start + LOSS_WINDOW),
+        "the first loss left the window"
+    );
+    assert!(screen.has_lost());
+    assert_eq!(
+        update(&mut screen, &[(7, cells)], &[]),
+        format!("{BEGIN}{}{END}", sent(7, 1, cells))
+    );
+}
+
+#[test]
+fn a_held_picture_goes_out_again_after_the_window() {
+    let mut screen = Screen::default().with_self_check(true);
+    let cells = Rect::new(0, 0, 4, 2);
+    update(&mut screen, &[(7, cells)], &[]);
+    let start = Instant::now();
+    let last = lose_to_the_limit(&mut screen, cells, start);
+    assert!(!screen.answer_at(&missing(7, 1), last), "above the limit");
+
+    let early = LOSS_WINDOW.checked_sub(Duration::from_millis(1)).unwrap();
+    screen.release_held_losses(start + early);
+    assert!(!screen.has_lost(), "the window did not end");
+    assert_eq!(update(&mut screen, &[(7, cells)], &[]), "");
+
+    screen.release_held_losses(start + LOSS_WINDOW);
+    assert!(screen.has_lost(), "no new ENOENT is necessary");
+    assert_eq!(
+        update(&mut screen, &[(7, cells)], &[]),
+        format!("{BEGIN}{}{END}", sent(7, 1, cells))
+    );
+    screen.release_held_losses(start + LOSS_WINDOW * 2);
+    assert!(!screen.has_lost(), "one release per held loss");
 }

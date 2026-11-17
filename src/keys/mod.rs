@@ -7,6 +7,7 @@ pub(crate) mod mouse;
 pub(crate) mod video;
 
 use crate::app::{App, ViewMode};
+use crate::pictures::kitty::query::LateAnswers;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use fullscreen::handle_fullscreen_key;
 use gallery::{handle_gallery_key, handle_search_key};
@@ -23,40 +24,42 @@ use video::handle_video_key;
 /// Unfiltered, those keys zoom, jump and open the info panel. Nothing in phewr uses Alt+`_` or
 /// Alt+`]`, and a key that fits no answer ends the swallow.
 ///
+/// The filter counts the owed Kitty answers and the owed OSC 10 answer apart. It swallows an
+/// Alt+`_` answer only while a Kitty answer is owed, and an Alt+`]` answer only while the OSC 10
+/// answer is owed.
+///
 /// The run loop reads every Kitty answer with `AnswerKeys` first, so the self check gets each
-/// `ENOENT`. Each Kitty answer that it read counts here as one late answer less
-/// ([`LateAnswerFilter::kitty_answers_came`]). A terminal answers the Kitty commands in order, so
-/// the late probe answers come before the answers of the self check.
+/// `ENOENT`. Each Kitty answer that it read counts here as one late Kitty answer less
+/// ([`LateAnswerFilter::kitty_answers_came`]), and never as the OSC 10 answer. Only a cut Kitty
+/// answer that `AnswerKeys` gives back reaches this filter.
 ///
 /// Ghostty 1.4 sends DA1 before the OSC 10 answer and the Kitty answers, so the start read waits
 /// `LATE_ANSWER_GRACE` after DA1. When the OSC 10 answer is still missing then, it stays owed, and
-/// this filter drops it when it comes. `AnswerKeys` takes a late Kitty answer.
+/// this filter drops it when it comes.
 #[derive(Debug, Default)]
 pub(crate) struct LateAnswerFilter {
-    /// The answers that can still come late. Each one ends with Alt+`\\`, an OSC answer also
-    /// with Ctrl+`g`.
-    owed: usize,
+    /// The owed answers. Each one ends with Alt+`\\`, an OSC answer also with Ctrl+`g`.
+    owed: LateAnswers,
     /// The opener of the answer in progress: `_` for Kitty, `]` for OSC.
     inside: Option<char>,
 }
 
 impl LateAnswerFilter {
-    pub(crate) fn new(owed: usize) -> Self {
+    pub(crate) const fn new(owed: LateAnswers) -> Self {
         Self { owed, inside: None }
     }
 
     /// True when `event` belongs to a late answer.
     pub(crate) fn swallows(&mut self, event: &Event) -> bool {
-        if self.owed == 0 {
-            return false;
-        }
         let Event::Key(key) = event else {
             return false;
         };
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char(open @ ('_' | ']')) if alt && self.inside.is_none() => {
+            KeyCode::Char(open @ ('_' | ']'))
+                if alt && self.inside.is_none() && self.owes(open) =>
+            {
                 self.inside = Some(open);
                 true
             }
@@ -74,15 +77,27 @@ impl LateAnswerFilter {
         }
     }
 
-    /// `count` Kitty answers came through `AnswerKeys`: as many answers less are owed.
-    pub(crate) fn kitty_answers_came(&mut self, count: usize) {
-        self.owed = self.owed.saturating_sub(count);
+    /// `count` Kitty answers came through `AnswerKeys`: as many Kitty answers less are owed.
+    pub(crate) const fn kitty_answers_came(&mut self, count: usize) {
+        self.owed.kitty = self.owed.kitty.saturating_sub(count);
     }
 
-    /// The last key of an answer: one answer less is owed.
+    /// True when an answer with the opener `open` is owed.
+    const fn owes(&self, open: char) -> bool {
+        if open == ']' {
+            self.owed.foreground
+        } else {
+            self.owed.kitty > 0
+        }
+    }
+
+    /// The last key of an answer: that answer is no longer owed.
     fn end_answer(&mut self) -> bool {
-        self.inside = None;
-        self.owed -= 1;
+        if self.inside.take() == Some(']') {
+            self.owed.foreground = false;
+        } else {
+            self.owed.kitty = self.owed.kitty.saturating_sub(1);
+        }
         true
     }
 }
@@ -140,7 +155,7 @@ fn step_key(app: &mut App, code: KeyCode) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LateAnswerFilter, handle_event};
+    use super::{LateAnswerFilter, LateAnswers, handle_event};
     use crate::app::ViewMode;
     use crate::test_support::{char_key, fullscreen_app, gallery_app, press};
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -179,9 +194,14 @@ mod tests {
         keys
     }
 
+    /// A filter that owes `kitty` Kitty answers and, with `foreground`, the OSC 10 answer.
+    fn owing(kitty: usize, foreground: bool) -> LateAnswerFilter {
+        LateAnswerFilter::new(LateAnswers { kitty, foreground })
+    }
+
     #[test]
     fn armed_filter_drops_late_answer() {
-        let mut filter = LateAnswerFilter::new(1);
+        let mut filter = owing(1, false);
         let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert!(!filter.swallows(&j), "a key before the answer");
 
@@ -199,7 +219,7 @@ mod tests {
     /// A start that owed two answers and got none in time drops both late answers.
     #[test]
     fn filter_drops_two_late_answers() {
-        let mut filter = LateAnswerFilter::new(2);
+        let mut filter = owing(2, false);
         for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\") {
             assert!(filter.swallows(&key), "{key:?}");
         }
@@ -211,7 +231,7 @@ mod tests {
     #[test]
     fn filter_drops_late_foreground_answer() {
         let bel = Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
-        let mut filter = LateAnswerFilter::new(2);
+        let mut filter = owing(1, true);
         let mut keys = late_answer_keys("\x1b]10;rgb:ffff/ffff/ffff");
         keys.push(bel.clone());
         keys.extend(late_answer_keys("\x1b_Gi=31;OK\x1b\\"));
@@ -221,7 +241,7 @@ mod tests {
         let zero = Event::Key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
         assert!(!filter.swallows(&zero), "both answers came");
 
-        let mut filter = LateAnswerFilter::new(1);
+        let mut filter = owing(0, true);
         for key in late_answer_keys("\x1b]10;rgb:ff/ff/ff\x1b\\") {
             assert!(filter.swallows(&key), "{key:?}");
         }
@@ -233,7 +253,7 @@ mod tests {
 
     #[test]
     fn filter_drops_error_answer() {
-        let mut filter = LateAnswerFilter::new(1);
+        let mut filter = owing(1, false);
         for key in late_answer_keys("\x1b_Gi=31;EBADF:could not open file\x1b\\") {
             assert!(filter.swallows(&key), "{key:?}");
         }
@@ -241,7 +261,7 @@ mod tests {
 
     #[test]
     fn foreign_key_ends_swallow() {
-        let mut filter = LateAnswerFilter::new(1);
+        let mut filter = owing(1, false);
         let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
         assert!(filter.swallows(&alt_underscore));
         let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -257,9 +277,39 @@ mod tests {
         for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\") {
             assert!(!filter.swallows(&key), "{key:?}");
         }
-        let mut filter = LateAnswerFilter::new(0);
+        let mut filter = owing(0, false);
         let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
         assert!(!filter.swallows(&alt_underscore));
+    }
+
+    /// The Kitty answers that `AnswerKeys` read, also a self check `ENOENT` that nobody owes,
+    /// never pay for the owed OSC 10 answer.
+    #[test]
+    fn kitty_answers_leave_the_foreground_owed() {
+        let mut filter = owing(1, true);
+        filter.kitty_answers_came(3);
+        for key in late_answer_keys("\x1b]10;rgb:ff/ff/ff\x1b\\") {
+            assert!(filter.swallows(&key), "{key:?}");
+        }
+        let zero = Event::Key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+        assert!(!filter.swallows(&zero), "the OSC 10 answer came");
+    }
+
+    /// Each opener needs its own owed answer.
+    #[test]
+    fn filter_swallows_only_the_owed_kind() {
+        let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
+        let alt_bracket = Event::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT));
+        let mut filter = owing(0, true);
+        assert!(!filter.swallows(&alt_underscore), "no Kitty answer owed");
+        let mut filter = owing(1, false);
+        assert!(!filter.swallows(&alt_bracket), "no OSC 10 answer owed");
+        for key in late_answer_keys("\x1b]10;rgb:ff/ff/ff\x1b\\") {
+            assert!(!filter.swallows(&key), "{key:?}");
+        }
+        for key in late_answer_keys("\x1b_Gi=31;OK\x1b\\") {
+            assert!(filter.swallows(&key), "{key:?}");
+        }
     }
 
     #[test]

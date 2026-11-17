@@ -20,12 +20,19 @@ pub(crate) struct StartAnswers {
     pub(crate) cell_px: Option<(u32, u32)>,
     /// The bytes up to the end of the last Kitty answer that came in time.
     pub(crate) probe: Option<Vec<u8>>,
-    /// The owed answers that can still come late, as key presses. After a device attributes
-    /// answer, no Kitty answer is owed, but a missing OSC 10 answer still is: Ghostty 1.4 sends
-    /// DA1 before it.
-    pub(crate) late_answers: usize,
+    /// The owed answers that can still come late, as key presses.
+    pub(crate) late_answers: LateAnswers,
     /// The foreground color of the terminal (OSC 10), the color of the grid icons.
     pub(crate) foreground: Option<[u8; 3]>,
+}
+
+/// The start answers that did not come in time and can still come late, as key presses.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LateAnswers {
+    /// The owed Kitty answers. After a device attributes answer, no Kitty answer is owed.
+    pub(crate) kitty: usize,
+    /// The OSC 10 answer is owed. It stays owed after DA1: Ghostty 1.4 sends DA1 before it.
+    pub(crate) foreground: bool,
 }
 
 /// The primary device attributes query (DA1). Every terminal answers it. Most terminals answer
@@ -37,7 +44,7 @@ const DEVICE_ATTRIBUTES_QUERY: &[u8] = b"\x1b[c";
 const FOREGROUND_QUERY: &[u8] = b"\x1b]10;?\x07";
 
 /// Send the cell size query, the foreground query, the Kitty `probe` and DA1 in one write, and
-/// wait for the cell size and for `answers` Kitty answers.
+/// wait for the cell size, the OSC 10 answer and `answers` Kitty answers.
 ///
 /// The DA1 answer ends the wait even when the terminal skips an answer. Ghostty 1.4 sends DA1
 /// before the OSC 10 answer and the Kitty answers, so after DA1 the read waits at most
@@ -97,12 +104,18 @@ fn start_sequence(probe: &[u8]) -> Vec<u8> {
 
 /// The length of the start answers once all are complete, in any order. The DA1 answer ends
 /// the first read. When an answer is still missing after DA1, the length is every byte so far,
-/// so that the grace read continues with the complete start of each late answer.
+/// so that the grace read continues with the complete start of each late answer. Before DA1,
+/// the read waits for the OSC 10 answer too, so that it cannot come after the end of the read.
 fn start_answers_end(answer: &[u8], answers: usize) -> Option<usize> {
     if device_attributes_end(answer).is_some() {
         return Some(all_answers_end(answer, answers).unwrap_or(answer.len()));
     }
-    Some(cell_size_report_end(answer)?.max(string_terminators_end(answer, answers)?))
+    let required = [
+        cell_size_report_end(answer)?,
+        foreground_end(answer)?,
+        string_terminators_end(answer, answers)?,
+    ];
+    Some(required.into_iter().fold(0, usize::max))
 }
 
 /// The end of the last start answer once DA1, the OSC 10 answer and `answers` Kitty answers are
@@ -145,12 +158,15 @@ fn start_answers(answer: &[u8], answers: usize) -> StartAnswers {
         cell_px: parse_cell_size_report(answer),
         foreground,
         probe: last_end.map(|end| answer[..end].to_vec()),
-        // A missing OSC 10 answer can come late too, before the Kitty answers, and after DA1
-        // in Ghostty 1.4.
-        late_answers: if probe_complete {
-            usize::from(attributes && foreground.is_none())
-        } else {
-            answers.saturating_sub(received) + usize::from(foreground.is_none())
+        late_answers: LateAnswers {
+            kitty: if probe_complete {
+                0
+            } else {
+                answers.saturating_sub(received)
+            },
+            // A missing OSC 10 answer can come late in any order: before the Kitty answers,
+            // and after DA1 in Ghostty 1.4.
+            foreground: foreground.is_none(),
         },
     }
 }
@@ -333,7 +349,7 @@ fn cell_pixel_size(ws: &crossterm::terminal::WindowSize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CELL_SIZE_QUERY, DEVICE_ATTRIBUTES_QUERY, FOREGROUND_QUERY, LATE_ANSWER_GRACE,
+        CELL_SIZE_QUERY, DEVICE_ATTRIBUTES_QUERY, FOREGROUND_QUERY, LATE_ANSWER_GRACE, LateAnswers,
         PROBE_TIMEOUT, all_answers_end, cell_pixel_size, cell_size_report_end, foreground_end,
         parse_cell_size_report, parse_foreground, read_answer, read_start_answers, start_answers,
         start_answers_end, start_sequence,
@@ -379,16 +395,24 @@ mod tests {
     fn start_read_takes_any_order() {
         let cell = b"\x1b[6;43;18t".as_slice();
         let probe = b"\x1b_Gi=31;OK\x1b\\".as_slice();
-        for answer in [[cell, probe].concat(), [probe, cell].concat()] {
+        for answer in [
+            [cell, FOREGROUND, probe].concat(),
+            [probe, cell, FOREGROUND].concat(),
+        ] {
             assert_eq!(start_answers_end(&answer, 1), Some(answer.len()));
             let answers = start_answers(&answer, 1);
             assert_eq!(answers.cell_px, Some((18, 43)));
-            assert_eq!(answers.late_answers, 0);
+            assert_eq!(answers.late_answers, LateAnswers::default());
             let probe_answer = answers.probe.unwrap();
             assert!(probe_answer.ends_with(probe), "{probe_answer:?}");
         }
-        let typed = [cell, probe, b"j"].concat();
+        let typed = [cell, FOREGROUND, probe, b"j"].concat();
         assert_eq!(start_answers_end(&typed, 1), Some(typed.len() - 1));
+        assert_eq!(
+            start_answers_end(&[cell, probe].concat(), 1),
+            None,
+            "the OSC 10 answer is missing"
+        );
         assert_eq!(
             start_answers_end(cell, 1),
             None,
@@ -406,20 +430,24 @@ mod tests {
         let cell = b"\x1b[6;43;18t".as_slice();
         let transfer = b"\x1b_Gi=31;OK\x1b\\".as_slice();
         let animation = b"\x1b_Gi=32;OK\x1b\\".as_slice();
-        let answer = [transfer, cell, animation].concat();
+        let answer = [transfer, cell, FOREGROUND, animation].concat();
         assert_eq!(start_answers_end(&answer, 2), Some(answer.len()));
         let answers = start_answers(&answer, 2);
-        assert_eq!(answers.late_answers, 0);
+        assert_eq!(answers.late_answers, LateAnswers::default());
         assert_eq!(answers.probe.as_deref(), Some(answer.as_slice()));
 
         let first_only = [cell, transfer].concat();
         assert_eq!(start_answers_end(&first_only, 2), None);
         let answers = start_answers(&first_only, 2);
-        assert!(answers.late_answers > 0, "the second answer can still come");
-        assert_eq!(answers.probe.as_deref(), Some(first_only.as_slice()));
         assert_eq!(
-            start_answers_end(cell, 0),
-            Some(cell.len()),
+            answers.late_answers.kitty, 1,
+            "the second answer can still come"
+        );
+        assert_eq!(answers.probe.as_deref(), Some(first_only.as_slice()));
+        let no_kitty = [cell, FOREGROUND].concat();
+        assert_eq!(
+            start_answers_end(&no_kitty, 0),
+            Some(no_kitty.len()),
             "no Kitty answer owed"
         );
     }
@@ -436,7 +464,11 @@ mod tests {
         let answers = start_answers(&answer, 2);
         assert_eq!(answers.cell_px, Some((18, 43)));
         assert_eq!(
-            answers.late_answers, 1,
+            answers.late_answers,
+            LateAnswers {
+                kitty: 0,
+                foreground: true
+            },
             "no Kitty answer can come late, but the missing OSC 10 answer can"
         );
         assert_eq!(
@@ -481,7 +513,7 @@ mod tests {
         assert_eq!(answers.cell_px, Some((18, 43)));
         assert!(answers.foreground.is_some());
         assert_eq!(answers.probe.as_deref(), Some(answer.as_slice()));
-        assert_eq!(answers.late_answers, 0);
+        assert_eq!(answers.late_answers, LateAnswers::default());
 
         let before_foreground = [cell, attributes].concat();
         assert_eq!(
@@ -507,12 +539,20 @@ mod tests {
         let answers = start_answers(attributes, 1);
         assert_eq!((answers.cell_px, answers.probe), (None, None));
         assert_eq!(
-            answers.late_answers, 1,
+            answers.late_answers,
+            LateAnswers {
+                kitty: 0,
+                foreground: true
+            },
             "after DA1, only the OSC 10 answer is owed"
         );
         let color = b"\x1b]10;rgb:ff/ff/ff\x07".as_slice();
         let answers = start_answers(&[attributes, color].concat(), 1);
-        assert_eq!(answers.late_answers, 0, "DA1 and OSC 10 came");
+        assert_eq!(
+            answers.late_answers,
+            LateAnswers::default(),
+            "DA1 and OSC 10 came"
+        );
     }
 
     #[test]
@@ -541,7 +581,7 @@ mod tests {
             assert_eq!(foreground[0], 255);
             assert!((128..=137).contains(&foreground[1]), "{foreground:?}");
             assert_eq!(foreground[2], 0);
-            assert_eq!(answers.late_answers, 0);
+            assert_eq!(answers.late_answers, LateAnswers::default());
         }
         assert_eq!(
             start_answers_end(&[cell, b"\x1b]10;rgb:ff/ff/ff\x1b\\"].concat(), 1),
@@ -558,7 +598,13 @@ mod tests {
         let only_cell = start_answers(b"\x1b[6;43;18t", 1);
         assert_eq!(only_cell.cell_px, Some((18, 43)));
         assert_eq!(only_cell.probe, None);
-        assert!(only_cell.late_answers > 0);
+        assert_eq!(
+            only_cell.late_answers,
+            LateAnswers {
+                kitty: 1,
+                foreground: true
+            }
+        );
         let only_probe = start_answers(b"\x1b_Gi=31;OK\x1b\\", 1);
         assert_eq!(only_probe.cell_px, None);
         assert_eq!(
@@ -567,9 +613,23 @@ mod tests {
         );
         let nothing = start_answers(b"", 1);
         assert_eq!((nothing.cell_px, nothing.probe), (None, None));
-        assert_eq!(nothing.late_answers, 2, "the OSC 10 and the Kitty answer");
+        assert_eq!(
+            nothing.late_answers,
+            LateAnswers {
+                kitty: 1,
+                foreground: true
+            },
+            "the OSC 10 and the Kitty answer"
+        );
         let with_color = start_answers(b"\x1b]10;rgb:ff/ff/ff\x07", 1);
-        assert_eq!(with_color.late_answers, 1, "only the Kitty answer");
+        assert_eq!(
+            with_color.late_answers,
+            LateAnswers {
+                kitty: 1,
+                foreground: false
+            },
+            "only the Kitty answer"
+        );
     }
 
     fn window(columns: u16, rows: u16, width: u16, height: u16) -> WindowSize {
@@ -706,5 +766,67 @@ mod tests {
         read_start_answers(&mut tty, &mut read, 1, start + Duration::from_secs(2));
         assert_eq!(read, answer);
         assert!(start.elapsed() < LATE_ANSWER_GRACE, "{:?}", start.elapsed());
+    }
+
+    /// The Kitty answer, then DA1, then the OSC 10 answer: the first read does not end before
+    /// DA1, and the grace read takes the OSC 10 answer. No answer can come late.
+    #[test]
+    fn kitty_da1_foreground_order_waits_for_foreground() {
+        let early = b"\x1b[6;43;18t\x1b_Gi=31;OK\x1b\\".as_slice();
+        let attributes = b"\x1b[?62;22;52c".as_slice();
+        assert_eq!(
+            start_answers_end(early, 1),
+            None,
+            "the OSC 10 answer is owed"
+        );
+        let (mut terminal, mut tty) = UnixStream::pair().unwrap();
+        terminal.write_all(early).unwrap();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            terminal.write_all(attributes).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            terminal.write_all(FOREGROUND).unwrap();
+            terminal.write_all(b"0").unwrap();
+            terminal
+        });
+        let mut answer = Vec::new();
+        read_start_answers(
+            &mut tty,
+            &mut answer,
+            1,
+            Instant::now() + Duration::from_secs(2),
+        );
+        drop(writer.join().unwrap());
+        assert_eq!(answer, [early, attributes, FOREGROUND].concat());
+        let answers = start_answers(&answer, 1);
+        assert!(answers.foreground.is_some());
+        assert_eq!(answers.late_answers, LateAnswers::default());
+    }
+
+    /// A terminal without OSC 10 ends the read at DA1 and its grace. The OSC 10 answer stays
+    /// owed, no Kitty answer does.
+    #[test]
+    fn terminal_without_foreground_ends_at_da1() {
+        let answer = b"\x1b[6;43;18t\x1b_Gi=31;OK\x1b\\\x1b[?62;22;52c".as_slice();
+        let (mut terminal, mut tty) = UnixStream::pair().unwrap();
+        terminal.write_all(answer).unwrap();
+        let mut read = Vec::new();
+        let start = Instant::now();
+        read_start_answers(&mut tty, &mut read, 1, start + PROBE_TIMEOUT);
+        let waited = start.elapsed();
+        assert_eq!(read, answer);
+        assert!(
+            waited + Duration::from_millis(50) < PROBE_TIMEOUT,
+            "{waited:?}"
+        );
+        let answers = start_answers(&read, 1);
+        assert_eq!(answers.foreground, None);
+        assert_eq!(
+            answers.late_answers,
+            LateAnswers {
+                kitty: 0,
+                foreground: true
+            }
+        );
     }
 }

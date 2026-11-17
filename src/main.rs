@@ -61,7 +61,8 @@ use crossterm::{
 };
 use image_list::SharedImageList;
 use pictures::kitty::query::{
-    StartAnswers, query_cell_pixel_size, query_cell_size_and_probe, window_cell_pixel_size,
+    LateAnswers, StartAnswers, query_cell_pixel_size, query_cell_size_and_probe,
+    window_cell_pixel_size,
 };
 use pictures::kitty::{KittyBackend, Loops};
 use run_loop::{LoopState, run};
@@ -204,8 +205,8 @@ fn apply_cli_overrides(config: &mut Config, interval: Option<f64>, info: bool) {
 struct StartProbe {
     graphics: KittyBackend,
     cell_px: Option<(u32, u32)>,
-    /// The Kitty answers that can still come late, as key presses.
-    late_answers: usize,
+    /// The Kitty answers and the OSC 10 answer that can still come late, as key presses.
+    late_answers: LateAnswers,
     /// The terminal foreground. Without the round trip of the probe, phewr does not ask for it.
     foreground: Option<[u8; 3]>,
 }
@@ -221,7 +222,7 @@ fn probe_terminal(
 ) -> StartProbe {
     let mut cell_px = None;
     let mut asked_cell_size = false;
-    let mut late_answers = 0;
+    let mut late_answers = LateAnswers::default();
     let mut foreground = None;
     let graphics = pictures::kitty::protocol::detect_backend(
         transfer_override,
@@ -360,7 +361,7 @@ mod tests {
         release_terminal_to, self_check_on,
     };
     use crate::config::Config;
-    use crate::pictures::kitty::query::StartAnswers;
+    use crate::pictures::kitty::query::{LateAnswers, StartAnswers};
     use crate::pictures::kitty::{KittyBackend, Loops, Transfer};
     use std::path::PathBuf;
 
@@ -437,14 +438,23 @@ mod tests {
                 StartAnswers {
                     cell_px: Some((10, 20)),
                     probe: None,
-                    late_answers: 1,
+                    late_answers: LateAnswers {
+                        kitty: 1,
+                        foreground: false,
+                    },
                     foreground: Some([200, 200, 200]),
                 }
             },
             || panic!("the cell size goes out with the probe"),
         );
         assert_eq!(probe.cell_px, Some((10, 20)));
-        assert_eq!(probe.late_answers, 1);
+        assert_eq!(
+            probe.late_answers,
+            LateAnswers {
+                kitty: 1,
+                foreground: false
+            }
+        );
         assert_eq!(probe.foreground, Some([200, 200, 200]));
         assert_eq!(probe.graphics.transfer(), Transfer::Direct);
         assert_eq!(probe.graphics.loops(), Loops::Ticks);
@@ -460,7 +470,7 @@ mod tests {
             || Some((7, 14)),
         );
         assert_eq!(probe.cell_px, Some((7, 14)));
-        assert_eq!(probe.late_answers, 0);
+        assert_eq!(probe.late_answers, LateAnswers::default());
         assert_eq!(probe.foreground, None);
         assert_eq!(probe.graphics.transfer(), Transfer::Png);
         assert_eq!(probe.graphics.loops(), Loops::Animation);

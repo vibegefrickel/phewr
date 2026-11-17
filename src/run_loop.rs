@@ -88,6 +88,8 @@ pub(crate) fn run(
         if release_held(app, state, Instant::now())? {
             return Ok(());
         }
+        // A picture that the loss limit held back goes out again after its window.
+        app.screen.release_held_losses(Instant::now());
 
         #[cfg(feature = "video")]
         poll_mpv_window(app, state);
