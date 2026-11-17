@@ -52,12 +52,17 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
   least `MIN_THUMB_COLS`, and its box holds the large grid icon (`icons::icon_size`: the icon
   takes round(0.3 x box rows), at least 2 rows, and its width fits the box). So a box has at
   least 5 rows, and no level shows the one-cell fallback symbol (2026-11-17). The list stops at
-  the first count that fails, and the fewest rows always stay. An unknown cell size uses the
+  the first count whose shaped width or icon rows fail, because both fall with the rows. A count
+  whose icon is only too wide is skipped: with the 2 columns of `MIN_GRID_COLS`, the box width
+  stays while the icon gets narrower, so a later count can hold the icon. Until 2026-11-17, the
+  list stopped there too, and a pane of 28x51 with 3:2 photos kept only level 2 without the icon.
+  If no count holds the icon, the fewest rows are the only level. An unknown cell size uses the
   ratio 1:2. Each column count gives one level. When the width limits the picture
   (`thumb_rows * cols_per_row >= thumb_cols`), the level is the most rows at that picture size.
   Otherwise, the level is the fewest rows, which give the largest box. `update_grid` shows the
   largest level of at most the stored `zoom_rows`, else the first level. `+` and `-` go to the
-  next level. Until 2026-11-17, a step changed one row. On 200x51 with 9:16 photos, the steps
+  next level. `set_zoom_rows` and `set_cell_shape` return `true` only when the shown grid
+  changes, so a new stored count that shows the same level reloads no thumbnail. Until 2026-11-17, a step changed one row. On 200x51 with 9:16 photos, the steps
   from 12 rows to 7 rows all gave 22 columns, so a step showed the same layout.
 - The levels on 200x51 with 15x38 px cells (rows -> columns):
   - 9:16: 2 -> 5, 3 -> 9, 4 -> 11, 5 -> 14, 6 -> 18, 7 -> 19, 8 -> 24.

@@ -219,7 +219,7 @@ mouse = true          # false leaves the mouse to the terminal
 animate = true        # play short loops of videos, animations and Live Photos in the grid
 live_photos = true    # hide the .mov of a Live Photo, Enter plays it
 loops = "auto"        # "auto", "animation" (Kitty animation, Ghostty 1.4.0 or later) or "ticks"
-visible_rows = 4      # thumbnail rows in the grid, 2 to 12
+visible_rows = 4      # most thumbnail rows in the grid, 2 to 12 (the grid picks a zoom level)
 
 [slideshow]
 interval = 3.0        # seconds per slide
