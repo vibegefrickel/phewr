@@ -2,12 +2,15 @@
 
 ## Handoff
 
-- Date: 2026-11-16
-- Commit: 26f3dd5
-- Done: `26f3dd5` commits the three youtr fixes of the master copy and an STE pass over the comments and the docs. The copies in `../youtr` and `../schnattr` match the master, so the sync is done.
-- Open (agent): no agent work is ready. The next items wait for the maintainer test or for a measurement.
-- Open (user): the maintainer tests in Ghostty and herdr ("Now", from step 3). The `kitty-frames-ack.py` measurement for the RGBA fast path ("Next", item 1).
-- Health: `just check` passes on 2026-11-16 (1067 tests, 992 in the lean set, `cargo deny` reports only the known duplicate versions). `just pictures-check` passes for `../youtr` and `../schnattr` (2026-11-16). No workers, no branches, no stashes.
+- Date: 2026-11-17
+- Commit: 8376b35
+- Done: the sync of the youtr fixes is done. youtr passed the test matrix of phase 7 (`docs/picture-refactor.md`).
+- Done: the start read waits `LATE_ANSWER_GRACE` for the answers that Ghostty 1.4 sends after DA1 (`8561eb3`). A missing OSC 10 answer stays owed after DA1, so `LateAnswerFilter` drops it (`8376b35`).
+- Open (agent): fix `docs/gotchas.md:261`. It says that the filter arms only after a timeout of the whole round trip, but since `8376b35` a missing OSC 10 answer after DA1 arms it too.
+- Open (user): the test matrix of phase 7 for phewr and schnattr, in Ghostty and herdr ("Now", from step 3). The `kitty-frames-ack.py` measurement for the RGBA fast path ("Next", item 1).
+- Open (user): decide on the two module notes of the youtr review (`docs/picture-refactor.md`): the resend on a focus gain, and an error other than `ENOENT`.
+- Health: `just check` passes on 2026-11-17 (1073 tests, 998 in the lean set, `cargo deny` reports only the known duplicate versions). `just pictures-check` passes for `../youtr` and `../schnattr`. No workers, no branches, no stashes.
+- Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key.
 
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
 
@@ -25,7 +28,7 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-16: `just check` passes with 1067 tests with the default features and 992 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-17: `just check` passes with 1073 tests with the default features and 998 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
