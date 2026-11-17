@@ -3,7 +3,6 @@
 
 use crate::info;
 use crate::pictures::decode;
-use chrono::{DateTime, Local};
 use std::path::Path;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -29,17 +28,33 @@ pub(crate) struct VideoMeta {
     pub(crate) hdr: Option<&'static str>,
 }
 
+/// One formatter for both dates, in the system time zone. `None` when jiff cannot convert the time.
+pub(crate) fn format_local(time: std::time::SystemTime, pattern: &str) -> Option<String> {
+    format_in(time, &jiff::tz::TimeZone::system(), pattern)
+}
+
+/// The time zone is a parameter, so a test can fix it without the `TZ` variable.
+fn format_in(
+    time: std::time::SystemTime,
+    zone: &jiff::tz::TimeZone,
+    pattern: &str,
+) -> Option<String> {
+    let timestamp = jiff::Timestamp::try_from(time).ok()?;
+    Some(
+        timestamp
+            .to_zoned_datetime(zone.clone())
+            .strftime(pattern)
+            .to_string(),
+    )
+}
+
 /// A missing part stays `None`.
 pub(crate) fn read(path: &Path) -> FileMeta {
     let metadata = std::fs::metadata(path).ok();
     let modified = metadata
         .as_ref()
         .and_then(|m| m.modified().ok())
-        .map(|time| {
-            DateTime::<Local>::from(time)
-                .format("%Y-%m-%d %H:%M")
-                .to_string()
-        });
+        .and_then(|time| format_local(time, "%Y-%m-%d %H:%M"));
     let format = path
         .extension()
         .map(|ext| ext.to_string_lossy().to_ascii_uppercase())
@@ -175,8 +190,27 @@ pub(crate) fn format_time(seconds: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileMeta, VideoMeta, format_motion, format_time, read};
+    use super::{FileMeta, VideoMeta, format_in, format_local, format_motion, format_time, read};
     use image::RgbImage;
+
+    #[test]
+    fn format_in_pads_and_matches_the_old_text() {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        let utc = jiff::tz::TimeZone::UTC;
+        assert_eq!(
+            format_in(time, &utc, "%Y-%m-%d %H:%M:%S").as_deref(),
+            Some("2001-09-09 01:46:40")
+        );
+        assert_eq!(
+            format_in(time, &utc, "%Y-%m-%d %H:%M").as_deref(),
+            Some("2001-09-09 01:46")
+        );
+    }
+
+    #[test]
+    fn format_local_formats_now() {
+        assert!(format_local(std::time::SystemTime::now(), "%Y").is_some());
+    }
 
     #[test]
     fn image_has_size_bytes_format_date() {

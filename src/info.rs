@@ -3,7 +3,6 @@
 use crate::pictures::decode;
 #[cfg(feature = "jxl")]
 use crate::pictures::decode::Route;
-use chrono::{DateTime, Local};
 use exif::{In, Tag};
 use std::fs::File;
 use std::io::BufReader;
@@ -31,12 +30,10 @@ pub(crate) fn load(path: &Path) -> ImageInfo {
     }
     if let Ok(metadata) = std::fs::metadata(path) {
         rows.push(("Size".to_owned(), human_size(metadata.len())));
-        if let Ok(modified) = metadata.modified() {
-            let local: DateTime<Local> = modified.into();
-            rows.push((
-                "Modified".to_owned(),
-                local.format("%Y-%m-%d %H:%M:%S").to_string(),
-            ));
+        if let Ok(modified) = metadata.modified()
+            && let Some(text) = crate::file_meta::format_local(modified, "%Y-%m-%d %H:%M:%S")
+        {
+            rows.push(("Modified".to_owned(), text));
         }
     }
     if let Some((w, h)) = decode::dimensions(path) {

@@ -120,13 +120,13 @@ assert_is_empty = "allow"
 
 [dependencies]
 base64 = "0.23"
-chrono = "0.4"
 clap = { version = "4.6", features = ["derive"] }
 crossterm = "0.29"
 directories = "6"
 fast_image_resize = "6.1"
 # Only the decoders for the formats that the scanner lists. AVIF goes through libheif.
 image = { version = "0.25.10", default-features = false, features = ["bmp", "exr", "gif", "hdr", "ico", "jpeg", "png", "qoi", "tga", "tiff", "webp"] }
+jiff = "1"
 # JPEG XL in pure Rust. The default feature `rayon` decodes on the shared rayon pool. `moxcms`
 # converts an ICC profile to sRGB. `image` still uses moxcms 0.8.
 # Both JPEG XL pins are exact on purpose. The sample copy on all cores in `decode/jxl.rs` reads

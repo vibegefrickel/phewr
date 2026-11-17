@@ -60,8 +60,7 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(STYLES.border)
-        .title(Line::from(Span::styled(" Info ", STYLES.title)))
-        .title_bottom(Line::from(Span::styled(" i: close ", STYLES.key)));
+        .title(Line::from(Span::styled(" Info ", STYLES.title)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -342,7 +341,7 @@ mod tests {
         app.info_visible = true;
         let screen = render(&mut app, None, 120, 30);
         assert_shows(&screen, " Info ");
-        assert_shows(&screen, " i: close ");
+        assert_hides(&screen, "i: close");
         assert_shows(&screen, "File");
         assert_shows(&screen, "Name    a.jpg");
         assert_shows(&screen, "Format  JPG");
@@ -350,7 +349,6 @@ mod tests {
         let buffer = render_buffer(&mut app, None, 120, 30);
         assert_terminal_background(&buffer);
         assert_default_fg(cell_of(&buffer, "Info "), Modifier::BOLD);
-        assert_ansi(cell_of(&buffer, "i: close"), Color::Cyan);
         assert_default_fg(cell_of(&buffer, "File"), Modifier::BOLD);
         assert_ansi(cell_of(&buffer, "Name "), Color::DarkGray);
         assert_default_fg(cell_of(&buffer, "a.jpg"), Modifier::empty());

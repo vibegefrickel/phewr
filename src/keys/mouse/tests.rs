@@ -160,11 +160,23 @@ fn wheel_scrolls_and_shift_zooms() {
         now,
     );
     assert_eq!(app.gallery.zoom_rows, rows);
-    mouse(&mut app, MouseEventKind::ScrollLeft, (10, 5));
-    assert_eq!(app.gallery.zoom_rows, rows + 1);
-    mouse(&mut app, MouseEventKind::ScrollRight, (10, 5));
-    assert_eq!(app.gallery.zoom_rows, rows);
     assert_eq!(app.gallery.scroll_offset, 0, "a zoom does not scroll");
+}
+
+#[test]
+fn horizontal_scroll_in_the_grid_does_nothing() {
+    let mut app = gallery_app(9);
+    draw_frame(&mut app, 120, 24);
+    let rows = app.gallery.zoom_rows;
+    let offset = app.gallery.scroll_offset;
+    for kind in [MouseEventKind::ScrollLeft, MouseEventKind::ScrollRight] {
+        mouse(&mut app, kind, (10, 5));
+        assert_eq!(app.gallery.zoom_rows, rows, "{kind:?} must not zoom");
+        assert_eq!(
+            app.gallery.scroll_offset, offset,
+            "{kind:?} must not scroll"
+        );
+    }
 }
 
 #[test]
@@ -182,6 +194,37 @@ fn right_click_shows_info_panel() {
 
     mouse(&mut app, RIGHT, (0, 0));
     assert_eq!(app.gallery.cursor, 2, "a right click on a gap does nothing");
+}
+
+#[test]
+fn right_click_on_the_cursor_cell_closes_info_panel() {
+    let mut app = gallery_app(9);
+    mouse_cell(&mut app, RIGHT, 5);
+    assert!(app.info_visible);
+    app.graphics_out.take_bytes();
+
+    mouse_cell(&mut app, RIGHT, 5);
+    assert_eq!(app.gallery.cursor, 5);
+    assert!(!app.info_visible);
+    assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+}
+
+#[test]
+fn right_click_on_another_cell_keeps_info_panel_open() {
+    let mut app = gallery_app(9);
+    mouse_cell(&mut app, RIGHT, 5);
+    mouse_cell(&mut app, RIGHT, 2);
+    assert_eq!(app.gallery.cursor, 2);
+    assert!(app.info_visible);
+}
+
+#[test]
+fn right_click_on_a_gap_keeps_info_panel_open() {
+    let mut app = gallery_app(9);
+    mouse_cell(&mut app, RIGHT, 5);
+    mouse(&mut app, RIGHT, (0, 0));
+    assert_eq!(app.gallery.cursor, 5);
+    assert!(app.info_visible);
 }
 
 #[test]

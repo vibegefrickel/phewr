@@ -83,10 +83,6 @@ fn gallery_mouse(app: &mut App, mouse: MouseEvent, at: Position, now: Instant) -
         }
         MouseEventKind::ScrollUp if shift => app.thumb_zoom_in(),
         MouseEventKind::ScrollDown if shift => app.thumb_zoom_out(),
-        // macOS can send Shift+wheel as a horizontal wheel without the SHIFT flag. The side depends on
-        // the natural scrolling setting. A sideways trackpad swipe changes the size too.
-        MouseEventKind::ScrollRight => app.thumb_zoom_in(),
-        MouseEventKind::ScrollLeft => app.thumb_zoom_out(),
         MouseEventKind::ScrollUp => scroll_grid(app, -1),
         MouseEventKind::ScrollDown => scroll_grid(app, 1),
         _ => {}
@@ -122,9 +118,14 @@ fn gallery_click(app: &mut App, at: Position, now: Instant) -> io::Result<()> {
     Ok(())
 }
 
-/// A right click on a cell opens the info panel. The panel follows the cursor.
+/// A right click on a cell opens the info panel. A second one on the cursor cell closes it, and one
+/// on another cell moves the cursor and keeps the panel open.
 fn gallery_right_click(app: &mut App, at: Position) -> io::Result<()> {
-    if select_cell(app, at).is_some() && !app.info_visible {
+    let before = app.gallery.cursor;
+    let Some(position) = select_cell(app, at) else {
+        return Ok(());
+    };
+    if !app.info_visible || position == before {
         app.graphics_delete_all()?;
         app.toggle_info();
     }
