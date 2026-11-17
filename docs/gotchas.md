@@ -261,12 +261,13 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   DA1 before the OSC 10 answer and the Kitty answers. Without the grace, the temp-file probe saw
   no `OK` and picked `t=d`, and the late answers reached the keys as text. An OSC 10 answer that
   is still missing after the grace stays owed (2026-11-17), so `LateAnswerFilter` drops it.
-  `LateAnswerFilter` in `keys/mod.rs` is armed only after a timeout of the whole round
-  trip. It drops the key events of each owed late answer: a Kitty answer from Alt+`_` to
-  Alt+`\`, and the OSC 10 answer from Alt+`]` to Ctrl+`g` (BEL) or Alt+`\`. A missing OSC 10
-  answer counts as owed after a timeout. A late DA1 answer is no key press: crossterm keeps it
-  as an internal event. Since the self check (2026-11-11), `AnswerKeys` reads every Kitty answer
-  before the filter, also a late probe answer. Each whole Kitty answer lowers the owed count of
+  `LateAnswerFilter` in `keys/mod.rs` is armed after a timeout of the whole round trip, and
+  after DA1 when the OSC 10 answer is still missing. It drops the key events of each owed late
+  answer: a Kitty answer from Alt+`_` to Alt+`\`, and the OSC 10 answer from Alt+`]` to
+  Ctrl+`g` (BEL) or Alt+`\`. A missing OSC 10 answer counts as owed after a timeout or after
+  DA1. A late DA1 answer is no key press: crossterm keeps it as an internal event. Since the
+  self check (2026-11-11), `AnswerKeys` reads every Kitty answer before the filter, also a late
+  probe answer. Each whole Kitty answer lowers the owed count of
   the filter (`LateAnswerFilter::kitty_answers_came`), so the filter never swallows an answer of
   the self check. A terminal answers the Kitty commands in order, so the late probe answers come
   before the answers of the self check. The filter sees only the rest, in practice a late OSC 10 answer.

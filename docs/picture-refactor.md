@@ -474,21 +474,27 @@ Results:
   `AnswerKeys` passes these events itself now.
 - phewr and schnattr: open.
 
-Open notes for the module, from the youtr review of 2026-11-16. Neither note showed in the
-test matrix.
+Notes for the module, from the youtr review of 2026-11-16. Neither note showed in the test
+matrix. The maintainer closed both on 2026-11-17 without a code change.
 
 - **A focus gain sends every picture again.** `Screen::focus_gained` marks every stored picture
-  for a new transmit, also in Ghostty, which keeps them. The cost is the pixels of each picture
-  on the screen, spread over a few updates by the 4 MB cap. A possible fix: with the self
-  check on, a focus gain sends only the placements again (`forget_placements`). The terminal
-  then answers `ENOENT` for each lost picture, and only those pictures go out again. First
-  make sure that herdr answers `ENOENT` for a picture that it dropped while another app had
-  the focus. If herdr stays silent, the current resend is necessary.
+  for a new transmit, also in Ghostty, which keeps them. Only youtr and schnattr call it: phewr
+  enables no focus reports. The cost is one screen of pixels for each focus gain, 2.5 MB for a
+  full schnattr screen (phase 4), less than one update of 4 MB. The alternative (with the self
+  check, a focus gain sends only the placements, and each `ENOENT` resends one picture) is
+  correct only if herdr answers `ENOENT` for a picture that it dropped without the focus.
+  Nobody tested that. Decision: keep the full resend.
 - **An error other than `ENOENT` hides a picture until it moves.** The screen keeps such a
   picture as placed, and the default placing policy sends nothing until the picture moves or
-  the window gets a resize. A realistic trigger is `ENOSPC`, when the storage quota of the
-  terminal is full. A possible fix: mark the picture lost for a storage error, so it gets one
-  more transmit. Do not do that for `EINVAL`, because the same transmit fails again.
+  the window gets a resize. The realistic trigger is `ENOSPC` from a full storage quota. The
+  store of `Screen` keeps every app below `TERMINAL_IMAGE_BUDGET` (128 MB). Ghostty cannot
+  trigger it: its quota is 320 MB per terminal surface, and above the quota it evicts pictures
+  without a placement without a notice. Two apps in two herdr panes share one Ghostty surface
+  and can reach 2 x 128 MB x 2 = 512 MB (herdr stores each image twice). That case ends as a
+  later `ENOENT`, which the self check handles, not as `ENOSPC`. herdr's own storage limit is
+  not known, so herdr can still answer `ENOSPC`. Decision: no retry. A future retry needs a cap of one per picture, never for `EINVAL`, or a
+  full terminal gets the same transmit on every frame. If the budget grows above 160 MB, check
+  this note again.
 
 ## Risks
 

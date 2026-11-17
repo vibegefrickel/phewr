@@ -3,14 +3,16 @@
 ## Handoff
 
 - Date: 2026-11-17
-- Commit: 8376b35
-- Done: the sync of the youtr fixes is done. youtr passed the test matrix of phase 7 (`docs/picture-refactor.md`).
-- Done: the start read waits `LATE_ANSWER_GRACE` for the answers that Ghostty 1.4 sends after DA1 (`8561eb3`). A missing OSC 10 answer stays owed after DA1, so `LateAnswerFilter` drops it (`8376b35`).
-- Open (agent): fix `docs/gotchas.md:261`. It says that the filter arms only after a timeout of the whole round trip, but since `8376b35` a missing OSC 10 answer after DA1 arms it too.
-- Open (user): the test matrix of phase 7 for phewr and schnattr, in Ghostty and herdr ("Now", from step 3). The `kitty-frames-ack.py` measurement for the RGBA fast path ("Next", item 1).
-- Open (user): decide on the two module notes of the youtr review (`docs/picture-refactor.md`): the resend on a focus gain, and an error other than `ENOENT`.
-- Health: `just check` passes on 2026-11-17 (1073 tests, 998 in the lean set, `cargo deny` reports only the known duplicate versions). `just pictures-check` passes for `../youtr` and `../schnattr`. No workers, no branches, no stashes.
-- Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key.
+- Commit: cb9076c
+- Done: maintainer test run in plain Ghostty, steps 1 to 9 passed ("Now"). Four auto-review workers merged: the zoom levels (`b314a45`), no filename labels and no `n` key (`200b8a4`), jiff for chrono with the right click toggle and no horizontal zoom (`4c63d3d`), the icon floor of the zoom levels (`2dbce53`).
+- Done: `8626afa` keeps the grid inside the width and stops a test that left temp files in `$TMPDIR`.
+- Done: `docs/gotchas.md` names both cases that arm `LateAnswerFilter` (uncommitted).
+- Done: the two module notes of the youtr review are closed without a code change: keep the full resend on a focus gain, no retry for `ENOSPC` (`docs/picture-refactor.md`, uncommitted). `TESTS.md` got two lines (step 0 deletes old temp files, step 5 uses the slideshow for the charts).
+- Open (agent): none until the test run goes on. Record each result in "Now" and fix the failures with workers.
+- Open (user): the test run from step 10 (videos), then the herdr part and the phase 7 scenarios ("Now", open points). The `kitty-frames-ack.py` measurement ("Next", item 1).
+- Open (user): commit `TODO.md`, `docs/gotchas.md` and `docs/picture-refactor.md`.
+- Health: see "State of the main goal". No workers, no worktrees, no branches except `main`, no stashes.
+- Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key. The herdr test in "Now" decides if this needs a fix.
 
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
 
@@ -28,21 +30,22 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-17: `just check` passes with 1073 tests with the default features and 998 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-17: `just check` passes with 1083 tests with the default features and 1008 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
 Maintainer tests in Ghostty and in herdr: run the 14 steps in `~/Pictures/phewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders, placeholders and Live Photos). Steps 9 and 10 include the grid loops: every video and animated cell must loop after its still. Measured on 2026-10-30: 30 looping cells cost about 3 % of one core in total (phewr 0.2 %, Ghostty 1.7 %, herdr 1.3 %).
 
+Test run of 2026-11-17 (plain Ghostty 1.4.0, build `cb9076c`): steps 1 to 9 passed. Step 6 also passed in herdr. Plain Ghostty picks the animation path (`?`, step 9). The run found and fixed: a test that left temp files (`8626afa`), the grid past the right edge (`8626afa`), the zoom levels (`b314a45`, `2dbce53`), the filename labels (`200b8a4`), the touchpad zoom, the right click toggle and the ` i: close ` hint (`4c63d3d`). Continue at step 10 (videos).
+
 Open points of the test run:
 
-- Plain Ghostty 1.4.0 must pick the animation path (`?` shows it). herdr 0.9.5 gets the ticks without the probe, and the ticks play there (maintainer, 2026-11-03).
-- Make sure that `a=f` frames go through `t=t` in Ghostty, and that the start in herdr is not slower (the DA1 answer must end the read).
-- The SVG grid icons (steps 3 and 8): the icons show in the terminal foreground at 45 % alpha. If herdr does not answer OSC 10, the octant icons stay. Make sure that both cases look right.
-- The slideshow view: a portrait image must reach the top and the bottom of the screen, a landscape image the left and the right, without a stretch. Ghostty must take the missing side of `r=` or `c=` from the aspect. The badge at the bottom right must show on top of the picture and of a video frame (`z=-1073741825`), and the picture must show around it.
-- Cmd+Q in the mpv window of a running slideshow must stop the slideshow on the placeholder (`--input-ipc-server`, merged 2026-11-03).
-
-Test run of 2026-10-24 (plain Ghostty): steps 1 and 2 passed. The run stopped at step 3a, and the fixes from it are in (see Done). Continue at step 3 with the current build.
+- Step 10: the slideshow view with a video. Cmd+Q in the mpv window of a running slideshow must stop the slideshow on the placeholder (`--input-ipc-server`, merged 2026-11-03).
+- The slideshow view: a portrait image must reach the top and the bottom of the screen, a landscape image the left and the right, without a stretch. The badge at the bottom right must show on top of the picture and of a video frame (`z=-1073741825`), and the picture must show around it.
+- herdr (Part 2): the steps 2, 10 and 14, the start speed against plain Ghostty (the DA1 answer must end the read), and the SVG grid icons (steps 3 and 8). If herdr does not answer OSC 10, the octant icons stay. Make sure that both cases look right.
+- herdr: press Alt+`]`, then `j` two times in the grid. If the cursor does not move, herdr owes the OSC 10 answer, and `LateAnswerFilter` eats the keys (the note of `8376b35`).
+- Shift+two-finger scroll: macOS sends it as a horizontal wheel, which does nothing since `4c63d3d`. Make sure whether Ghostty reports Shift on a vertical wheel. If not, only `+` and `-` zoom the grid, and the README row must say so.
+- The phase 7 scenarios (`docs/picture-refactor.md`): a resize, a focus change, the help overlay, 10 scrolls, a folder with more than 500 pictures (`~/Pictures/iphone-20250401`, 678 files) and the quit, in Ghostty and in herdr.
 
 After the tests:
 
