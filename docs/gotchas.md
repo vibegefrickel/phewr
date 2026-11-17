@@ -252,6 +252,9 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   grid size, because macOS can send Shift+wheel as a horizontal wheel without the SHIFT flag. A
   two-finger scroll on a touchpad has a small sideways part, so the grid zoomed by accident.
   Shift+wheel now zooms only when the terminal sends the SHIFT flag. `+` and `-` always zoom.
+  If the info panel is open, a right click in the gallery closes it and does not move the cursor
+  (2026-11-17). The panel makes the grid narrower, so the cursor cell moves on the screen. Before,
+  a second right click at the same place hit another cell and kept the panel open.
 - **Late probe answer:** the start write holds the cell size query, the OSC 10 foreground query
   (`ESC ] 10 ; ? BEL`), the `a=q` transfer probe,
   the animation probe and the DA1 query `ESC [ c`. The animation probe is a silent 1x1 image
