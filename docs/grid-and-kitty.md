@@ -49,18 +49,23 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
   `MIN_THUMB_COLS` (5) wide. Without this minimum, a 9:16 grid with 12 rows got more columns
   than the width holds, and the last column went past the right edge (2026-11-17).
 - A zoom level is a row count from 2 to 12 (`GalleryState::zoom_levels`). Its shaped width is at
-  least `MIN_THUMB_COLS`. The list stops at the first count that fails, and the fewest rows
-  always stay. Each column count gives one level. When the width limits the picture
+  least `MIN_THUMB_COLS`, and its box holds the large grid icon (`icons::icon_size`: the icon
+  takes round(0.3 x box rows), at least 2 rows, and its width fits the box). So a box has at
+  least 5 rows, and no level shows the one-cell fallback symbol (2026-11-17). The list stops at
+  the first count that fails, and the fewest rows always stay. An unknown cell size uses the
+  ratio 1:2. Each column count gives one level. When the width limits the picture
   (`thumb_rows * cols_per_row >= thumb_cols`), the level is the most rows at that picture size.
   Otherwise, the level is the fewest rows, which give the largest box. `update_grid` shows the
   largest level of at most the stored `zoom_rows`, else the first level. `+` and `-` go to the
   next level. Until 2026-11-17, a step changed one row. On 200x51 with 9:16 photos, the steps
   from 12 rows to 7 rows all gave 22 columns, so a step showed the same layout.
 - The levels on 200x51 with 15x38 px cells (rows -> columns):
-  - 9:16: 2 -> 5, 3 -> 9, 4 -> 11, 5 -> 14, 6 -> 18, 7 -> 19, 8 -> 24, 9 -> 28.
-  - 3:4: 2 -> 4, 3 -> 6, 4 -> 9, 5 -> 11, 6 -> 14, 7 -> 16, 8 -> 18, 9 -> 22, 11 -> 28.
-  - 3:2: 2 -> 2, 3 -> 3, 4 -> 4, 5 -> 5, 6 -> 7, 7 -> 8, 8 -> 9, 10 -> 12, 12 -> 16.
-  - A narrow pane of 60x51 with 3:2 photos: 5 -> 2, 9 -> 3, 11 -> 4.
+  - 9:16: 2 -> 5, 3 -> 9, 4 -> 11, 5 -> 14, 6 -> 18, 7 -> 19, 8 -> 24.
+  - 3:4: 2 -> 4, 3 -> 6, 4 -> 9, 5 -> 11, 6 -> 14, 7 -> 16, 8 -> 18.
+  - 3:2: 2 -> 2, 3 -> 3, 4 -> 4, 5 -> 5, 6 -> 7, 7 -> 8, 8 -> 9.
+  - Narrow panes with 3:2 photos: 60x51 keeps one level (5 -> 2), so `+` and `-` do nothing
+    there. 80x40 keeps 3 and 5 rows, 100x51 keeps 3, 6 and 7 rows. The maintainer accepted
+    this (2026-11-17).
 - The Live mark `◎ Live` needs a border of 9 columns. A narrower border gets `◎` alone.
 - The first screen waits for the shape (2 ms to 4 ms).
 - The shape stays until the next directory switch. So the columns never move while the user
