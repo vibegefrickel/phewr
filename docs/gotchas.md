@@ -247,8 +247,11 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   `ui::draw` records `app.layout`, and a mouse handler reads the regions through
   `ui::split_info`, `ui::content_area` and `ui::status_area`. A test that needs them calls
   `test_support::draw_frame` first. The double-click (400 ms) uses `handle_event_at` with a
-  clock, so tests add a `Duration` to an `Instant` and never sleep. macOS can send Shift+wheel
-  as a horizontal wheel, so `ScrollLeft` and `ScrollRight` change the grid size too.
+  clock, so tests add a `Duration` to an `Instant` and never sleep. A horizontal
+  wheel does nothing in the grid (2026-11-17). Before, `ScrollLeft` and `ScrollRight` changed the
+  grid size, because macOS can send Shift+wheel as a horizontal wheel without the SHIFT flag. A
+  two-finger scroll on a touchpad has a small sideways part, so the grid zoomed by accident.
+  Shift+wheel now zooms only when the terminal sends the SHIFT flag. `+` and `-` always zoom.
 - **Late probe answer:** the start write holds the cell size query, the OSC 10 foreground query
   (`ESC ] 10 ; ? BEL`), the `a=q` transfer probe,
   the animation probe and the DA1 query `ESC [ c`. The animation probe is a silent 1x1 image

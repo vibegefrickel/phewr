@@ -197,8 +197,8 @@ loops. Over SSH, videos always open in the mpv window.
 | Where | Mouse | Action |
 |-------|-------|--------|
 | Grid | Click / double-click | Select / open |
-| Grid | Right click | Info panel |
-| Grid | Wheel / Shift+wheel | Scroll / change the thumbnail size |
+| Grid | Right click | Open the info panel, or close it on the cursor cell |
+| Grid | Wheel / Shift+wheel | Scroll / change the thumbnail size (when the terminal reports Shift) |
 | Fullscreen | Wheel | Zoom |
 | Fullscreen | Drag | Pan the zoomed image |
 | Fullscreen | Click near the left or right edge | Previous / next image |

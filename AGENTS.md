@@ -363,8 +363,8 @@ decisions. Read the long form before you change the code that an item names.
   crossterm's `EnableMouseCapture`, because it turns on 1003. A test that needs the screen
   regions calls `test_support::draw_frame` first. The double-click uses `handle_event_at` with a
   clock, so tests never sleep. `[gallery] mouse = false` turns the capture off. The run loop
-  releases the mouse while an mpv window plays. macOS can send Shift+wheel as a horizontal
-  wheel, so `ScrollLeft` and `ScrollRight` change the grid size too.
+  releases the mouse while an mpv window plays. A horizontal
+  wheel does nothing in the grid, so a touchpad scroll never zooms by accident (2026-11-17).
 - **Cell shape:** the shape comes from the headers of the first 64 files, once per scan, and
   stays until the next directory switch.
 
