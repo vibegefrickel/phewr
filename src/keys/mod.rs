@@ -28,10 +28,9 @@ use video::handle_video_key;
 /// ([`LateAnswerFilter::kitty_answers_came`]). A terminal answers the Kitty commands in order, so
 /// the late probe answers come before the answers of the self check.
 ///
-/// When DA1 came, the start read owes no answer. Ghostty 1.4 sends DA1 before the OSC 10 answer
-/// and the Kitty answers, so the start read waits `LATE_ANSWER_GRACE` after DA1. An OSC 10
-/// answer that comes after this grace reaches the keys. `AnswerKeys` still takes a late Kitty
-/// answer.
+/// Ghostty 1.4 sends DA1 before the OSC 10 answer and the Kitty answers, so the start read waits
+/// `LATE_ANSWER_GRACE` after DA1. When the OSC 10 answer is still missing then, it stays owed, and
+/// this filter drops it when it comes. `AnswerKeys` takes a late Kitty answer.
 #[derive(Debug, Default)]
 pub(crate) struct LateAnswerFilter {
     /// The answers that can still come late. Each one ends with Alt+`\\`, an OSC answer also

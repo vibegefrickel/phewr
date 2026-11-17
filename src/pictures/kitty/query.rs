@@ -20,8 +20,9 @@ pub(crate) struct StartAnswers {
     pub(crate) cell_px: Option<(u32, u32)>,
     /// The bytes up to the end of the last Kitty answer that came in time.
     pub(crate) probe: Option<Vec<u8>>,
-    /// The owed Kitty answers that can still come late, as key presses. Zero when a later device
-    /// attributes answer came.
+    /// The owed answers that can still come late, as key presses. After a device attributes
+    /// answer, no Kitty answer is owed, but a missing OSC 10 answer still is: Ghostty 1.4 sends
+    /// DA1 before it.
     pub(crate) late_answers: usize,
     /// The foreground color of the terminal (OSC 10), the color of the grid icons.
     pub(crate) foreground: Option<[u8; 3]>,
@@ -137,16 +138,17 @@ fn foreground_end(answer: &[u8]) -> Option<usize> {
 fn start_answers(answer: &[u8], answers: usize) -> StartAnswers {
     let received = string_terminator_ends(answer).count();
     let last_end = string_terminator_ends(answer).last();
-    let probe_complete = string_terminators_end(answer, answers).is_some()
-        || device_attributes_end(answer).is_some();
+    let attributes = device_attributes_end(answer).is_some();
+    let probe_complete = string_terminators_end(answer, answers).is_some() || attributes;
     let foreground = parse_foreground(answer);
     StartAnswers {
         cell_px: parse_cell_size_report(answer),
         foreground,
         probe: last_end.map(|end| answer[..end].to_vec()),
-        // A missing OSC 10 answer can come late too, before the Kitty answers.
+        // A missing OSC 10 answer can come late too, before the Kitty answers, and after DA1
+        // in Ghostty 1.4.
         late_answers: if probe_complete {
-            0
+            usize::from(attributes && foreground.is_none())
         } else {
             answers.saturating_sub(received) + usize::from(foreground.is_none())
         },
@@ -433,7 +435,10 @@ mod tests {
         assert_eq!(all_answers_end(&answer, 2), None, "the grace read follows");
         let answers = start_answers(&answer, 2);
         assert_eq!(answers.cell_px, Some((18, 43)));
-        assert_eq!(answers.late_answers, 0, "no Kitty answer can come late");
+        assert_eq!(
+            answers.late_answers, 1,
+            "no Kitty answer can come late, but the missing OSC 10 answer can"
+        );
         assert_eq!(
             answers.probe.as_deref(),
             Some([cell, transfer].concat().as_slice())
@@ -501,7 +506,13 @@ mod tests {
         assert_eq!(all_answers_end(attributes, 0), None, "OSC 10 is missing");
         let answers = start_answers(attributes, 1);
         assert_eq!((answers.cell_px, answers.probe), (None, None));
-        assert_eq!(answers.late_answers, 0, "DA1 came");
+        assert_eq!(
+            answers.late_answers, 1,
+            "after DA1, only the OSC 10 answer is owed"
+        );
+        let color = b"\x1b]10;rgb:ff/ff/ff\x07".as_slice();
+        let answers = start_answers(&[attributes, color].concat(), 1);
+        assert_eq!(answers.late_answers, 0, "DA1 and OSC 10 came");
     }
 
     #[test]

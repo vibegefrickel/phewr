@@ -257,7 +257,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   missing at DA1 gets a second read of at most `LATE_ANSWER_GRACE` (100 ms): Ghostty 1.4 sends
   DA1 before the OSC 10 answer and the Kitty answers. Without the grace, the temp-file probe saw
   no `OK` and picked `t=d`, and the late answers reached the keys as text. An OSC 10 answer that
-  comes after the grace still reaches the keys, because the read owes nothing after DA1.
+  is still missing after the grace stays owed (2026-11-17), so `LateAnswerFilter` drops it.
   `LateAnswerFilter` in `keys/mod.rs` is armed only after a timeout of the whole round
   trip. It drops the key events of each owed late answer: a Kitty answer from Alt+`_` to
   Alt+`\`, and the OSC 10 answer from Alt+`]` to Ctrl+`g` (BEL) or Alt+`\`. A missing OSC 10
