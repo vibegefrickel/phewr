@@ -55,15 +55,11 @@ fn assert_ansi_bold(cell: &Cell, fg: Color) {
 }
 
 #[test]
-fn hides_labels_by_default() {
+fn file_cells_draw_no_name() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
     let screen = render(&mut app, None, 100, 30);
     assert_hides(&screen, "b.jpg");
     assert_shows(&screen, " a.jpg [1/2] ");
-
-    app.gallery.toggle_filenames();
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, "b.jpg");
 }
 
 #[test]
@@ -144,11 +140,10 @@ fn marked_cell_gets_yellow_border() {
 }
 
 #[test]
-fn borders_reach_edges_and_hold_label() {
+fn borders_reach_edges() {
     let names: Vec<String> = (0..40).map(|index| format!("{index:02}.jpg")).collect();
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut app = app_with(&names);
-    app.gallery.show_filenames = true;
     render_buffer(&mut app, None, 100, 30);
     let last = app.gallery.visible_rows * app.gallery.grid_cols - 1;
     app.gallery.cursor = last;
@@ -161,11 +156,7 @@ fn borders_reach_edges_and_hold_label() {
     assert_eq!(border.bottom(), grid.bottom(), "the bottom edge gap");
     assert_border(&buffer, border, THICK, Color::Blue, Modifier::BOLD);
     let cell = app.gallery.thumb_rect(last);
-    assert_eq!(
-        cell.bottom() + 1,
-        border.bottom() - 1,
-        "the label row sits inside"
-    );
+    assert_eq!(cell.bottom(), border.bottom() - 1, "the bottom gap row");
     assert_fill(
         &buffer[(cell.x + 1, cell.bottom())],
         Color::Blue,
@@ -183,14 +174,14 @@ fn borders_reach_edges_and_hold_label() {
     let first = app.gallery.thumb_rect(0);
     assert_symbol(
         &buffer,
-        (marked.x, first.bottom()),
+        (marked.x, first.bottom() - 1),
         "\u{2502}",
         Color::Yellow,
         Modifier::empty(),
     );
     assert_symbol(
         &buffer,
-        (marked.x, first.bottom() + 1),
+        (marked.x, first.bottom()),
         "\u{2514}",
         Color::Yellow,
         Modifier::empty(),
@@ -254,7 +245,7 @@ fn folder_cell_shows_icon_and_name() {
         shows_icon(&app, &buffer, 2, None),
         "the file cell has no icon"
     );
-    // The names sit inside the cells, in the row below the icon, even without labels.
+    // The names sit inside the cells, in the row below the icon.
     let (x, _) = cell_center(&app, 1);
     let below = icon_area(&app, 1).bottom();
     let row = &screen_rows(&buffer)[usize::from(below)];
@@ -272,28 +263,11 @@ fn folder_cell_shows_icon_and_name() {
         "{screen}"
     );
 
-    // With labels, the names move to the label row, and the selected border wins.
-    app.gallery.toggle_filenames();
+    // The cursor style wins for the name of the selected folder.
     app.gallery.cursor = 1;
     let buffer = render_buffer(&mut app, None, 100, 30);
-    let screen = screen_rows(&buffer).join("\n");
-    let row = &screen_rows(&buffer)[usize::from(icon_area(&app, 1).bottom())];
-    assert!(!row.contains("summer"), "{screen}");
-    assert_shows(&screen, "summer");
-    assert_shows(&screen, "a.jpg");
-    let label = cell_of(&buffer, "summer");
-    assert_eq!((label.fg, label.modifier), (Color::Blue, Modifier::BOLD));
-    assert_border(
-        &buffer,
-        app.gallery.border_rect(1),
-        THICK,
-        Color::Blue,
-        Modifier::BOLD,
-    );
-    assert!(
-        status_row(&screen).starts_with(" summer [2/3]  1 folder, 1 image "),
-        "{screen}"
-    );
+    let name = cell_of(&buffer, "summer");
+    assert_eq!((name.fg, name.modifier), (Color::Blue, Modifier::BOLD));
 }
 
 #[cfg(feature = "video")]
@@ -403,21 +377,12 @@ fn cut_cell_stays_open_at_edge() {
 #[test]
 fn uses_terminal_defaults_and_ansi_roles() {
     let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
-    app.gallery.show_filenames = true;
     app.selection.insert(app.images[1].clone());
     let buffer = render_buffer(&mut app, None, 100, 30);
     assert_terminal_background(&buffer);
 
-    assert_ansi_bold(cell_of(&buffer, "a.jpg"), Color::Blue);
-    assert_ansi(cell_of(&buffer, "\u{25cf} b.jpg"), Color::Yellow);
-    assert_default_fg(cell_of(&buffer, "c.jpg"), Modifier::empty());
     assert_default_fg(cell_of(&buffer, "a.jpg ["), Modifier::empty());
     assert_ansi(cell_of(&buffer, "1 selected"), Color::Yellow);
-
-    // On a marked cell under the cursor, the cursor style wins for the label.
-    app.selection.insert(app.images[0].clone());
-    let buffer = render_buffer(&mut app, None, 100, 30);
-    assert_ansi_bold(cell_of(&buffer, "\u{25cf} a.jpg"), Color::Blue);
 
     app.error = Some("scan failed".to_owned());
     let buffer = render_buffer(&mut app, None, 100, 30);
@@ -432,7 +397,6 @@ fn animated_still_carries_play_stamp() {
     let still = fixture("still.gif");
     let mut app = app_with(&[anim.to_str().unwrap(), still.to_str().unwrap()]);
     app.filenames = vec!["anim.gif".to_owned(), "still.gif".to_owned()];
-    app.gallery.show_filenames = true;
     let screen = render(&mut app, None, 100, 30);
     assert!(
         !screen.contains('\u{25b6}'),
@@ -465,26 +429,17 @@ fn animated_still_carries_play_stamp() {
 }
 
 #[test]
-fn shortens_long_label() {
-    let long = format!("{}.jpg", "x".repeat(80));
-    let mut app = app_with(&[long.as_str()]);
-    app.gallery.show_filenames = true;
-    let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, "xx\u{2026}");
-}
-
-#[test]
-fn wide_characters_fit_label() {
+fn wide_characters_fit_folder_name() {
     let name = format!("{}.jpg", "\u{5199}\u{771f}".repeat(10));
     let app = app_with(&[name.as_str()]);
-    let label = super::label_text(&app, 0, false, 12);
+    let label = super::folder_name_text(&app, 0, 12);
     assert!(label.ends_with('\u{2026}'), "{label}");
     assert!(Line::from(&*label).width() <= 10, "{label}");
 
     // An emoji with VS16 takes two columns, its base character alone one.
     let name = format!("{}.jpg", "\u{263a}\u{fe0f}".repeat(10));
     let app = app_with(&[name.as_str()]);
-    let label = super::label_text(&app, 0, false, 12);
+    let label = super::folder_name_text(&app, 0, 12);
     assert!(label.ends_with('\u{2026}'), "{label}");
     assert!(Line::from(&*label).width() <= 10, "{label}");
 }
@@ -541,7 +496,6 @@ fn check_head(text: &str) {
 fn narrow_grid_cuts_first_cell() {
     // 6 columns: the cell width clamps to 5, so the first border needs 7 columns.
     let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
-    app.gallery.show_filenames = true;
     let buffer = render_buffer(&mut app, None, 6, 12);
     let grid = app.gallery.grid_rect;
     assert_eq!(app.gallery.grid_cols, 2);

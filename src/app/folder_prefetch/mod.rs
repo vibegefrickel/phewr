@@ -29,7 +29,6 @@ struct RestKey {
     current_dir: Option<PathBuf>,
     grid_rect: Rect,
     zoom_rows: usize,
-    show_filenames: bool,
     cell_px: (u32, u32),
 }
 
@@ -183,7 +182,6 @@ impl App {
             current_dir: self.current_dir.clone(),
             grid_rect: self.gallery.grid_rect,
             zoom_rows: self.gallery.zoom_rows,
-            show_filenames: self.gallery.show_filenames,
             cell_px: self.cell_px,
         })
     }

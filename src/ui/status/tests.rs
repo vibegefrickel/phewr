@@ -11,11 +11,10 @@ use ratatui::style::{Color, Modifier};
 #[test]
 fn gallery_shows_position_without_hints() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
-    app.gallery.show_filenames = true;
     let screen = render(&mut app, None, 100, 30);
     assert_eq!(status_row(&screen).trim_end(), " a.jpg [1/2]", "{screen}");
     assert_hides(&screen, "?: help");
-    assert_shows(&screen, "b.jpg");
+    assert_hides(&screen, "b.jpg");
     assert_hides(&screen, "Gallery");
     assert_hides(&screen, "Search");
     assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 29), "no frame");
@@ -74,14 +73,12 @@ fn search_shows_query_and_matches() {
 #[test]
 fn gallery_shows_selection_count() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
-    app.gallery.show_filenames = true;
     app.selection.insert(app.images[1].clone());
     let screen = render(&mut app, None, 100, 30);
     assert!(
         status_row(&screen).trim_end() == " a.jpg [1/2]  1 selected",
         "{screen}"
     );
-    assert_shows(&screen, "\u{25cf} b.jpg");
 }
 
 #[test]

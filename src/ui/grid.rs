@@ -2,7 +2,6 @@
 //! thumbnail. Kitty draws the thumbnails above them.
 
 use crate::app::App;
-use crate::gallery::LABEL_ROWS;
 use crate::icons::{self, Icon};
 use crate::kitty_output::IconCell;
 use crate::styles::STYLES;
@@ -18,6 +17,9 @@ const LIVE_MARK: &str = "\u{25ce} Live";
 /// The Live mark of a cell too narrow for `LIVE_MARK`.
 const LIVE_SYMBOL: &str = "\u{25ce}";
 
+/// The rows of a folder name below the folder icon.
+const FOLDER_NAME_ROWS: u16 = 1;
+
 /// The grid area and the icons that the cells ask Kitty for.
 struct GridDraw<'a> {
     rect: Rect,
@@ -27,10 +29,9 @@ struct GridDraw<'a> {
 #[derive(Clone, Copy)]
 struct CellLook {
     style: Style,
-    marked: bool,
 }
 
-/// The grid cells with their optional labels. The selected border comes last and wins on a gap
+/// The grid cells. The selected border comes last and wins on a gap
 /// that two cells share. `icons` gets the icons that Kitty draws.
 pub(super) fn draw_thumbnail_cells(
     frame: &mut Frame<'_>,
@@ -62,7 +63,6 @@ pub(super) fn draw_thumbnail_cells(
             } else {
                 STYLES.text
             },
-            marked: is_marked,
         };
         if app.is_folder(img_idx) {
             draw_folder_cell(frame, app, vis_idx, img_idx, look, &mut grid);
@@ -73,9 +73,6 @@ pub(super) fn draw_thumbnail_cells(
                 Icon::Loading
             };
             draw_cell_icon(frame, app, vis_idx, icon, &mut grid);
-        }
-        if app.gallery.show_filenames && !is_parent(app, img_idx) {
-            draw_label(frame, app, vis_idx, img_idx, look, grid_rect);
         }
         if app.is_live(img_idx) {
             draw_live_mark(frame, border, look.style, grid_rect);
@@ -160,8 +157,8 @@ fn is_parent(app: &App, img_idx: usize) -> bool {
     app.is_parent_entry(img_idx)
 }
 
-/// A folder icon with the name below it, or two dots for `..`. Without the label row, the name
-/// goes inside the cell.
+/// A folder icon with the name below it, or two dots for `..`. The name goes below the icon, inside
+/// the thumbnail area.
 fn draw_folder_cell(
     frame: &mut Frame<'_>,
     app: &App,
@@ -179,18 +176,18 @@ fn draw_folder_cell(
     let Some(below) = draw_cell_icon(frame, app, vis_idx, icon, grid) else {
         return;
     };
-    if app.gallery.show_filenames || icon == Icon::Parent {
+    if icon == Icon::Parent {
         return;
     }
     let name_rect = Rect {
         y: below,
-        height: LABEL_ROWS,
+        height: FOLDER_NAME_ROWS,
         ..thumb
     }
     .intersection(grid.rect);
     draw_centered_text(
         frame,
-        label_text(app, img_idx, look.marked, name_rect.width),
+        folder_name_text(app, img_idx, name_rect.width),
         look.style,
         name_rect,
     );
@@ -227,33 +224,6 @@ fn draw_cell_border(
     );
 }
 
-/// The filename below the thumbnail of `vis_idx`, cut to the cell width.
-fn draw_label(
-    frame: &mut Frame<'_>,
-    app: &App,
-    vis_idx: usize,
-    img_idx: usize,
-    look: CellLook,
-    grid_rect: Rect,
-) {
-    let thumb = app.gallery.thumb_rect(vis_idx).intersection(grid_rect);
-    let label_y = thumb.y + thumb.height;
-    if label_y >= grid_rect.bottom() {
-        return;
-    }
-    let label_rect = Rect {
-        y: label_y,
-        height: LABEL_ROWS,
-        ..thumb
-    };
-    draw_centered_text(
-        frame,
-        label_text(app, img_idx, look.marked, thumb.width),
-        look.style,
-        label_rect,
-    );
-}
-
 fn draw_centered_text(frame: &mut Frame<'_>, text: Cow<'_, str>, style: Style, area: Rect) {
     frame.render_widget(
         Paragraph::new(text)
@@ -280,22 +250,16 @@ fn head_within(text: &str, room: usize) -> &str {
     text.get(..end).unwrap_or(text)
 }
 
-/// The label of `img_idx`, cut to `width` with a margin, with a dot for a mark.
-fn label_text(app: &App, img_idx: usize, is_marked: bool, width: u16) -> Cow<'_, str> {
+/// The folder name of `img_idx`, cut to `width` with a margin.
+fn folder_name_text(app: &App, img_idx: usize, width: u16) -> Cow<'_, str> {
     let raw_filename = app.filenames[img_idx].as_str();
-    let prefix_len = 2 * usize::from(is_marked);
-    let max_label = usize::from(width).saturating_sub(2 + prefix_len);
-    let trimmed = if raw_filename.width() > max_label {
+    let max_label = usize::from(width).saturating_sub(2);
+    if raw_filename.width() > max_label {
         let room = max_label.saturating_sub(1);
         let head = head_within(raw_filename, room);
         Cow::Owned(format!("{head}\u{2026}"))
     } else {
         Cow::Borrowed(raw_filename)
-    };
-    if is_marked {
-        Cow::Owned(format!("\u{25cf} {trimmed}"))
-    } else {
-        trimmed
     }
 }
 

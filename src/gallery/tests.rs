@@ -1,5 +1,5 @@
 //! The tests of the grid geometry, the cursor and the cell under the mouse.
-use super::{GAP, GalleryState, LABEL_ROWS, MAX_VISIBLE_ROWS, MIN_THUMB_COLS, MIN_VISIBLE_ROWS};
+use super::{GAP, GalleryState, MAX_VISIBLE_ROWS, MIN_THUMB_COLS, MIN_VISIBLE_ROWS};
 use ratatui::layout::Rect;
 
 #[test]
@@ -24,22 +24,6 @@ fn empty_grid_selects_nothing() {
     gallery.move_down();
     gallery.move_to_last();
     assert_eq!(gallery.selected_index(), None);
-}
-
-#[test]
-fn filename_toggle_gives_row_to_labels() {
-    let mut gallery = GalleryState::with_zoom_rows(12, 4);
-    // 20 rows for the cells, after the 5 gap rows of 4 rows.
-    gallery.update_grid(Rect::new(0, 0, 75, 25));
-    assert!(!gallery.show_filenames);
-    assert_eq!(gallery.cell_height_total(), 5);
-    assert_eq!(gallery.thumb_rows, 5);
-
-    gallery.toggle_filenames();
-    assert!(gallery.show_filenames);
-    assert_eq!(gallery.thumb_rows, 4);
-    assert_eq!(gallery.cell_height_total(), 5);
-    assert_eq!(gallery.visible_rows, 4);
 }
 
 #[test]
@@ -307,9 +291,8 @@ fn visible_items_match_thumb_rects() {
 
 #[test]
 fn gaps_sit_between_cells_and_edges() {
-    for (width, height, labels) in [(101, 22, false), (157, 41, true), (80, 30, false)] {
+    for (width, height) in [(101, 22), (157, 41), (80, 30)] {
         let mut gallery = GalleryState::with_zoom_rows(100, 3);
-        gallery.show_filenames = labels;
         let grid = Rect::new(2, 3, width, height);
         gallery.update_grid(grid);
         let cols = gallery.grid_cols;
@@ -358,16 +341,6 @@ fn border_covers_gaps_around_cell() {
         gallery.border_rect(0).right() - 1,
         "two neighbors share the gap column"
     );
-
-    gallery.show_filenames = true;
-    gallery.update_grid(Rect::new(0, 0, 101, 22));
-    let cell = gallery.thumb_rect(0);
-    let border = gallery.border_rect(0);
-    assert_eq!(
-        border.bottom(),
-        cell.bottom() + LABEL_ROWS + 1,
-        "the label is inside"
-    );
 }
 
 #[test]
@@ -394,28 +367,6 @@ fn remainders_go_to_first_cells() {
     gallery.update_grid(Rect::new(0, 0, 12, 21));
     assert_eq!((gallery.grid_cols, gallery.thumb_cols), (2, 5));
     assert_eq!(gallery.extra_cols, 0);
-}
-
-#[test]
-fn labels_sit_below_tall_rows() {
-    let mut gallery = GalleryState::with_zoom_rows(12, 2);
-    gallery.show_filenames = true;
-    gallery.update_grid(Rect::new(0, 0, 100, 26));
-    assert_eq!((gallery.thumb_rows, gallery.cell_height_total()), (10, 11));
-    assert_eq!(gallery.extra_rows, 1);
-
-    let first = gallery.thumb_rect(0);
-    let second_row = gallery.thumb_rect(3);
-    assert_eq!(first.height, 11);
-    assert_eq!(
-        second_row.y, 14,
-        "1 gap, 11 rows of thumbnail, 1 row of label and 1 gap"
-    );
-    assert_eq!(second_row.height, 10);
-    assert_eq!(
-        second_row.bottom() + LABEL_ROWS + 1,
-        gallery.grid_rect.bottom()
-    );
 }
 
 #[test]
@@ -485,19 +436,23 @@ fn portrait_grid_stays_inside_width() {
 }
 
 #[test]
-fn cell_at_hits_thumbnail_and_label() {
-    let mut gallery = GalleryState::with_zoom_rows(12, 2);
-    gallery.show_filenames = true;
+fn cell_at_hits_thumbnail() {
+    let mut gallery = GalleryState::with_zoom_rows(8, 2);
     gallery.update_grid(Rect::new(0, 0, 100, 20));
     let cols = gallery.grid_cols;
-    assert!((3..=4).contains(&cols), "{cols} columns, 3 rows");
+    assert!((3..=4).contains(&cols), "{cols} columns, 3 rows of 8 cells");
     let cell = gallery.thumb_rect(cols + 1);
 
     assert_eq!(gallery.cell_at(cell.x, cell.y), Some(cols + 1));
     assert_eq!(
-        gallery.cell_at(cell.x + cell.width - 1, cell.y + cell.height),
+        gallery.cell_at(cell.x + cell.width - 1, cell.y + cell.height - 1),
         Some(cols + 1),
-        "the label row"
+        "the last cell of the box"
+    );
+    assert_eq!(
+        gallery.cell_at(cell.x, cell.y + cell.height),
+        None,
+        "the gap row below"
     );
     assert_eq!(gallery.cell_at(cell.x - 1, cell.y), None, "the gap");
     assert_eq!(gallery.cell_at(0, 0), None);

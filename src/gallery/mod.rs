@@ -13,7 +13,6 @@ use crate::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use ratatui::layout::Rect;
 use std::ops::Range;
 
-pub(crate) const LABEL_ROWS: u16 = 1;
 /// The gap in terminal cells between two cells and at the grid edges. The borders sit in it.
 pub(crate) const GAP: u16 = 1;
 
@@ -31,7 +30,7 @@ const MIN_GRID_COLS: usize = 2;
 /// The grid: its geometry, the cursor and the filter.
 ///
 /// A terminal cell is one character cell (`cell_px`). The thumbnail area is the box that shows
-/// the picture (`thumb_rect`). A grid cell is the thumbnail area plus its label (`cell_at`).
+/// the picture (`thumb_rect`). A grid cell is the thumbnail area (`cell_at`).
 #[derive(Clone)]
 pub(crate) struct GalleryState {
     pub filtered_indices: Vec<usize>,
@@ -44,7 +43,6 @@ pub(crate) struct GalleryState {
     pub grid_rect: Rect,
     pub search_active: bool,
     pub search_query: String,
-    pub show_filenames: bool,
     /// The zoom level: the thumbnail rows that the grid shows.
     pub zoom_rows: usize,
     /// The base thumbnail area in terminal cells. Every thumbnail is decoded for this size.
@@ -108,7 +106,6 @@ impl GalleryState {
             grid_rect: Rect::default(),
             search_active: false,
             search_query: String::new(),
-            show_filenames: false,
             zoom_rows,
             thumb_cols: DEFAULT_THUMB_COLS,
             thumb_rows: DEFAULT_THUMB_ROWS,
@@ -159,19 +156,6 @@ impl GalleryState {
     /// The box that every thumbnail is decoded for.
     pub(crate) fn thumb_box(&self) -> Rect {
         Rect::new(0, 0, self.thumb_cols, self.thumb_rows)
-    }
-
-    fn cell_height_total(&self) -> u16 {
-        self.thumb_rows + self.label_rows()
-    }
-
-    pub(crate) fn toggle_filenames(&mut self) {
-        self.show_filenames = !self.show_filenames;
-        self.update_grid(self.grid_rect);
-    }
-
-    fn label_rows(&self) -> u16 {
-        u16::from(self.show_filenames)
     }
 
     /// Back to the configured zoom level. Returns `true` if it changed.
@@ -247,10 +231,8 @@ impl GalleryState {
         let grid_rect = self.grid_rect;
         let rows = rows as u16;
         let cell_area_height = grid_rect.height.saturating_sub(gaps(rows));
-        let cell_height = (cell_area_height / rows).max(MIN_THUMB_ROWS + self.label_rows());
-        let thumb_rows = cell_height
-            .saturating_sub(self.label_rows())
-            .clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
+        let cell_height = (cell_area_height / rows).max(MIN_THUMB_ROWS);
+        let thumb_rows = cell_height.clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
         let shaped_width = (f64::from(thumb_rows) * self.cols_per_row).round() as u16;
         // The count uses the clamped width, else the clamp of `thumb_cols` pushes the last
         // columns past the right edge of a far zoomed-out portrait grid.
@@ -277,7 +259,7 @@ impl GalleryState {
         if self.grid_rect.is_empty() {
             return most;
         }
-        let min_cell = usize::from(MIN_THUMB_ROWS + self.label_rows() + GAP);
+        let min_cell = usize::from(MIN_THUMB_ROWS + GAP);
         (usize::from(self.grid_rect.height.saturating_sub(GAP)) / min_cell)
             .max(1)
             .min(most)
@@ -307,7 +289,7 @@ impl GalleryState {
         self.thumb_rows = layout.thumb_rows;
         self.extra_rows = spread(
             layout.cell_area_height,
-            self.cell_height_total(),
+            self.thumb_rows,
             self.visible_rows as u16,
         );
         self.grid_cols = layout.grid_cols;
@@ -369,7 +351,7 @@ impl GalleryState {
     }
 
     fn row_y(&self, row: u16) -> u16 {
-        self.grid_rect.y + GAP + row * (self.cell_height_total() + GAP) + row.min(self.extra_rows)
+        self.grid_rect.y + GAP + row * (self.thumb_rows + GAP) + row.min(self.extra_rows)
     }
 
     pub(crate) fn selected_index(&self) -> Option<usize> {
@@ -454,12 +436,8 @@ impl GalleryState {
     pub(crate) fn cell_at(&self, column: u16, row: u16) -> Option<usize> {
         let range = self.visible_range();
         (0..range.len()).find_map(|vis_idx| {
-            let thumb = self.thumb_rect(vis_idx);
-            let hit = Rect {
-                height: thumb.height + self.label_rows(),
-                ..thumb
-            };
-            hit.contains(ratatui::layout::Position::new(column, row))
+            self.thumb_rect(vis_idx)
+                .contains(ratatui::layout::Position::new(column, row))
                 .then_some(range.start + vis_idx)
         })
     }
@@ -488,7 +466,7 @@ impl GalleryState {
             .map(|(vis_idx, position)| (vis_idx, self.filtered_indices[position]))
     }
 
-    /// The thumbnail area of the visible cell `vis_idx`, without the label row.
+    /// The thumbnail area of the visible cell `vis_idx`.
     pub(crate) fn thumb_rect(&self, vis_idx: usize) -> Rect {
         let col = (vis_idx % self.grid_cols) as u16;
         let row = (vis_idx / self.grid_cols) as u16;
@@ -500,14 +478,14 @@ impl GalleryState {
         }
     }
 
-    /// The border of the visible cell `vis_idx`, in the gaps around the thumbnail and the label.
+    /// The border of the visible cell `vis_idx`, in the gaps.
     pub(crate) fn border_rect(&self, vis_idx: usize) -> Rect {
         let thumb = self.thumb_rect(vis_idx);
         Rect {
             x: thumb.x - GAP,
             y: thumb.y - GAP,
             width: thumb.width + 2 * GAP,
-            height: thumb.height + self.label_rows() + 2 * GAP,
+            height: thumb.height + 2 * GAP,
         }
     }
 }

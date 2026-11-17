@@ -29,12 +29,6 @@ impl App {
         }
     }
 
-    /// The label row makes the thumbnails one row smaller: every cached one is stale.
-    pub(crate) fn toggle_filenames(&mut self) {
-        self.gallery.toggle_filenames();
-        self.mark_dirty();
-    }
-
     /// The cell shape and every thumbnail depend on the pixel size of a terminal cell.
     pub(crate) fn set_cell_px(&mut self, cell_px: (u32, u32)) {
         if cell_px == self.cell_px {
@@ -119,21 +113,6 @@ mod tests {
 
         app.thumb_zoom_reset();
         assert_eq!(app.gallery.zoom_rows, start);
-    }
-
-    #[test]
-    fn filename_toggle_forgets_thumbnails() {
-        let mut app = gallery_app(3);
-        app.thumb_cache.insert(0, image::RgbaImage::new(1, 1));
-        let rows_before = app.gallery.thumb_rows;
-
-        char_key(&mut app, 'n');
-
-        assert!(app.gallery.show_filenames);
-        assert_eq!(app.gallery.thumb_rows, rows_before - 1);
-        assert!(!app.thumb_cache.contains(&0), "the taller picture is stale");
-        assert!(app.graphics_storage_dirty);
-        assert!(app.needs_render);
     }
 
     #[test]

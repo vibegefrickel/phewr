@@ -90,9 +90,6 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
         KeyCode::Char('0') => {
             app.thumb_zoom_reset();
         }
-        KeyCode::Char('n') => {
-            app.toggle_filenames();
-        }
         KeyCode::Char(' ') => {
             app.toggle_selection_at_cursor();
         }
@@ -324,21 +321,18 @@ mod tests {
         assert!(char_key(&mut app, 'q'));
     }
 
+    /// `n` is free: it changes no layout.
     #[test]
-    fn n_toggles_filename_labels() {
+    fn n_changes_nothing() {
         let mut app = gallery_app(2);
-        let compact_thumbs = app.gallery.thumb_rows;
-        assert!(!app.gallery.show_filenames);
-
-        app.needs_render = false;
-        char_key(&mut app, 'n');
-        assert!(app.gallery.show_filenames);
-        assert_eq!(app.gallery.thumb_rows, compact_thumbs - 1);
-        assert!(app.needs_render);
+        let layout = (app.gallery.thumb_rows, app.gallery.grid_cols);
+        let thumb_rect = app.gallery.thumb_rect(0);
 
         char_key(&mut app, 'n');
-        assert!(!app.gallery.show_filenames);
-        assert_eq!(app.gallery.thumb_rows, compact_thumbs);
+
+        assert_eq!((app.gallery.thumb_rows, app.gallery.grid_cols), layout);
+        assert_eq!(app.gallery.thumb_rect(0), thumb_rect);
+        assert_eq!(app.mode, ViewMode::Gallery);
     }
 
     /// The zoom keys stop at two rows and at the most rows that fit the terminal.

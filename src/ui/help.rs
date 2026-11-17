@@ -28,7 +28,6 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("0", "Reset thumbnail size"),
     ("Wheel", "Scroll the grid"),
     ("PgDn/PgUp, ^f/^b", "Page down / up"),
-    ("n", "Toggle filename labels"),
     ("Tab / right click", "Toggle info panel"),
     ("s", "Slideshow from cursor"),
     #[cfg(feature = "video")]
