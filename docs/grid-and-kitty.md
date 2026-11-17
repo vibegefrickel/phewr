@@ -27,7 +27,7 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 ### Borders
 
 - The selected cell gets a thick border (`BorderType::Thick`, `STYLES.cursor_cell`). It lies in
-  the gaps around the cell and its label (`GalleryState::border_rect`).
+  the gaps around the cell (`GalleryState::border_rect`).
 - Each marked cell gets a plain yellow border (`STYLES.marked`).
 - Neighbors share the gap line.
 - The selected border is drawn last, so it wins.

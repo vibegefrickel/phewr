@@ -75,6 +75,7 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Done
 
+- Filename labels removed (2026-11-17, `200b8a4`, worker `remove-filename-labels`): the grid has no label row and no `n` key, because the status row and the info panel show the file facts. The thumbnail box gets the row. Folder cells keep their name below the folder icon.
 - Grid zoom levels (2026-11-17, `b314a45`, worker `grid-zoom-levels`): a zoom step goes to the next zoom level, and every step changes the column count. A level keeps the folder shape at a box width of at least 5 cells (`MIN_THUMB_COLS`, before 8). When the width limits the picture, a level shows the most rows at that picture size (a narrow pane). Before, the steps from 12 to 7 rows of a 9:16 folder on 200x51 all gave 22 columns. The Live mark is `◎` alone in a border below 9 columns. Found in the test run of 2026-11-17, step 2, together with the right edge fix of `8626afa`.
 - Sync of the master copy (2026-11-16): `../youtr` and `../schnattr` match the master after the fixes of 2026-11-12. youtr still holds its `read_event` workaround (`src/tui/session/mod.rs`) and its `dynamic` helper (`src/thumbs/load.rs`). Their removal is work of the youtr session. youtr keeps `Placing::EveryFrame` until the maintainer tests the self check under herdr.
 - Picture module, the youtr notes (2026-11-12): `AnswerKeys::read` passes a `Resize`, `FocusGained` or `FocusLost` event through and keeps the hold, so an answer that such an event splits comes whole (before, its rest reached the app as key presses). `ScreenImage::into_dynamic` gives the `DynamicImage` for an edit (an opaque picture as RGB). `Bitmap` converts into `Pixels` like `ScreenImage`. Three tests cover the three items.
@@ -160,7 +161,7 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 - Kitty transfer medium: a temp file (`t=t`) when the terminal answers the probe with `OK` and deletes the probe file, PNG over SSH, direct otherwise.
 - Benchmarks: `src/bench/` holds ignored benchmarks on `PHEWR_TEST_DIR`, `just bench [DIR]` runs them.
 - Theme system removed: `src/theme.rs`, the theme catalog, the `t` picker and the `-t` flag are gone. phewr uses the terminal default colors and the 16 ANSI colors (`src/styles.rs`).
-- Grid look: a border only around the selected and the marked cells, no spacer line, centered thumbnails, filenames hidden by default (`n` toggles them)
+- Grid look: a border only around the selected and the marked cells, no spacer line, centered thumbnails, filenames hidden by default (`n` toggled them until 2026-11-17)
 - Grid zoom: `+`/`-` change the visible rows (default 4), the columns follow the terminal width (minimum 2), the state file saves the zoom level as `[gallery] visible_rows`
 - Fullscreen fix: a gallery pre-decode without a hint showed HEIC, JPEG and PNG at full size
 - JPEG XL (jxl-oxide, sRGB), EXR and HDR (tone map), QOI, TGA

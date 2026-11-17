@@ -165,8 +165,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
   view. `status.rs` holds the status row of each view (`draw_status_row`, `error_line`,
   `gallery_status_line`, `fullscreen_status_line`, `video_status_line`, `is_empty_folder`).
-  `grid.rs` holds the grid cells: the borders, the labels (`label_text`, the column width through
-  `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` holds the help popup: two columns
+  `grid.rs` holds the grid cells: the borders, the folder names (`folder_name_text`, the column width
+  through `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` holds the help popup: two columns
   from 100 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, the rows in `HELP_GALLERY_ROWS` and
   `HELP_FULLSCREEN_ROWS`), else one column that clips. The gallery, the fullscreen view and the
   video view have no frame. They use the full area minus 1 status row (`content_area`,

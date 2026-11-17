@@ -225,8 +225,8 @@ read after a reboot.
   cost. The length of the motion needs one ffprobe of about 31 ms per still under the cursor.
   For this reason, the status row shows the length only after the motion played once, from the
   probe cache.
-- A mark on the cell: the picture covers the text of its cell. A symbol can go into the label
-  row (the `n` key) or into the gap above the cell, where the border lives.
+- A mark on the cell: the picture covers the text of its cell. A symbol can go into the gap
+  above the cell, where the border lives. The grid has no label row since 2026-11-17.
 - Cost: the scan pass (0.11 ms per 10 000 names), the side table, the mark, and the player
   changes above. When the motion plays, phewr reads the identifiers. The probe adds the
   format tag, and the meta thread reads the tag 0x0011.
@@ -290,7 +290,7 @@ Choice B, provisional until open question 2 has an answer. These facts support i
   0.61 ms on the first read. A missing identifier counts as a match.
 - Choice C: the loop of the real 2.83 s motion takes 0.59 s (a constant-rate run, 12 frames).
   Each Live cell costs one loop job, and the cell count stays halved.
-- The Live mark sits in the gap above the cell (`◎ Live`), not in the label row.
+- The Live mark sits in the gap above the cell (`◎ Live`).
 - The status row shows the motion length (`Live 2.8 s`, `7a62965`). The meta thread takes it
   from the probe cache, else a second thread runs one ffprobe. A failed probe gets no retry.
 - A rest of 200 ms in the fullscreen view starts the motion ahead of Enter (`b82f164`). The first

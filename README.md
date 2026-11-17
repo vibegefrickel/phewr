@@ -135,8 +135,7 @@ return {
 | `Backspace` | Go to the parent folder |
 | `p` | Play the video in an mpv window, with sound |
 | `s` | Start a slideshow from the cursor |
-| `+` `-` `0` | Larger / smaller / default thumbnails (2 to 12 rows) |
-| `n` | Show or hide file names |
+| `+` `-` `0` | Larger / smaller / default thumbnails (each step changes the columns) |
 | `Tab` | Show or hide the info panel |
 | `/` | Search. `Enter` applies, `Esc` clears. |
 | `Space` | Mark or unmark (the marks go to yazi on quit) |
