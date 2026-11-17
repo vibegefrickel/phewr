@@ -1,5 +1,5 @@
-//! The grid cells: the borders in the gaps, the labels and the icons of the cells without a
-//! thumbnail. Kitty draws the thumbnails above them.
+//! The grid cells: the borders in the gaps, the folder names, the Live marks and the icons of the
+//! cells without a thumbnail. Kitty draws the thumbnails above them.
 
 use crate::app::App;
 use crate::icons::{self, Icon};
@@ -26,11 +26,6 @@ struct GridDraw<'a> {
     icons: &'a mut Vec<IconCell>,
 }
 
-#[derive(Clone, Copy)]
-struct CellLook {
-    style: Style,
-}
-
 /// The grid cells. The selected border comes last and wins on a gap
 /// that two cells share. `icons` gets the icons that Kitty draws.
 pub(super) fn draw_thumbnail_cells(
@@ -55,17 +50,15 @@ pub(super) fn draw_thumbnail_cells(
         } else if is_marked {
             draw_cell_border(frame, BorderType::Plain, STYLES.marked, border, grid_rect);
         }
-        let look = CellLook {
-            style: if is_selected {
-                STYLES.cursor_cell
-            } else if is_marked {
-                STYLES.marked
-            } else {
-                STYLES.text
-            },
+        let style = if is_selected {
+            STYLES.cursor_cell
+        } else if is_marked {
+            STYLES.marked
+        } else {
+            STYLES.text
         };
         if app.is_folder(img_idx) {
-            draw_folder_cell(frame, app, vis_idx, img_idx, look, &mut grid);
+            draw_folder_cell(frame, app, vis_idx, img_idx, style, &mut grid);
         } else if !app.thumb_cache.contains(&img_idx) {
             let icon = if app.is_video(img_idx) {
                 Icon::Video
@@ -75,7 +68,7 @@ pub(super) fn draw_thumbnail_cells(
             draw_cell_icon(frame, app, vis_idx, icon, &mut grid);
         }
         if app.is_live(img_idx) {
-            draw_live_mark(frame, border, look.style, grid_rect);
+            draw_live_mark(frame, border, style, grid_rect);
         }
     }
 
@@ -164,7 +157,7 @@ fn draw_folder_cell(
     app: &App,
     vis_idx: usize,
     img_idx: usize,
-    look: CellLook,
+    style: Style,
     grid: &mut GridDraw<'_>,
 ) {
     let thumb = app.gallery.thumb_rect(vis_idx);
@@ -188,7 +181,7 @@ fn draw_folder_cell(
     draw_centered_text(
         frame,
         folder_name_text(app, img_idx, name_rect.width),
-        look.style,
+        style,
         name_rect,
     );
 }

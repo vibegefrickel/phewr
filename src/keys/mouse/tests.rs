@@ -182,18 +182,15 @@ fn horizontal_scroll_in_the_grid_does_nothing() {
 #[test]
 fn right_click_shows_info_panel() {
     let mut app = gallery_app(9);
+    mouse(&mut app, RIGHT, (0, 0));
+    assert_eq!(app.gallery.cursor, 0, "a right click on a gap does nothing");
+    assert!(!app.info_visible);
+    assert!(app.graphics_out.take_bytes().is_empty());
+
     mouse_cell(&mut app, RIGHT, 5);
     assert_eq!(app.gallery.cursor, 5);
     assert!(app.info_visible);
     assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
-
-    mouse_cell(&mut app, RIGHT, 2);
-    assert_eq!(app.gallery.cursor, 2);
-    assert!(app.info_visible);
-    assert!(app.graphics_out.take_bytes().is_empty());
-
-    mouse(&mut app, RIGHT, (0, 0));
-    assert_eq!(app.gallery.cursor, 2, "a right click on a gap does nothing");
 }
 
 #[test]
@@ -201,6 +198,7 @@ fn right_click_on_the_cursor_cell_closes_info_panel() {
     let mut app = gallery_app(9);
     mouse_cell(&mut app, RIGHT, 5);
     assert!(app.info_visible);
+    draw_frame(&mut app, 120, 24);
     app.graphics_out.take_bytes();
 
     mouse_cell(&mut app, RIGHT, 5);
@@ -210,21 +208,29 @@ fn right_click_on_the_cursor_cell_closes_info_panel() {
 }
 
 #[test]
-fn right_click_on_another_cell_keeps_info_panel_open() {
+fn right_click_on_another_cell_closes_info_panel_without_moving_cursor() {
     let mut app = gallery_app(9);
     mouse_cell(&mut app, RIGHT, 5);
+    draw_frame(&mut app, 120, 24);
+    app.graphics_out.take_bytes();
+
     mouse_cell(&mut app, RIGHT, 2);
-    assert_eq!(app.gallery.cursor, 2);
-    assert!(app.info_visible);
+    assert_eq!(app.gallery.cursor, 5);
+    assert!(!app.info_visible);
+    assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
 }
 
 #[test]
-fn right_click_on_a_gap_keeps_info_panel_open() {
+fn right_click_on_a_gap_closes_info_panel_without_moving_cursor() {
     let mut app = gallery_app(9);
     mouse_cell(&mut app, RIGHT, 5);
+    draw_frame(&mut app, 120, 24);
+    app.graphics_out.take_bytes();
+
     mouse(&mut app, RIGHT, (0, 0));
     assert_eq!(app.gallery.cursor, 5);
-    assert!(app.info_visible);
+    assert!(!app.info_visible);
+    assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
 }
 
 #[test]

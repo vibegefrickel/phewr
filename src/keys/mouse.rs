@@ -118,17 +118,15 @@ fn gallery_click(app: &mut App, at: Position, now: Instant) -> io::Result<()> {
     Ok(())
 }
 
-/// A right click on a cell opens the info panel. A second one on the cursor cell closes it, and one
-/// on another cell moves the cursor and keeps the panel open.
+/// A right click on a cell opens the info panel. If the panel is open, a right click anywhere in
+/// the gallery closes it without moving the cursor. If the panel is closed, a right click on a gap
+/// does nothing.
 fn gallery_right_click(app: &mut App, at: Position) -> io::Result<()> {
-    let before = app.gallery.cursor;
-    let Some(position) = select_cell(app, at) else {
+    if !app.info_visible && select_cell(app, at).is_none() {
         return Ok(());
-    };
-    if !app.info_visible || position == before {
-        app.graphics_delete_all()?;
-        app.toggle_info();
     }
+    app.graphics_delete_all()?;
+    app.toggle_info();
     Ok(())
 }
 

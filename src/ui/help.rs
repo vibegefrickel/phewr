@@ -24,7 +24,7 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("g / G, Home / End", "First / last"),
     ("Enter, double-click", "Open image or folder"),
     ("Backspace", "Parent folder"),
-    ("+ / -, Shift+wheel", "Larger / smaller grid"),
+    ("+ / -, Shift+wheel", "Grid size (Shift if sent)"),
     ("0", "Reset thumbnail size"),
     ("Wheel", "Scroll the grid"),
     ("PgDn/PgUp, ^f/^b", "Page down / up"),
@@ -275,6 +275,7 @@ mod tests {
         let (two, screen) = two_columns(HELP_TWO_COLUMN_WIDTH);
         assert!(two, "{HELP_TWO_COLUMN_WIDTH} columns");
         assert_shows(&screen, "Pause / resume slideshow");
+        assert_shows(&screen, "Grid size (Shift if sent)");
         assert!(
             !two_columns(HELP_TWO_COLUMN_WIDTH - 1).0,
             "one column below"
