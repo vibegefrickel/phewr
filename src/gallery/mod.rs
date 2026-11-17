@@ -20,7 +20,7 @@ pub(crate) const GAP: u16 = 1;
 /// The cell size before the first `update_grid`.
 const DEFAULT_THUMB_COLS: u16 = 20;
 const DEFAULT_THUMB_ROWS: u16 = 8;
-const MIN_THUMB_COLS: u16 = 8;
+const MIN_THUMB_COLS: u16 = 5;
 const MAX_THUMB_COLS: u16 = 120;
 const MIN_THUMB_ROWS: u16 = 3;
 const MAX_THUMB_ROWS: u16 = 60;
@@ -63,6 +63,22 @@ pub(crate) struct GalleryState {
     /// the scroll stay, so a zoom out and back in returns to the same screen after a clamp at the
     /// list edge.
     kept_place: Option<KeptPlace>,
+}
+
+/// The layout of one row count in the grid rectangle (`GalleryState::row_layout`).
+struct RowLayout {
+    /// The rows of the cells after the gap rows.
+    cell_area_height: u16,
+    thumb_rows: u16,
+    /// The width in terminal cells that the folder shape gives the box, before any clamp.
+    shaped_width: u16,
+    grid_cols: usize,
+    /// The columns of the cells after the gap columns.
+    cell_area_width: u16,
+    thumb_cols: u16,
+    /// The box is at least as high as the picture at the full box width. The picture is then
+    /// limited by the width, and it keeps its size with fewer box rows.
+    holds_picture_width: bool,
 }
 
 /// A cursor place (`GalleryState::cursor_place`) and the cursor and the scroll after its relayout.
@@ -163,14 +179,24 @@ impl GalleryState {
         self.set_zoom_rows(self.default_zoom_rows)
     }
 
-    /// One row fewer, larger thumbnails. Returns `true` if the level changed.
+    /// The next level with fewer rows, larger thumbnails. Returns `true` if the level changed.
     pub(crate) fn thumb_zoom_in(&mut self) -> bool {
-        self.set_zoom_rows(self.zoom_rows.saturating_sub(1))
+        let levels = self.zoom_levels();
+        let shown = shown_level(&levels, self.zoom_rows);
+        let Some(&rows) = levels.iter().rev().find(|&&rows| rows < shown) else {
+            return false;
+        };
+        self.set_zoom_rows(rows)
     }
 
-    /// One row more, smaller thumbnails. Returns `true` if the level changed.
+    /// The next level with more rows, smaller thumbnails. Returns `true` if the level changed.
     pub(crate) fn thumb_zoom_out(&mut self) -> bool {
-        self.set_zoom_rows(self.zoom_rows + 1)
+        let levels = self.zoom_levels();
+        let shown = shown_level(&levels, self.zoom_rows);
+        let Some(&rows) = levels.iter().find(|&&rows| rows > shown) else {
+            return false;
+        };
+        self.set_zoom_rows(rows)
     }
 
     pub(crate) fn set_zoom_rows(&mut self, rows: usize) -> bool {
@@ -181,6 +207,68 @@ impl GalleryState {
         self.zoom_rows = rows;
         self.update_grid(self.grid_rect);
         true
+    }
+
+    /// The row counts that a zoom step shows, fewest rows first. Each level keeps the cell shape
+    /// (`MIN_THUMB_COLS`), and each step changes the column count, so every step is visible. Of
+    /// the row counts with one column count, the level is the count with the largest picture
+    /// and then the most rows. Before the first `update_grid`, every row count is a level.
+    fn zoom_levels(&self) -> Vec<usize> {
+        let (fewest, most) = (self.min_visible_rows(), self.max_visible_rows());
+        if self.grid_rect.is_empty() {
+            return (fewest..=most).collect();
+        }
+        let mut levels = Vec::new();
+        let mut last_cols = None;
+        for rows in fewest..=most {
+            let layout = self.row_layout(rows);
+            // The shaped width does not grow with the rows, so no later count keeps the shape.
+            if layout.shaped_width < MIN_THUMB_COLS && rows > fewest {
+                break;
+            }
+            // The column count does not fall with the rows, so equal counts are neighbors. The
+            // box height falls with the rows: the fewest rows give the largest picture. A picture
+            // that the width limits keeps its size while the box holds the full width, so the
+            // most of those rows win.
+            if last_cols != Some(layout.grid_cols) {
+                last_cols = Some(layout.grid_cols);
+                levels.push(rows);
+            } else if layout.holds_picture_width
+                && let Some(level) = levels.last_mut()
+            {
+                *level = rows;
+            }
+        }
+        levels
+    }
+
+    /// The box size, the shaped width and the column count of `rows` rows in `grid_rect`.
+    fn row_layout(&self, rows: usize) -> RowLayout {
+        let grid_rect = self.grid_rect;
+        let rows = rows as u16;
+        let cell_area_height = grid_rect.height.saturating_sub(gaps(rows));
+        let cell_height = (cell_area_height / rows).max(MIN_THUMB_ROWS + self.label_rows());
+        let thumb_rows = cell_height
+            .saturating_sub(self.label_rows())
+            .clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
+        let shaped_width = (f64::from(thumb_rows) * self.cols_per_row).round() as u16;
+        // The count uses the clamped width, else the clamp of `thumb_cols` pushes the last
+        // columns past the right edge of a far zoomed-out portrait grid.
+        let grid_cols = (usize::from(grid_rect.width.saturating_sub(GAP))
+            / usize::from(shaped_width.max(MIN_THUMB_COLS) + GAP))
+        .max(MIN_GRID_COLS);
+        let cols = grid_cols as u16;
+        let cell_area_width = grid_rect.width.saturating_sub(gaps(cols));
+        let thumb_cols = (cell_area_width / cols).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
+        RowLayout {
+            cell_area_height,
+            thumb_rows,
+            shaped_width,
+            grid_cols,
+            cell_area_width,
+            thumb_cols,
+            holds_picture_width: f64::from(thumb_rows) * self.cols_per_row >= f64::from(thumb_cols),
+        }
     }
 
     /// The rows that fit the terminal at the smallest thumbnail height.
@@ -205,8 +293,8 @@ impl GalleryState {
         self.kept_place = None;
     }
 
-    /// Fit `zoom_rows` rows into `grid_rect`. The cell shape picks the column count, then the
-    /// columns fill the width.
+    /// Fit the largest zoom level of at most `zoom_rows` rows, else the first level, into
+    /// `grid_rect`. The cell shape picks the column count, then the columns fill the width.
     pub(crate) fn update_grid(&mut self, grid_rect: Rect) {
         let before = (self.grid_cols, self.visible_rows);
         let place = self
@@ -214,26 +302,21 @@ impl GalleryState {
             .filter(|kept| kept.cursor == self.cursor && kept.scroll_offset == self.scroll_offset)
             .map_or_else(|| self.cursor_place(), |kept| kept.place);
         self.grid_rect = grid_rect;
-        self.visible_rows = self
-            .zoom_rows
-            .clamp(self.min_visible_rows(), self.max_visible_rows());
-        let rows = self.visible_rows as u16;
-        let cell_area_height = grid_rect.height.saturating_sub(gaps(rows));
-        let cell_height = (cell_area_height / rows).max(MIN_THUMB_ROWS + self.label_rows());
-        self.thumb_rows = cell_height
-            .saturating_sub(self.label_rows())
-            .clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
-        self.extra_rows = spread(cell_area_height, self.cell_height_total(), rows);
-        // The count uses the clamped width, else the clamp below pushes the last columns past
-        // the right edge of a far zoomed-out portrait grid.
-        let shaped_width = (f64::from(self.thumb_rows) * self.cols_per_row).round() as u16;
-        self.grid_cols = (usize::from(grid_rect.width.saturating_sub(GAP))
-            / usize::from(shaped_width.max(MIN_THUMB_COLS) + GAP))
-        .max(MIN_GRID_COLS);
-        let cols = self.grid_cols as u16;
-        let cell_area_width = grid_rect.width.saturating_sub(gaps(cols));
-        self.thumb_cols = (cell_area_width / cols).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
-        self.extra_cols = spread(cell_area_width, self.thumb_cols, cols);
+        self.visible_rows = shown_level(&self.zoom_levels(), self.zoom_rows);
+        let layout = self.row_layout(self.visible_rows);
+        self.thumb_rows = layout.thumb_rows;
+        self.extra_rows = spread(
+            layout.cell_area_height,
+            self.cell_height_total(),
+            self.visible_rows as u16,
+        );
+        self.grid_cols = layout.grid_cols;
+        self.thumb_cols = layout.thumb_cols;
+        self.extra_cols = spread(
+            layout.cell_area_width,
+            self.thumb_cols,
+            self.grid_cols as u16,
+        );
         if before != (self.grid_cols, self.visible_rows) {
             self.keep_cursor_place(place);
             self.ensure_cursor_visible();
@@ -427,6 +510,17 @@ impl GalleryState {
             height: thumb.height + self.label_rows() + 2 * GAP,
         }
     }
+}
+
+/// The largest level of at most `zoom_rows` rows, else the first level.
+fn shown_level(levels: &[usize], zoom_rows: usize) -> usize {
+    levels
+        .iter()
+        .rev()
+        .find(|&&rows| rows <= zoom_rows)
+        .or(levels.first())
+        .copied()
+        .unwrap_or(1)
 }
 
 fn gaps(count: u16) -> u16 {

@@ -692,9 +692,10 @@ fn zoom_in_leaves_no_black_cell() {
     zoom_to_the_limit('+', 2);
 }
 
+/// From 10 rows on, the boxes are 3 rows high, so 11 and 12 rows give no new level.
 #[test]
 fn zoom_out_leaves_no_black_cell() {
-    zoom_to_the_limit('-', 12);
+    zoom_to_the_limit('-', 10);
 }
 
 #[test]

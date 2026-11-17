@@ -1,5 +1,5 @@
 //! The tests of the grid geometry, the cursor and the cell under the mouse.
-use super::{GAP, GalleryState, LABEL_ROWS, MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
+use super::{GAP, GalleryState, LABEL_ROWS, MAX_VISIBLE_ROWS, MIN_THUMB_COLS, MIN_VISIBLE_ROWS};
 use ratatui::layout::Rect;
 
 #[test]
@@ -76,7 +76,7 @@ fn zero_rect_keeps_smallest_cells() {
     assert_eq!(gallery.grid_cols, 2);
     assert_eq!(
         gallery.thumb_box(),
-        Rect::new(0, 0, 8, 3),
+        Rect::new(0, 0, 5, 3),
         "the smallest thumbnail area"
     );
     assert_eq!(gallery.visible_rows, 4);
@@ -92,11 +92,13 @@ fn zoom_changes_and_clamps_rows() {
     assert_eq!(gallery.grid_cols, 3);
     assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (32, 8));
 
+    // 3 rows give the 2 columns of 2 rows, so the step goes to 2 rows.
     assert!(gallery.thumb_zoom_in());
-    assert_eq!(gallery.zoom_rows, 3);
+    assert_eq!(gallery.zoom_rows, 2);
     assert!(gallery.thumb_rows > 8);
 
     assert!(gallery.thumb_zoom_out());
+    assert_eq!(gallery.zoom_rows, 4);
     assert_eq!((gallery.thumb_cols, gallery.thumb_rows), (32, 8));
 
     for _ in 0..40 {
@@ -110,25 +112,28 @@ fn zoom_changes_and_clamps_rows() {
         gallery.thumb_zoom_out();
     }
     assert_eq!(
-        gallery.zoom_rows, 9,
-        "40 rows: 1 edge gap, then 3 rows and 1 gap each"
+        gallery.zoom_rows, 8,
+        "40 rows fit 9 rows of 3, and 9 rows give the 9 columns of 8 rows"
     );
     assert!(!gallery.thumb_zoom_out());
 
     // A tall terminal stops at 12 rows.
-    gallery.update_grid(Rect::new(0, 0, 100, 200));
+    gallery.update_grid(Rect::new(0, 0, 400, 200));
     for _ in 0..40 {
         gallery.thumb_zoom_out();
     }
     assert_eq!(gallery.zoom_rows, 12);
     assert_eq!(gallery.visible_rows, 12);
 
-    // A terminal with room for one row keeps that row.
+    // A terminal with room for one row shows that row, and no step changes the level.
     gallery.update_grid(Rect::new(0, 0, 100, 6));
     assert_eq!(gallery.visible_rows, 1);
-    assert!(gallery.thumb_zoom_in(), "from 12 to the 1 row that fits");
-    assert_eq!(gallery.zoom_rows, 1);
     assert!(!gallery.thumb_zoom_in());
+    assert!(!gallery.thumb_zoom_out());
+    assert_eq!(
+        gallery.zoom_rows, 12,
+        "the level stays for a larger terminal"
+    );
 
     gallery.update_grid(Rect::new(0, 0, 100, 40));
     assert!(gallery.reset_zoom());
@@ -387,7 +392,7 @@ fn remainders_go_to_first_cells() {
 
     // A clamped cell size cannot fill the width, so nothing spreads.
     gallery.update_grid(Rect::new(0, 0, 12, 21));
-    assert_eq!((gallery.grid_cols, gallery.thumb_cols), (2, 8));
+    assert_eq!((gallery.grid_cols, gallery.thumb_cols), (2, 5));
     assert_eq!(gallery.extra_cols, 0);
 }
 
@@ -546,4 +551,125 @@ fn scroll_rows_ignores_short_list() {
     empty.update_grid(Rect::new(0, 0, 100, 20));
     empty.scroll_rows(1);
     assert_eq!(empty.cell_at(5, 5), None);
+}
+
+/// The grid of the maintainer: Ghostty fullscreen, 200x51 cells of 15x38 px.
+fn fullscreen_grid(aspect: f64) -> (GalleryState, Rect) {
+    let mut gallery = GalleryState::with_zoom_rows(500, 2);
+    let grid = Rect::new(0, 0, 200, 51);
+    gallery.update_grid(grid);
+    gallery.set_cell_shape(aspect, (15, 38));
+    (gallery, grid)
+}
+
+/// Every step changes the column count, every level keeps the cell shape, and every level ends
+/// at the right edge gap.
+#[test]
+fn every_zoom_step_changes_columns() {
+    for (aspect, expected) in [
+        (9.0 / 16.0, vec![5, 9, 11, 14, 18, 19, 24, 28]),
+        (0.75, vec![4, 6, 9, 11, 14, 16, 18, 22, 28]),
+        (1.5, vec![2, 3, 4, 5, 7, 8, 9, 12, 16]),
+    ] {
+        let (mut gallery, grid) = fullscreen_grid(aspect);
+        let mut columns = vec![gallery.grid_cols];
+        loop {
+            let layout = gallery.row_layout(gallery.visible_rows);
+            assert!(
+                layout.shaped_width >= MIN_THUMB_COLS,
+                "{aspect}: {} rows",
+                gallery.visible_rows
+            );
+            let last = gallery.thumb_rect(gallery.grid_cols - 1);
+            assert_eq!(last.right() + GAP, grid.right(), "{aspect}");
+            if !gallery.thumb_zoom_out() {
+                break;
+            }
+            columns.push(gallery.grid_cols);
+        }
+        assert_eq!(columns, expected, "{aspect}");
+
+        let mut back = vec![gallery.grid_cols];
+        while gallery.thumb_zoom_in() {
+            back.push(gallery.grid_cols);
+        }
+        back.reverse();
+        assert_eq!(back, expected, "{aspect}: the same levels back");
+        assert_eq!(gallery.zoom_rows, 2);
+    }
+}
+
+/// A stored level of 12 rows in a 9:16 folder shows the 9 rows that keep the cell shape.
+#[test]
+fn stored_level_shows_largest_level() {
+    let mut gallery = GalleryState::with_zoom_rows(500, 12);
+    gallery.update_grid(Rect::new(0, 0, 200, 51));
+    gallery.set_cell_shape(9.0 / 16.0, (15, 38));
+    assert_eq!(gallery.zoom_rows, 12, "the stored level stays");
+    assert_eq!((gallery.visible_rows, gallery.grid_cols), (9, 28));
+
+    assert!(!gallery.thumb_zoom_out(), "no level with more columns");
+    assert_eq!(gallery.zoom_rows, 12);
+
+    assert!(gallery.thumb_zoom_in());
+    assert_eq!(gallery.zoom_rows, 8);
+    assert_eq!((gallery.visible_rows, gallery.grid_cols), (8, 24));
+}
+
+/// A terminal too small for the shape at the fewest rows keeps the fewest rows as its one level.
+#[test]
+fn tiny_grid_keeps_fewest_rows() {
+    let mut gallery = GalleryState::with_zoom_rows(50, 4);
+    gallery.update_grid(Rect::new(0, 0, 40, 9));
+    gallery.set_cell_shape(9.0 / 16.0, (15, 38));
+    assert!(gallery.row_layout(2).shaped_width < MIN_THUMB_COLS);
+    assert_eq!(gallery.zoom_levels(), [2]);
+    assert_eq!(gallery.visible_rows, 2);
+    assert!(!gallery.thumb_zoom_in());
+    assert!(!gallery.thumb_zoom_out());
+}
+
+/// The picture in the box: the folder shape at the box width, or at the box height when the
+/// shape is wider than the box.
+fn picture_size(gallery: &GalleryState) -> (f64, f64) {
+    let (cols, rows) = (f64::from(gallery.thumb_cols), f64::from(gallery.thumb_rows));
+    let width = cols.min(rows * gallery.cols_per_row);
+    (width, width / gallery.cols_per_row)
+}
+
+/// A narrow pane with 3:2 photos: the width limits the picture, so a level shows the most rows
+/// at that picture size. No level leaves empty rows in a box that one more row also fills.
+#[test]
+fn width_limited_levels_show_most_rows() {
+    for (width, height, expected) in [
+        (60, 51, vec![5, 9, 11]),
+        (80, 40, vec![3, 5, 7, 8]),
+        (100, 51, vec![3, 6, 7, 10, 12]),
+    ] {
+        let mut gallery = GalleryState::with_zoom_rows(500, 2);
+        gallery.update_grid(Rect::new(0, 0, width, height));
+        gallery.set_cell_shape(1.5, (15, 38));
+        assert_eq!(gallery.zoom_levels(), expected, "{width}x{height}");
+        let most = gallery.max_visible_rows();
+        loop {
+            let rows = gallery.visible_rows;
+            let layout = gallery.row_layout(rows);
+            if rows < most && layout.holds_picture_width {
+                let next = gallery.row_layout(rows + 1);
+                assert!(
+                    next.grid_cols != layout.grid_cols || !next.holds_picture_width,
+                    "{width}x{height}: {rows} rows leave empty box rows"
+                );
+            }
+            let (cols, picture) = (gallery.grid_cols, picture_size(&gallery));
+            if !gallery.thumb_zoom_out() {
+                break;
+            }
+            assert!(
+                gallery.grid_cols > cols
+                    || (gallery.visible_rows > rows && picture_size(&gallery) == picture),
+                "{width}x{height}: the step from {rows} rows"
+            );
+        }
+    }
 }

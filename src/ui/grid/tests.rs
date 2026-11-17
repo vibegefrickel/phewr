@@ -342,11 +342,11 @@ fn small_cell_gets_symbol() {
 
 #[test]
 fn cut_cell_stays_open_at_edge() {
-    // 15 columns: the cell width clamps to 8, so the second cell overflows the grid.
+    // 12 columns: the cell width clamps to 5, so the second cell overflows the grid.
     let mut app = app_with(&["a.jpg", "b.jpg"]);
     app.gallery.cursor = 1;
     app.selection.insert(app.images[0].clone());
-    let buffer = render_buffer(&mut app, None, 15, 8);
+    let buffer = render_buffer(&mut app, None, 12, 8);
     let grid = app.gallery.grid_rect;
     let border = app.gallery.border_rect(1);
     assert!(border.right() > grid.right(), "the cell overflows");
@@ -539,10 +539,10 @@ fn check_head(text: &str) {
 
 #[test]
 fn narrow_grid_cuts_first_cell() {
-    // 9 columns: the cell width clamps to 8, so the first border needs 10 columns.
+    // 6 columns: the cell width clamps to 5, so the first border needs 7 columns.
     let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
     app.gallery.show_filenames = true;
-    let buffer = render_buffer(&mut app, None, 9, 12);
+    let buffer = render_buffer(&mut app, None, 6, 12);
     let grid = app.gallery.grid_rect;
     assert_eq!(app.gallery.grid_cols, 2);
     assert!(
@@ -597,5 +597,34 @@ fn live_still_carries_mark_above_cell() {
         "\u{250f}",
         Color::Blue,
         Modifier::BOLD,
+    );
+}
+
+/// A 5x3 box: the Live mark is `◎` alone and stays inside its border, and the cell icon is the
+/// one-cell symbol.
+#[test]
+fn narrow_live_cell_gets_symbol_mark() {
+    let mut app = app_with(&["IMG_0001.JPG", "b.jpg", "c.jpg"]);
+    app.set_live_photos(crate::scanner::LivePhotos::from_pairs([(
+        "/photos/IMG_0001.JPG".into(),
+        "/photos/IMG_0001.MOV".into(),
+    )]));
+    // The cursor sits in the second row, so no border covers the top row.
+    app.gallery.cursor = 2;
+    let buffer = render_buffer(&mut app, None, 13, 10);
+    assert_eq!(app.gallery.thumb_box(), Rect::new(0, 0, 5, 3));
+    let border = app.gallery.border_rect(0);
+    assert_eq!(border.width, 7);
+
+    let top = &screen_rows(&buffer)[usize::from(border.y)];
+    assert_eq!(top.trim_end(), "  \u{25ce}", "nothing in the next cell");
+
+    assert_eq!(icon_rect(app.gallery.thumb_rect(0), app.cell_px), None);
+    assert_symbol(
+        &buffer,
+        cell_center(&app, 0),
+        Icon::Loading.symbol(),
+        Color::DarkGray,
+        Modifier::empty(),
     );
 }

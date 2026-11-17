@@ -15,6 +15,8 @@ use unicode_width::UnicodeWidthStr;
 
 /// The mark of a Live Photo still in the gap above its cell.
 const LIVE_MARK: &str = "\u{25ce} Live";
+/// The Live mark of a cell too narrow for `LIVE_MARK`.
+const LIVE_SYMBOL: &str = "\u{25ce}";
 
 /// The grid area and the icons that the cells ask Kitty for.
 struct GridDraw<'a> {
@@ -97,16 +99,20 @@ pub(super) fn draw_thumbnail_cells(
 
 /// The Live mark of a Live Photo still: `◎ Live` in the gap above the picture, where the top
 /// border lives. Kitty draws the picture inside the cell, so the mark stays visible. A border
-/// is at least 10 columns wide, and the grid edge cuts the mark.
+/// narrower than the mark and its corners gets `◎` alone, so the mark stays inside its cell. A
+/// border is at least 7 columns wide, and the grid edge cuts the mark.
 fn draw_live_mark(frame: &mut Frame<'_>, border: Rect, style: Style, grid_rect: Rect) {
     let at = Position::new(border.x + 2, border.y);
     if !grid_rect.contains(at) {
         return;
     }
+    // 2 columns before the mark, and the top right corner after it.
+    let fits = usize::from(border.width) >= LIVE_MARK.width() + 3;
+    let mark = if fits { LIVE_MARK } else { LIVE_SYMBOL };
     let room = usize::from(grid_rect.right() - at.x);
     frame
         .buffer_mut()
-        .set_stringn(at.x, at.y, LIVE_MARK, room, style);
+        .set_stringn(at.x, at.y, mark, room, style);
 }
 
 /// A large dim icon in the middle of the thumbnail area of `vis_idx`, or the one-cell symbol
