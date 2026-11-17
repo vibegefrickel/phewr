@@ -259,7 +259,11 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   (`ESC ] 10 ; ? BEL`), the `a=q` transfer probe,
   the animation probe and the DA1 query `ESC [ c`. The animation probe is a silent 1x1 image
   (`a=t,q=2,i=32`), one frame `a=f,i=32` that the terminal answers, and `a=d,d=I,i=32`. The read
-  ends when every owed answer came, or at the DA1 answer. Since 2026-11-16, an answer that is
+  ends when every owed answer came, or at the DA1 answer. Before DA1, the read also waits for the
+  OSC 10 answer (2026-11-17). Before, a terminal that sent the Kitty answer, then DA1, then OSC 10
+  ended the read without the OSC 10 answer, and nothing owed it. Nobody saw this order in a real
+  terminal. A terminal without OSC 10 ends the read at DA1 and its grace, and its OSC 10 answer
+  stays owed for the session. Since 2026-11-16, an answer that is
   missing at DA1 gets a second read of at most `LATE_ANSWER_GRACE` (100 ms): Ghostty 1.4 sends
   DA1 before the OSC 10 answer and the Kitty answers. Without the grace, the temp-file probe saw
   no `OK` and picked `t=d`, and the late answers reached the keys as text. An OSC 10 answer that
@@ -270,10 +274,12 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   Ctrl+`g` (BEL) or Alt+`\`. A missing OSC 10 answer counts as owed after a timeout or after
   DA1. A late DA1 answer is no key press: crossterm keeps it as an internal event. Since the
   self check (2026-11-11), `AnswerKeys` reads every Kitty answer before the filter, also a late
-  probe answer. Each whole Kitty answer lowers the owed count of
-  the filter (`LateAnswerFilter::kitty_answers_came`), so the filter never swallows an answer of
-  the self check. A terminal answers the Kitty commands in order, so the late probe answers come
-  before the answers of the self check. The filter sees only the rest, in practice a late OSC 10 answer.
+  probe answer. The filter counts the owed Kitty answers and the owed OSC 10 answer apart
+  (`LateAnswers`, 2026-11-17). Each whole Kitty answer lowers only the Kitty count
+  (`LateAnswerFilter::kitty_answers_came`), so the filter never swallows an answer of the self
+  check. Before, one count held both kinds, and a self check `ENOENT` before a late OSC 10 answer
+  let the OSC 10 answer through as keys. The filter swallows Alt+`_` only while a Kitty answer is
+  owed, and Alt+`]` only while the OSC 10 answer is owed.
 - **Self check (2026-11-11):** when the self check is on, the engine places with `q=1`
   (`Screen::with_self_check`, the argument `errors` of `place_as_to`). The terminal then answers
   an error for a placement of a picture that it does not hold, `ENOENT: image not found`. A
@@ -289,6 +295,15 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   pass, and that pass sends the lost picture again. The measurement of 2026-11-11: after ten
   scrolls in a herdr pane, phewr lost 2 to 5 cells before the self check, schnattr 0 and plain
   Ghostty 0. A placement that herdr drops without an `ENOENT` stays gone until its next move.
+  The loss limit (2026-11-17): after `MAX_LOSSES` (3) losses of one picture within `LOSS_WINDOW`
+  (10 s), `Screen::answer_at` ignores its next `ENOENT` and records the picture in `held`. Each
+  pass of the run loop calls `Screen::release_held_losses`, and after the window the next grid
+  pass sends the picture again. Without the limit, a Ghostty `image-storage-limit` below
+  `TERMINAL_IMAGE_BUDGET` gives a transfer loop at the speed of the round trip: each new transfer
+  evicts another visible picture. The limit counts per picture, so N pictures that evict each
+  other still get up to 3 x N transfers in 10 s. A global limit also stops the re-send of a
+  single picture that the terminal dropped one time. Only the grid pass reacts to `has_lost`, as
+  before. Nobody tested the limit in a real terminal.
 - **Grid zoom:** the grid shows 2 to 12 rows (`MIN_VISIBLE_ROWS`, `MAX_VISIBLE_ROWS`). A 2x2
   grid is the largest thumbnail size. A step goes to the next zoom level, not to the next row
   count (`docs/grid-and-kitty.md`, 2026-11-17). A stored 12 can show fewer rows, and in a narrow

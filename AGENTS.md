@@ -347,18 +347,23 @@ decisions. Read the long form before you change the code that an item names.
   of Ghostty. If the terminal answered at start, the run loop asks again after each resize. The
   read takes every byte of the tty, so a key typed in that millisecond is lost. A terminal that
   answers neither the probes nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time.
-- **Late probe answer:** the read ends when every owed answer came, or at the DA1 answer. Ghostty
-  1.4 sends DA1 before the OSC 10 answer and the Kitty answers. So when an answer is missing at
-  DA1, a second read waits at most `LATE_ANSWER_GRACE` (100 ms) for it. After a timeout of the whole round trip, `LateAnswerFilter` drops the key events of the late Kitty
-  answers and of a late OSC 10 answer. `AnswerKeys` reads every Kitty answer first, also a late
-  probe answer. Each one lowers the owed count of the filter (`kitty_answers_came`). The filter
-  sees only the rest, in practice a late OSC 10 answer.
+- **Late probe answer:** the read ends when every owed answer came, or at the DA1 answer. Before
+  DA1, the read also waits for the OSC 10 answer. Ghostty 1.4 sends DA1 before the OSC 10 answer
+  and the Kitty answers. So when an answer is missing at DA1, a second read waits at most
+  `LATE_ANSWER_GRACE` (100 ms) for it. `LateAnswerFilter` drops the key events of the late
+  answers. It counts the owed Kitty answers and the owed OSC 10 answer apart (`LateAnswers`).
+  `AnswerKeys` reads every Kitty answer first, also a late probe answer. Each one lowers only the
+  Kitty count (`kitty_answers_came`), so a self check `ENOENT` does not pay for a late OSC 10
+  answer.
 - **Self check:** the engine places with `q=1` (`Screen::with_self_check`). phewr turns it on,
   and `PHEWR_KITTY_SELF_CHECK=0` turns it off. A transfer keeps `q=2`, else each transfer gets an
   `OK`. `handle_input` runs `AnswerKeys` first, then `LateAnswerFilter`. An `ENOENT` goes to
   `Screen::answer`, and `sync_grid_icons` writes a grid pass while `Screen::has_lost` is true. A
   hold of key events ends after 50 ms of quiet input (`ANSWER_WAIT`). phewr drops the keys of a
   started answer that never ends.
+  After `MAX_LOSSES` (3) losses of one picture within `LOSS_WINDOW` (10 s), `Screen::answer`
+  ignores its next `ENOENT`, and `release_held_losses` sends it again after the window. Tests
+  pass the clock to `Screen::answer_at`.
 - **Mouse:** phewr enables only the mouse modes 1000, 1002 and 1006, never 1003. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. A test that needs the screen
   regions calls `test_support::draw_frame` first. The double-click uses `handle_event_at` with a
