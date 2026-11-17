@@ -45,7 +45,9 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 - A header thread that ends without a result, or that does not start, gives the default shape
   3:2.
 - The median snaps to one of 7 buckets: 9:16, 2:3, 3:4, 1:1, 4:3, 3:2 and 16:9.
-- The column count includes 1 gap per column plus the edge gap.
+- The column count includes 1 gap per column plus the edge gap. It counts each column at least
+  `MIN_THUMB_COLS` (8) wide. Without this minimum, a 9:16 grid with 12 rows got more columns
+  than the width holds, and the last column went past the right edge (2026-11-17).
 - The first screen waits for the shape (2 ms to 4 ms).
 - The shape stays until the next directory switch. So the columns never move while the user
   browses.

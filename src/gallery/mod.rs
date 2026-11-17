@@ -224,9 +224,11 @@ impl GalleryState {
             .saturating_sub(self.label_rows())
             .clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
         self.extra_rows = spread(cell_area_height, self.cell_height_total(), rows);
+        // The count uses the clamped width, else the clamp below pushes the last columns past
+        // the right edge of a far zoomed-out portrait grid.
         let shaped_width = (f64::from(self.thumb_rows) * self.cols_per_row).round() as u16;
         self.grid_cols = (usize::from(grid_rect.width.saturating_sub(GAP))
-            / usize::from(shaped_width.max(1) + GAP))
+            / usize::from(shaped_width.max(MIN_THUMB_COLS) + GAP))
         .max(MIN_GRID_COLS);
         let cols = self.grid_cols as u16;
         let cell_area_width = grid_rect.width.saturating_sub(gaps(cols));

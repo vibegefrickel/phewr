@@ -1,5 +1,5 @@
 //! The tests of the grid geometry, the cursor and the cell under the mouse.
-use super::{GAP, GalleryState, LABEL_ROWS};
+use super::{GAP, GalleryState, LABEL_ROWS, MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
 use ratatui::layout::Rect;
 
 #[test]
@@ -463,6 +463,20 @@ fn cell_shape_follows_photos_and_pixels() {
     assert!(gallery.set_cell_shape(0.75, (8, 16)));
     assert!(gallery.set_cell_shape(f64::NAN, (0, 0)));
     assert_eq!(gallery.grid_cols, 4);
+}
+
+/// Screenshots (9:16) on Retina cells (18x36 px) at every zoom: the thinnest cells must still
+/// end at the right edge gap.
+#[test]
+fn portrait_grid_stays_inside_width() {
+    for rows in usize::from(MIN_VISIBLE_ROWS)..=usize::from(MAX_VISIBLE_ROWS) {
+        let mut gallery = GalleryState::with_zoom_rows(500, rows);
+        let grid = Rect::new(0, 0, 150, 60);
+        gallery.update_grid(grid);
+        gallery.set_cell_shape(9.0 / 16.0, (18, 36));
+        let last = gallery.thumb_rect(gallery.grid_cols - 1);
+        assert_eq!(last.right() + GAP, grid.right(), "{rows} rows");
+    }
 }
 
 #[test]

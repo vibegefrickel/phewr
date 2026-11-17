@@ -297,14 +297,24 @@ pub(super) fn playing_app() -> App {
 #[test]
 fn slideshow_frame_below_badge() {
     let mut app = playing_app();
-    let mut out = Vec::new();
-    super::render_video_frame_to(&app, &mut out, false).unwrap();
-    assert!(!text(&out).contains(",z="), "{}", text(&out));
+    let mut before = Vec::new();
+    super::render_video_frame_to(&app, &mut before, false).unwrap();
 
     app.start_slideshow();
-    let mut out = Vec::new();
-    super::render_video_frame_to(&app, &mut out, false).unwrap();
-    assert!(text(&out).contains(",z=-1073741825"), "{}", text(&out));
+    let mut during = Vec::new();
+    super::render_video_frame_to(&app, &mut during, false).unwrap();
+
+    for bytes in [&before, &during] {
+        for path in crate::pictures::kitty::protocol::temp_file_paths(bytes) {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+    assert!(!text(&before).contains(",z="), "{}", text(&before));
+    assert!(
+        text(&during).contains(",z=-1073741825"),
+        "{}",
+        text(&during)
+    );
 }
 
 #[cfg(feature = "video")]
