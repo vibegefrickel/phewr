@@ -154,11 +154,18 @@ fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
     ]
 }
 
+/// The icon rows for a box of `thumb_rows` rows. `None` below two rows. The count never falls
+/// when the box grows, so no smaller box holds an icon if this box holds none.
+pub(crate) fn icon_rows(thumb_rows: u16) -> Option<u16> {
+    let rows = (f64::from(thumb_rows) * ICON_HEIGHT_SHARE).round() as u16;
+    (rows >= MIN_ICON_ROWS).then_some(rows)
+}
+
 /// The icon size in cells (columns, rows) for a box of `thumb_box` cells: a square in pixels,
 /// 30 % of the box height. `None` when it does not fit or has fewer than two rows.
 pub(crate) fn icon_size(thumb_box: (u16, u16), cell_px: (u32, u32)) -> Option<(u16, u16)> {
-    let rows = (f64::from(thumb_box.1) * ICON_HEIGHT_SHARE).round() as u16;
-    if rows < MIN_ICON_ROWS || cell_px.0 == 0 {
+    let rows = icon_rows(thumb_box.1)?;
+    if cell_px.0 == 0 {
         return None;
     }
     let height_px = u32::from(rows) * cell_px.1;

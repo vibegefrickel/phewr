@@ -135,12 +135,23 @@ impl GalleryState {
         } else {
             DEFAULT_IMAGE_ASPECT
         };
-        let before = (self.grid_cols, self.thumb_cols, self.extra_cols);
+        let before = self.grid_shape();
         self.image_aspect = aspect;
         self.cols_per_row = aspect * cell_ratio;
         self.cell_px = cell_px;
         self.update_grid(self.grid_rect);
-        before != (self.grid_cols, self.thumb_cols, self.extra_cols)
+        before != self.grid_shape()
+    }
+
+    /// What the grid shows: the rows, the columns and the box size.
+    fn grid_shape(&self) -> (usize, usize, u16, u16, u16) {
+        (
+            self.visible_rows,
+            self.grid_cols,
+            self.thumb_cols,
+            self.thumb_rows,
+            self.extra_cols,
+        )
     }
 
     /// The grid that a switch to another folder starts from, with `entries` cells at `zoom_rows`.
@@ -163,12 +174,12 @@ impl GalleryState {
         Rect::new(0, 0, self.thumb_cols, self.thumb_rows)
     }
 
-    /// Back to the configured zoom level. Returns `true` if it changed.
+    /// Back to the configured zoom level. Returns `true` if the grid on the screen changed.
     pub(crate) fn reset_zoom(&mut self) -> bool {
         self.set_zoom_rows(self.default_zoom_rows)
     }
 
-    /// The next level with fewer rows, larger thumbnails. Returns `true` if the level changed.
+    /// The next level with fewer rows, larger thumbnails. Returns `true` if the grid on the screen changed.
     pub(crate) fn thumb_zoom_in(&mut self) -> bool {
         let levels = self.zoom_levels();
         let shown = shown_level(&levels, self.zoom_rows);
@@ -178,7 +189,7 @@ impl GalleryState {
         self.set_zoom_rows(rows)
     }
 
-    /// The next level with more rows, smaller thumbnails. Returns `true` if the level changed.
+    /// The next level with more rows, smaller thumbnails. Returns `true` if the grid on the screen changed.
     pub(crate) fn thumb_zoom_out(&mut self) -> bool {
         let levels = self.zoom_levels();
         let shown = shown_level(&levels, self.zoom_rows);
@@ -188,21 +199,25 @@ impl GalleryState {
         self.set_zoom_rows(rows)
     }
 
+    /// Store `rows` as the zoom level. Returns `true` only when the grid on the screen changed,
+    /// so a new stored level that shows the same level costs no reload.
     pub(crate) fn set_zoom_rows(&mut self, rows: usize) -> bool {
         let rows = rows.clamp(self.min_visible_rows(), self.max_visible_rows());
         if rows == self.zoom_rows {
             return false;
         }
+        let before = self.grid_shape();
         self.zoom_rows = rows;
         self.update_grid(self.grid_rect);
-        true
+        before != self.grid_shape()
     }
 
     /// The row counts that a zoom step shows, fewest rows first. Each level keeps the cell shape
     /// (`MIN_THUMB_COLS`), and each step changes the column count, so every step is visible. Of
     /// the row counts with one column count, the level is the count with the largest picture
-    /// and then the most rows. Each level holds the large grid icon (`icons::icon_size`). Before
-    /// the first `update_grid`, every row count is a level.
+    /// and then the most rows. Each level holds the large grid icon (`icons::icon_size`), and a
+    /// row count whose icon is too wide is skipped. If no row count holds the icon, the fewest
+    /// rows are the only level. Before the first `update_grid`, every row count is a level.
     fn zoom_levels(&self) -> Vec<usize> {
         let (fewest, most) = (self.min_visible_rows(), self.max_visible_rows());
         if self.grid_rect.is_empty() {
@@ -213,10 +228,16 @@ impl GalleryState {
         for rows in fewest..=most {
             let layout = self.row_layout(rows);
             // The shaped width does not grow with the rows, so no later count keeps the shape.
-            // The icon height falls with the rows, so no later count holds the icon.
-            if rows > fewest && (layout.shaped_width < MIN_THUMB_COLS || !self.holds_icon(&layout))
+            // The icon height falls with the rows, so no later count has enough icon rows. The
+            // box width can stay while the icon gets narrower, so a later count can hold an icon
+            // that is too wide here. Such a count is skipped.
+            if (rows > fewest && layout.shaped_width < MIN_THUMB_COLS)
+                || icons::icon_rows(layout.thumb_rows).is_none()
             {
                 break;
+            }
+            if !self.holds_icon(&layout) {
+                continue;
             }
             // The column count does not fall with the rows, so equal counts are neighbors. The
             // box height falls with the rows: the fewest rows give the largest picture. A picture
@@ -230,6 +251,9 @@ impl GalleryState {
             {
                 *level = rows;
             }
+        }
+        if levels.is_empty() {
+            levels.push(fewest);
         }
         levels
     }

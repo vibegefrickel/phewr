@@ -660,3 +660,42 @@ fn unknown_cell_size_keeps_several_levels() {
     gallery.set_cell_shape(1.5, (0, 0));
     assert!(gallery.zoom_levels().len() > 1);
 }
+
+#[test]
+fn narrow_grid_skips_too_wide_icon_levels() {
+    let cell_px = (15, 38);
+    let mut gallery = GalleryState::with_zoom_rows(500, 2);
+    gallery.update_grid(Rect::new(0, 0, 28, 51));
+    gallery.set_cell_shape(1.5, cell_px);
+    let levels = gallery.zoom_levels();
+    assert!(levels.iter().all(|&rows| rows > 2), "{levels:?}");
+    for rows in levels {
+        let layout = gallery.row_layout(rows);
+        assert!(gallery.holds_icon(&layout), "{rows} rows");
+    }
+}
+
+#[test]
+fn reset_that_keeps_the_shown_level_changes_nothing() {
+    let mut gallery = GalleryState::with_zoom_rows(500, 4);
+    gallery.update_grid(Rect::new(0, 0, 100, 51));
+    gallery.set_cell_shape(1.5, (15, 38));
+    assert_eq!(gallery.zoom_levels(), vec![3, 6, 7]);
+    let shown = gallery.visible_rows;
+    assert_eq!(shown, 3);
+    assert!(!gallery.set_zoom_rows(5), "5 and 4 show the same level");
+    assert_eq!(gallery.zoom_rows, 5);
+    assert!(!gallery.reset_zoom());
+    assert_eq!(gallery.zoom_rows, 4);
+    assert_eq!(gallery.visible_rows, shown);
+}
+
+#[test]
+fn new_aspect_that_changes_only_rows_is_a_change() {
+    let mut gallery = GalleryState::with_zoom_rows(500, 7);
+    gallery.update_grid(Rect::new(0, 0, 100, 51));
+    gallery.set_cell_shape(1.78, (15, 38));
+    let (cols, thumb_cols) = (gallery.grid_cols, gallery.thumb_cols);
+    assert!(gallery.set_cell_shape(2.0, (15, 38)));
+    assert_eq!((gallery.grid_cols, gallery.thumb_cols), (cols, thumb_cols));
+}
