@@ -283,7 +283,10 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   scrolls in a herdr pane, phewr lost 2 to 5 cells before the self check, schnattr 0 and plain
   Ghostty 0. A placement that herdr drops without an `ENOENT` stays gone until its next move.
 - **Grid zoom:** the grid shows 2 to 12 rows (`MIN_VISIBLE_ROWS`, `MAX_VISIBLE_ROWS`). A 2x2
-  grid is the largest thumbnail size. The fullscreen view is the larger view. The config key
+  grid is the largest thumbnail size. A step goes to the next zoom level, not to the next row
+  count (`docs/grid-and-kitty.md`, 2026-11-17). A stored 12 can show fewer rows, and in a narrow
+  pane a stored 2 can show more rows. A step away from a stored count without a level writes the
+  level to the state file. The fullscreen view is the larger view. The config key
   and the state file clamp to that range on load. A terminal too small for 2 rows keeps the
   rows that fit. A change of the rows or the columns (a zoom, the info panel, a resize, the
   cell shape) keeps the place of the cursor row on the screen: the top row stays at the top, the

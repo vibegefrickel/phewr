@@ -306,8 +306,11 @@ decisions. Read the long form before you change the code that an item names.
   the grid has work. A cursor move, a folder change, a zoom, a resize, a mode change or the quit
   cancels it, and the next start waits for the old thread. A lower thread priority gave no gain
   (2026-11-03).
-- **Grid zoom:** the grid shows 2 to 12 rows. A zoom or the info panel keeps the screen row of
-  the cursor, and at the list edges the grid stays flush with the edge
+- **Grid zoom:** the grid shows 2 to 12 rows. A zoom step goes to the next zoom level
+  (`GalleryState::zoom_levels`), not to the next row count. A level keeps the folder shape at a
+  box width of at least `MIN_THUMB_COLS` (5), and every step changes the column count. The grid
+  shows the largest level of at most the stored `zoom_rows`. A zoom or the info panel keeps the
+  screen row of the cursor, and at the list edges the grid stays flush with the edge
   (`GalleryState::keep_cursor_place`). `+`, `-` and `0` do no file I/O on the UI thread: they
   queue a `StateChange` to the writer thread. A state file that does not parse stays as it is.
   The state file holds a global `visible_rows`, a `zoom_counter` and a `[zoom]` table keyed

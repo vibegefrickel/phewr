@@ -46,8 +46,22 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
   3:2.
 - The median snaps to one of 7 buckets: 9:16, 2:3, 3:4, 1:1, 4:3, 3:2 and 16:9.
 - The column count includes 1 gap per column plus the edge gap. It counts each column at least
-  `MIN_THUMB_COLS` (8) wide. Without this minimum, a 9:16 grid with 12 rows got more columns
+  `MIN_THUMB_COLS` (5) wide. Without this minimum, a 9:16 grid with 12 rows got more columns
   than the width holds, and the last column went past the right edge (2026-11-17).
+- A zoom level is a row count from 2 to 12 (`GalleryState::zoom_levels`). Its shaped width is at
+  least `MIN_THUMB_COLS`. The list stops at the first count that fails, and the fewest rows
+  always stay. Each column count gives one level. When the width limits the picture
+  (`thumb_rows * cols_per_row >= thumb_cols`), the level is the most rows at that picture size.
+  Otherwise, the level is the fewest rows, which give the largest box. `update_grid` shows the
+  largest level of at most the stored `zoom_rows`, else the first level. `+` and `-` go to the
+  next level. Until 2026-11-17, a step changed one row. On 200x51 with 9:16 photos, the steps
+  from 12 rows to 7 rows all gave 22 columns, so a step showed the same layout.
+- The levels on 200x51 with 15x38 px cells (rows -> columns):
+  - 9:16: 2 -> 5, 3 -> 9, 4 -> 11, 5 -> 14, 6 -> 18, 7 -> 19, 8 -> 24, 9 -> 28.
+  - 3:4: 2 -> 4, 3 -> 6, 4 -> 9, 5 -> 11, 6 -> 14, 7 -> 16, 8 -> 18, 9 -> 22, 11 -> 28.
+  - 3:2: 2 -> 2, 3 -> 3, 4 -> 4, 5 -> 5, 6 -> 7, 7 -> 8, 8 -> 9, 10 -> 12, 12 -> 16.
+  - A narrow pane of 60x51 with 3:2 photos: 5 -> 2, 9 -> 3, 11 -> 4.
+- The Live mark `◎ Live` needs a border of 9 columns. A narrower border gets `◎` alone.
 - The first screen waits for the shape (2 ms to 4 ms).
 - The shape stays until the next directory switch. So the columns never move while the user
   browses.
