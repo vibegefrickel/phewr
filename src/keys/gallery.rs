@@ -350,11 +350,11 @@ mod tests {
             char_key(&mut app, '-');
         }
         assert_eq!(
-            app.gallery.zoom_rows, 5,
-            "24 rows: 1 edge gap, then 3 rows and 1 gap each"
+            app.gallery.zoom_rows, 3,
+            "24 rows: 3 rows of 6 are the last level with the large icon"
         );
         char_key(&mut app, '-');
-        assert_eq!(app.gallery.zoom_rows, 5);
+        assert_eq!(app.gallery.zoom_rows, 3);
     }
 
     #[test]

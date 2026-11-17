@@ -96,8 +96,8 @@ fn zoom_changes_and_clamps_rows() {
         gallery.thumb_zoom_out();
     }
     assert_eq!(
-        gallery.zoom_rows, 8,
-        "40 rows fit 9 rows of 3, and 9 rows give the 9 columns of 8 rows"
+        gallery.zoom_rows, 6,
+        "40 rows: 6 rows of 5 are the last level with the large icon"
     );
     assert!(!gallery.thumb_zoom_out());
 
@@ -522,9 +522,9 @@ fn fullscreen_grid(aspect: f64) -> (GalleryState, Rect) {
 #[test]
 fn every_zoom_step_changes_columns() {
     for (aspect, expected) in [
-        (9.0 / 16.0, vec![5, 9, 11, 14, 18, 19, 24, 28]),
-        (0.75, vec![4, 6, 9, 11, 14, 16, 18, 22, 28]),
-        (1.5, vec![2, 3, 4, 5, 7, 8, 9, 12, 16]),
+        (9.0 / 16.0, vec![5, 9, 11, 14, 18, 19, 24]),
+        (0.75, vec![4, 6, 9, 11, 14, 16, 18]),
+        (1.5, vec![2, 3, 4, 5, 7, 8, 9]),
     ] {
         let (mut gallery, grid) = fullscreen_grid(aspect);
         let mut columns = vec![gallery.grid_cols];
@@ -554,21 +554,22 @@ fn every_zoom_step_changes_columns() {
     }
 }
 
-/// A stored level of 12 rows in a 9:16 folder shows the 9 rows that keep the cell shape.
+/// A stored level of 12 rows in a 9:16 folder shows the 8 rows, the last level that holds the
+/// large icon.
 #[test]
 fn stored_level_shows_largest_level() {
     let mut gallery = GalleryState::with_zoom_rows(500, 12);
     gallery.update_grid(Rect::new(0, 0, 200, 51));
     gallery.set_cell_shape(9.0 / 16.0, (15, 38));
     assert_eq!(gallery.zoom_rows, 12, "the stored level stays");
-    assert_eq!((gallery.visible_rows, gallery.grid_cols), (9, 28));
+    assert_eq!((gallery.visible_rows, gallery.grid_cols), (8, 24));
 
     assert!(!gallery.thumb_zoom_out(), "no level with more columns");
     assert_eq!(gallery.zoom_rows, 12);
 
     assert!(gallery.thumb_zoom_in());
-    assert_eq!(gallery.zoom_rows, 8);
-    assert_eq!((gallery.visible_rows, gallery.grid_cols), (8, 24));
+    assert_eq!(gallery.zoom_rows, 7);
+    assert_eq!((gallery.visible_rows, gallery.grid_cols), (7, 19));
 }
 
 /// A terminal too small for the shape at the fewest rows keeps the fewest rows as its one level.
@@ -597,9 +598,9 @@ fn picture_size(gallery: &GalleryState) -> (f64, f64) {
 #[test]
 fn width_limited_levels_show_most_rows() {
     for (width, height, expected) in [
-        (60, 51, vec![5, 9, 11]),
-        (80, 40, vec![3, 5, 7, 8]),
-        (100, 51, vec![3, 6, 7, 10, 12]),
+        (60, 51, vec![5]),
+        (80, 40, vec![3, 5]),
+        (100, 51, vec![3, 6, 7]),
     ] {
         let mut gallery = GalleryState::with_zoom_rows(500, 2);
         gallery.update_grid(Rect::new(0, 0, width, height));
@@ -627,4 +628,35 @@ fn width_limited_levels_show_most_rows() {
             );
         }
     }
+}
+
+#[test]
+fn every_zoom_level_holds_the_large_icon() {
+    let cell_px = (15, 38);
+    for (aspect, expected) in [
+        (9.0 / 16.0, vec![2, 3, 4, 5, 6, 7, 8]),
+        (3.0 / 4.0, vec![2, 3, 4, 5, 6, 7, 8]),
+        (1.5, vec![2, 3, 4, 5, 6, 7, 8]),
+    ] {
+        let mut gallery = GalleryState::with_zoom_rows(500, 2);
+        gallery.update_grid(Rect::new(0, 0, 200, 51));
+        gallery.set_cell_shape(aspect, cell_px);
+        let levels = gallery.zoom_levels();
+        assert_eq!(levels, expected, "aspect {aspect}");
+        for rows in levels {
+            let layout = gallery.row_layout(rows);
+            assert!(
+                crate::icons::icon_size((layout.thumb_cols, layout.thumb_rows), cell_px).is_some(),
+                "aspect {aspect}: {rows} rows"
+            );
+        }
+    }
+}
+
+#[test]
+fn unknown_cell_size_keeps_several_levels() {
+    let mut gallery = GalleryState::with_zoom_rows(500, 2);
+    gallery.update_grid(Rect::new(0, 0, 200, 51));
+    gallery.set_cell_shape(1.5, (0, 0));
+    assert!(gallery.zoom_levels().len() > 1);
 }

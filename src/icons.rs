@@ -154,18 +154,21 @@ fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
     ]
 }
 
-/// The icon box in `thumb`: a square in pixels, 30 % of the height, centered. `None` when it
-/// does not fit or has fewer than two rows.
-pub(crate) fn icon_rect(thumb: Rect, cell_px: (u32, u32)) -> Option<Rect> {
-    let rows = (f64::from(thumb.height) * ICON_HEIGHT_SHARE).round() as u16;
+/// The icon size in cells (columns, rows) for a box of `thumb_box` cells: a square in pixels,
+/// 30 % of the box height. `None` when it does not fit or has fewer than two rows.
+pub(crate) fn icon_size(thumb_box: (u16, u16), cell_px: (u32, u32)) -> Option<(u16, u16)> {
+    let rows = (f64::from(thumb_box.1) * ICON_HEIGHT_SHARE).round() as u16;
     if rows < MIN_ICON_ROWS || cell_px.0 == 0 {
         return None;
     }
     let height_px = u32::from(rows) * cell_px.1;
     let cols = u16::try_from(height_px.div_ceil(cell_px.0)).ok()?;
-    if cols > thumb.width {
-        return None;
-    }
+    (cols <= thumb_box.0).then_some((cols, rows))
+}
+
+/// The icon box in `thumb`, centered. `None` when `icon_size` gives none.
+pub(crate) fn icon_rect(thumb: Rect, cell_px: (u32, u32)) -> Option<Rect> {
+    let (cols, rows) = icon_size((thumb.width, thumb.height), cell_px)?;
     Some(crate::pictures::kitty::placement::centered(
         thumb, cols, rows,
     ))

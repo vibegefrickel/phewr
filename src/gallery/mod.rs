@@ -9,6 +9,7 @@
 //! the gaps (`GalleryState::border_rect`): plain for a marked cell, thick for the selected cell,
 //! drawn last. A border that the grid edge cuts stays open at that edge.
 use crate::config::{MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
+use crate::icons;
 use crate::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use ratatui::layout::Rect;
 use std::ops::Range;
@@ -54,6 +55,8 @@ pub(crate) struct GalleryState {
     pub extra_rows: u16,
     /// The cell width over its height, in terminal cells. It picks the column count.
     cols_per_row: f64,
+    /// The cell size in pixels that `set_cell_shape` got. `(0, 0)` is unknown.
+    cell_px: (u32, u32),
     image_aspect: f64,
     /// The zoom level of the reset key.
     pub(crate) default_zoom_rows: usize,
@@ -112,6 +115,7 @@ impl GalleryState {
             extra_cols: 0,
             extra_rows: 0,
             cols_per_row: DEFAULT_IMAGE_ASPECT * DEFAULT_CELL_RATIO,
+            cell_px: (0, 0),
             image_aspect: DEFAULT_IMAGE_ASPECT,
             default_zoom_rows: zoom_rows,
             kept_place: None,
@@ -134,6 +138,7 @@ impl GalleryState {
         let before = (self.grid_cols, self.thumb_cols, self.extra_cols);
         self.image_aspect = aspect;
         self.cols_per_row = aspect * cell_ratio;
+        self.cell_px = cell_px;
         self.update_grid(self.grid_rect);
         before != (self.grid_cols, self.thumb_cols, self.extra_cols)
     }
@@ -196,7 +201,8 @@ impl GalleryState {
     /// The row counts that a zoom step shows, fewest rows first. Each level keeps the cell shape
     /// (`MIN_THUMB_COLS`), and each step changes the column count, so every step is visible. Of
     /// the row counts with one column count, the level is the count with the largest picture
-    /// and then the most rows. Before the first `update_grid`, every row count is a level.
+    /// and then the most rows. Each level holds the large grid icon (`icons::icon_size`). Before
+    /// the first `update_grid`, every row count is a level.
     fn zoom_levels(&self) -> Vec<usize> {
         let (fewest, most) = (self.min_visible_rows(), self.max_visible_rows());
         if self.grid_rect.is_empty() {
@@ -207,7 +213,9 @@ impl GalleryState {
         for rows in fewest..=most {
             let layout = self.row_layout(rows);
             // The shaped width does not grow with the rows, so no later count keeps the shape.
-            if layout.shaped_width < MIN_THUMB_COLS && rows > fewest {
+            // The icon height falls with the rows, so no later count holds the icon.
+            if rows > fewest && (layout.shaped_width < MIN_THUMB_COLS || !self.holds_icon(&layout))
+            {
                 break;
             }
             // The column count does not fall with the rows, so equal counts are neighbors. The
@@ -224,6 +232,17 @@ impl GalleryState {
             }
         }
         levels
+    }
+
+    /// The box of `layout` holds the large grid icon. An unknown cell size uses the default
+    /// cell ratio.
+    fn holds_icon(&self, layout: &RowLayout) -> bool {
+        let cell_px = if self.cell_px.0 == 0 || self.cell_px.1 == 0 {
+            (1, DEFAULT_CELL_RATIO as u32)
+        } else {
+            self.cell_px
+        };
+        icons::icon_size((layout.thumb_cols, layout.thumb_rows), cell_px).is_some()
     }
 
     /// The box size, the shaped width and the column count of `rows` rows in `grid_rect`.

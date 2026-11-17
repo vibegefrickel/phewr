@@ -144,7 +144,7 @@ mod tests {
         let dir = test_dir();
         let mut app = gallery_app(3);
         app.state_file = dir.path().join("state.toml");
-        for (key, limit) in [('+', 2), ('-', 5)] {
+        for (key, limit) in [('+', 2), ('-', 3)] {
             for _ in 0..40 {
                 char_key(&mut app, key);
             }
