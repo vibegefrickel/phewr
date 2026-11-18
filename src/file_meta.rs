@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(super::known_length(2.8), Some(2.8));
     }
 
-    /// `PHEWR_TEST_LIVE_DIR` with `IMG_2928.MOV` (2.83 s) and the real ffprobe.
+    /// `PHEWR_TEST_LIVE_DIR` with `IMG_1050.MOV` (2.771667 s) and the real ffprobe.
     #[test]
     #[cfg(feature = "video")]
     #[ignore = "needs PHEWR_TEST_LIVE_DIR and ffprobe"]
@@ -319,7 +319,7 @@ mod tests {
             println!("note: skipped, because ffprobe is not on PATH");
             return;
         }
-        let seconds = super::motion_length_probed(&dir.join("IMG_2928.MOV")).unwrap();
+        let seconds = super::motion_length_probed(&dir.join("IMG_1050.MOV")).unwrap();
         assert_eq!(format_motion(seconds), "2.8 s");
     }
 

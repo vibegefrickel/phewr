@@ -286,26 +286,34 @@ fn real_identifiers_match_exiftool() {
     };
     // The values that `exiftool -Apple:ContentIdentifier -Keys:ContentIdentifier` reads.
     let expected = [
-        ("IMG_0711.HEIC", "0FD24349-014A-423D-AE8D-35FCE43A24E7"),
-        ("IMG_2927.HEIC", "1745E022-9712-43C7-B024-F308EC6413CB"),
-        ("IMG_2927.MOV", "1745E022-9712-43C7-B024-F308EC6413CB"),
-        ("IMG_2928.HEIC", "56AA36A8-98DB-496E-B2D0-5749C32EC49B"),
-        ("IMG_2928.MOV", "56AA36A8-98DB-496E-B2D0-5749C32EC49B"),
-        ("IMG_2929.HEIC", "ED69AFC7-A2EB-4FE9-88A0-54293FC2478F"),
-        ("IMG_2929.MOV", "EE6D649E-788F-4E3A-BCD2-483651BF7B34"),
+        ("IMG_1043.HEIC", "19AA45E8-2C43-4A48-B704-0EDB7F578732"),
+        ("IMG_1043.MOV", "19AA45E8-2C43-4A48-B704-0EDB7F578732"),
+        ("IMG_1050.HEIC", "121104FF-0F30-4FA7-9054-DCB695E50EB2"),
+        ("IMG_1050.MOV", "121104FF-0F30-4FA7-9054-DCB695E50EB2"),
+        ("IMG_1060.HEIC", "0714BC44-E790-48FE-A1C0-136996D3E22C"),
+        ("IMG_1060.MOV", "0714BC44-E790-48FE-A1C0-136996D3E22C"),
+        ("IMG_1069.HEIC", "7608C195-6DEE-4855-BFDE-847E5A17D762"),
+        ("IMG_1069.MOV", "0714BC44-E790-48FE-A1C0-136996D3E22C"),
+        ("IMG_1076.HEIC", "D86C875C-E087-4141-81EF-D0F00CF1E5CA"),
+        ("IMG_1076.MOV", "D86C875C-E087-4141-81EF-D0F00CF1E5CA"),
+        ("IMG_1102.JPG", "85CF7AF3-F52F-4CC4-8AED-2CD33CCEA65F"),
+        ("IMG_1102.MOV", "85CF7AF3-F52F-4CC4-8AED-2CD33CCEA65F"),
+        ("IMG_1126.HEIC", "624FF550-2747-49FC-B88B-EF67C8A3AAA9"),
+        ("IMG_1126.MOV", "624FF550-2747-49FC-B88B-EF67C8A3AAA9"),
+        ("IMG_1134.HEIC", "536F5C71-DD97-467C-811D-AB56D4545775"),
+        ("IMG_1134.MOV", "536F5C71-DD97-467C-811D-AB56D4545775"),
         ("IMG_4410.MOV", "EE6D649E-788F-4E3A-BCD2-483651BF7B34"),
-        ("IMG_5001.JPG", "56AA36A8-98DB-496E-B2D0-5749C32EC49B"),
-        ("IMG_5001.MOV", "56AA36A8-98DB-496E-B2D0-5749C32EC49B"),
-        ("IMG_E2928.HEIC", "56AA36A8-98DB-496E-B2D0-5749C32EC49B"),
+        ("IMG_E1050.HEIC", "121104FF-0F30-4FA7-9054-DCB695E50EB2"),
     ];
     for (name, want) in expected {
         assert_eq!(id(name).as_deref(), Some(want), "{name}");
     }
+    assert_eq!(id("IMG_1052.HEIC"), None, "a plain still has no identifier");
     for (stem, still, differ) in [
-        ("IMG_2927", "IMG_2927.HEIC", false),
-        ("IMG_2928", "IMG_2928.HEIC", false),
-        ("IMG_5001", "IMG_5001.JPG", false),
-        ("IMG_2929", "IMG_2929.HEIC", true),
+        ("IMG_1043", "IMG_1043.HEIC", false),
+        ("IMG_1050", "IMG_1050.HEIC", false),
+        ("IMG_1102", "IMG_1102.JPG", false),
+        ("IMG_1069", "IMG_1069.HEIC", true),
     ] {
         let motion = dir.join(format!("{stem}.MOV"));
         assert_eq!(

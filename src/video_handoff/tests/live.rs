@@ -207,23 +207,19 @@ fn real_folder_cases() {
     assert_eq!(
         app.filenames[app.folder_count..],
         [
-            "IMG_0711.HEIC",
             "IMG_1043.HEIC",
             "IMG_1050.HEIC",
+            "IMG_1052.HEIC",
             "IMG_1060.HEIC",
             "IMG_1069.HEIC",
             "IMG_1076.HEIC",
-            "IMG_1102.HEIC",
+            "IMG_1102.JPG",
             "IMG_1126.HEIC",
             "IMG_1134.HEIC",
-            "IMG_2927.HEIC",
-            "IMG_2928.HEIC",
-            "IMG_2929.HEIC",
             "IMG_4410.MOV",
-            "IMG_5001.JPG",
-            "IMG_E2928.HEIC",
+            "IMG_E1050.HEIC",
         ],
-        "the motions of the 12 pairs have no cell"
+        "the motions of the 8 pairs have no cell"
     );
     for (name, motion) in [
         ("IMG_1043.HEIC", Some("IMG_1043.MOV")),
@@ -231,15 +227,11 @@ fn real_folder_cases() {
         ("IMG_1060.HEIC", Some("IMG_1060.MOV")),
         ("IMG_1069.HEIC", Some("IMG_1069.MOV")),
         ("IMG_1076.HEIC", Some("IMG_1076.MOV")),
-        ("IMG_1102.HEIC", Some("IMG_1102.MOV")),
+        ("IMG_1102.JPG", Some("IMG_1102.MOV")),
         ("IMG_1126.HEIC", Some("IMG_1126.MOV")),
         ("IMG_1134.HEIC", Some("IMG_1134.MOV")),
-        ("IMG_2927.HEIC", Some("IMG_2927.MOV")),
-        ("IMG_2928.HEIC", Some("IMG_2928.MOV")),
-        ("IMG_2929.HEIC", Some("IMG_2929.MOV")),
-        ("IMG_5001.JPG", Some("IMG_5001.MOV")),
-        ("IMG_E2928.HEIC", None),
-        ("IMG_0711.HEIC", None),
+        ("IMG_E1050.HEIC", None),
+        ("IMG_1052.HEIC", None),
         ("IMG_4410.MOV", None),
     ] {
         let index = index_of(&app, name);
@@ -261,7 +253,7 @@ fn real_folder_cases() {
             ..Config::default()
         },
     );
-    assert_eq!(off.file_count(), 27, "without pairs, every movie is a cell");
+    assert_eq!(off.file_count(), 19, "without pairs, every movie is a cell");
 }
 
 /// Enter on each real Live still: the mismatch pair alone gets the note.
@@ -274,12 +266,12 @@ fn real_mismatch_note() {
         return;
     };
     for (name, note) in [
-        ("IMG_2927.HEIC", None),
-        ("IMG_2928.HEIC", None),
-        ("IMG_5001.JPG", None),
+        ("IMG_1043.HEIC", None),
+        ("IMG_1050.HEIC", None),
+        ("IMG_1102.JPG", None),
         (
-            "IMG_2929.HEIC",
-            Some("IMG_2929.HEIC and IMG_2929.MOV carry different Live Photo identifiers"),
+            "IMG_1069.HEIC",
+            Some("IMG_1069.HEIC and IMG_1069.MOV carry different Live Photo identifiers"),
         ),
     ] {
         let mut app = scanned_app(&dir, &Config::default());
@@ -299,7 +291,7 @@ fn real_mismatch_note() {
     }
 }
 
-/// The real motion of `IMG_2927.HEIC` plays one time through the real ffmpeg at the wall clock,
+/// The real motion of `IMG_1050.HEIC` plays one time through the real ffmpeg at the wall clock,
 /// and the still comes back.
 #[test]
 #[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe, plays 2.8 s"]
@@ -317,7 +309,7 @@ fn real_motion_plays_once() {
     let mut app = scanned_app(&dir, &Config::default());
     app.disk_cache_dir = cache.path().to_path_buf();
     app.fullscreen_box = ratatui::layout::Rect::new(0, 0, 100, 40);
-    let still = index_of(&app, "IMG_2927.HEIC");
+    let still = index_of(&app, "IMG_1050.HEIC");
     app.enter_fullscreen_at(still);
     let decoder: Rc<dyn Decoder> = Rc::new(SystemDecoder::new(Some(ffprobe)));
     let mut state = state_with_decoder(VideoPlayer::Terminal, decoder, ffmpeg);
@@ -343,7 +335,7 @@ fn real_motion_plays_once() {
     }
     let seconds = start.elapsed().as_secs_f64();
     println!(
-        "IMG_2927.MOV: {shown} frames shown in {seconds:.2} s, status {:?}",
+        "IMG_1050.MOV: {shown} frames shown in {seconds:.2} s, status {:?}",
         state.status
     );
     assert!(log.borrow().is_empty(), "no mpv");
@@ -361,7 +353,7 @@ fn real_motion_plays_once() {
 /// probes on a thread, and the slowest pass of the UI thread stays short. Then the time from
 /// Enter to the first frame, without a rest and after a rest of 500 ms.
 #[test]
-#[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe, runs about 15 s"]
+#[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe, runs about 30 s"]
 fn real_rest_starts_motion_ahead() {
     use crate::config::Config;
     use crate::player::{Decoder, SystemDecoder};
@@ -375,15 +367,23 @@ fn real_rest_starts_motion_ahead() {
     // New paths: the probe cache of the process knows none of them.
     let copy = tempfile::tempdir().unwrap();
     for name in [
-        "IMG_0711.HEIC",
-        "IMG_2927.HEIC",
-        "IMG_2927.MOV",
-        "IMG_2928.HEIC",
-        "IMG_2928.MOV",
-        "IMG_2929.HEIC",
-        "IMG_2929.MOV",
-        "IMG_5001.JPG",
-        "IMG_5001.MOV",
+        "IMG_1052.HEIC",
+        "IMG_1043.HEIC",
+        "IMG_1043.MOV",
+        "IMG_1050.HEIC",
+        "IMG_1050.MOV",
+        "IMG_1060.HEIC",
+        "IMG_1060.MOV",
+        "IMG_1069.HEIC",
+        "IMG_1069.MOV",
+        "IMG_1076.HEIC",
+        "IMG_1076.MOV",
+        "IMG_1126.HEIC",
+        "IMG_1126.MOV",
+        "IMG_1134.HEIC",
+        "IMG_1134.MOV",
+        "IMG_1102.JPG",
+        "IMG_1102.MOV",
     ] {
         std::fs::copy(dir.join(name), copy.path().join(name)).unwrap();
     }
@@ -397,12 +397,16 @@ fn real_rest_starts_motion_ahead() {
         runner: fake_runner(),
         pending: Vec::new(),
     };
-    let other = index_of(&app, "IMG_0711.HEIC");
+    let other = index_of(&app, "IMG_1052.HEIC");
     for name in [
-        "IMG_2927.HEIC",
-        "IMG_2928.HEIC",
-        "IMG_2929.HEIC",
-        "IMG_5001.JPG",
+        "IMG_1043.HEIC",
+        "IMG_1050.HEIC",
+        "IMG_1060.HEIC",
+        "IMG_1069.HEIC",
+        "IMG_1076.HEIC",
+        "IMG_1102.JPG",
+        "IMG_1126.HEIC",
+        "IMG_1134.HEIC",
     ] {
         let still = index_of(&app, name);
         let motion = app.live_motion(still).unwrap().to_path_buf();
