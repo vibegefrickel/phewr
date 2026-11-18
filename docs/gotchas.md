@@ -24,12 +24,18 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   `terminal`. Without the temp file medium (SSH, a probe that picked `direct` or `png`) or
   without ffmpeg, a video opens in the mpv window with a note. mpv's own Kitty output is gone:
   it played a 4K HLG clip at 2.4 fps in Ghostty and cannot scale a small frame.
-- **Video placeholder:** `q`, `Esc` and the back click in the terminal player always go to the
-  grid (`leave_player` calls `App::exit_video`), because the player has no controls, and the
-  placeholder is one more step back without a use. After the mpv window, `App::video_return` selects
-  the view. A video in `ViewMode::Fullscreen` is a placeholder (`shows_video_placeholder`).
-  `load_if_needed`, `zoom_in` and `slideshow_tick` skip it, because the image decode cannot read
-  a video. `p` on the placeholder opens the mpv window.
+- **Videos in the fullscreen view:** a video never shows in `ViewMode::Fullscreen`. Each step
+  onto a video (`h` `j` `k` `l`, the arrows, Home, End, the slideshow step, the return from the
+  mpv window) opens the terminal player with `video_return = Fullscreen`, and a step from the
+  player onto a photo returns to the fullscreen view. Until 2026-11-18, a video in
+  `ViewMode::Fullscreen` was a placeholder with the hint "video: Enter plays, p opens the mpv
+  window". The maintainer saw it after Cmd+Q in the mpv window of a slideshow and dropped it.
+  Only a failed open of the player (a probe error, an ffmpeg start error) leaves the fullscreen
+  view on the video with its error (`App::fullscreen_on_video`). `load_if_needed`, `zoom_in` and
+  `slideshow_tick` skip that case, because the image decode cannot read a video. `q`, `Esc` and
+  the back click in the player always go to the grid (`leave_player` calls `App::exit_video`),
+  because the player has no controls. After the mpv window, `App::video_return` selects the
+  view.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
   video, and its still carries a play triangle until its loop starts. The probe, the routes and
   the stamp are in `docs/video.md` ("Animated images" and "Probe").
@@ -52,16 +58,25 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   terminal player stops playing (`playing()` is false), and the slideshow moves on. Outside a slideshow, the clip
   loops. In the mpv window, mpv gets `--loop-file=no`, `--keep-open=no`, `--idle=no`,
   `--loop-playlist=no` and `--input-commands` that bind `q`, `Q` and `CLOSE_WIN` to `quit 4`.
-  Exit code 0 is the end of the file. Each other exit stops the slideshow on the placeholder.
+  Exit code 0 is the end of the file, and the slideshow moves on. Each other exit, also `h` and
+  `l`, pauses the slideshow in the player view, and the paused slideshow loops the clip
+  (2026-11-18, before it stopped the slideshow on the placeholder). Without the terminal
+  player, the grid shows while the window plays, and a quit stops the slideshow.
   `--input-commands` needs mpv 0.38 or later. mpv exits with 0 also on the app quit (Cmd+Q). For
   this reason, a slideshow window starts mpv with `--input-ipc-server` and a socket of its own,
-  and a thread reads the `end-file` reason. Exit code 0 with the reason `quit` or `stop` stops the
-  slideshow (`mpv::exit_with_reason`). The reason `eof`, any other reason, no reason and no socket
-  continue it. The real Cmd+Q is not tested yet.
+  and a thread reads the `end-file` reason. Exit code 0 with the reason `quit` or `stop` pauses
+  the slideshow (`mpv::exit_with_reason`). The reason `eof`, any other reason, no reason and no
+  socket continue it. The maintainer tested Cmd+Q on 2026-11-18: it reached phewr as a quit.
 - **mpv steps:** each mpv start gets `--input-commands` with `keybind l "quit 10"` and
   `keybind h "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). Until 2026-11-18 the keys were
   `n` and `N`. The maintainer wants the same step keys in the player and in the window. `l`
-  replaces the default `ab-loop` of mpv 0.41 in this window, `h` is free there. `App::step_from_video` keeps
+  replaces the default `ab-loop` of mpv 0.41 in this window, `h` is free there. A neighbor video
+  opens in a new mpv window (2026-11-18, before it played in the terminal player). The window
+  returns to the view that opened it: the grid stays the grid, and the still of an animation or
+  of a Live Photo stays its still (`return_from_video`). Only `p` in the player view keeps that
+  view (`request_video_window_from_player`, `window_keeps_player`): the last frame stays while
+  the window plays, the decoder stops, and after the exit the player plays the file again. `?`
+  while the window plays deletes the last frame, and the view stays empty until the exit. `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
   file that mpv played, not from the gallery cursor.
 - **mpv window:** phewr follows each mpv window until it exits (`App::poll_video_window`). The
@@ -109,7 +124,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   loops are on. `[gallery] animate = false` gives no loop and no stamp (maintainer,
   2026-11-03). Enter or a left click on the middle of the fullscreen picture plays the motion
   one time (`App::enter_motion_at`, `App::video_path`), and `current` stays on the still. The
-  same click plays a video placeholder and an animation, like Enter. The end of the motion, `q`,
+  same click plays an animation, like Enter. The end of the motion, `q`,
   `Esc` and a right click go back to the still. `p` opens the motion in the mpv window. At the
   start of the motion, phewr reads both content identifiers on the UI thread (a `moov` above
   1 MB counts as no Live Photo). If they differ, the motion plays with a note. The slideshow
@@ -183,7 +198,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   no status note. The note shows in the status row at the bottom. The next key press or mouse
   button press clears it (`clears_status`), a key release or repeat does not. A read error of the
   scan lives in `App::scan_error`, not in `App::error`. The status row shows it after `error`. It
-  never hides the video placeholder, it survives the first decode, and a key press or a folder
+  survives the first decode, and a key press or a folder
   switch clears it.
 - **Status row:** the row shows no key hints. At the right, it shows the facts of the selected
   file (`file_meta.rs`): the size, the file size, the format, the date and, for a video, the

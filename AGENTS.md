@@ -231,9 +231,10 @@ decisions. Read the long form before you change the code that an item names.
 - **Video player default:** `[video] player` defaults to `terminal`, and `builtin` maps to
   `terminal`. Without the temp file medium or without ffmpeg, a video opens in the mpv window
   with a note.
-- **Video placeholder:** `q`, `Esc` and the back click in the terminal player always go to the
-  grid. A video in `ViewMode::Fullscreen` is a placeholder (`shows_video_placeholder`).
-  `load_if_needed`, `zoom_in` and `slideshow_tick` skip it.
+- **Videos in the fullscreen view:** a video never shows in `ViewMode::Fullscreen`. Each step
+  onto a video opens the terminal player. Only a failed open of the player leaves the fullscreen
+  view on the video with its error (`App::fullscreen_on_video`). `load_if_needed`, `zoom_in` and
+  `slideshow_tick` skip that case. `q`, `Esc` and the back click in the player go to the grid.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
   video (`docs/video.md`, "Animated images").
 - **Slideshow view:** a running or paused slideshow has no status row (`ui::status_rows`), so
@@ -244,9 +245,16 @@ decisions. Read the long form before you change the code that an item names.
   the video frame sit below the cell backgrounds (`BELOW_BACKGROUNDS`), so the badge covers them.
 - **Slideshow and videos:** a running slideshow plays a video one time and moves on. Outside a
   slideshow, the clip loops. The mpv window of a slideshow reads the `end-file` reason through
-  `--input-ipc-server`: `quit` or `stop` stops the slideshow (`mpv::exit_with_reason`).
+  `--input-ipc-server` (`mpv::exit_with_reason`). The end of the file moves the slideshow on.
+  Each other exit (`quit`, `stop`, `h`, `l`) pauses the slideshow in the player view, and the
+  paused slideshow loops the clip. Without the terminal player, the grid shows while the window
+  plays, and a quit stops the slideshow.
 - **mpv steps and window:** `l` and `h` in mpv exit with 10 and 11, and phewr steps from the file
-  that mpv played. phewr polls each mpv window every 100 ms until it exits. The window gets
+  that mpv played. A neighbor video opens in a new mpv window. The window returns to the view
+  that opened it: the grid stays the grid, and the still of an animation or of a Live Photo stays
+  its still. Only `p` in the player view keeps that view (`request_video_window_from_player`):
+  the last frame stays while the window plays, the decoder stops, and after the exit the player
+  plays the file again. phewr polls each mpv window every 100 ms until it exits. The window gets
   `--fs --native-fs=no` and `--hwdec=auto-safe`. `--input-commands` needs mpv 0.38 or later.
   mpv's own Kitty output is gone: it played a 4K HLG clip at 2.4 fps in Ghostty.
 - **HDR in the terminal:** for HLG and PQ, `player::tone_map` writes a 3D cube into the cache

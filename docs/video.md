@@ -219,9 +219,10 @@ rules. This page holds the reasons and the numbers.
 - The loop frames replace the stamped still, so the stamp means "not playing yet".
 - There is no small `▶` marker in the label or in the gap.
 - `App::opens_in_player` reads the header of the one file after a key press.
-- `App::is_video` still drives the placeholder and the loading icon.
+- `App::is_video` drives the loading icon and the skips after a failed open (`App::fullscreen_on_video`).
 - ffmpeg gets no `-hwaccel` for an animation. See "Frame path".
-- Esc from an animation returns to its still frame in the fullscreen view.
+- `q` and Esc from a playing animation go to the grid. The still of an animation shows after a
+  failed open, and while and after an mpv window that the still opened with `p`.
 - In a running slideshow, the terminal player holds an animation for at least the slideshow
   interval (`Player::play_at_least`). The mpv window has no such hold.
 - The rest of the facts are under "Probe".

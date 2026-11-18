@@ -214,8 +214,8 @@ read after a reboot.
     one time (`Repeat::Never`, today only for a slideshow).
   - `leave_player` always goes to the grid today (`App::exit_video`). The end of the motion
     and `q` must go back to the fullscreen view of the still.
-  - The player, `shows_video_placeholder`, `App::video_return` and the mpv steps work on list
-    indices (`App::current`). The hidden `.mov` has no index. The player must take the path
+  - The player, `App::video_return` and the mpv steps work on list indices (`App::current`).
+    (`shows_video_placeholder` was in this list until 2026-11-18.) The hidden `.mov` has no index. The player must take the path
     of the movie from the side table, and `current` stays on the still.
   - With `current` on the still, `step_from_video` (`l` and `h` in mpv) steps from the still.
     This is the correct step for a pair.

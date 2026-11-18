@@ -160,7 +160,7 @@ and date. For a video, it shows the length, the frame rate and `SDR`, `HLG` or `
 | `Space` | Pause / resume the slideshow |
 | `[` `]` | Shorter / longer slideshow interval (0.5 s steps) |
 | `Tab` | Show or hide the info panel |
-| `Enter`, click in the middle | Play the video, the animation or the motion of a Live Photo |
+| `Enter`, click in the middle | Play the animation or the motion of a Live Photo |
 | `p` | Play the video in an mpv window, with sound |
 | `q` | Back to the gallery. In a slideshow, `q` stops it too. |
 | `Esc` | Stop the slideshow, or go back to the gallery |
@@ -188,7 +188,8 @@ mpv controls. HDR videos (HLG, PQ, Dolby Vision 8.4, HDR10) play tone-mapped to 
 
 In the mpv window, `l` and `h` play the next and the previous file (mpv 0.38 or later). The `l`
 binding replaces the A-B loop key of mpv in this window. When the window closes, phewr goes back
-to the view that opened it.
+to the view that opened it. A video from the fullscreen view plays again in the terminal player,
+and a slideshow comes back paused.
 
 In a slideshow, a video plays once and the slideshow continues. Outside a slideshow, a video
 loops. Over SSH, videos always open in the mpv window.
