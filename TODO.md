@@ -3,16 +3,17 @@
 ## Handoff
 
 - Date: 2026-11-18
-- Commit: 3018758
-- Done: the review of the week (2e1e3b8 to a5c8fbf) and its three fix workers are merged: the right click closes the info panel from any place (`8732102`), the start read waits for OSC 10 before DA1 with the split late answers and the loss limit (`00257e2`), the zoom levels skip a too wide icon and reload only on a real zoom change (`2141119`). Each fix has a docs commit ("Done", "Review of the week").
-- Done: the catch-up of 2026-11-18 reviewed the three fixes and found no issue. `just check` passes.
+- Commit: e63ea37
+- Done: the catch-up reviewed the three review-of-the-week fixes of 2026-11-17 (`8732102`, `00257e2`, `2141119`) and found no issue.
+- Done: `just pictures-sync` into `../schnattr` and `../youtr`. schnattr's `tui/answers.rs`, `tui/terminal.rs`, `tui/mod.rs` and its tests take `query::LateAnswers`, youtr's `thumbs/terminal.rs` logs it. Both stay uncommitted in their repositories.
+- Done: the test run went on (steps 10 to 13 passed, "Now"). Two auto-review workers merged: the player keys (`c485119`, docs `a1110b9`) and no video placeholder (`8a2881c`, docs `500602f`). `just install` built `8a2881c`.
+- Done: 8 real iPad Live pairs are in `~/Pictures/phewr-test/12-live-photos`, and `TESTS.md` step 14 counts 15 file cells ("Now", "After the tests").
+- Done: the worker `live-mark` (auto review) merged as `d4b7359`: no `◎ Live` text, a Live still carries the play triangle like a video, also with `animate = false`. The docs commit follows it, and `just install` built it.
 - Open (agent): none until the test run goes on. Record each result in "Now" and fix the failures with workers.
-- Open (user): the test run from step 10 (videos), then the herdr part and the phase 7 scenarios ("Now", open points). The `kitty-frames-ack.py` measurement ("Next", item 1).
-- Done: `just pictures-sync` into `../schnattr` and `../youtr` (the user gave the go on 2026-11-18). schnattr's `tui/answers.rs`, `tui/terminal.rs`, `tui/mod.rs` and its tests take `query::LateAnswers`, youtr's `thumbs/terminal.rs` logs it. Both stay uncommitted in their repositories.
-- Open (user): commit the sync in `../schnattr` and `../youtr`. youtr also holds the uncommitted frame work of its own session (`src/tui/frame/`).
-- Health: see "State of the main goal". No workers, no worktrees, no branches except `main`, no stashes. Uncommitted: this file and `docs/picture-refactor.md`.
+- Open (user): the test run: step 10 again (points 5 to 7), step 14 after the `live-mark` merge, the herdr part, Shift+wheel, the loss limit and the phase 7 scenarios ("Now", open points).
+- Open (user): commit this file. Commit the sync in `../schnattr` and `../youtr` (youtr also holds the uncommitted frame work of its own session).
+- Health: see "State of the main goal". `just check` passed in all three merges (1099 tests after `d4b7359`). No workers, no worktrees, no branches except `main`, no stashes.
 - Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key. The herdr test in "Now" decides if this needs a fix.
-- Note: the commit `a5c8fbf` has the message `.`. It holds the doc edits of the handoff of 2026-11-17. Only a rewrite of the history changes it.
 
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
 
@@ -30,18 +31,19 @@ State of the main goal (2026-11-09):
 - Formats: JPEG, PNG, HEIC, AVIF, JPEG XL, camera RAW, PSD, animations, videos and Live Photos open. JPEG XL and camera RAW pass tests on real files.
 - Videos: the terminal player is the default video path. `p` opens the mpv window with sound.
 - Mouse: every view and overlay works with the mouse. The maintainer test is open.
-- Health on 2026-11-18: `just check` passes with 1094 tests with the default features and 1019 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
+- Health on 2026-11-18: `just check` passes with 1099 tests with the default features and 1024 tests in the lean set (`just test-lean`). `just coverage` reports 88 % of the lines (the benches count as 0 %). The ignored tests need real files. Clippy is clean, and `cargo deny` reports only duplicate versions (`lru`, `moxcms`, `miniz_oxide`, `syn`, `thiserror`).
 
 ## Now
 
 Maintainer tests in Ghostty and in herdr: run the 14 steps in `~/Pictures/phewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders, placeholders and Live Photos). Steps 9 and 10 include the grid loops: every video and animated cell must loop after its still. Measured on 2026-10-30: 30 looping cells cost about 3 % of one core in total (phewr 0.2 %, Ghostty 1.7 %, herdr 1.3 %).
 
-Test run of 2026-11-17 (plain Ghostty 1.4.0, build `cb9076c`): steps 1 to 9 passed. Step 6 also passed in herdr. Plain Ghostty picks the animation path (`?`, step 9). The run found and fixed: a test that left temp files (`8626afa`), the grid past the right edge (`8626afa`), the zoom levels (`b314a45`, `2dbce53`), the filename labels (`200b8a4`), the touchpad zoom, the right click toggle and the ` i: close ` hint (`4c63d3d`). Continue at step 10 (videos).
+Test run of 2026-11-17 (plain Ghostty 1.4.0, build `cb9076c`): steps 1 to 9 passed. Step 6 also passed in herdr. Plain Ghostty picks the animation path (`?`, step 9). The run found and fixed: a test that left temp files (`8626afa`), the grid past the right edge (`8626afa`), the zoom levels (`b314a45`, `2dbce53`), the filename labels (`200b8a4`), the touchpad zoom, the right click toggle and the ` i: close ` hint (`4c63d3d`).
+
+Test run of 2026-11-18 (plain Ghostty, build `3018758`): steps 10, 11 and 12 passed, with two findings in step 10. The player stepped with `n` / `N` too, and the help blocks of the fullscreen view and the player differed (worker `video-keys`). After Cmd+Q in the mpv window of a running slideshow, phewr showed the video placeholder with no picture (worker `no-placeholder`: the placeholder goes, the mpv window returns to the grid, to the terminal player or to the paused slideshow). The grid loops ran in Ghostty and in herdr, herdr a bit slower. Step 13 (yazi) passed in Ghostty and in herdr. Continue at step 14 (Live Photos).
 
 Open points of the test run:
 
-- Step 10: the slideshow view with a video. Cmd+Q in the mpv window of a running slideshow must stop the slideshow on the placeholder (`--input-ipc-server`, merged 2026-11-03).
-- The slideshow view: a portrait image must reach the top and the bottom of the screen, a landscape image the left and the right, without a stretch. The badge at the bottom right must show on top of the picture and of a video frame (`z=-1073741825`), and the picture must show around it.
+- Step 10 again with build `8a2881c`, points 5 to 7: `p` from the grid returns to the grid, `p` from the fullscreen player (step onto a video with `l` in fullscreen) keeps the last frame and plays again after the exit, `p` in a slideshow returns to the paused slideshow after `q` or Cmd+Q, the end of the file moves the slideshow on, `l` and `h` in mpv step, and `p` on an animated still returns to the still.
 - herdr (Part 2): the steps 2, 10 and 14, the start speed against plain Ghostty (the DA1 answer must end the read), and the SVG grid icons (steps 3 and 8). If herdr does not answer OSC 10, the octant icons stay. Make sure that both cases look right.
 - herdr: press Alt+`]`, then `j` two times in the grid. If the cursor does not move, herdr owes the OSC 10 answer, and `LateAnswerFilter` eats the keys (the note of `8376b35`).
 - Shift+two-finger scroll: macOS sends it as a horizontal wheel, which does nothing since `4c63d3d`. Make sure whether Ghostty reports Shift on a vertical wheel. If not, only `+` and `-` zoom the grid, and the README row and the help row ("Grid size (Shift if sent)", `ui/help.rs`) must say so.
@@ -49,6 +51,8 @@ Open points of the test run:
 - The phase 7 scenarios (`docs/picture-refactor.md`): a resize, a focus change, the help overlay, 10 scrolls, a folder with more than 500 pictures (`~/Pictures/iphone-20250401`, 678 files) and the quit, in Ghostty and in herdr.
 
 After the tests:
+
+- The test folder `12-live-photos` has 8 real iPad pairs since 2026-11-18 (`IMG_1043` to `IMG_1134`, from `~/Pictures/ipad-20261118`, 108 MB in total). `IMG_1043` and `IMG_1076` have orientation 3. `TESTS.md` step 14 counts 15 file cells. `d4b7359` removed the `◎ Live` text: a Live still carries the play triangle like a video, also with `animate = false`.
 
 - RAW: the portrait RAW files in `08-raw` (except `IMG_1361.DNG`) are copies with a changed Orientation tag, so they test the container orientation, not a real portrait shot.
 
@@ -87,6 +91,9 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
   - `fix-zoom-levels` (`2141119`): a row count whose icon is only too wide no longer ends the zoom levels, so a narrow pane gets levels with the icon. `0` and the zoom steps reload the thumbnails only when the shown grid changes.
 - Filename labels removed (2026-11-17, `200b8a4`, worker `remove-filename-labels`): the grid has no label row and no `n` key, because the status row and the info panel show the file facts. The thumbnail box gets the row. Folder cells keep their name below the folder icon.
 - Grid zoom levels (2026-11-17, `b314a45`, worker `grid-zoom-levels`): a zoom step goes to the next zoom level, and every step changes the column count. A level keeps the folder shape at a box width of at least 5 cells (`MIN_THUMB_COLS`, before 8). When the width limits the picture, a level shows the most rows at that picture size (a narrow pane). Before, the steps from 12 to 7 rows of a 9:16 folder on 200x51 all gave 22 columns. The Live mark is `◎` alone in a border below 9 columns. Found in the test run of 2026-11-17, step 2, together with the right edge fix of `8626afa`.
+- No Live text (2026-11-18, `d4b7359`, worker `live-mark`, auto review): the grid cell of a Live still draws no `◎ Live`. The still carries the play triangle like a video cell, also with `[gallery] animate = false`, which before gave no stamp (decision of 2026-11-03 changed, confirmed by the maintainer on 2026-11-18). The pre-review found 2 suggestions (two doc comments), both applied.
+- No video placeholder (2026-11-18, `8a2881c`, worker `no-placeholder`, auto review): a video never shows in the fullscreen view, every step onto a video opens the terminal player. The mpv window returns to the view that opened it: the grid stays the grid, `p` in a player from the fullscreen view keeps the last frame and plays again after the exit, a slideshow comes back paused after every exit except the end of the file, and the still of an animation or a Live Photo stays its still. `h` and `l` in mpv open a neighbor video in a new window. The help lists Space and `?` for the player. Found in the test run of 2026-11-18, step 10. The maintainer decided the three open questions of the worker on 2026-11-18, all for the current behavior: `h` and `l` in mpv open a neighbor video in a new mpv window, a failed start of the terminal player shows the error in the fullscreen view, and every exit of the window except the end of the file pauses the slideshow, also after a resume with Space during the window.
+- Player keys (2026-11-18, `c485119`, worker `video-keys`, auto review): the player steps only with the keys of the fullscreen view, no `n` / `N`. The mpv window steps with `l` and `h`, which replace `n` and `N`. `l` replaces the A-B loop key of mpv in that window.
 - Sync of the master copy (2026-11-18): `../schnattr` and `../youtr` match the master `3018758` after the review fixes of 2026-11-17. schnattr's `answers::LateAnswers` takes `query::LateAnswers`, so a Kitty answer no longer pays for the owed OSC 10 answer there either.
 - Sync of the master copy (2026-11-16): `../youtr` and `../schnattr` match the master after the fixes of 2026-11-12. youtr still holds its `read_event` workaround (`src/tui/session/mod.rs`) and its `dynamic` helper (`src/thumbs/load.rs`). Their removal is work of the youtr session. youtr keeps `Placing::EveryFrame` until the maintainer tests the self check under herdr.
 - Picture module, the youtr notes (2026-11-12): `AnswerKeys::read` passes a `Resize`, `FocusGained` or `FocusLost` event through and keeps the hold, so an answer that such an event splits comes whole (before, its rest reached the app as key presses). `ScreenImage::into_dynamic` gives the `DynamicImage` for an edit (an opaque picture as RGB). `Bitmap` converts into `Pixels` like `ScreenImage`. Three tests cover the three items.
