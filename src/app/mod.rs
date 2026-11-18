@@ -95,6 +95,10 @@ pub(crate) struct App {
 
     pub(crate) current_dir: Option<PathBuf>,
     pub(crate) initial_dir: Option<PathBuf>,
+    /// The start paths are a plain file list: the status row shows no folder path.
+    pub(crate) file_list: bool,
+    /// The home folder that the status row shows as `~`. `main` sets it, so no test reads `HOME`.
+    pub(crate) home_dir: Option<PathBuf>,
     /// The cursor target of the next scan end: the folder that the user came from.
     return_to: Option<PathBuf>,
     folder_prefetch: folder_prefetch::FolderPrefetch,
@@ -235,6 +239,8 @@ impl App {
             selection: HashSet::new(),
             current_dir: None,
             initial_dir: None,
+            file_list: false,
+            home_dir: None,
             return_to: None,
             meta: meta::MetaState::default(),
             current: 0,

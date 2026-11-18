@@ -289,6 +289,7 @@ fn main() -> io::Result<()> {
 
     let (paths, cursor_target) = start_paths(paths);
     let initial_dir = initial_dir_from_paths(&paths);
+    let file_list = !matches!(paths.as_slice(), [only] if only.is_dir());
 
     let shared_list = SharedImageList::new();
     scanner::spawn_with(paths, shared_list.clone(), config.live_photos);
@@ -322,6 +323,8 @@ fn main() -> io::Result<()> {
         cursor_target,
         cli.slideshow,
     );
+    app.file_list = file_list;
+    app.home_dir = std::env::home_dir();
     let run_result = run(session.terminal_mut(), &mut app, &mut state);
     let restore_result = session.restore();
     let reveal_path = app.reveal_path();

@@ -24,6 +24,11 @@ pub(crate) struct Styles {
     pub badge: Style,
     /// An error in the slideshow badge.
     pub badge_error: Style,
+    /// The colors of the mode blocks in the status row. The block shows them reversed.
+    pub mode_normal: Color,
+    pub mode_fullscreen: Color,
+    pub mode_search: Color,
+    pub mode_help: Color,
 }
 
 pub(crate) const STYLES: Styles = Styles {
@@ -38,4 +43,8 @@ pub(crate) const STYLES: Styles = Styles {
     key: Style::new().fg(Color::Cyan),
     badge: Style::new().fg(Color::Black).bg(Color::Gray),
     badge_error: Style::new().fg(Color::Black).bg(Color::Red),
+    mode_normal: Color::Red,
+    mode_fullscreen: Color::LightGreen,
+    mode_search: Color::Blue,
+    mode_help: Color::LightCyan,
 };

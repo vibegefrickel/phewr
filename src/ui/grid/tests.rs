@@ -185,7 +185,10 @@ fn borders_reach_edges() {
     // The status row below the grid stays text.
     let screen = screen_rows(&buffer).join("\n");
     assert!(
-        status_row(&screen).starts_with(&format!(" {last:02}.jpg [{}/40]  1 selected", last + 1)),
+        status_row(&screen).starts_with(&format!(
+            " NORMAL  {last:02}.jpg [{}/40]  1 selected",
+            last + 1
+        )),
         "{screen}"
     );
     assert_terminal_background(&buffer);
@@ -254,7 +257,7 @@ fn folder_cell_shows_icon_and_name() {
     assert_hides(&screen, "a.jpg");
     assert_eq!(
         status_row(&screen).trim_end(),
-        " .. [1/3]  1 folder, 1 image",
+        " NORMAL  .. [1/3]  1 folder, 1 image",
         "{screen}"
     );
 

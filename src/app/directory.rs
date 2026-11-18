@@ -15,6 +15,8 @@ impl App {
         self.park_thumbnails();
         let canonical = canonicalize_or_self(dir);
         self.current_dir = Some(canonical.clone());
+        // A listed folder has a path, also after a file list.
+        self.file_list = false;
         self.apply_folder_zoom(&canonical);
 
         let new_list = SharedImageList::new();

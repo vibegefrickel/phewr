@@ -12,7 +12,11 @@ use ratatui::style::{Color, Modifier};
 fn gallery_shows_position_without_hints() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
     let screen = render(&mut app, None, 100, 30);
-    assert_eq!(status_row(&screen).trim_end(), " a.jpg [1/2]", "{screen}");
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " NORMAL  a.jpg [1/2]",
+        "{screen}"
+    );
     assert_hides(&screen, "?: help");
     assert_hides(&screen, "b.jpg");
     assert_hides(&screen, "Gallery");
@@ -27,7 +31,7 @@ fn empty_folder_shows_note() {
     app.scan_complete = true;
     let screen = render(&mut app, None, 100, 30);
     assert!(
-        status_row(&screen).starts_with(" No images or folders here"),
+        status_row(&screen).starts_with(" NORMAL  No images or folders here"),
         "{screen}"
     );
     assert_hides(&screen, "[1/");
@@ -60,14 +64,17 @@ fn search_shows_query_and_matches() {
     app.gallery.filtered_indices = vec![1];
     let screen = render(&mut app, None, 100, 30);
     assert!(
-        status_row(&screen).trim_end() == " /b\u{2588}  1/2 matches",
+        status_row(&screen).trim_end() == " SEARCH  /b\u{2588}  1/2 matches",
         "{screen}"
     );
 
     // After Enter, the filter stays and the position counts the matches.
     app.gallery.search_active = false;
     let screen = render(&mut app, None, 100, 30);
-    assert!(status_row(&screen).starts_with(" b.jpg [1/1] "), "{screen}");
+    assert!(
+        status_row(&screen).starts_with(" NORMAL  b.jpg [1/1] "),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -76,7 +83,7 @@ fn gallery_shows_selection_count() {
     app.selection.insert(app.images[1].clone());
     let screen = render(&mut app, None, 100, 30);
     assert!(
-        status_row(&screen).trim_end() == " a.jpg [1/2]  1 selected",
+        status_row(&screen).trim_end() == " NORMAL  a.jpg [1/2]  1 selected",
         "{screen}"
     );
 }
@@ -87,7 +94,7 @@ fn gallery_row_holds_search_and_scan() {
     app.scan_complete = false;
     let screen = render(&mut app, None, 100, 30);
     assert!(
-        status_row(&screen).trim_end() == " a.jpg [1/2]  scanning\u{2026}",
+        status_row(&screen).trim_end() == " NORMAL  a.jpg [1/2]  scanning\u{2026}",
         "{screen}"
     );
 
@@ -98,7 +105,8 @@ fn gallery_row_holds_search_and_scan() {
     let buffer = render_buffer(&mut app, None, 100, 30);
     let screen = screen_rows(&buffer).join("\n");
     assert!(
-        status_row(&screen).trim_end() == " /a\u{2588}  1/2 matches  1 selected  scanning\u{2026}",
+        status_row(&screen).trim_end()
+            == " SEARCH  /a\u{2588}  1/2 matches  1 selected  scanning\u{2026}",
         "{screen}"
     );
     assert_default_fg(cell_of(&buffer, "/a\u{2588}"), Modifier::empty());
@@ -119,7 +127,7 @@ fn file_facts_show_until_note() {
     let buffer = render_buffer(&mut app, None, 100, 30);
     let screen = screen_rows(&buffer).join("\n");
     let row = status_row(&screen);
-    assert!(row.starts_with(" a.png [1/1] "), "{screen}");
+    assert!(row.starts_with(" NORMAL  a.png [1/1] "), "{screen}");
     assert!(row.contains("8\u{d7}8 \u{b7} 0.0 MP \u{b7} "), "{row}");
     assert!(row.contains(" \u{b7} PNG \u{b7} "), "{row}");
     assert_eq!(
@@ -159,7 +167,7 @@ fn scan_error_comes_after_error() {
 fn note_replaces_hints() {
     let mut app = app_with(&["a.jpg"]);
     let screen = render(&mut app, Some("1 file marked"), 100, 30);
-    assert_shows(&screen, " a.jpg [1/1]  1 file marked ");
+    assert_shows(&screen, " NORMAL  a.jpg [1/1]  1 file marked ");
     assert_hides(&screen, "Enter: open");
 }
 
@@ -171,7 +179,7 @@ fn fullscreen_shows_name_and_position() {
     app.loaded = Some(RgbaImage::new(30, 20).into());
     let screen = render(&mut app, None, 100, 30);
     assert!(
-        status_row(&screen).trim_end() == " b.jpg [2/2]",
+        status_row(&screen).trim_end() == " FULLSCREEN  b.jpg [2/2]",
         "the decoded size is not the file size, the facts come from the file: {screen}"
     );
     assert_eq!(
@@ -192,7 +200,10 @@ fn fullscreen_shows_zoom() {
     app.mode = ViewMode::Fullscreen;
     app.zoom = 2.0;
     let screen = render(&mut app, None, 100, 30);
-    assert_eq!(status_row(&screen).trim_end(), " a.jpg [1/1] 200%");
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " FULLSCREEN  a.jpg [1/1] 200%"
+    );
 }
 
 #[test]
@@ -227,8 +238,13 @@ fn fullscreen_uses_ansi_roles() {
     let buffer = render_buffer(&mut app, None, 100, 30);
     assert_terminal_background(&buffer);
     assert_symbol(&buffer, (0, 0), " ", Color::Reset, Modifier::empty());
-    assert_symbol(&buffer, (0, 29), " ", Color::Reset, Modifier::empty());
-    assert_symbol(&buffer, (1, 29), "a", Color::Reset, Modifier::empty());
+    assert_symbol(
+        &buffer,
+        (1, 29),
+        "F",
+        Color::LightGreen,
+        Modifier::REVERSED | Modifier::BOLD,
+    );
 
     app.error = Some("decode failed".to_owned());
     let buffer = render_buffer(&mut app, None, 100, 30);
@@ -242,7 +258,7 @@ fn video_row_shows_time_and_note() {
     app.mode = ViewMode::Video;
     let screen = render(&mut app, None, 100, 30);
     assert!(
-        status_row(&screen).starts_with(" \u{25b6} clip.mp4 00:00/00:00 [1/2] "),
+        status_row(&screen).starts_with(" FULLSCREEN  \u{25b6} clip.mp4 00:00/00:00 [1/2] "),
         "{screen}"
     );
     assert_hides(&screen, "Space: pause");
@@ -273,8 +289,8 @@ fn video_row_shows_player_error() {
     let decoder = fake_decoder(info);
     let mut player = Player::open(
         shared(&decoder),
-        std::path::Path::new("/bin/ffmpeg"),
-        std::path::Path::new("/videos/clip.mp4"),
+        Path::new("/bin/ffmpeg"),
+        Path::new("/videos/clip.mp4"),
         (64, 48),
         &[],
         true,
@@ -285,7 +301,7 @@ fn video_row_shows_player_error() {
     app.video = Some(player);
     let screen = render(&mut app, None, 100, 30);
     assert!(
-        status_row(&screen).starts_with(" \u{25b6} clip.mp4 00:00/1:02:05 [1/2] "),
+        status_row(&screen).starts_with(" FULLSCREEN  \u{25b6} clip.mp4 00:00/1:02:05 [1/2] "),
         "{screen}"
     );
     assert_eq!(crate::file_meta::format_time(65.9), "01:05");
@@ -307,4 +323,236 @@ fn video_row_shows_player_error() {
     );
     let screen = render(&mut app, None, 100, 30);
     assert_shows(&screen, " Error: ffmpeg could not decode clip.mp4 ");
+}
+
+use super::{display_path, shorten_path};
+use std::path::{Path, PathBuf};
+
+fn app_in(dir: &Path, names: &[&str]) -> crate::app::App {
+    let mut app = app_with(names);
+    app.current_dir = Some(dir.to_path_buf());
+    app
+}
+
+#[test]
+fn display_path_shortens_home() {
+    let home = Path::new("/Users/me");
+    assert_eq!(
+        display_path(Path::new("/Users/me/Pictures/trip"), Some(home)),
+        "~/Pictures/trip"
+    );
+    assert_eq!(display_path(Path::new("/Users/me"), Some(home)), "~");
+}
+
+#[test]
+fn display_path_keeps_path_outside_home() {
+    let home = Path::new("/Users/me");
+    assert_eq!(
+        display_path(Path::new("/Volumes/disk/photos"), Some(home)),
+        "/Volumes/disk/photos"
+    );
+    assert_eq!(
+        display_path(Path::new("/Users/meme/photos"), Some(home)),
+        "/Users/meme/photos",
+        "a folder name that starts like home is not home"
+    );
+    assert_eq!(display_path(Path::new("/tmp/a"), None), "/tmp/a");
+}
+
+#[test]
+fn shorten_path_keeps_last_folder() {
+    let path = "~/Pictures/phewr-test/12-live-photos";
+    assert_eq!(shorten_path(path, 40).as_deref(), Some(path));
+    assert_eq!(
+        shorten_path(path, 30).as_deref(),
+        Some("\u{2026}/phewr-test/12-live-photos")
+    );
+    assert_eq!(
+        shorten_path(path, 20).as_deref(),
+        Some("\u{2026}/12-live-photos")
+    );
+    assert_eq!(shorten_path(path, 5), None, "the last folder does not fit");
+    assert_eq!(shorten_path("~", 0), None);
+}
+
+#[test]
+fn gallery_row_starts_with_folder_path() {
+    let mut app = app_in(Path::new("/Volumes/disk/trip"), &["a.jpg", "b.jpg"]);
+    let screen = render(&mut app, None, 100, 30);
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " NORMAL  /Volumes/disk/trip  a.jpg [1/2]",
+        "{screen}"
+    );
+}
+
+#[test]
+fn gallery_row_shows_home_as_tilde() {
+    let mut app = app_in(Path::new("/Users/me/Pictures/trip"), &["a.jpg"]);
+    app.home_dir = Some(PathBuf::from("/Users/me"));
+    let screen = render(&mut app, None, 100, 30);
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " NORMAL  ~/Pictures/trip  a.jpg [1/1]",
+        "{screen}"
+    );
+}
+
+#[test]
+fn folder_switch_from_a_file_list_shows_the_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app_in(Path::new("/Volumes/disk/trip"), &["a.jpg"]);
+    app.file_list = true;
+    let screen = render(&mut app, None, 100, 30);
+    assert_hides(&screen, "/Volumes/disk/trip");
+
+    app.switch_to_dir(temp.path());
+    assert!(!app.file_list);
+    let screen = render(&mut app, None, 100, 30);
+    let canonical = crate::scanner::canonicalize_or_self(temp.path());
+    assert_shows(&screen, &canonical.display().to_string());
+}
+
+#[test]
+fn file_list_row_shows_no_path() {
+    let mut app = app_in(Path::new("/Volumes/disk/trip"), &["a.jpg", "b.jpg"]);
+    app.file_list = true;
+    let screen = render(&mut app, None, 100, 30);
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " NORMAL  a.jpg [1/2]",
+        "{screen}"
+    );
+}
+
+#[test]
+fn narrow_row_shortens_path_from_its_start() {
+    let mut app = app_in(Path::new("/Volumes/disk/phewr-test/trip"), &["a.jpg"]);
+    // Below 60 columns the mode block is ` N ` (3 columns), the name part is 13 columns.
+    let screen = render(&mut app, None, 38, 30);
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " N  \u{2026}/phewr-test/trip  a.jpg [1/1]",
+        "{screen}"
+    );
+    let screen = render(&mut app, None, 32, 30);
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " N  \u{2026}/trip  a.jpg [1/1]"
+    );
+    let screen = render(&mut app, None, 20, 30);
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " N  a.jpg [1/1]",
+        "no room for the path"
+    );
+}
+
+#[test]
+fn path_is_dim_and_name_keeps_its_style() {
+    let mut app = app_in(Path::new("/Volumes/disk"), &["a.jpg"]);
+    let buffer = render_buffer(&mut app, None, 60, 30);
+    let path = cell_of(&buffer, "/Volumes");
+    assert_eq!(path.modifier, crate::ui::STYLES.dim.add_modifier);
+    assert_default_fg(cell_of(&buffer, "a.jpg"), Modifier::empty());
+}
+
+#[test]
+fn fullscreen_row_starts_with_folder_path() {
+    let mut app = app_in(Path::new("/Volumes/disk/trip"), &["a.jpg", "b.jpg"]);
+    app.mode = ViewMode::Fullscreen;
+    app.zoom = 2.0;
+    let screen = render(&mut app, Some("a note"), 100, 30);
+    assert_eq!(
+        status_row(&screen).trim_end(),
+        " FULLSCREEN  /Volumes/disk/trip  a.jpg [1/2] 200%  a note",
+        "{screen}"
+    );
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn video_row_starts_with_folder_path() {
+    let mut app = app_in(Path::new("/Volumes/disk/trip"), &["clip.mp4", "b.jpg"]);
+    app.mode = ViewMode::Video;
+    let screen = render(&mut app, None, 100, 30);
+    assert!(
+        status_row(&screen)
+            .starts_with(" FULLSCREEN  /Volumes/disk/trip  \u{25b6} clip.mp4 00:00/00:00 [1/2] "),
+        "{screen}"
+    );
+}
+
+fn assert_mode(buffer: &ratatui::buffer::Buffer, letter: &str, color: Color) {
+    assert_symbol(
+        buffer,
+        (1, 29),
+        letter,
+        color,
+        Modifier::REVERSED | Modifier::BOLD,
+    );
+}
+
+#[test]
+fn mode_block_names_each_view() {
+    let mut app = app_with(&["a.jpg"]);
+    let screen = render(&mut app, None, 100, 30);
+    assert!(status_row(&screen).starts_with(" NORMAL  "), "{screen}");
+    let buffer = render_buffer(&mut app, None, 100, 30);
+    assert_mode(&buffer, "N", Color::Red);
+
+    app.gallery.search_active = true;
+    let screen = render(&mut app, None, 100, 30);
+    assert!(status_row(&screen).starts_with(" SEARCH  "), "{screen}");
+    let buffer = render_buffer(&mut app, None, 100, 30);
+    assert_mode(&buffer, "S", Color::Blue);
+    app.gallery.search_active = false;
+
+    app.mode = ViewMode::Fullscreen;
+    let screen = render(&mut app, None, 100, 30);
+    assert!(status_row(&screen).starts_with(" FULLSCREEN  "), "{screen}");
+    let buffer = render_buffer(&mut app, None, 100, 30);
+    assert_mode(&buffer, "F", Color::LightGreen);
+
+    app.help_visible = true;
+    let buffer = render_buffer(&mut app, None, 100, 30);
+    assert_mode(&buffer, "H", Color::LightCyan);
+}
+
+#[test]
+fn mode_block_is_one_letter_on_a_narrow_screen() {
+    let mut app = app_with(&["a.jpg"]);
+    let screen = render(&mut app, None, 59, 30);
+    assert!(status_row(&screen).starts_with(" N  a.jpg"), "{screen}");
+    app.gallery.search_active = true;
+    let screen = render(&mut app, None, 59, 30);
+    assert!(status_row(&screen).starts_with(" /  /"), "{screen}");
+    app.gallery.search_active = false;
+    app.mode = ViewMode::Fullscreen;
+    let screen = render(&mut app, None, 59, 30);
+    assert!(status_row(&screen).starts_with(" F  a.jpg"), "{screen}");
+    app.help_visible = true;
+    let screen = render(&mut app, None, 59, 30);
+    assert!(status_row(&screen).starts_with(" ?  a.jpg"), "{screen}");
+    let screen = render(&mut app, None, 60, 30);
+    assert!(status_row(&screen).starts_with(" HELP  "), "{screen}");
+}
+
+#[test]
+fn slideshow_shows_a_box_at_the_bottom_left() {
+    let mut app = app_with(&["a.jpg"]);
+    app.mode = ViewMode::Fullscreen;
+    app.start_slideshow();
+    let buffer = render_buffer(&mut app, None, 100, 30);
+    let screen = screen_rows(&buffer).join("\n");
+    assert!(status_row(&screen).starts_with(" SLIDESHOW "), "{screen}");
+    assert_symbol(&buffer, (1, 29), "S", Color::Black, Modifier::BOLD);
+    assert_eq!(buffer[(1, 29)].bg, Color::Gray, "the look of the badge");
+    assert_eq!(
+        app.image_rect,
+        Rect::new(0, 0, 100, 30),
+        "the box sits on the picture"
+    );
+    let screen = render(&mut app, None, 50, 30);
+    assert!(status_row(&screen).starts_with(" S "), "{screen}");
 }

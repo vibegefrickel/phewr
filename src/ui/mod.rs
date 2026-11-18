@@ -14,7 +14,10 @@ use ratatui::{
 };
 #[cfg(feature = "video")]
 use status::video_status_line;
-use status::{draw_slideshow_badge, draw_status_row, fullscreen_status_line, gallery_status_line};
+use status::{
+    draw_slideshow_badge, draw_slideshow_mode, draw_status_row, fullscreen_status_line,
+    gallery_status_line,
+};
 
 /// The preferred info panel width, with its border.
 const INFO_PANEL_WIDTH: u16 = 42;
@@ -98,10 +101,12 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
-    let bottom_line = fullscreen_status_line(app, status);
+    let status_area = status_area(area, app);
+    let bottom_line = fullscreen_status_line(app, status, status_area.width);
     let inner = content_area(area, app);
-    draw_status_row(frame, app, status_area(area, app), bottom_line, status);
+    draw_status_row(frame, app, status_area, bottom_line, status);
     if status_rows(app) == 0 {
+        draw_slideshow_mode(frame, app, inner);
         draw_slideshow_badge(frame, app, inner, status);
     }
 
@@ -110,10 +115,12 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Opt
 
 #[cfg(feature = "video")]
 fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
-    let bottom_line = video_status_line(app, status);
-    draw_status_row(frame, app, status_area(area, app), bottom_line, status);
+    let status_area = status_area(area, app);
+    let bottom_line = video_status_line(app, status, status_area.width);
+    draw_status_row(frame, app, status_area, bottom_line, status);
     let inner = content_area(area, app);
     if status_rows(app) == 0 {
+        draw_slideshow_mode(frame, app, inner);
         draw_slideshow_badge(frame, app, inner, status);
     }
     app.image_rect = inner;
@@ -123,8 +130,9 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
     let grid_rect = content_area(area, app);
     app.gallery.update_grid(grid_rect);
     let filtered_count = app.gallery.filtered_indices.len();
-    let line = gallery_status_line(app, filtered_count, status);
-    draw_status_row(frame, app, status_area(area, app), line, status);
+    let status_area = status_area(area, app);
+    let line = gallery_status_line(app, filtered_count, status, status_area.width);
+    draw_status_row(frame, app, status_area, line, status);
     let mut wanted = std::mem::take(&mut app.grid_icons.wanted);
     draw_thumbnail_cells(frame, app, grid_rect, &mut wanted);
     app.grid_icons.wanted = wanted;
@@ -207,7 +215,7 @@ mod tests {
         assert!(rows[11].ends_with(" \u{25b6} 5.0s "), "{rows:?}");
         assert_eq!(buffer[(39, 11)].style().bg, Some(Color::Gray));
         assert_ne!(
-            buffer[(0, 11)].style().bg,
+            buffer[(10, 11)].style().bg,
             Some(Color::Gray),
             "the picture shows left of the badge"
         );

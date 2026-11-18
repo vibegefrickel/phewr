@@ -2,8 +2,9 @@
 //! facts at the right.
 
 use super::STYLES;
-use crate::app::App;
+use crate::app::{App, ViewMode};
 use ratatui::{prelude::*, widgets::Paragraph};
+use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 /// `line` at the left, the file facts at the right. A note, a question, an error or a long line
@@ -45,9 +46,9 @@ fn facts_fit(left_width: usize, facts: &str, area_width: u16) -> bool {
 }
 
 /// An error, or the name, the position, the zoom and the note. A slideshow has no status row.
-pub(super) fn fullscreen_status_line(app: &App, status: Option<&str>) -> Line<'static> {
+pub(super) fn fullscreen_status_line(app: &App, status: Option<&str>, width: u16) -> Line<'static> {
     if let Some(line) = error_line(app) {
-        return line;
+        return with_mode(app, line, width);
     }
     let filename = app
         .current_path()
@@ -69,7 +70,7 @@ pub(super) fn fullscreen_status_line(app: &App, status: Option<&str>) -> Line<'s
         STYLES.text,
     )];
     spans.extend(status.map(|note| Span::styled(format!(" {note} "), STYLES.text)));
-    Line::from(spans)
+    with_folder(app, Line::from(spans), width)
 }
 
 /// The badge at the bottom right of a slideshow: the picture stays visible around it, because the
@@ -138,13 +139,14 @@ const FINISHED_GLYPH: &str = "\u{23f8}";
 
 /// An error, or the state, the name, the time, the position and the note.
 #[cfg(feature = "video")]
-pub(super) fn video_status_line(app: &App, status: Option<&str>) -> Line<'static> {
+pub(super) fn video_status_line(app: &App, status: Option<&str>, width: u16) -> Line<'static> {
     let error = app
         .error
         .as_deref()
         .or_else(|| app.video.as_ref().and_then(|v| v.error.as_deref()));
     if let Some(err) = error {
-        return Line::from(Span::styled(format!(" Error: {err} "), STYLES.error));
+        let line = Line::from(Span::styled(format!(" Error: {err} "), STYLES.error));
+        return with_mode(app, line, width);
     }
     let filename = app
         .current_path()
@@ -169,7 +171,7 @@ pub(super) fn video_status_line(app: &App, status: Option<&str>) -> Line<'static
     } else {
         String::new()
     };
-    Line::from(vec![
+    let line = Line::from(vec![
         Span::styled(
             format!(
                 " {} {} {}/{} [{}/{}] {}",
@@ -186,7 +188,8 @@ pub(super) fn video_status_line(app: &App, status: Option<&str>) -> Line<'static
         status.map_or_else(Span::default, |note| {
             Span::styled(format!(" {note} "), STYLES.text)
         }),
-    ])
+    ]);
+    with_folder(app, line, width)
 }
 
 /// An error, the search query while typing, or the name, the position, the
@@ -195,9 +198,10 @@ pub(super) fn gallery_status_line(
     app: &App,
     filtered_count: usize,
     status: Option<&str>,
+    width: u16,
 ) -> Line<'static> {
     if let Some(line) = error_line(app) {
-        return line;
+        return with_mode(app, line, width);
     }
 
     let mut spans = if app.gallery.search_active {
@@ -227,14 +231,123 @@ pub(super) fn gallery_status_line(
         spans.push(Span::styled(" scanning\u{2026} ", STYLES.dim));
     }
     if app.gallery.search_active {
-        return Line::from(spans);
+        return with_folder(app, Line::from(spans), width);
     }
     if let Some(status) = status {
         spans.push(Span::styled(format!(" {status} "), STYLES.text));
     } else if is_empty_folder(app) {
         spans.push(Span::styled(" No images or folders here ", STYLES.text));
     }
+    with_folder(app, Line::from(spans), width)
+}
+
+/// `rest` behind the folder path, so the path is the first thing on the row.
+fn with_folder(app: &App, rest: Line<'static>, width: u16) -> Line<'static> {
+    let Some(dir) = app.current_dir.as_deref().filter(|_| !app.file_list) else {
+        return with_mode(app, rest, width);
+    };
+    let block = mode_span(app, width);
+    let text = display_path(dir, app.home_dir.as_deref());
+    // The path span adds one space at each side.
+    let budget = usize::from(width).saturating_sub(block.width() + rest.width() + 2);
+    let Some(text) = shorten_path(&text, budget) else {
+        return with_mode(app, rest, width);
+    };
+    let mut spans = vec![block, Span::styled(format!(" {text} "), STYLES.dim)];
+    spans.extend(rest.spans);
     Line::from(spans)
+}
+
+/// `rest` behind the mode block.
+fn with_mode(app: &App, rest: Line<'static>, width: u16) -> Line<'static> {
+    let mut spans = vec![mode_span(app, width)];
+    spans.extend(rest.spans);
+    Line::from(spans)
+}
+
+/// Below this many columns the mode block shows one letter.
+const MODE_SHORT_WIDTH: u16 = 60;
+
+/// The block of the mode that the status row shows: the help overlay, the search line, the grid
+/// or the fullscreen view and the player.
+fn mode_span(app: &App, width: u16) -> Span<'static> {
+    let (name, short_name, color) = if app.help_visible {
+        ("HELP", "?", STYLES.mode_help)
+    } else if app.mode != ViewMode::Gallery {
+        ("FULLSCREEN", "F", STYLES.mode_fullscreen)
+    } else if app.gallery.search_active {
+        ("SEARCH", "/", STYLES.mode_search)
+    } else {
+        ("NORMAL", "N", STYLES.mode_normal)
+    };
+    mode_block(name, short_name, color, width)
+}
+
+/// `short_name` on a screen narrower than `MODE_SHORT_WIDTH`, else `name`.
+fn mode_text<'a>(name: &'a str, short_name: &'a str, width: u16) -> &'a str {
+    if width < MODE_SHORT_WIDTH {
+        short_name
+    } else {
+        name
+    }
+}
+
+/// A block with the mode name in reversed `color`. A screen narrower than `MODE_SHORT_WIDTH`
+/// gets `short_name`.
+fn mode_block(name: &str, short_name: &str, color: Color, width: u16) -> Span<'static> {
+    Span::styled(
+        format!(" {} ", mode_text(name, short_name, width)),
+        Style::default()
+            .fg(color)
+            .bg(Color::Reset)
+            .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+    )
+}
+
+/// The box SLIDESHOW at the bottom left of a slideshow, on top of the picture.
+pub(super) fn draw_slideshow_mode(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if app.slideshow.is_none() || area.height == 0 {
+        return;
+    }
+    // The look of the badge at the bottom right.
+    let block = Span::styled(
+        format!(" {} ", mode_text("SLIDESHOW", "S", area.width)),
+        STYLES.badge.add_modifier(Modifier::BOLD),
+    );
+    let width = u16::try_from(block.width())
+        .unwrap_or(u16::MAX)
+        .min(area.width);
+    let rect = Rect {
+        x: area.x,
+        y: area.bottom() - 1,
+        width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(block), rect);
+}
+
+/// `path` with the home folder as `~`. A path outside the home folder stays as it is.
+fn display_path(path: &Path, home: Option<&Path>) -> String {
+    let relative = home
+        .filter(|home| home.parent().is_some())
+        .and_then(|home| path.strip_prefix(home).ok());
+    match relative {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
+/// `text` when it fits in `budget` columns, else its tail behind `…/`. The last folder stays
+/// whole. `None` when not even that fits.
+fn shorten_path(text: &str, budget: usize) -> Option<String> {
+    if text.width() <= budget {
+        return Some(text.to_owned());
+    }
+    let parts: Vec<&str> = text.split('/').collect();
+    (1..parts.len())
+        .map(|start| format!("\u{2026}/{}", parts[start..].join("/")))
+        .find(|candidate| candidate.width() <= budget)
 }
 
 /// The error or the scan error, in this order.
