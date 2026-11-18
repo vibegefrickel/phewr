@@ -129,8 +129,15 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   same click plays an animation, like Enter. The end of the motion, `q`,
   `Esc` and a right click go back to the still. `p` opens the motion in the mpv window. At the
   start of the motion, phewr reads both content identifiers on the UI thread (a `moov` above
-  1 MB counts as no Live Photo). If they differ, the motion plays with a note. The slideshow
-  shows the still only. A HEIC wins the motion over a JPEG twin, and the JPEG stays a plain cell.
+  1 MB counts as no Live Photo). If they differ, the motion plays with a note. A running slideshow
+  shows the still, plays the motion one time and moves on without the interval
+  (`App::slideshow_starts_motion`, `Slideshow::motion_for` blocks a second start, 2026-11-19: the
+  maintainer replaced the "still only" decision of 2026-11-03, "treat like a video"). A paused
+  slideshow shows the still only. A failed still decode starts the motion without the still and
+  never spins the run loop (`slideshow_check_again_soon`). Without ffmpeg and mpv, the still shows
+  for the interval and the slideshow goes on. A manual step onto a Live still in a running
+  slideshow plays the motion too (`jump_to` resets `motion_for`). A HEIC wins the motion over a
+  JPEG twin, and the JPEG stays a plain cell.
   Several path arguments pair nothing. One file argument that names a hidden `.mov` puts the
   cursor on its still. The folder prefetch pairs with the same config. The design and the
   measurements are in `docs/live-photos.md`.

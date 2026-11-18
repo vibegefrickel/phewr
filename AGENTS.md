@@ -243,7 +243,8 @@ decisions. Read the long form before you change the code that an item names.
   `pictures/kitty/placement.rs`). Outside a slideshow, an image shows at its own size. A badge at
   the bottom right shows the play or pause glyph, the interval, the note or the error. The image and
   the video frame sit below the cell backgrounds (`BELOW_BACKGROUNDS`), so the badge covers them.
-- **Slideshow and videos:** a running slideshow plays a video one time and moves on. Outside a
+- **Slideshow and videos:** a running slideshow plays a video one time and moves on, and a Live
+  still plays its motion one time after its still (`Slideshow::motion_for`). Outside a
   slideshow, the clip loops. The mpv window of a slideshow reads the `end-file` reason through
   `--input-ipc-server` (`mpv::exit_with_reason`). The end of the file moves the slideshow on.
   Each other exit (`quit`, `stop`, `h`, `l`) pauses the slideshow in the player view, and the
@@ -273,7 +274,9 @@ decisions. Read the long form before you change the code that an item names.
   (`PRESTART_LIFETIME`) drop the player.
 - **Live Photos:** the folder scan hides the motion `.mov` of each Live still
   (`[gallery] live_photos`). The still loops its motion in the grid, and Enter plays it one time.
-  The slideshow shows the still only. A HEIC wins the motion over a JPEG twin. A left click on
+  A running slideshow shows the still, plays the motion one time and moves on without the
+  interval. A paused slideshow shows the still only. Without ffmpeg and mpv, the still shows for
+  the interval. A HEIC wins the motion over a JPEG twin. A left click on
   the middle of the fullscreen picture plays like Enter. At the start of the motion, phewr reads
   both content identifiers on the UI thread. If they differ, the motion plays with a note.
   A Live still carries the play triangle like a video cell, and no text. `[gallery] animate =

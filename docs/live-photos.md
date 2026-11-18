@@ -235,7 +235,8 @@ read after a reboot.
   still costs.
 - Marks: a mark on the still stands for the pair. Marks only count today.
 - Search: the `.mov` has the same stem, so the search finds the same photos.
-- Slideshow: it shows the still only. A config key can play the motion one time.
+- Slideshow: it shows the still, then plays the motion one time and moves on (2026-11-19, before
+  the still only). A paused slideshow shows the still only.
 - Prestart: a rest on the still in the fullscreen view can start the player ahead of Enter,
   like the prestart of `video_handoff/prestart/`.
 
@@ -314,8 +315,9 @@ Choice B, provisional until open question 2 has an answer. These facts support i
    - b. phewr shows the `.mov` as its own cell after the next directory switch.
    - c. phewr ignores the identifier and trusts the base name.
 5. Does the slideshow play the motion?
-   - a. No, it shows the still only (recommended).
-   - b. Yes, one time after the still, like a video today.
+   - a. No, it shows the still only (recommended, chosen on 2026-11-03).
+   - b. Yes, one time after the still, like a video today (the maintainer switched to b on
+     2026-11-19, `3c82ce3`).
 6. Is there a config key to turn the pairing off?
    - a. Yes: `[gallery] live_photos = false` shows both cells (recommended).
    - b. No.

@@ -264,7 +264,8 @@ sends a lost picture again. `PHEWR_KITTY_SELF_CHECK=0` turns off the self check 
   page.
 - **Animated images:** GIF, WebP, APNG and AVIF sequences. Animated WebP needs FFmpeg 9 or later.
 - **Live Photos:** phewr pairs an iPhone still with its `.mov`. The grid marks the still with
-  the play triangle like a video cell and loops the motion. `Enter` plays it once.
+  the play triangle like a video cell and loops the motion. `Enter` plays it once, and a running
+  slideshow plays it once after the still.
 - **Video** (feature `video`): MP4, MOV, MKV, AVI, WebM and M4V.
 
 phewr shows photos upright (EXIF orientation). It converts the colors of each image into the
