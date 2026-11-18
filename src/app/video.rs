@@ -175,6 +175,10 @@ impl App {
                 // At the end of the list, the slideshow stops and the player loops the clip.
                 self.video = None;
                 self.slideshow_step();
+                // A stopped slideshow leaves the motion of a Live Photo for its still.
+                if self.plays_motion() {
+                    self.return_from_video();
+                }
             }
             return true;
         }

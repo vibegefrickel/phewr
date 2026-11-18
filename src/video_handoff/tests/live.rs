@@ -510,3 +510,212 @@ impl Real {
         time
     }
 }
+
+/// A running slideshow on the still of `app`, with the decoded still on the screen.
+fn running_slideshow(app: &mut crate::app::App) {
+    app.loaded = Some(image::RgbaImage::new(1, 1).into());
+    app.start_slideshow();
+}
+
+#[test]
+fn running_slideshow_plays_motion_then_moves_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+    let still = app.current;
+    let decoder = fake_decoder(clip_info());
+    let mut state = terminal(&decoder);
+    let (log, mut runner) = fake_runner();
+    running_slideshow(&mut app);
+
+    app.slideshow_tick();
+    assert_eq!(app.mode, ViewMode::Video, "the motion starts at once");
+    assert!(app.plays_motion());
+    assert_eq!(app.current, still);
+    play_videos(&mut app, &mut state, &mut runner);
+    assert!(decoder.last_args().contains("IMG_0001.MOV"));
+    assert!(log.borrow().is_empty(), "no mpv");
+
+    app.slideshow_tick();
+    assert_eq!(app.current, still, "the motion holds the slide");
+    decoder.feed(vec![0; 640 * 480 * 4]);
+    assert!(app.video.as_mut().unwrap().poll());
+    decoder.end();
+    assert!(!app.video.as_mut().unwrap().poll());
+
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(
+        app.mode,
+        ViewMode::Video,
+        "the slideshow moves on, not the still"
+    );
+    app.slideshow_tick();
+    assert_eq!(decoder.starts().len(), 1, "the motion plays one time");
+    assert_eq!(app.current, still + 1);
+    assert_eq!(app.mode, ViewMode::Fullscreen);
+    assert!(!app.plays_motion());
+    assert!(app.slideshow_running());
+    let interval = app.slideshow.as_ref().unwrap().interval;
+    assert!(app.slideshow_timeout().unwrap() > interval / 2);
+}
+
+#[test]
+fn paused_slideshow_plays_no_motion() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+    running_slideshow(&mut app);
+    app.slideshow_toggle_pause();
+
+    app.slideshow_tick();
+
+    assert_eq!(app.mode, ViewMode::Fullscreen);
+    assert!(!app.plays_motion());
+}
+
+#[test]
+fn s_in_grid_on_live_still_starts_motion() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+    let still = app.current;
+    app.enter_gallery();
+    super::super::focus_gallery_on_current(&mut app);
+
+    char_key(&mut app, 's');
+    assert!(app.slideshow_running());
+    assert_eq!(app.mode, ViewMode::Fullscreen);
+    app.slideshow_tick();
+    assert_eq!(
+        app.mode,
+        ViewMode::Fullscreen,
+        "the motion waits for the still"
+    );
+
+    app.loaded = Some(image::RgbaImage::new(1, 1).into());
+    app.slideshow_tick();
+    assert_eq!(app.mode, ViewMode::Video);
+    assert!(app.plays_motion());
+    assert_eq!(app.current, still);
+}
+
+#[test]
+fn quit_in_window_during_motion_pauses_on_still() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+    let still = app.current;
+    let decoder = fake_decoder(clip_info());
+    let mut state = terminal(&decoder);
+    let (log, mut runner) = fake_runner();
+    running_slideshow(&mut app);
+    app.slideshow_tick();
+    play_videos(&mut app, &mut state, &mut runner);
+    assert!(app.video.is_some());
+
+    char_key(&mut app, 'p');
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(log.borrow().len(), 1, "the window opens");
+    assert_eq!(
+        app.mode,
+        ViewMode::Fullscreen,
+        "the still shows behind the window"
+    );
+    app.slideshow_tick();
+    assert_eq!(app.current, still, "the window holds the slideshow");
+
+    runner
+        .window
+        .take()
+        .unwrap()
+        .send(Some(crate::mpv::USER_QUIT))
+        .unwrap();
+    super::super::poll_mpv_window(&mut app, &mut state);
+
+    assert_eq!(app.current, still);
+    assert_eq!(app.mode, ViewMode::Fullscreen);
+    assert!(app.slideshow.as_ref().unwrap().paused);
+    app.slideshow_tick();
+    assert!(!app.plays_motion(), "a paused slideshow plays no motion");
+}
+
+#[test]
+fn end_of_window_during_motion_moves_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+    let still = app.current;
+    let decoder = fake_decoder(clip_info());
+    let mut state = terminal(&decoder);
+    let (_log, mut runner) = fake_runner();
+    running_slideshow(&mut app);
+    app.slideshow_tick();
+    play_videos(&mut app, &mut state, &mut runner);
+    char_key(&mut app, 'p');
+    play_videos(&mut app, &mut state, &mut runner);
+
+    runner.window.take().unwrap().send(Some(0)).unwrap();
+    super::super::poll_mpv_window(&mut app, &mut state);
+
+    assert_eq!(app.current, still + 1);
+    assert!(!app.slideshow.as_ref().unwrap().paused);
+}
+
+#[test]
+fn slideshow_without_players_keeps_running_on_live_still() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+    let still = app.current;
+    let decoder = fake_decoder(clip_info());
+    let mut state = terminal(&decoder);
+    state.video.mpv = None;
+    state.video.ffmpeg = None;
+    let (_log, mut runner) = fake_runner();
+    running_slideshow(&mut app);
+
+    app.slideshow_tick();
+    play_videos(&mut app, &mut state, &mut runner);
+
+    assert!(
+        app.slideshow_running(),
+        "the missing tools do not stop the show"
+    );
+    assert_eq!(app.mode, ViewMode::Fullscreen);
+    assert_eq!(app.current, still);
+    app.slideshow_tick();
+    assert!(!app.plays_motion(), "the motion starts one time only");
+    app.slideshow.as_mut().unwrap().next_at = crate::test_support::overdue();
+    app.loaded = Some(image::RgbaImage::new(1, 1).into());
+    app.slideshow_tick();
+    assert_eq!(
+        app.current,
+        still + 1,
+        "the slide moves on after the interval"
+    );
+}
+
+#[test]
+fn failed_still_decode_does_not_block_the_slideshow() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+    app.start_slideshow();
+    app.loaded = None;
+    app.error = Some("broken".into());
+
+    app.slideshow_tick();
+
+    assert!(app.plays_motion(), "the motion starts without the still");
+}
+
+#[test]
+fn manual_step_back_onto_still_replays_motion_in_slideshow() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+    let still = app.current;
+    running_slideshow(&mut app);
+    app.slideshow_tick();
+    assert!(app.plays_motion());
+
+    char_key(&mut app, 'l');
+    char_key(&mut app, 'h');
+    app.loaded = Some(image::RgbaImage::new(1, 1).into());
+    app.slideshow_tick();
+
+    assert_eq!(app.current, still);
+    assert!(app.plays_motion());
+}

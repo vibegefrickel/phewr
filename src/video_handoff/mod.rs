@@ -113,7 +113,10 @@ fn finish_motion(app: &mut App, state: &mut LoopState) {
     if let Some(error) = player.error.clone() {
         state.status = Some(error);
     }
-    app.return_from_video();
+    // A running slideshow moves on from the finished motion, see `slideshow_video_holds`.
+    if !app.slideshow_advancing() {
+        app.return_from_video();
+    }
 }
 
 enum Blocker {
@@ -251,10 +254,12 @@ fn leave_for_window(app: &mut App, keep_player: bool) {
     focus_gallery_on_current(app);
 }
 
-/// The window did not open: the player view plays on, and the grid stops the slideshow.
+/// The window did not open: the player view plays on, and the grid stops the slideshow. A Live
+/// Photo motion that cannot play leaves the slideshow on its still.
 fn leave_without_window(app: &mut App, keep_player: bool) {
+    let motion = app.plays_motion();
     leave_for_window(app, keep_player);
-    if app.mode != ViewMode::Video {
+    if app.mode != ViewMode::Video && !motion {
         app.stop_slideshow();
     }
 }

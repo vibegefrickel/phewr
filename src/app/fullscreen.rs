@@ -123,6 +123,10 @@ impl App {
             self.video = None;
             self.motion = None;
             self.video_window = None;
+            // The slideshow plays the motion of a Live still that a step lands on.
+            if let Some(show) = self.slideshow.as_mut() {
+                show.motion_for = None;
+            }
         }
 
         self.park_shown_image();

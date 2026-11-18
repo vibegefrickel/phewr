@@ -14,7 +14,23 @@ pub(crate) struct Slideshow {
     pub(crate) interval: Duration,
     pub(crate) paused: bool,
     /// A running decode pushes it back.
-    pub(super) next_at: Instant,
+    pub(crate) next_at: Instant,
+    /// The Live Photo still whose motion this slide started. A failed or finished motion does not
+    /// start again.
+    #[cfg(feature = "video")]
+    pub(super) motion_for: Option<usize>,
+}
+
+impl Slideshow {
+    pub(crate) fn new(interval: Duration, paused: bool, next_at: Instant) -> Self {
+        Self {
+            interval,
+            paused,
+            next_at,
+            #[cfg(feature = "video")]
+            motion_for: None,
+        }
+    }
 }
 
 impl App {
@@ -35,11 +51,7 @@ impl App {
             return;
         }
         let interval = self.slideshow_interval;
-        self.slideshow = Some(Slideshow {
-            interval,
-            paused: false,
-            next_at: Instant::now() + interval,
-        });
+        self.slideshow = Some(Slideshow::new(interval, false, Instant::now() + interval));
         // A slideshow lives in the fullscreen view, even when it starts on a video.
         #[cfg(feature = "video")]
         if self.mode == ViewMode::Video {
@@ -48,7 +60,8 @@ impl App {
         self.needs_render = true;
     }
 
-    /// A running slideshow that is not paused. It plays a video once and then moves on.
+    /// A running slideshow that is not paused. It plays a video or a Live Photo motion once and
+    /// then moves on.
     pub(crate) fn slideshow_advancing(&self) -> bool {
         self.slideshow.as_ref().is_some_and(|show| !show.paused)
     }
@@ -119,7 +132,7 @@ impl App {
             return;
         }
         #[cfg(feature = "video")]
-        if self.slideshow_video_holds() {
+        if self.slideshow_video_holds() || self.slideshow_starts_motion() {
             return;
         }
         let Some(show) = self.slideshow.as_ref() else {
@@ -134,6 +147,33 @@ impl App {
             return;
         }
         self.slideshow_step();
+    }
+
+    /// True while the slide waits for the motion of its Live Photo still, or starts it now. The
+    /// still shows first. The finished motion moves the slideshow on without the interval.
+    #[cfg(feature = "video")]
+    fn slideshow_starts_motion(&mut self) -> bool {
+        let current = self.current;
+        if self.mode != ViewMode::Fullscreen || !self.is_live(current) {
+            return false;
+        }
+        if self
+            .slideshow
+            .as_ref()
+            .is_none_or(|show| show.motion_for == Some(current))
+        {
+            return false;
+        }
+        // The decode of the still is under way. A failed decode starts the motion anyway.
+        if self.loaded.is_none() && self.error.is_none() {
+            self.slideshow_check_again_soon();
+            return true;
+        }
+        if let Some(show) = self.slideshow.as_mut() {
+            show.motion_for = Some(current);
+        }
+        self.enter_motion_at(current);
+        true
     }
 
     /// Push the next check 100 ms out, while a decode or a video holds the slide.
@@ -202,13 +242,13 @@ mod tests {
         app.loaded = Some(RgbaImage::new(1, 1).into());
 
         app.start_slideshow();
-        app.slideshow = Some(Slideshow {
-            interval: Duration::from_millis(10),
-            paused: false,
-            next_at: Instant::now()
+        app.slideshow = Some(Slideshow::new(
+            Duration::from_millis(10),
+            false,
+            Instant::now()
                 .checked_sub(Duration::from_millis(1))
                 .unwrap(),
-        });
+        ));
         app.slideshow_tick();
         assert_eq!(app.current, 1);
 
@@ -243,13 +283,13 @@ mod tests {
         app.filenames = vec!["a.png".into(), "b.png".into()];
         app.mode = ViewMode::Fullscreen;
         app.loaded = None;
-        app.slideshow = Some(Slideshow {
-            interval: Duration::from_millis(10),
-            paused: false,
-            next_at: Instant::now()
+        app.slideshow = Some(Slideshow::new(
+            Duration::from_millis(10),
+            false,
+            Instant::now()
                 .checked_sub(Duration::from_millis(1))
                 .unwrap(),
-        });
+        ));
         app.slideshow_tick();
         assert_eq!(app.current, 0, "must not advance while decoding");
         assert!(app.slideshow_timeout().is_some());
@@ -363,7 +403,7 @@ mod tests {
 
     #[cfg(feature = "video")]
     #[test]
-    fn live_photo_shows_still_only() {
+    fn live_photo_starts_motion_in_running_slideshow() {
         use crate::test_support::live::{LIVE_ID, fullscreen_on_still};
         let dir = tempfile::tempdir().unwrap();
         let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
@@ -371,21 +411,36 @@ mod tests {
         app.start_slideshow();
         app.loaded = Some(RgbaImage::new(1, 1).into());
 
-        app.slideshow.as_mut().unwrap().next_at = overdue();
         app.slideshow_tick();
 
-        assert_eq!(app.current, still + 1, "the slide moves on after the still");
-        assert_eq!(app.mode, ViewMode::Fullscreen, "no motion plays");
+        assert_eq!(app.current, still, "the motion holds the slide");
+        assert_eq!(app.mode, ViewMode::Video);
+        assert!(app.plays_motion());
+        assert_eq!(
+            app.slideshow_timeout(),
+            None,
+            "the motion drives the slideshow"
+        );
+    }
+
+    #[cfg(feature = "video")]
+    #[test]
+    fn live_photo_waits_for_its_still() {
+        use crate::test_support::live::{LIVE_ID, fullscreen_on_still};
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+        app.start_slideshow();
+        app.loaded = None;
+
+        app.slideshow_tick();
+
+        assert_eq!(app.mode, ViewMode::Fullscreen);
         assert!(!app.plays_motion());
     }
 
     #[test]
     fn struct_reports_interval() {
-        let show = Slideshow {
-            interval: Duration::from_secs(2),
-            paused: true,
-            next_at: Instant::now(),
-        };
+        let show = Slideshow::new(Duration::from_secs(2), true, Instant::now());
         let mut app = app_with(&["a.png"]);
         app.slideshow = Some(show);
         assert_eq!(app.slideshow_timeout(), None);
