@@ -109,7 +109,7 @@ fn step_from_motion_leaves_it() {
     let still = app.current;
     press(&mut app, KeyCode::Enter);
 
-    char_key(&mut app, 'n');
+    char_key(&mut app, 'l');
 
     assert_eq!(app.current, still + 1);
     assert_eq!(app.mode, ViewMode::Fullscreen, "z.png is a photo");

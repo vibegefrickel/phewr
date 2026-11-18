@@ -28,15 +28,16 @@ const CONNECT_RETRY: Duration = Duration::from_millis(20);
 /// button. mpv uses it after a signal too. In [`Playback::Loop`], a quit exits with 0.
 pub(crate) const USER_QUIT: i32 = 4;
 
-/// The mpv exit code after `n`: phewr steps to the next file.
+/// The mpv exit code after `l`: phewr steps to the next file.
 pub(crate) const NEXT_FILE: i32 = 10;
 
-/// The mpv exit code after `N` (Shift+n): phewr steps to the previous file.
+/// The mpv exit code after `h`: phewr steps to the previous file.
 pub(crate) const PREVIOUS_FILE: i32 = 11;
 
-/// mpv 0.41 binds neither `n` nor `N` by default. The seek keys (the arrows) and the playlist
-/// keys (`<`, `>`, Enter) keep their function.
-const STEP_KEYS: [(&str, i32); 2] = [("n", NEXT_FILE), ("N", PREVIOUS_FILE)];
+/// mpv 0.41 binds `l` to `ab-loop` and `L` to the loop toggle by default, and `h` is free. The
+/// `keybind` of phewr wins in this window. The seek keys (the arrows) and the playlist keys
+/// (`<`, `>`, Enter) keep their function.
+const STEP_KEYS: [(&str, i32); 2] = [("l", NEXT_FILE), ("h", PREVIOUS_FILE)];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Playback {
@@ -305,7 +306,7 @@ mod tests {
             .collect()
     }
 
-    const STEP_BINDINGS: &str = r#"keybind n "quit 10",keybind N "quit 11""#;
+    const STEP_BINDINGS: &str = r#"keybind l "quit 10",keybind h "quit 11""#;
 
     #[test]
     fn window_args_detach_from_terminal() {

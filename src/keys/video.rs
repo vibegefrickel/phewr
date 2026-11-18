@@ -14,8 +14,8 @@ use std::io;
 pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     match key.code {
         KeyCode::Char(' ') => app.slideshow_toggle_pause(),
-        KeyCode::Left | KeyCode::Char('h' | 'j' | 'N') => step(app, Step::Previous)?,
-        KeyCode::Right | KeyCode::Char('k' | 'l' | 'n') => step(app, Step::Next)?,
+        KeyCode::Left | KeyCode::Char('h' | 'j') => step(app, Step::Previous)?,
+        KeyCode::Right | KeyCode::Char('k' | 'l') => step(app, Step::Next)?,
         KeyCode::Char('q') | KeyCode::Esc => leave_player(app)?,
         KeyCode::Char('p') => {
             app.graphics_delete_all()?;
@@ -99,16 +99,16 @@ mod tests {
     }
 
     #[test]
-    fn n_steps_and_home_end_jump() {
+    fn l_and_h_step_and_home_end_jump() {
         let mut app = video_app();
         let decoder = with_player(&mut app);
 
-        char_key(&mut app, 'n');
+        char_key(&mut app, 'l');
         assert_eq!(app.current, 2);
         assert_eq!(app.mode, ViewMode::Video);
         assert!(app.video.is_none(), "the step stops the player");
         assert!(!decoder.streaming());
-        char_key(&mut app, 'N');
+        char_key(&mut app, 'h');
         assert_eq!(app.current, 1);
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.current, 1);
@@ -136,7 +136,7 @@ mod tests {
         with_player(&mut app);
         app.needs_render = false;
 
-        char_key(&mut app, 'n');
+        char_key(&mut app, 'l');
 
         assert_eq!(app.current, 3);
         assert_eq!(app.mode, ViewMode::Video);

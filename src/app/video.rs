@@ -217,7 +217,7 @@ impl App {
             && !self.gallery.search_active
     }
 
-    /// Step to the neighbor after `n` or `N` in mpv. `false` at the end of the list.
+    /// Step to the neighbor after `l` or `h` in mpv. `false` at the end of the list.
     ///
     /// A video keeps the view that the first video returns to: a run of videos from the gallery
     /// ends in the gallery.

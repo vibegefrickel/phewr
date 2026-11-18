@@ -69,11 +69,9 @@ const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
     #[cfg(feature = "video")]
     ("", "Video player (no sound)"),
     #[cfg(feature = "video")]
-    ("\u{2190}/\u{2192}, h j / k l", "Previous / next file"),
+    ("\u{2190} / \u{2192}, h j / k l", "Previous / next file"),
     #[cfg(feature = "video")]
     ("Home / End", "First / last file"),
-    #[cfg(feature = "video")]
-    ("n / N", "Next / previous file"),
     #[cfg(feature = "video")]
     ("p", "Open in mpv, with sound"),
     #[cfg(feature = "video")]

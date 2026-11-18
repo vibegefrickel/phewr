@@ -135,7 +135,7 @@ mod tests {
             *log.borrow(),
             ["spawn /bin/mpv --no-terminal --force-window=immediate \
                  --fs --native-fs=no --hwdec=auto-safe --loop-file=inf \
-                 --input-commands=keybind n \"quit 10\",keybind N \"quit 11\" \
+                 --input-commands=keybind l \"quit 10\",keybind h \"quit 11\" \
                  -- /videos/clip.mp4"]
         );
         assert_eq!(app.mode, ViewMode::Gallery);

@@ -34,7 +34,7 @@ const CACHE_READ_POLL: Duration = Duration::from_millis(2);
 /// The wait until the first grid picture. A cold grid shows it after 15 ms to 25 ms.
 const FIRST_PICTURE_POLL: Duration = Duration::from_millis(2);
 const IDLE_POLL: Duration = Duration::from_millis(250);
-/// The wait while an mpv window plays: the latency of `n` and `N` in the window.
+/// The wait while an mpv window plays: the latency of `h` and `l` in the window.
 #[cfg(feature = "video")]
 pub(crate) const WINDOW_POLL: Duration = Duration::from_millis(100);
 
