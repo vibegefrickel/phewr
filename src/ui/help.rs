@@ -4,18 +4,18 @@ use crate::pictures::kitty::placement::centered;
 use crate::styles::STYLES;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph},
 };
 
 /// A key and its description. An empty key makes a heading, and both empty make a blank line.
 type HelpRow = (&'static str, &'static str);
 
-const HELP_TWO_COLUMN_WIDTH: u16 = 100;
+const HELP_TWO_COLUMN_WIDTH: u16 = 102;
 
 /// The width of the longest key, `Enter, double-click`.
 const HELP_KEY_WIDTH: usize = 19;
 
-const HELP_SINGLE_WIDTH: u16 = 56;
+const HELP_SINGLE_WIDTH: u16 = 58;
 
 /// The left column: the gallery and its search line.
 const HELP_GALLERY_ROWS: &[HelpRow] = &[
@@ -43,45 +43,30 @@ const HELP_GALLERY_ROWS: &[HelpRow] = &[
     ("Enter / Esc", "Confirm / cancel"),
 ];
 
-/// The right column: the fullscreen view, the video player and the mouse.
+/// The right column: the fullscreen view with the video player, and the mouse. The player has no
+/// sound, so the `p` row names the mpv window "with sound".
 const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
-    ("", "Fullscreen"),
-    ("\u{2190} / \u{2192}, h j / k l", "Previous / next image"),
-    ("Edge click", "Previous / next image"),
-    ("Home / End", "First / last"),
-    ("+ / -, wheel", "Zoom in / out"),
-    ("0", "Reset zoom to fit"),
+    ("", "Fullscreen / video player"),
+    ("\u{2190} / \u{2192}, h j / k l", "Previous / next file"),
+    ("Edge click", "Previous / next (image)"),
+    ("Home / End", "First / last file"),
+    ("+ / -, wheel", "Zoom in / out (image)"),
+    ("0", "Reset zoom to fit (image)"),
     #[cfg(feature = "video")]
     ("Enter, click middle", "Play animation"),
     #[cfg(feature = "video")]
     ("Enter on Live Photo", "Play the motion once"),
-    ("h/j/k/l, drag", "Pan when zoomed"),
-    ("Tab / right click", "Toggle info panel"),
-    ("s", "Start / stop slideshow"),
+    ("h/j/k/l, drag", "Pan when zoomed (image)"),
+    ("Tab / right click", "Toggle info panel (image)"),
+    ("s", "Start / stop slideshow (image)"),
     #[cfg(feature = "video")]
-    ("p", "Open in the mpv window"),
+    ("p", "Open in mpv, with sound"),
     ("Space", "Pause / resume slideshow"),
-    ("[ / ]", "Shorter / longer interval"),
+    ("[ / ]", "Shorter / longer interval (image)"),
     ("q / Esc", "Back to gallery"),
     ("?", "Toggle help"),
     #[cfg(feature = "video")]
-    ("", ""),
-    #[cfg(feature = "video")]
-    ("", "Video player (no sound)"),
-    #[cfg(feature = "video")]
-    ("\u{2190} / \u{2192}, h j / k l", "Previous / next file"),
-    #[cfg(feature = "video")]
-    ("Home / End", "First / last file"),
-    #[cfg(feature = "video")]
-    ("p", "Open in mpv, with sound"),
-    #[cfg(feature = "video")]
-    ("Space", "Pause / resume slideshow"),
-    #[cfg(feature = "video")]
-    ("q / Esc", "Back"),
-    #[cfg(feature = "video")]
-    ("?", "Toggle help"),
-    #[cfg(feature = "video")]
-    ("Right click", "Back"),
+    ("Right click", "Back (video)"),
     ("", ""),
     ("", "Mouse"),
     ("Shift+drag", "Select terminal text"),
@@ -102,7 +87,7 @@ fn help_lines<'a>(rows: impl IntoIterator<Item = &'a HelpRow>) -> Vec<Line<'stat
         .collect()
 }
 
-/// The help popup. From 100 columns on it has two columns and fits into 40 rows. A narrower
+/// The help popup. From 102 columns on it has two columns and fits into 40 rows. A narrower
 /// terminal gets one column that the popup clips. The last row names the Kitty medium.
 pub(super) fn draw_help_popup(
     frame: &mut Frame<'_>,
@@ -118,11 +103,11 @@ pub(super) fn draw_help_popup(
         left.len() + 1 + right.len()
     };
 
-    let height = u16::try_from(content_rows + 4)
+    let height = u16::try_from(content_rows + 6)
         .unwrap_or(u16::MAX)
         .min(area.height.saturating_sub(2));
     let width = if two_columns {
-        area.width.saturating_sub(4).min(110)
+        area.width.saturating_sub(4).min(112)
     } else {
         HELP_SINGLE_WIDTH.min(area.width.saturating_sub(4))
     };
@@ -132,8 +117,10 @@ pub(super) fn draw_help_popup(
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(STYLES.popup_border)
-        .title(Line::from(Span::styled(" Help ", STYLES.title)));
+        .padding(Padding::uniform(1))
+        .title(Line::from(Span::styled("\u{2500} Help ", STYLES.title)));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -189,11 +176,11 @@ mod tests {
             &screen,
             " press any key to close \u{b7} Kitty transfer: direct (t=d) \u{b7} loops: ticks (a=p)",
         );
+        assert_shows(&screen, " Fullscreen / video player");
+        assert_shows(&screen, "Previous / next file");
+        assert_hides(&screen, "Video player");
         #[cfg(feature = "video")]
-        {
-            assert_shows(&screen, " Video player (no sound)");
-            assert_shows(&screen, "Previous / next file");
-        }
+        assert_shows(&screen, "Open in mpv, with sound");
 
         let rows = screen_rows(&render_buffer(&mut app, None, 120, 52));
         let top = rows.iter().position(|row| row.contains(" Help ")).unwrap();
@@ -264,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn two_columns_from_100_columns() {
+    fn two_columns_from_102_columns() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let mut two_columns = |width| {

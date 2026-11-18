@@ -4,12 +4,11 @@ use super::mpv_note;
 use crate::app::App;
 use crate::run_loop::LoopState;
 
-/// Show the note of a failed playback after an mpv window exits.
+/// Replace the window note with the note of a failed playback when an mpv window exits. A clean
+/// exit leaves no note.
 pub(crate) fn poll_mpv_window(app: &mut App, state: &mut LoopState) {
-    if let Some(exit) = app.poll_video_window()
-        && let Some(note) = mpv_note(app, exit.code, &exit.path)
-    {
-        state.status = Some(note);
+    if let Some(exit) = app.poll_video_window() {
+        state.status = mpv_note(app, exit.code, &exit.path);
     }
 }
 
@@ -56,6 +55,36 @@ mod tests {
         poll_mpv_window(&mut app, &mut state);
         assert_eq!(app.current, 2, "the end of the clip moves on");
         assert_eq!(app.mode, ViewMode::Fullscreen);
+        assert!(app.slideshow_advancing());
+    }
+
+    #[test]
+    fn quit_exit_clears_window_note() {
+        let (mut app, mut state, _decoder, mut runner) = slideshow_in_window();
+        assert!(
+            state
+                .status
+                .as_ref()
+                .is_some_and(|note| note.contains("waits for its end"))
+        );
+        let window = runner.window.take().unwrap();
+        window
+            .send(mpv::exit_with_reason(Some(0), Some("quit")))
+            .unwrap();
+        poll_mpv_window(&mut app, &mut state);
+        assert_eq!(state.status, None);
+        assert!(app.slideshow_running());
+        assert!(!app.slideshow_advancing(), "the slideshow is paused");
+    }
+
+    #[test]
+    fn clip_end_clears_window_note() {
+        let (mut app, mut state, _decoder, mut runner) = slideshow_in_window();
+        assert!(state.status.is_some());
+        runner.window.take().unwrap().send(Some(0)).unwrap();
+        poll_mpv_window(&mut app, &mut state);
+        assert_eq!(state.status, None);
+        assert_eq!(app.current, 2, "the end of the clip moves on");
         assert!(app.slideshow_advancing());
     }
 
@@ -261,9 +290,11 @@ mod tests {
         poll_mpv_window(&mut app, &mut state);
         assert_eq!(app.mode, ViewMode::Video);
         assert_eq!(app.current, 0);
+        assert_eq!(state.status, None, "the exit drops the old window note");
+        play_videos(&mut app, &mut state, &mut runner);
         assert_eq!(
             state.status.as_deref(),
-            Some("next.mov plays in an mpv window")
+            Some("clip.mp4 plays in an mpv window")
         );
     }
 
