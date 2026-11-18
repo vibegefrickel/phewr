@@ -217,7 +217,7 @@ read after a reboot.
   - The player, `shows_video_placeholder`, `App::video_return` and the mpv steps work on list
     indices (`App::current`). The hidden `.mov` has no index. The player must take the path
     of the movie from the side table, and `current` stays on the still.
-  - With `current` on the still, `step_from_video` (`n` and `N` in mpv) steps from the still.
+  - With `current` on the still, `step_from_video` (`l` and `h` in mpv) steps from the still.
     This is the correct step for a pair.
 - A click on the middle of the picture does the same, for the mouse. Today, that click does
   nothing. `p` opens the motion in the mpv window.

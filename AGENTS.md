@@ -245,7 +245,7 @@ decisions. Read the long form before you change the code that an item names.
 - **Slideshow and videos:** a running slideshow plays a video one time and moves on. Outside a
   slideshow, the clip loops. The mpv window of a slideshow reads the `end-file` reason through
   `--input-ipc-server`: `quit` or `stop` stops the slideshow (`mpv::exit_with_reason`).
-- **mpv steps and window:** `n` and `N` in mpv exit with 10 and 11, and phewr steps from the file
+- **mpv steps and window:** `l` and `h` in mpv exit with 10 and 11, and phewr steps from the file
   that mpv played. phewr polls each mpv window every 100 ms until it exits. The window gets
   `--fs --native-fs=no` and `--hwdec=auto-safe`. `--input-commands` needs mpv 0.38 or later.
   mpv's own Kitty output is gone: it played a 4K HLG clip at 2.4 fps in Ghostty.

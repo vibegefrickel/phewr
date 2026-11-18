@@ -58,8 +58,10 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   and a thread reads the `end-file` reason. Exit code 0 with the reason `quit` or `stop` stops the
   slideshow (`mpv::exit_with_reason`). The reason `eof`, any other reason, no reason and no socket
   continue it. The real Cmd+Q is not tested yet.
-- **mpv steps:** each mpv start gets `--input-commands` with `keybind n "quit 10"` and
-  `keybind N "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). `App::step_from_video` keeps
+- **mpv steps:** each mpv start gets `--input-commands` with `keybind l "quit 10"` and
+  `keybind h "quit 11"` (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`). Until 2026-11-18 the keys were
+  `n` and `N`. The maintainer wants the same step keys in the player and in the window. `l`
+  replaces the default `ab-loop` of mpv 0.41 in this window, `h` is free there. `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
   file that mpv played, not from the gallery cursor.
 - **mpv window:** phewr follows each mpv window until it exits (`App::poll_video_window`). The

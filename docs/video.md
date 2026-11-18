@@ -264,7 +264,7 @@ rules. This page holds the reasons and the numbers.
 - mpv 0.41 sends `{"event":"end-file","reason":"eof"}` at the natural end and
   `{"event":"end-file","reason":"quit"}` on the `quit` command. Both exit with code 0. A SIGTERM
   sends no `end-file` line and exits with -15.
-- Each mpv start gets `--input-commands` with `keybind n "quit 10"` and `keybind N "quit 11"`
+- Each mpv start gets `--input-commands` with `keybind l "quit 10"` and `keybind h "quit 11"`
   (`mpv::NEXT_FILE`, `mpv::PREVIOUS_FILE`).
 - `App::step_from_video` keeps `video_return`. A run of videos from the gallery ends in the
   gallery.
