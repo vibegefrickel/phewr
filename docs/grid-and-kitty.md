@@ -71,7 +71,6 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
   - Narrow panes with 3:2 photos: 60x51 keeps one level (5 -> 2), so `+` and `-` do nothing
     there. 80x40 keeps 3 and 5 rows, 100x51 keeps 3, 6 and 7 rows. The maintainer accepted
     this (2026-11-17).
-- The Live mark `◎ Live` needs a border of 9 columns. A narrower border gets `◎` alone.
 - The first screen waits for the shape (2 ms to 4 ms).
 - The shape stays until the next directory switch. So the columns never move while the user
   browses.

@@ -115,14 +115,14 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Live Photos:** one folder scan hides the motion `.mov` of each Live Photo still
   (`scanner::spawn_with`, `[gallery] live_photos`, on by default). The pass runs on the sorted
   names before the first entry and reads no file. `SharedImageList::set_live_photos` comes
-  before the folders, and `App::live` takes the table with the first entry. A Live still carries
-  `◎ Live` in the gap above its cell, and its status facts start with `Live 2.8 s` (the motion length, one
-  decimal). The meta thread reads the length from the probe cache, else a second thread runs one
+  before the folders, and `App::live` takes the table with the first entry. The status facts of a
+  Live still start with `Live 2.8 s` (the motion length, one decimal). The meta thread reads the length from the probe cache, else a second thread runs one
   ffprobe that does not count as pending work. Without a length, the row shows `Live`, and a
   failed probe gets no retry in the session. In the grid, it
-  loops its motion like a video cell (`App::loop_source`) and carries the play stamp while the
-  loops are on. `[gallery] animate = false` gives no loop and no stamp (maintainer,
-  2026-11-03). Enter or a left click on the middle of the fullscreen picture plays the motion
+  loops its motion like a video cell (`App::loop_source`) and carries the play stamp like a video
+  cell, also with `[gallery] animate = false`, which gives no loop (maintainer, 2026-11-18). Until
+  2026-11-18, the still carried `◎ Live` in the gap above its cell, and `animate = false` gave no
+  stamp. The maintainer wants no text in the grid: the triangle is enough. Enter or a left click on the middle of the fullscreen picture plays the motion
   one time (`App::enter_motion_at`, `App::video_path`), and `current` stays on the still. The
   same click plays an animation, like Enter. The end of the motion, `q`,
   `Esc` and a right click go back to the still. `p` opens the motion in the mpv window. At the

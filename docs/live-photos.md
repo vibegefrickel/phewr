@@ -21,8 +21,8 @@ from this page.
 - Built on 2026-11-03 (`4e2d22b`): choice B and choice C. The maintainer decided the questions
   3 to 8 with the recommended answers, then asked for the grid roll of choice C. The roll is on
   whenever the grid loops are on (`[gallery] animate`), with no key of its own. A Live still
-  gets no play stamp with `animate = false`, a click on the middle of the picture plays like
-  Enter, and a JPEG twin of a HEIC pair stays a plain cell (maintainer, 2026-11-03).
+  keeps its play stamp with `animate = false` (since 2026-11-18, before it got none), a click on
+  the middle of the picture plays like Enter, and a JPEG twin of a HEIC pair stays a plain cell (maintainer, 2026-11-03).
 - Question 2, partly: `~/Pictures/phewr-test/12-live-photos/` holds real iPhone stills (HEIC
   and one JPEG) and copies of one real iPhone 14 Pro Live Photo movie with the identifier of
   each still. phewr reads all 11 identifiers like exiftool, so the tag places hold for HEIC and
@@ -290,7 +290,7 @@ Choice B, provisional until open question 2 has an answer. These facts support i
   0.61 ms on the first read. A missing identifier counts as a match.
 - Choice C: the loop of the real 2.83 s motion takes 0.59 s (a constant-rate run, 12 frames).
   Each Live cell costs one loop job, and the cell count stays halved.
-- The Live mark sits in the gap above the cell (`◎ Live`).
+- The cell shows no text. Until 2026-11-18, the mark `◎ Live` sat in the gap above the cell.
 - The status row shows the motion length (`Live 2.8 s`, `7a62965`). The meta thread takes it
   from the probe cache, else a second thread runs one ffprobe. A failed probe gets no retry.
 - A rest of 200 ms in the fullscreen view starts the motion ahead of Enter (`b82f164`). The first

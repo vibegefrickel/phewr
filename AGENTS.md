@@ -276,7 +276,8 @@ decisions. Read the long form before you change the code that an item names.
   The slideshow shows the still only. A HEIC wins the motion over a JPEG twin. A left click on
   the middle of the fullscreen picture plays like Enter. At the start of the motion, phewr reads
   both content identifiers on the UI thread. If they differ, the motion plays with a note.
-  `[gallery] animate = false` gives no loop and no stamp. The design is in
+  A Live still carries the play triangle like a video cell, and no text. `[gallery] animate =
+  false` gives no loop, and the triangle stays. The design is in
   `docs/live-photos.md`.
 
 ### Folders, files and the status row
