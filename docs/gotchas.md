@@ -196,7 +196,9 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   nothing, and a failed write is the exit error of phewr.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
   no status note. The note shows in the status row at the bottom. The next key press or mouse
-  button press clears it (`clears_status`), a key release or repeat does not. A read error of the
+  button press clears it (`clears_status`), a key release or repeat does not. The exit of an mpv
+  window replaces the window note ("plays in an mpv window") with the exit note, and a clean exit
+  clears it (2026-11-18, before the note stayed until a key press). A read error of the
   scan lives in `App::scan_error`, not in `App::error`. The status row shows it after `error`. It
   survives the first decode, and a key press or a folder
   switch clears it.

@@ -167,8 +167,10 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `gallery_status_line`, `fullscreen_status_line`, `video_status_line`, `is_empty_folder`).
   `grid.rs` holds the grid cells: the borders, the folder names (`folder_name_text`, the column width
   through `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` holds the help popup: two columns
-  from 100 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, the rows in `HELP_GALLERY_ROWS` and
-  `HELP_FULLSCREEN_ROWS`), else one column that clips. The gallery, the fullscreen view and the
+  from 102 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, the rows in `HELP_GALLERY_ROWS` and
+  `HELP_FULLSCREEN_ROWS`, one block "Fullscreen / video player"), else one column that clips. The
+  box has rounded corners, one cell of padding on every side and the title after one line cell,
+  like the help box of schnattr (2026-11-18). The gallery, the fullscreen view and the
   video view have no frame. They use the full area minus 1 status row (`content_area`,
   `status_area`). The help popup and the info panel keep their borders.
 - `gallery/`: `mod.rs` holds the grid geometry and the cursor.
