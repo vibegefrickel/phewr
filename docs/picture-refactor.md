@@ -6,7 +6,7 @@ schnattr `8f45abc`, `455ac6f`). Step 2 of phase 4b is done too: schnattr runs th
 no `allow` on `mod pictures;`. Phase 5 is done (`caa87b3`, 2026-11-11): the self check of the
 Kitty placements, and 0 lost cells in herdr after ten scrolls. Phase 6 is done (youtr `a5d338e`,
 2026-11-11): youtr runs the module, and the schnattr frame is synced into youtr again (youtr
-`31fbeba`). Both copies match the master `3030ce5` (`just pictures-check`). Phase 7, the test
+`31fbeba`). Both copies match the master `3018758` (`just pictures-check`, 2026-11-18). Phase 7, the test
 matrix of the maintainer, runs: youtr passed in Ghostty and in Ghostty inside herdr
 (2026-11-16). phewr and schnattr are open.
 Phase 0 holds the bench numbers of phewr (2026-11-11). The maintainer measures the memory in a real
