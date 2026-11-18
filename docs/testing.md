@@ -8,7 +8,9 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. `real_flipped_copy_shows_upright` copies `PHEWR_TEST_RAW`
   (a RAF or ARW) into a temp dir and writes the orientations 2, 3 and 4 with exiftool.
   `PHEWR_TEST_LIVE_DIR` is the folder of real Live Photo files
-  (`~/Pictures/phewr-test/12-live-photos/`, its `README.md` lists the cases).
+  (`~/Pictures/phewr-test/12-live-photos/`, its `README.md` lists the cases, 15 file cells since
+  the 8 real iPad pairs of 2026-11-18). `real_live_still_loops_its_motion` reads the loop of
+  `IMG_1043.HEIC`, because the test grid shows 2 rows and the still has index 1.
   `real_identifiers_match_exiftool`, `real_folder_cases`, `real_mismatch_note`,
   `real_motion_plays_once`, `real_live_still_loops_its_motion` and
   `real_motion_length_rounds_to_2_8` read it, the last three with the real ffmpeg or ffprobe.

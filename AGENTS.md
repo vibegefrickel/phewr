@@ -252,9 +252,9 @@ decisions. Read the long form before you change the code that an item names.
 - **mpv steps and window:** `l` and `h` in mpv exit with 10 and 11, and phewr steps from the file
   that mpv played. A neighbor video opens in a new mpv window. The window returns to the view
   that opened it: the grid stays the grid, and the still of an animation or of a Live Photo stays
-  its still. Only `p` in the player view keeps that view (`request_video_window_from_player`):
-  the last frame stays while the window plays, the decoder stops, and after the exit the player
-  plays the file again. phewr polls each mpv window every 100 ms until it exits. The window gets
+  its still. `p` in the player view keeps that view for every view that opened the player, also
+  the grid (`request_video_window_from_player`): the last frame stays while the window plays, the
+  decoder stops, and after the exit the player plays the file again. phewr polls each mpv window every 100 ms until it exits. The window gets
   `--fs --native-fs=no` and `--hwdec=auto-safe`. `--input-commands` needs mpv 0.38 or later.
   mpv's own Kitty output is gone: it played a 4K HLG clip at 2.4 fps in Ghostty.
 - **HDR in the terminal:** for HLG and PQ, `player::tone_map` writes a 3D cube into the cache

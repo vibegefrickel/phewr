@@ -73,9 +73,11 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   replaces the default `ab-loop` of mpv 0.41 in this window, `h` is free there. A neighbor video
   opens in a new mpv window (2026-11-18, before it played in the terminal player). The window
   returns to the view that opened it: the grid stays the grid, and the still of an animation or
-  of a Live Photo stays its still (`return_from_video`). Only `p` in the player view keeps that
-  view (`request_video_window_from_player`, `window_keeps_player`): the last frame stays while
-  the window plays, the decoder stops, and after the exit the player plays the file again. `?`
+  of a Live Photo stays its still (`return_from_video`). `p` in the player view keeps that view
+  for every view that opened the player, also the grid (`request_video_window_from_player`,
+  `window_keeps_player`, 2026-11-19: before, only a player from the fullscreen view stayed, and
+  the maintainer landed in the grid after Cmd+Q): the last frame stays while the window plays,
+  the decoder stops, and after the exit the player plays the file again. `?`
   while the window plays deletes the last frame, and the view stays empty until the exit. `App::step_from_video` keeps
   `video_return`, so a run of videos from the gallery ends in the gallery. A step goes from the
   file that mpv played, not from the gallery cursor.

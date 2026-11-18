@@ -188,8 +188,8 @@ mpv controls. HDR videos (HLG, PQ, Dolby Vision 8.4, HDR10) play tone-mapped to 
 
 In the mpv window, `l` and `h` play the next and the previous file (mpv 0.38 or later). The `l`
 binding replaces the A-B loop key of mpv in this window. When the window closes, phewr goes back
-to the view that opened it. A video from the fullscreen view plays again in the terminal player,
-and a slideshow comes back paused.
+to the view that opened it. A video from the terminal player plays again there, and a slideshow
+comes back paused.
 
 In a slideshow, a video plays once and the slideshow continues. Outside a slideshow, a video
 loops. Over SSH, videos always open in the mpv window.
