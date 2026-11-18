@@ -204,8 +204,20 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   scan lives in `App::scan_error`, not in `App::error`. The status row shows it after `error`. It
   survives the first decode, and a key press or a folder
   switch clears it.
-- **Status row:** the row shows no key hints. At the right, it shows the facts of the selected
-  file (`file_meta.rs`): the size, the file size, the format, the date and, for a video, the
+- **Status row:** the row starts with the mode block (2026-11-19, asked by the maintainer after
+  the schnattr status bar): NORMAL in the grid (red), FULLSCREEN in the fullscreen view and the
+  terminal player (light green), SEARCH on the search line (blue), HELP while the help overlay is
+  open (light cyan). The block has the shape of the schnattr `mode_block` (foreground color,
+  reversed, bold), written as one function `ui::status::mode_block`, so a later move into a shared
+  module is a copy. The colors are roles of `STYLES` (`mode_*`). Below 60 columns
+  (`MODE_SHORT_WIDTH`) the block shows one letter. Then the folder path follows, dim, with the home
+  folder as `~` (`display_path`, the home folder is `App::home_dir`, set in `main`, so a test
+  never reads `HOME`). A narrow row shortens the path from its start with `…/` and keeps the last
+  folder whole (`shorten_path`); if `…/last` does not fit, the path hides. A file list (several
+  file arguments) shows no path (`App::file_list`, reset by `switch_to_dir`). A slideshow has no
+  status row: the box SLIDESHOW (S when narrow) sits at the bottom left of the picture in the
+  badge style (black on gray, bold), like the badge at the bottom right. The row shows no key
+  hints. At the right, it shows the facts of the selected file (`file_meta.rs`): the size, the file size, the format, the date and, for a video, the
   length, the frame rate and the HDR curve. A thread reads them (`app/meta.rs`, one read at a
   time, 256 entries), so a cursor move never waits. A status note, a question, an error, the
   search line and a row too narrow for both hide the facts. A video takes its facts from the

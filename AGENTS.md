@@ -297,9 +297,15 @@ decisions. Read the long form before you change the code that an item names.
   `App::gallery_dir` without a newline.
 - **Status notes:** the note lives in `LoopState`, not in `App`. The next key press or mouse
   button press clears it. A scan read error lives in `App::scan_error`.
-- **Status row:** the row shows no key hints, only the facts of the selected file
-  (`file_meta.rs`). A thread reads them, so a cursor move never waits. A status note, a
-  question, an error, the search line and a row too narrow for both hide the facts.
+- **Status row:** the row starts with the mode block (NORMAL, FULLSCREEN, SEARCH, HELP, one
+  letter below 60 columns, the shape of the schnattr mode block, `ui::status::mode_block`), then
+  the folder path with the home folder as `~` (`App::home_dir`, set in `main`, never read from
+  `HOME` in a test), then the name and the position. A narrow row shortens the path from its
+  start with `…/`. A file list (several file arguments, `App::file_list`) shows no path. The row
+  shows no key hints, only the facts of the selected file (`file_meta.rs`) at the right. A thread
+  reads them, so a cursor move never waits. A status note, a question, an error, the search line
+  and a row too narrow for both hide the facts. A slideshow has no status row: a box SLIDESHOW
+  in the badge style sits at the bottom left of the picture.
 
 ### Run loop and threads
 

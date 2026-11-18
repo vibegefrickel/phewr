@@ -146,8 +146,10 @@ The grid shows the subfolders first, with `..` for the parent folder. The cell s
 photos: a folder of portrait photos gets narrow cells. phewr remembers the zoom level of each
 folder. Videos, animations and Live Photos play a short loop in the grid.
 
-The status row at the bottom shows the selected file: its name, size in pixels, file size, format
-and date. For a video, it shows the length, the frame rate and `SDR`, `HLG` or `PQ`.
+The status row at the bottom starts with the mode (`NORMAL`, `FULLSCREEN`, `SEARCH` or `HELP`) and
+the folder, with your home folder as `~`. Then it shows the selected file: its name, size in
+pixels, file size, format and date. For a video, it shows the length, the frame rate and `SDR`,
+`HLG` or `PQ`.
 
 ### Fullscreen
 
@@ -167,7 +169,8 @@ and date. For a video, it shows the length, the frame rate and `SDR`, `HLG` or `
 
 A slideshow uses the whole screen: it hides the status row and scales each picture to fill the
 screen with its aspect. A portrait picture reaches the top and the bottom, a landscape picture
-the left and the right. A small badge at the bottom right shows the play or pause state, the
+the left and the right. A small box `SLIDESHOW` sits at the bottom left. A small badge at the
+bottom right shows the play or pause state, the
 interval and errors.
 
 ### Video
