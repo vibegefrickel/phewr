@@ -375,8 +375,8 @@ impl App {
         let cache_dir = self.disk_cache_dir.clone();
         let missed = self.thumb_jobs.cache_misses.contains(&job.key);
         let known = self.known_animation_flag(&path);
-        // A Live Photo still loops its motion, so it gets the stamp while the loops are on.
-        let rolls = self.grid_loops.enabled && self.is_live(job.key);
+        // A Live Photo still carries the play triangle like a video, also without the loops.
+        let live = self.is_live(job.key);
         spawn_job(phase, move || {
             let entry = LazyEntry::new(&cache_dir, &path, target);
             let (image, sharp) = match phase {
@@ -393,9 +393,8 @@ impl App {
             } else {
                 animation_flag(&path, &entry, known)
             };
-            // The still carries the play triangle until its loop starts. The disk cache keeps
-            // the still without the stamp.
-            let playable = rolls || is_playable(&path, animated.map(|flag| flag.animated));
+            // The disk cache keeps the still without the stamp.
+            let playable = live || is_playable(&path, animated.map(|flag| flag.animated));
             let picture = image.map(|mut image| {
                 if playable {
                     crate::icons::stamp_play(&mut image);
@@ -584,7 +583,7 @@ mod folder_switch_tests {
 #[cfg(feature = "video")]
 mod live_tests {
     use crate::config::Config;
-    use crate::test_support::live::{LIVE_ID, LIVE_STILL_RGB, scanned_app, write_live_pair};
+    use crate::test_support::live::{LIVE_ID, scanned_app, write_live_pair};
     use crate::test_support::{assert_close, test_dir, wait_until};
 
     /// The center pixel of the grid picture of the Live Photo still, with `config`.
@@ -605,15 +604,14 @@ mod live_tests {
     }
 
     #[test]
-    fn live_still_carries_stamp_while_loops_are_on() {
-        let stamped = still_center(&Config::default());
-        assert_close(stamped, [255, 255, 255]);
+    fn live_still_carries_stamp_with_and_without_loops() {
+        assert_close(still_center(&Config::default()), [255, 255, 255]);
 
-        let plain = still_center(&Config {
+        let without_loops = still_center(&Config {
             animate: false,
             ..Config::default()
         });
-        assert_close(plain, LIVE_STILL_RGB);
+        assert_close(without_loops, [255, 255, 255]);
     }
 }
 

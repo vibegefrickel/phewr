@@ -10,9 +10,9 @@ pub(crate) struct Styles {
     pub title: Style,
     pub border: Style,
     pub popup_border: Style,
-    /// The thick border, the folder name and the Live mark of the cell under the cursor.
+    /// The thick border and the folder name of the cell under the cursor.
     pub cursor_cell: Style,
-    /// The plain border and the Live mark of a marked file, and the selection count.
+    /// The plain border of a marked file, and the selection count.
     pub marked: Style,
     /// Errors.
     pub error: Style,

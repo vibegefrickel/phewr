@@ -49,11 +49,6 @@ fn assert_fill(cell: &Cell, fg: Color, bg: Color, modifier: Modifier) {
     assert_eq!((cell.fg, cell.bg, cell.modifier), (fg, bg, modifier));
 }
 
-/// Fail when the cell does not carry the ANSI color `fg` in bold.
-fn assert_ansi_bold(cell: &Cell, fg: Color) {
-    assert_eq!((cell.fg, cell.modifier), (fg, Modifier::BOLD));
-}
-
 #[test]
 fn file_cells_draw_no_name() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
@@ -526,59 +521,18 @@ fn live_app() -> App {
     app
 }
 
+/// The maintainer wants no text for a Live cell: the play triangle alone marks it.
 #[test]
-fn live_still_carries_mark_above_cell() {
+fn live_cell_draws_no_text_in_its_gap() {
     let mut app = live_app();
-    let buffer = render_buffer(&mut app, None, 100, 30);
-    let border = app.gallery.border_rect(1);
-    let rows = screen_rows(&buffer);
-    let top = &rows[usize::from(border.y)];
-    assert!(top.contains("\u{25ce} Live"), "{top}");
-    let mark = cell_of(&buffer, "\u{25ce} Live");
-    assert_default_fg(mark, Modifier::empty());
-    assert_eq!(
-        rows.iter().filter(|row| row.contains("Live")).count(),
-        1,
-        "only the Live cell carries the mark"
-    );
-
-    app.gallery.cursor = 1;
-    let buffer = render_buffer(&mut app, None, 100, 30);
-    assert_ansi_bold(cell_of(&buffer, "\u{25ce} Live"), Color::Blue);
-    assert_symbol(
-        &buffer,
-        (border.x, border.y),
-        "\u{250f}",
-        Color::Blue,
-        Modifier::BOLD,
-    );
-}
-
-/// A 5x3 box: the Live mark is `◎` alone and stays inside its border, and the cell icon is the
-/// one-cell symbol.
-#[test]
-fn narrow_live_cell_gets_symbol_mark() {
-    let mut app = app_with(&["IMG_0001.JPG", "b.jpg", "c.jpg"]);
-    app.set_live_photos(crate::scanner::LivePhotos::from_pairs([(
-        "/photos/IMG_0001.JPG".into(),
-        "/photos/IMG_0001.MOV".into(),
-    )]));
-    // The cursor sits in the second row, so no border covers the top row.
-    app.gallery.cursor = 2;
-    let buffer = render_buffer(&mut app, None, 13, 10);
-    assert_eq!(app.gallery.thumb_box(), Rect::new(0, 0, 5, 3));
-    let border = app.gallery.border_rect(0);
-    assert_eq!(border.width, 7);
-
-    let top = &screen_rows(&buffer)[usize::from(border.y)];
-    assert_eq!(top.trim_end(), "  \u{25ce}", "nothing in the next cell");
-
-    assert_eq!(icon_rect(app.gallery.thumb_rect(0), app.cell_px), None);
-    assert_symbol(
-        &buffer,
-        cell_center(&app, 0),
-        Icon::Loading.symbol(),
-        Color::DarkGray,
-        Modifier::empty(),
-    );
+    for cursor in [0, 1] {
+        app.gallery.cursor = cursor;
+        let buffer = render_buffer(&mut app, None, 100, 30);
+        let border = app.gallery.border_rect(1);
+        let top = &screen_rows(&buffer)[usize::from(border.y)];
+        let only_borders = top
+            .chars()
+            .all(|symbol| symbol == ' ' || ('\u{2500}'..='\u{257f}').contains(&symbol));
+        assert!(only_borders, "{top}");
+    }
 }

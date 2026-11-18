@@ -129,7 +129,7 @@ impl App {
         self.live = std::sync::Arc::new(live);
     }
 
-    /// True for a Live Photo still: its cell carries the Live mark.
+    /// True for a Live Photo still: its cell loops the motion and carries the play triangle.
     pub(crate) fn is_live(&self, index: usize) -> bool {
         self.live_motion(index).is_some()
     }

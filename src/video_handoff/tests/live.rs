@@ -194,7 +194,7 @@ fn failed_motion_returns_with_note() {
     assert_eq!(state.status.as_deref(), Some("no video stream"));
 }
 
-/// The cells, the Live marks and the pairs of the real folder, as its `README.md` lists them.
+/// The cells and the Live pairs of the real folder, as its `README.md` lists them.
 #[test]
 #[ignore = "needs PHEWR_TEST_LIVE_DIR"]
 fn real_folder_cases() {

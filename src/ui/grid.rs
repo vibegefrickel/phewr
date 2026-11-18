@@ -1,4 +1,4 @@
-//! The grid cells: the borders in the gaps, the folder names, the Live marks and the icons of the
+//! The grid cells: the borders in the gaps, the folder names and the icons of the
 //! cells without a thumbnail. Kitty draws the thumbnails above them.
 
 use crate::app::App;
@@ -11,11 +11,6 @@ use ratatui::{
 };
 use std::borrow::Cow;
 use unicode_width::UnicodeWidthStr;
-
-/// The mark of a Live Photo still in the gap above its cell.
-const LIVE_MARK: &str = "\u{25ce} Live";
-/// The Live mark of a cell too narrow for `LIVE_MARK`.
-const LIVE_SYMBOL: &str = "\u{25ce}";
 
 /// The rows of a folder name below the folder icon.
 const FOLDER_NAME_ROWS: u16 = 1;
@@ -46,7 +41,7 @@ pub(super) fn draw_thumbnail_cells(
         let is_marked = app.is_marked(img_idx);
         let border = app.gallery.border_rect(vis_idx);
         if is_selected {
-            selected_border = Some((border, img_idx));
+            selected_border = Some(border);
         } else if is_marked {
             draw_cell_border(frame, BorderType::Plain, STYLES.marked, border, grid_rect);
         }
@@ -67,12 +62,9 @@ pub(super) fn draw_thumbnail_cells(
             };
             draw_cell_icon(frame, app, vis_idx, icon, &mut grid);
         }
-        if app.is_live(img_idx) {
-            draw_live_mark(frame, border, style, grid_rect);
-        }
     }
 
-    if let Some((border, img_idx)) = selected_border {
+    if let Some(border) = selected_border {
         draw_cell_border(
             frame,
             BorderType::Thick,
@@ -80,29 +72,7 @@ pub(super) fn draw_thumbnail_cells(
             border,
             grid_rect,
         );
-        // The thick border covers the mark of the cursor cell.
-        if app.is_live(img_idx) {
-            draw_live_mark(frame, border, STYLES.cursor_cell, grid_rect);
-        }
     }
-}
-
-/// The Live mark of a Live Photo still: `◎ Live` in the gap above the picture, where the top
-/// border lives. Kitty draws the picture inside the cell, so the mark stays visible. A border
-/// narrower than the mark and its corners gets `◎` alone, so the mark stays inside its cell. A
-/// border is at least 7 columns wide, and the grid edge cuts the mark.
-fn draw_live_mark(frame: &mut Frame<'_>, border: Rect, style: Style, grid_rect: Rect) {
-    let at = Position::new(border.x + 2, border.y);
-    if !grid_rect.contains(at) {
-        return;
-    }
-    // 2 columns before the mark, and the top right corner after it.
-    let fits = usize::from(border.width) >= LIVE_MARK.width() + 3;
-    let mark = if fits { LIVE_MARK } else { LIVE_SYMBOL };
-    let room = usize::from(grid_rect.right() - at.x);
-    frame
-        .buffer_mut()
-        .set_stringn(at.x, at.y, mark, room, style);
 }
 
 /// A large dim icon in the middle of the thumbnail area of `vis_idx`, or the one-cell symbol
