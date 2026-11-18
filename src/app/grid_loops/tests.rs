@@ -467,8 +467,8 @@ fn wrapped_ids_skip_live_loops() {
     }
 }
 
-/// The real motion of `IMG_2927.HEIC` in `PHEWR_TEST_LIVE_DIR` decodes into a loop, and the
-/// grid cell of the still plays it.
+/// The real motion of `IMG_1043.HEIC`, the first Live still of `PHEWR_TEST_LIVE_DIR`, decodes
+/// into a loop, and the grid cell of the still plays it.
 #[cfg(feature = "video")]
 #[test]
 #[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe"]
@@ -484,9 +484,9 @@ fn real_live_still_loops_its_motion() {
     let cache = test_dir();
     let mut app = scanned_app(&dir, &Config::default());
     app.disk_cache_dir = cache.path().to_path_buf();
-    let still = index_of(&app, "IMG_2927.HEIC");
+    let still = index_of(&app, "IMG_1043.HEIC");
     let motion = app.loop_source(still).unwrap();
-    assert_eq!(motion, dir.join("IMG_2927.MOV"));
+    assert_eq!(motion, dir.join("IMG_1043.MOV"));
     let target =
         crate::pictures::resize::padding::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
 
@@ -502,7 +502,7 @@ fn real_live_still_loops_its_motion() {
     )
     .unwrap();
     println!(
-        "IMG_2927.MOV: {} loop frames of {:?} for a target of {target:?} in {:?}",
+        "IMG_1043.MOV: {} loop frames of {:?} for a target of {target:?} in {:?}",
         frames.frames.len(),
         frames.frames[0].dimensions(),
         start.elapsed()

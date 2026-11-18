@@ -208,6 +208,14 @@ fn real_folder_cases() {
         app.filenames[app.folder_count..],
         [
             "IMG_0711.HEIC",
+            "IMG_1043.HEIC",
+            "IMG_1050.HEIC",
+            "IMG_1060.HEIC",
+            "IMG_1069.HEIC",
+            "IMG_1076.HEIC",
+            "IMG_1102.HEIC",
+            "IMG_1126.HEIC",
+            "IMG_1134.HEIC",
             "IMG_2927.HEIC",
             "IMG_2928.HEIC",
             "IMG_2929.HEIC",
@@ -215,9 +223,17 @@ fn real_folder_cases() {
             "IMG_5001.JPG",
             "IMG_E2928.HEIC",
         ],
-        "the motions of the 4 pairs have no cell"
+        "the motions of the 12 pairs have no cell"
     );
     for (name, motion) in [
+        ("IMG_1043.HEIC", Some("IMG_1043.MOV")),
+        ("IMG_1050.HEIC", Some("IMG_1050.MOV")),
+        ("IMG_1060.HEIC", Some("IMG_1060.MOV")),
+        ("IMG_1069.HEIC", Some("IMG_1069.MOV")),
+        ("IMG_1076.HEIC", Some("IMG_1076.MOV")),
+        ("IMG_1102.HEIC", Some("IMG_1102.MOV")),
+        ("IMG_1126.HEIC", Some("IMG_1126.MOV")),
+        ("IMG_1134.HEIC", Some("IMG_1134.MOV")),
         ("IMG_2927.HEIC", Some("IMG_2927.MOV")),
         ("IMG_2928.HEIC", Some("IMG_2928.MOV")),
         ("IMG_2929.HEIC", Some("IMG_2929.MOV")),
@@ -245,7 +261,7 @@ fn real_folder_cases() {
             ..Config::default()
         },
     );
-    assert_eq!(off.file_count(), 11, "without pairs, every movie is a cell");
+    assert_eq!(off.file_count(), 27, "without pairs, every movie is a cell");
 }
 
 /// Enter on each real Live still: the mismatch pair alone gets the note.

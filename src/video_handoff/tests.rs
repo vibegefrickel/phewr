@@ -211,7 +211,47 @@ fn window_without_player_returns_to_grid() {
 }
 
 #[test]
-fn window_returns_to_gallery() {
+fn gallery_window_returns_to_player() {
+    let decoder = fake_decoder(clip_info());
+    let mut state = state_with(VideoPlayer::Terminal, std::rc::Rc::clone(&decoder));
+    let (log, mut runner) = fake_runner();
+    let mut app = gallery_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], 1);
+    play_videos(&mut app, &mut state, &mut runner);
+    assert!(app.video.is_some(), "the grid opened the terminal player");
+    assert_eq!(app.video_return, crate::app::VideoReturn::Gallery);
+    app.graphics_out.take_bytes();
+
+    char_key(&mut app, 'p');
+    assert!(
+        app.graphics_out.take_bytes().is_empty(),
+        "the last frame stays on the screen"
+    );
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(starts(&log).len(), 1);
+    assert_eq!(app.mode, ViewMode::Video, "the player view waits");
+    assert!(app.video.is_none(), "the decoder stops");
+    assert!(app.watches_video_window());
+    assert_eq!(decoder.starts().len(), 1, "no second ffmpeg");
+
+    runner
+        .window
+        .take()
+        .unwrap()
+        .send(Some(mpv::USER_QUIT))
+        .unwrap();
+    super::poll_mpv_window(&mut app, &mut state);
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(app.mode, ViewMode::Video);
+    assert!(app.video.is_some(), "the terminal player plays again");
+    assert_eq!(decoder.starts().len(), 2);
+
+    char_key(&mut app, 'q');
+    assert_eq!(app.mode, ViewMode::Gallery, "q goes to the grid");
+    assert_eq!(app.gallery.cursor, 1);
+}
+
+#[test]
+fn gallery_p_keeps_gallery() {
     for mut state in [window_state(), terminal_state()] {
         let mut app = gallery_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], 1);
         app.gallery.cursor = 0;
@@ -219,7 +259,7 @@ fn window_returns_to_gallery() {
         let (_log, mut runner) = fake_runner();
 
         play_videos(&mut app, &mut state, &mut runner);
-        assert_eq!(app.mode, ViewMode::Gallery, "the gallery opened this video");
+        assert_eq!(app.mode, ViewMode::Gallery, "p in the grid keeps the grid");
         assert_eq!(app.gallery.cursor, 1);
 
         runner
@@ -376,6 +416,33 @@ fn fullscreen_window_returns_to_player() {
     assert_eq!(app.current, 1);
     assert!(app.video.is_some(), "the terminal player plays again");
     assert_eq!(decoder.starts().len(), 2);
+}
+
+#[test]
+fn gallery_window_step_keeps_player() {
+    let decoder = fake_decoder(clip_info());
+    let mut state = state_with(VideoPlayer::Terminal, std::rc::Rc::clone(&decoder));
+    let (log, mut runner) = fake_runner();
+    let mut app = gallery_app_on_video(&["a.jpg", "clip.mp4", "next.mov"], 1);
+    play_videos(&mut app, &mut state, &mut runner);
+    char_key(&mut app, 'p');
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(starts(&log).len(), 1);
+
+    runner
+        .window
+        .take()
+        .unwrap()
+        .send(Some(mpv::NEXT_FILE))
+        .unwrap();
+    super::poll_mpv_window(&mut app, &mut state);
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(starts(&log).len(), 2, "a new window opens");
+    assert!(last_start(&log).ends_with(" -- /videos/next.mov"));
+    assert_eq!(app.mode, ViewMode::Video, "the player view stays");
+    assert_eq!(app.current, 2);
+    assert!(app.video.is_none(), "mpv plays the next file");
+    assert_eq!(decoder.starts().len(), 1, "no second ffmpeg");
 }
 
 #[test]

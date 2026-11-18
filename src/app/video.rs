@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "video")]
 use std::sync::mpsc;
 
-/// The view that opened a video. A video from the fullscreen view plays again in the terminal
-/// player after mpv.
+/// The view that opened a video. It picks the view behind a closed player. The player view
+/// itself always plays again in the terminal player after mpv, whatever opened it.
 #[cfg(feature = "video")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VideoReturn {
@@ -102,7 +102,8 @@ impl App {
         self.window_keeps_player = false;
     }
 
-    /// Ask for the mpv window from the player view, which waits for the window.
+    /// Ask for the mpv window from the player view, which waits for the window. The player view
+    /// stays for each `video_return`, except for the motion of a Live Photo.
     #[cfg(feature = "video")]
     pub(crate) fn request_video_window_from_player(&mut self) {
         self.request_video_window();
@@ -147,11 +148,12 @@ impl App {
     }
 
     /// The view behind the mpv window of the current video. With `keep_player`, the player view
-    /// of a file from the fullscreen view keeps its last frame, and its player plays again after
-    /// the window. Else [`App::return_from_video`] picks the grid or the still.
+    /// keeps its last frame for each `video_return`, and its player plays again after the
+    /// window. The motion of a Live Photo still returns to its still.
+    /// Else [`App::return_from_video`] picks the grid or the still.
     #[cfg(feature = "video")]
     pub(crate) fn leave_for_window(&mut self, keep_player: bool) {
-        if keep_player && self.video_return == VideoReturn::Fullscreen && !self.plays_motion() {
+        if keep_player && !self.plays_motion() {
             // The decoder stops: the window is the only playback.
             self.video = None;
             self.needs_render = true;

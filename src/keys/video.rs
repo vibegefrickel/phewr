@@ -1,7 +1,7 @@
 //! The keys of the terminal video player.
 
 use super::step_key;
-use crate::app::{App, VideoReturn};
+use crate::app::App;
 use crate::mpv::Step;
 use crate::video_handoff::focus_gallery_on_current;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -45,9 +45,10 @@ pub(super) fn leave_player(app: &mut App) -> io::Result<()> {
     Ok(())
 }
 
-/// A player from the fullscreen view keeps its last frame on the screen while the window plays.
+/// The player keeps its last frame on the screen while the window plays. The motion of a Live
+/// Photo returns to its still, so its frame goes.
 fn open_window(app: &mut App) -> io::Result<()> {
-    if app.video_return == VideoReturn::Gallery || app.plays_motion() {
+    if app.plays_motion() {
         app.graphics_delete_all()?;
     }
     app.request_video_window_from_player();
