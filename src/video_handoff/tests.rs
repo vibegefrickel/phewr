@@ -7,11 +7,15 @@ use crate::keys::fullscreen::handle_fullscreen_key;
 use crate::mpv;
 use crate::pictures::kitty::{KittyBackend, Transfer};
 use crate::player::SystemDecoder;
+use crate::test_support::char_key;
 use crate::test_support::video::{
-    clip_info, fake_decoder, fake_runner, fullscreen_video_app, gallery_app_on_video, last_start,
-    slideshow_video_app, starts, state_with, terminal_state, video_app, window_state,
+    FakeRunner, clip_info, fake_decoder, fake_runner, fullscreen_app_on_video,
+    fullscreen_video_app, gallery_app_on_video, last_start, slideshow_video_app, starts,
+    state_with, terminal_state, video_app, window_state,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+const NAMES: &[&str] = &["a.jpg", "clip.mp4", "b.jpg"];
 
 #[test]
 fn terminal_player_starts_ffmpeg() {
@@ -142,7 +146,6 @@ fn failed_open_shows_error() {
 
     assert_eq!(app.mode, ViewMode::Fullscreen);
     assert_eq!(app.error.as_deref(), Some("no video stream"));
-    assert!(!app.shows_video_placeholder());
     let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
     assert!(!handle_fullscreen_key(&mut app, enter).unwrap());
     assert_eq!(
@@ -170,12 +173,11 @@ fn failed_start_goes_back() {
         "{:?}",
         app.error
     );
-    assert!(!app.shows_video_placeholder());
     assert!(log.borrow().is_empty(), "no mpv start");
 }
 
 #[test]
-fn window_returns_to_placeholder() {
+fn window_without_player_returns_to_grid() {
     let mut app = fullscreen_video_app();
     let mut state = window_state();
     let (log, mut runner) = fake_runner();
@@ -186,27 +188,50 @@ fn window_returns_to_placeholder() {
     assert!(start.starts_with("spawn /bin/mpv --no-terminal"), "{start}");
     assert!(start.contains(" --loop-file=inf "), "{start}");
     assert!(start.ends_with(" -- /videos/clip.mp4"), "{start}");
-    assert_eq!(app.mode, ViewMode::Fullscreen);
-    assert_eq!(app.current, 1, "fullscreen stays on the video");
-    assert!(app.shows_video_placeholder());
+    assert_eq!(
+        app.mode,
+        ViewMode::Gallery,
+        "the fullscreen view shows no video"
+    );
+    assert_eq!(app.gallery.cursor, 1);
     assert!(app.watches_video_window());
     assert_eq!(
         state.status.as_deref(),
         Some("clip.mp4 plays in an mpv window")
     );
+
+    runner
+        .window
+        .take()
+        .unwrap()
+        .send(Some(mpv::USER_QUIT))
+        .unwrap();
+    super::poll_mpv_window(&mut app, &mut state);
+    assert_eq!(app.mode, ViewMode::Gallery);
 }
 
 #[test]
 fn window_returns_to_gallery() {
-    let mut app = gallery_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], 1);
-    app.gallery.cursor = 0;
-    let mut state = window_state();
-    let (_log, mut runner) = fake_runner();
+    for mut state in [window_state(), terminal_state()] {
+        let mut app = gallery_app_on_video(&["a.jpg", "clip.mp4", "b.jpg"], 1);
+        app.gallery.cursor = 0;
+        app.request_video_window();
+        let (_log, mut runner) = fake_runner();
 
-    play_videos(&mut app, &mut state, &mut runner);
+        play_videos(&mut app, &mut state, &mut runner);
+        assert_eq!(app.mode, ViewMode::Gallery, "the gallery opened this video");
+        assert_eq!(app.gallery.cursor, 1);
 
-    assert_eq!(app.mode, ViewMode::Gallery, "the gallery opened this video");
-    assert_eq!(app.gallery.cursor, 1);
+        runner
+            .window
+            .take()
+            .unwrap()
+            .send(Some(mpv::USER_QUIT))
+            .unwrap();
+        super::poll_mpv_window(&mut app, &mut state);
+        play_videos(&mut app, &mut state, &mut runner);
+        assert_eq!(app.mode, ViewMode::Gallery, "the grid stays");
+    }
 }
 
 #[test]
@@ -273,8 +298,7 @@ fn no_ffmpeg_or_mpv_goes_back() {
     play_videos(&mut app, &mut state, &mut runner);
 
     assert!(log.borrow().is_empty());
-    assert_eq!(app.mode, ViewMode::Fullscreen);
-    assert!(app.shows_video_placeholder());
+    assert_eq!(app.mode, ViewMode::Gallery);
     assert!(!app.slideshow_running(), "nothing can play the video");
     assert_eq!(
         state.status.as_deref(),
@@ -299,43 +323,127 @@ fn mpv_start_failure_goes_back() {
     );
 }
 
+/// A player from the fullscreen view on the second of `names` that opened its video in the
+/// mpv window with `p`.
+fn fullscreen_player_in_window(
+    names: &[&str],
+    state: &mut crate::run_loop::LoopState,
+    runner: &mut FakeRunner,
+) -> crate::app::App {
+    let mut app = fullscreen_app_on_video(names, false);
+    play_videos(&mut app, state, runner);
+    assert!(app.video.is_some());
+    app.graphics_out.take_bytes();
+    char_key(&mut app, 'p');
+    assert!(
+        app.graphics_out.take_bytes().is_empty(),
+        "the last frame stays on the screen"
+    );
+    play_videos(&mut app, state, runner);
+    app
+}
+
 #[test]
-fn window_request_overrides_terminal() {
+fn fullscreen_window_returns_to_player() {
     let decoder = fake_decoder(clip_info());
-    let mut app = fullscreen_video_app();
     let mut state = state_with(VideoPlayer::Terminal, std::rc::Rc::clone(&decoder));
     let (log, mut runner) = fake_runner();
-    app.request_video_window();
-
-    play_videos(&mut app, &mut state, &mut runner);
+    let mut app = fullscreen_player_in_window(NAMES, &mut state, &mut runner);
 
     assert_eq!(starts(&log).len(), 1);
-    assert!(decoder.starts().is_empty(), "no ffmpeg");
-    assert_eq!(app.mode, ViewMode::Fullscreen);
+    assert!(last_start(&log).contains(" --loop-file=inf "));
+    assert_eq!(app.mode, ViewMode::Video, "the player view waits");
+    assert!(app.video.is_none(), "the decoder stops");
     assert!(app.watches_video_window());
     assert_eq!(
         state.status.as_deref(),
         Some("clip.mp4 plays in an mpv window")
     );
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(decoder.starts().len(), 1, "no second ffmpeg");
+    char_key(&mut app, 'p');
+    assert!(!app.take_video_window_request(), "one window at a time");
+
+    runner
+        .window
+        .take()
+        .unwrap()
+        .send(Some(mpv::USER_QUIT))
+        .unwrap();
+    super::poll_mpv_window(&mut app, &mut state);
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(app.mode, ViewMode::Video);
+    assert_eq!(app.current, 1);
+    assert!(app.video.is_some(), "the terminal player plays again");
+    assert_eq!(decoder.starts().len(), 2);
 }
 
 #[test]
-fn enter_on_placeholder_replays() {
-    let mut app = fullscreen_video_app();
-    let mut state = terminal_state();
-    let (_log, mut runner) = fake_runner();
+fn window_step_opens_neighbor_window() {
+    let names = ["a.jpg", "clip.mp4", "next.mov"];
+    let mut state = state_with(VideoPlayer::Terminal, fake_decoder(clip_info()));
+    let (log, mut runner) = fake_runner();
+    let mut app = fullscreen_player_in_window(&names, &mut state, &mut runner);
+    runner
+        .window
+        .take()
+        .unwrap()
+        .send(Some(mpv::NEXT_FILE))
+        .unwrap();
+    super::poll_mpv_window(&mut app, &mut state);
     play_videos(&mut app, &mut state, &mut runner);
-    assert!(app.video.is_some());
-    app.graphics_delete_all().unwrap();
-    app.return_from_video();
-    assert!(app.video.is_none());
-    assert_eq!(app.mode, ViewMode::Fullscreen);
+    assert!(last_start(&log).ends_with(" -- /videos/next.mov"));
+    assert_eq!(app.mode, ViewMode::Video);
+    assert_eq!(app.current, 2);
+    assert!(app.video.is_none(), "mpv plays the next file");
+    assert!(app.watches_video_window());
 
-    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-    assert!(!handle_fullscreen_key(&mut app, enter).unwrap());
+    let mut app = fullscreen_player_in_window(&names, &mut state, &mut runner);
+    runner
+        .window
+        .take()
+        .unwrap()
+        .send(Some(mpv::PREVIOUS_FILE))
+        .unwrap();
+    super::poll_mpv_window(&mut app, &mut state);
+    assert_eq!(app.mode, ViewMode::Fullscreen, "a.jpg is a photo");
+    assert_eq!(app.current, 0);
+}
+
+#[test]
+fn missing_mpv_keeps_player() {
+    let decoder = fake_decoder(clip_info());
+    let mut state = state_with(VideoPlayer::Terminal, std::rc::Rc::clone(&decoder));
+    state.video.mpv = None;
+    let (log, mut runner) = fake_runner();
+    let mut app = fullscreen_player_in_window(NAMES, &mut state, &mut runner);
+
+    assert!(log.borrow().is_empty());
+    assert_eq!(state.status.as_deref(), Some(MPV_MISSING_NOTE));
     assert_eq!(app.mode, ViewMode::Video);
     play_videos(&mut app, &mut state, &mut runner);
-    assert!(app.video.is_some());
+    assert!(app.video.is_some(), "the terminal player plays on");
+}
+
+#[test]
+fn slideshow_end_loops_last_clip() {
+    let decoder = fake_decoder(clip_info());
+    let mut app = fullscreen_app_on_video(&["a.jpg", "clip.mp4"], true);
+    app.slideshow_loop = false;
+    let mut state = state_with(VideoPlayer::Terminal, std::rc::Rc::clone(&decoder));
+    let (_log, mut runner) = fake_runner();
+    play_videos(&mut app, &mut state, &mut runner);
+    decoder.feed(vec![0; 640 * 480 * 4]);
+    assert!(app.video.as_mut().unwrap().poll());
+    decoder.end();
+    assert!(!app.video.as_mut().unwrap().poll());
+
+    app.slideshow_tick();
+    assert!(!app.slideshow_running(), "the list ends");
+    assert_eq!(app.mode, ViewMode::Video);
+    play_videos(&mut app, &mut state, &mut runner);
+    assert!(app.video.is_some(), "the clip plays again");
+    assert_eq!(decoder.starts().len(), 2);
 }
 
 /// A step that moved nothing names the end of the list that it hit.
@@ -368,3 +476,61 @@ fn step_past_list_end_names_end() {
 }
 
 mod live;
+
+/// An app in the fullscreen view on the still of an animation, as after a failed open.
+fn app_on_animated_still() -> crate::app::App {
+    use crate::test_support::{app_with, fixture, video::with_temp_file_medium};
+    let still = fixture("still.gif");
+    let anim = fixture("anim.webp");
+    let mut app =
+        with_temp_file_medium(app_with(&[still.to_str().unwrap(), anim.to_str().unwrap()]));
+    app.enter_fullscreen_at(0);
+    app.next();
+    assert_eq!(app.mode, ViewMode::Video);
+    app.mode = ViewMode::Fullscreen;
+    assert!(app.fullscreen_on_animation());
+    app
+}
+
+#[test]
+fn animated_still_window_returns_to_still() {
+    let mut app = app_on_animated_still();
+    let decoder = fake_decoder(clip_info());
+    let mut state = state_with(VideoPlayer::Terminal, std::rc::Rc::clone(&decoder));
+    let (log, mut runner) = fake_runner();
+
+    char_key(&mut app, 'p');
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(starts(&log).len(), 1);
+    assert_eq!(
+        app.mode,
+        ViewMode::Fullscreen,
+        "the still opened the window"
+    );
+
+    runner
+        .window
+        .take()
+        .unwrap()
+        .send(Some(mpv::USER_QUIT))
+        .unwrap();
+    super::poll_mpv_window(&mut app, &mut state);
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(app.mode, ViewMode::Fullscreen);
+    assert_eq!(app.current, 1);
+    assert!(app.video.is_none());
+    assert!(decoder.starts().is_empty(), "no terminal player");
+}
+
+#[test]
+fn animation_without_player_returns_to_still() {
+    let mut app = app_on_animated_still();
+    app.mode = ViewMode::Video;
+    let mut state = window_state();
+    let (log, mut runner) = fake_runner();
+
+    play_videos(&mut app, &mut state, &mut runner);
+    assert_eq!(starts(&log).len(), 1);
+    assert_eq!(app.mode, ViewMode::Fullscreen, "an animation has a still");
+    assert_eq!(app.current, 1);
+}

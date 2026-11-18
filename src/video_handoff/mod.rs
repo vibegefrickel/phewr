@@ -54,7 +54,8 @@ pub(crate) fn play_videos(app: &mut App, state: &mut LoopState, runner: &mut imp
 }
 
 fn start_video_view(app: &mut App, state: &mut LoopState, runner: &mut impl mpv::Runner) {
-    if app.mode != ViewMode::Video || app.video.is_some() {
+    // The player view waits for the mpv window of its video with the last frame.
+    if app.mode != ViewMode::Video || app.video.is_some() || app.watches_video_window() {
         return;
     }
     if app.plays_motion() {
@@ -63,13 +64,15 @@ fn start_video_view(app: &mut App, state: &mut LoopState, runner: &mut impl mpv:
     }
     let mismatch = identifier_note(app);
     if app.take_video_window_request() {
-        open_window(app, state, runner, None);
+        let keep_player =
+            app.take_window_keeps_player() && terminal_player_program(app, state).is_ok();
+        open_window(app, state, runner, keep_player, None);
     } else {
         // The note of a failed motion goes to `state`, so the program path is a copy.
         match terminal_player_program(app, state).map(Path::to_path_buf) {
             Ok(program) => open_terminal_player(app, state, &program),
-            Err(Blocker::Configured) => open_window(app, state, runner, None),
-            Err(Blocker::Missing(reason)) => open_window(app, state, runner, Some(reason)),
+            Err(Blocker::Configured) => open_window(app, state, runner, false, None),
+            Err(Blocker::Missing(reason)) => open_window(app, state, runner, false, Some(reason)),
         }
     }
     if let Some(note) = mismatch {
@@ -185,14 +188,17 @@ fn open_terminal_player(app: &mut App, state: &mut LoopState, program: &Path) {
     }
 }
 
-/// Open the current video in the mpv window and go back to the view that opened it.
+/// Open the current video in the mpv window, and show the view behind it
+/// ([`App::leave_for_window`]).
 ///
 /// `reason` is the note of a fallback from the terminal player. A running slideshow plays
 /// the video once and waits for the window. Each other playback loops until the user quits.
+/// Without the window, the player view plays the video again, and the grid stops the slideshow.
 fn open_window(
     app: &mut App,
     state: &mut LoopState,
     runner: &mut impl mpv::Runner,
+    keep_player: bool,
     reason: Option<&str>,
 ) {
     let path = app.video_path().to_path_buf();
@@ -207,8 +213,7 @@ fn open_window(
         .map(|reason| format!("{reason}: "))
         .unwrap_or_default();
     let Some(program) = state.video.mpv.as_deref() else {
-        back_from_video(app);
-        app.stop_slideshow();
+        leave_without_window(app, keep_player);
         state.status = Some(format!("{prefix}{MPV_MISSING_NOTE}"));
         return;
     };
@@ -222,8 +227,8 @@ fn open_window(
         socket.as_deref(),
     ) {
         Ok(exit) => {
-            back_from_video(app);
-            if !once {
+            leave_for_window(app, keep_player);
+            if !once && app.mode != ViewMode::Video {
                 app.stop_slideshow();
             }
             app.watch_video_window(exit, once);
@@ -234,17 +239,24 @@ fn open_window(
             });
         }
         Err(error) => {
-            back_from_video(app);
-            app.stop_slideshow();
+            leave_without_window(app, keep_player);
             state.status = Some(format!("{prefix}mpv did not start ({error})"));
         }
     }
 }
 
-/// Return to the view that opened the video, with the gallery cursor on it.
-pub(crate) fn back_from_video(app: &mut App) {
-    app.return_from_video();
+/// Show the view behind the mpv window, with the gallery cursor on the video.
+fn leave_for_window(app: &mut App, keep_player: bool) {
+    app.leave_for_window(keep_player);
     focus_gallery_on_current(app);
+}
+
+/// The window did not open: the player view plays on, and the grid stops the slideshow.
+fn leave_without_window(app: &mut App, keep_player: bool) {
+    leave_for_window(app, keep_player);
+    if app.mode != ViewMode::Video {
+        app.stop_slideshow();
+    }
 }
 
 /// A failed playback, or a step past the list end.

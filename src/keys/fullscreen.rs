@@ -31,7 +31,7 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.request_video_window();
         }
         #[cfg(feature = "video")]
-        KeyCode::Char('p') if app.shows_video_placeholder() || app.fullscreen_on_animation() => {
+        KeyCode::Char('p') if app.fullscreen_on_animation() => {
             app.enter_video(app.current);
             app.request_video_window();
         }
@@ -58,8 +58,8 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
     Ok(false)
 }
 
-/// Enter and a click on the middle of the picture: play the video of the placeholder, the
-/// animation or the motion of a Live Photo. `false` when the file has nothing to play.
+/// Enter and a click on the middle of the picture: play the animation or the motion of a Live
+/// Photo. `false` when the file has nothing to play.
 pub(super) fn play_in_place(app: &mut App) -> io::Result<bool> {
     if on_live(app) {
         // The still stays on the screen until the first frame of the motion replaces it.
@@ -67,12 +67,10 @@ pub(super) fn play_in_place(app: &mut App) -> io::Result<bool> {
         enter_motion(app);
         return Ok(true);
     }
-    if !app.shows_video_placeholder() && !on_animation(app) {
+    if !on_animation(app) {
         return Ok(false);
     }
-    if !app.shows_video_placeholder() {
-        app.graphics_delete_all()?;
-    }
+    app.graphics_delete_all()?;
     app.stop_slideshow();
     app.enter_fullscreen_at(app.current);
     Ok(true)

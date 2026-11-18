@@ -1,7 +1,7 @@
 //! The keys of the terminal video player.
 
 use super::step_key;
-use crate::app::App;
+use crate::app::{App, VideoReturn};
 use crate::mpv::Step;
 use crate::video_handoff::focus_gallery_on_current;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -17,10 +17,7 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
         KeyCode::Left | KeyCode::Char('h' | 'j') => step(app, Step::Previous)?,
         KeyCode::Right | KeyCode::Char('k' | 'l') => step(app, Step::Next)?,
         KeyCode::Char('q') | KeyCode::Esc => leave_player(app)?,
-        KeyCode::Char('p') => {
-            app.graphics_delete_all()?;
-            app.request_video_window();
-        }
+        KeyCode::Char('p') if !app.watches_video_window() => open_window(app)?,
         KeyCode::Char('?') => {
             app.graphics_delete_all()?;
             app.help_visible = true;
@@ -41,10 +38,19 @@ pub(super) fn leave_player(app: &mut App) -> io::Result<()> {
     if app.plays_motion() {
         app.return_from_video();
     } else {
-        // The player has no controls. The fullscreen placeholder is no step back.
+        // The player has no controls. The fullscreen view shows no video.
         app.exit_video();
     }
     focus_gallery_on_current(app);
+    Ok(())
+}
+
+/// A player from the fullscreen view keeps its last frame on the screen while the window plays.
+fn open_window(app: &mut App) -> io::Result<()> {
+    if app.video_return == VideoReturn::Gallery || app.plays_motion() {
+        app.graphics_delete_all()?;
+    }
+    app.request_video_window_from_player();
     Ok(())
 }
 

@@ -16,16 +16,101 @@ pub(crate) fn poll_mpv_window(app: &mut App, state: &mut LoopState) {
 #[cfg(test)]
 mod tests {
     use super::poll_mpv_window;
-    use crate::app::{VideoReturn, ViewMode};
+    use crate::app::{App, VideoReturn, ViewMode};
+    use crate::config::VideoPlayer;
     use crate::mpv;
+    use crate::run_loop::LoopState;
+    use crate::test_support::char_key;
     use crate::test_support::video::{
-        fake_runner, fullscreen_app_on_video, gallery_app_on_video, last_start,
-        slideshow_video_app, video_app, window_state,
+        FakeDecoder, FakeRunner, clip_info, fake_decoder, fake_runner, fullscreen_app_on_video,
+        gallery_app_on_video, last_start, slideshow_video_app, state_with, video_app, window_state,
     };
     use crate::video_handoff::play_videos;
+    use std::rc::Rc;
+
+    /// A slideshow in the terminal player that opened its video in the mpv window with `p`.
+    fn slideshow_in_window() -> (App, LoopState, Rc<FakeDecoder>, FakeRunner) {
+        let mut app = slideshow_video_app();
+        let decoder = fake_decoder(clip_info());
+        let mut state = state_with(VideoPlayer::Terminal, Rc::clone(&decoder));
+        let (_log, mut runner) = fake_runner();
+        play_videos(&mut app, &mut state, &mut runner);
+        assert!(app.video.is_some());
+        char_key(&mut app, 'p');
+        play_videos(&mut app, &mut state, &mut runner);
+        assert!(app.watches_video_window());
+        (app, state, decoder, runner)
+    }
 
     #[test]
-    fn window_holds_slideshow() {
+    fn slideshow_window_holds_player_view() {
+        let (mut app, mut state, decoder, mut runner) = slideshow_in_window();
+        assert_eq!(app.mode, ViewMode::Video, "the last frame stays");
+        assert!(app.video.is_none(), "the decoder stops");
+        app.slideshow_tick();
+        play_videos(&mut app, &mut state, &mut runner);
+        assert_eq!(app.current, 1, "the open window holds the slide");
+        assert_eq!(decoder.starts().len(), 1, "no second ffmpeg");
+
+        runner.window.take().unwrap().send(Some(0)).unwrap();
+        poll_mpv_window(&mut app, &mut state);
+        assert_eq!(app.current, 2, "the end of the clip moves on");
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+        assert!(app.slideshow_advancing());
+    }
+
+    #[test]
+    fn quit_window_pauses_slideshow() {
+        let closes = [
+            Some(Some(mpv::USER_QUIT)),
+            Some(mpv::exit_with_reason(Some(0), Some("quit"))),
+            Some(None),
+            // A wait thread that ends without a code.
+            None,
+        ];
+        for close in closes {
+            let (mut app, mut state, decoder, mut runner) = slideshow_in_window();
+            let window = runner.window.take().unwrap();
+            match close {
+                Some(code) => window.send(code).unwrap(),
+                None => drop(window),
+            }
+            poll_mpv_window(&mut app, &mut state);
+            app.slideshow_tick();
+            assert_eq!(app.current, 1, "{close:?}");
+            assert_eq!(app.mode, ViewMode::Video, "{close:?}");
+            assert!(app.slideshow_running(), "{close:?}");
+            assert!(!app.slideshow_advancing(), "{close:?}");
+
+            play_videos(&mut app, &mut state, &mut runner);
+            assert!(app.video.is_some(), "{close:?}");
+            assert_eq!(decoder.starts().len(), 2, "{close:?}");
+            decoder.feed(vec![0; 640 * 480 * 4]);
+            assert!(app.video.as_mut().unwrap().poll());
+            decoder.end();
+            assert!(!app.video.as_mut().unwrap().poll());
+            assert_eq!(
+                decoder.starts().len(),
+                3,
+                "a paused slideshow loops the clip: {close:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn step_in_slideshow_window_pauses() {
+        let (mut app, mut state, _decoder, mut runner) = slideshow_in_window();
+        let window = runner.window.take().unwrap();
+        window.send(Some(mpv::PREVIOUS_FILE)).unwrap();
+        poll_mpv_window(&mut app, &mut state);
+        assert_eq!(app.current, 0);
+        assert_eq!(app.mode, ViewMode::Fullscreen);
+        assert!(app.slideshow_running());
+        assert!(!app.slideshow_advancing());
+    }
+
+    #[test]
+    fn slideshow_window_without_player_shows_grid() {
         let mut app = slideshow_video_app();
         let mut state = window_state();
         let (log, mut runner) = fake_runner();
@@ -39,7 +124,8 @@ mod tests {
             state.status.as_deref(),
             Some("clip.mp4 plays in an mpv window, the slideshow waits for its end")
         );
-        assert!(app.shows_video_placeholder());
+        assert_eq!(app.mode, ViewMode::Gallery);
+        assert_eq!(app.gallery.cursor, 1);
         app.slideshow_tick();
         assert_eq!(app.current, 1, "the open window holds the slide");
         assert!(app.slideshow_timeout().is_some(), "the loop checks again");
@@ -47,11 +133,12 @@ mod tests {
         runner.window.take().unwrap().send(Some(0)).unwrap();
         poll_mpv_window(&mut app, &mut state);
         assert_eq!(app.current, 2);
+        assert_eq!(app.mode, ViewMode::Fullscreen);
         assert!(app.slideshow_running());
     }
 
     #[test]
-    fn quit_window_stops_slideshow() {
+    fn quit_window_without_player_goes_to_grid() {
         for close in [Some(Some(mpv::USER_QUIT)), Some(None), None] {
             let mut app = slideshow_video_app();
             let mut state = window_state();
@@ -61,7 +148,6 @@ mod tests {
             let window = runner.window.take().unwrap();
             match close {
                 Some(code) => window.send(code).unwrap(),
-                // A wait thread that ends without a code.
                 None => drop(window),
             }
             poll_mpv_window(&mut app, &mut state);
@@ -69,7 +155,7 @@ mod tests {
 
             assert_eq!(app.current, 1, "{close:?}");
             assert!(!app.slideshow_running(), "{close:?}");
-            assert!(app.shows_video_placeholder());
+            assert_eq!(app.mode, ViewMode::Gallery, "{close:?}");
         }
     }
 
@@ -116,11 +202,9 @@ mod tests {
         assert!(late_quit.is_err(), "phewr dropped the exit of the window");
         app.prev();
         assert_eq!(app.mode, ViewMode::Video, "prev steps onto the video");
-        app.return_from_video();
         app.slideshow_tick();
 
-        assert!(app.slideshow_running(), "the late quit does not count");
-        assert!(app.shows_video_placeholder());
+        assert!(app.slideshow_advancing(), "the late quit does not count");
     }
 
     #[test]
@@ -238,7 +322,7 @@ mod tests {
         poll_mpv_window(&mut app, &mut state);
 
         assert_eq!(app.current, 1, "the help popup keeps the view");
-        assert!(app.shows_video_placeholder());
+        assert_eq!(app.mode, ViewMode::Gallery, "no terminal player");
         assert!(!app.watches_video_window(), "phewr forgets the window");
     }
 

@@ -176,7 +176,7 @@ fn long_wait_ends_motion_player() {
 }
 
 #[test]
-fn plain_still_and_placeholder_start_nothing() {
+fn plain_still_and_player_view_start_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = idle_on_still(dir.path());
     char_key(&mut app, 'l');
@@ -192,13 +192,11 @@ fn plain_still_and_placeholder_start_nothing() {
 
     let mut app = fullscreen_video_app();
     app.scan_complete = true;
-    app.return_from_video();
-    assert!(app.shows_video_placeholder());
     tick_prestart(&mut app, &state, start);
     tick_prestart(&mut app, &state, start + PRESTART_DELAY * 2);
     assert!(
         !app.video_prestart.rests(),
-        "the placeholder starts on Enter"
+        "the player view starts its own player"
     );
     assert!(decoder.starts().is_empty());
 }

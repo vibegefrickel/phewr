@@ -98,26 +98,9 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
-    let placeholder = app.shows_video_placeholder();
-
     let bottom_line = fullscreen_status_line(app, status);
     let inner = content_area(area, app);
     draw_status_row(frame, app, status_area(area, app), bottom_line, status);
-    if placeholder {
-        let middle = Rect {
-            y: inner.y + inner.height / 2,
-            height: inner.height.min(1),
-            ..inner
-        };
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "video: Enter plays, p opens the mpv window",
-                STYLES.dim,
-            ))
-            .alignment(Alignment::Center),
-            middle,
-        );
-    }
     if status_rows(app) == 0 {
         draw_slideshow_badge(frame, app, inner, status);
     }
@@ -378,14 +361,5 @@ mod tests {
         let screen = render(&mut app, None, 120, 30);
         assert_shows(&screen, "File");
         assert_shows(&screen, "EXIF");
-    }
-
-    #[cfg(feature = "video")]
-    #[test]
-    fn fullscreen_video_shows_placeholder() {
-        let mut app = app_with(&["clip.mp4"]);
-        app.mode = crate::app::ViewMode::Fullscreen;
-        let screen = render(&mut app, None, 80, 24);
-        assert_shows(&screen, "video: Enter plays, p opens the mpv window");
     }
 }

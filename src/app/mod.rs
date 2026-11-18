@@ -131,6 +131,9 @@ pub(crate) struct App {
     /// `p` asked for the mpv window. The run loop takes the request.
     #[cfg(feature = "video")]
     video_window_request: bool,
+    /// The player view asked for the window: it waits with its last frame and plays again after.
+    #[cfg(feature = "video")]
+    window_keeps_player: bool,
     #[cfg(feature = "video")]
     video_window: Option<VideoWindow>,
     /// The first frame of a new video removes the other pictures first.
@@ -257,6 +260,8 @@ impl App {
             video_return: VideoReturn::Gallery,
             #[cfg(feature = "video")]
             video_window_request: false,
+            #[cfg(feature = "video")]
+            window_keeps_player: false,
             #[cfg(feature = "video")]
             video_window: None,
             #[cfg(feature = "video")]

@@ -117,7 +117,7 @@ impl App {
     }
 
     pub(super) fn jump_to(&mut self, target: usize) {
-        // A step away from the placeholder stops the player and forgets the mpv window.
+        // A step away from a video stops the player and forgets the mpv window.
         #[cfg(feature = "video")]
         {
             self.video = None;
