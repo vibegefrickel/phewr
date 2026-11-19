@@ -52,7 +52,16 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   failed open puts the error into the status note, not into `app.error`, because the still decode
   cleared `app.error` at once. The probe, the routes and
   the stamp are in `docs/video.md` ("Animated images" and "Probe").
-- **Slideshow view (2026-11-09):** a running or paused slideshow has no status row
+- **Panes (2026-11-19):** the info pane is the left pane of the tuilibr frame, the grid or the
+  picture the main pane, and the status row spans both. The maintainer decided that every app with
+  a split view has the minimal and the maximal layout, default maximal (`[gallery] layout`, `B`).
+  Before, the info panel was a right column of 42 cells under no status row. A pane change
+  (`App::change_panes`) deletes the pictures. Only the grid calls `mark_dirty`: in the fullscreen
+  view a reset dropped the decode, and a 24 MP HEIC stayed empty until a cold decode (pre-review of
+  2026-11-19). The layout value is text, parsed after the TOML parse, because `config::load_at`
+  drops the whole file to the defaults on a parse error. A click in the info pane does nothing.
+- **Slideshow view (2026-11-09):** a running or paused slideshow has no panes (Tab, `B` and the
+  right click do nothing there, `App::slideshow_fills_screen`) and no status row
   (`ui::status_rows` gives 0 outside the grid), so `image_rect` covers the whole screen. A badge
   at the bottom right of `image_rect` (`draw_slideshow_badge` in `ui/status/mod.rs`) shows the play
   or pause glyph and the interval, with the status note in front. An error replaces the badge

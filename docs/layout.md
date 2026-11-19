@@ -86,9 +86,12 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   loop files in `loop_file.rs`). `grid_loops/` is listed above.
 - `tuilibr::pictures`: the shared picture module (decoders, resize, shape, jobs, the Kitty layer,
   the test builders). It lives in tuilibr since 2026-11-19. `tuilibr/docs/pictures.md` holds its module tree. This page lists only the files of phewr.
-- `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
-  `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
-  view. `status/` fills the `BarView` of each view for `tuilibr::frame::draw_bar`
+- `ui/`: the ratatui drawing of each view, the help popup and the info pane. `mod.rs` holds
+  `draw`, `panes` (`Panes { info, main, status }`, the one source of the areas for the draw, the
+  mouse and the run loop: `frame::split_boxed` and `pane_box` in the maximal layout, `frame::split`
+  and `divider` in the minimal one, `dim_pane` on the info pane), `content_area`, `status_area`, the
+  info pane, the fullscreen and the video view. `App::pane_layout` holds the layout of the session,
+  `Config::layout` and `Config::layout_note` the config value and its start note. `status/` fills the `BarView` of each view for `tuilibr::frame::draw_bar`
   (`draw_status_row`, `BarParts`, `gallery_bar`, `fullscreen_bar`, `video_bar`, `folder_span`,
   `shorten_path`, `display_path`, `is_empty_folder`).
   `grid/` holds the grid cells: the borders, the folder names (`folder_name_text`, the column width

@@ -8,7 +8,7 @@ phewr draws through the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitt
 It is tested in [Ghostty](https://ghostty.org/).
 
 phewr is a fork of [rview](https://github.com/jrf/rview) by jrf. The fork adds a zoomable grid,
-slideshows, an info panel with EXIF data, video playback, Live Photos, HEIC and many more formats.
+slideshows, an info pane with EXIF data, video playback, Live Photos, HEIC and many more formats.
 
 **Status:** phewr is in development and has no release. The first release comes in Q1 2027 at the
 earliest. To get phewr, clone the repository and build it (see "Install").
@@ -52,7 +52,7 @@ phewr image.png                    # its folder, with the cursor on image.png
 phewr a.png b.png                  # only these files
 phewr -s ~/Pictures/holiday        # start a slideshow at once
 phewr -s -n 5 ~/Pictures/holiday   # ... with 5 seconds per slide
-phewr -i ~/Pictures                # open with the info panel
+phewr -i ~/Pictures                # open with the info pane
 phewr -j 4 ~/Pictures              # decode threads (default: all cores)
 phewr --cwd-file /tmp/phewr-cwd    # write the folder of the grid into the file on exit
 ```
@@ -141,8 +141,9 @@ return {
 | `p` | Play the video in an mpv window, with sound |
 | `s` | Start a slideshow from the cursor |
 | `+` `-` `0` | Larger / smaller / default thumbnails (each step changes the columns) |
-| `Tab` | Show or hide the info panel |
+| `Tab` | Show or hide the info pane |
 | `/` | Search. `Enter` applies, `Esc` clears. |
+| `B` | Toggle the layout: maximal (boxes) or minimal (one divider) |
 | `Space` | Mark or unmark (the marks go to yazi on quit) |
 | `a` `A` | Mark all / clear the marks |
 | `q` | Quit |
@@ -166,7 +167,7 @@ pixels, file size, format and date. For a video, it shows the length, the frame 
 | `s` | Start / stop the slideshow |
 | `Space` | Pause / resume the slideshow |
 | `[` `]` | Shorter / longer slideshow interval (0.5 s steps) |
-| `Tab` | Show or hide the info panel |
+| `Tab` | Show or hide the info pane |
 | `p` | Play the video in an mpv window, with sound |
 | `q` | Back to the gallery. In a slideshow, `q` stops it too. |
 | `Esc` | Stop the slideshow, or go back to the gallery |
@@ -206,12 +207,12 @@ loops. Over SSH, videos always open in the mpv window.
 | Where | Mouse | Action |
 |-------|-------|--------|
 | Grid | Click / double-click | Select / open |
-| Grid | Right click | Open the info panel on a cell, or close the open panel from any place |
+| Grid | Right click | Open the info pane on a cell, or close the open pane from any place |
 | Grid | Wheel / Shift+wheel | Scroll / change the thumbnail size (when the terminal reports Shift) |
 | Fullscreen | Wheel | Zoom |
 | Fullscreen | Drag | Pan the zoomed image |
 | Fullscreen | Click near the left or right edge | Previous / next image |
-| Fullscreen | Right click | Info panel |
+| Fullscreen | Right click | Info pane |
 | Player | Click beside the video, or right click | Back |
 | Every view | Click on the status row | Help |
 
@@ -228,6 +229,7 @@ mouse = true          # false leaves the mouse to the terminal
 animate = true        # play short loops of videos, animations and Live Photos in the grid
 live_photos = true    # hide the .mov of a Live Photo, Enter plays it
 loops = "auto"        # "auto", "animation" (Kitty animation, Ghostty 1.4.0 or later) or "ticks"
+layout = "maximal"    # "maximal" (each pane in a box) or "minimal" (one divider), B toggles it
 visible_rows = 4      # most thumbnail rows in the grid, 2 to 12 (the grid picks a zoom level)
 
 [slideshow]

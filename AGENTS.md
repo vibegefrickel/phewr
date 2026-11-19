@@ -197,7 +197,8 @@ short form:
   scan, slideshow, meta, mouse, the thumbnail jobs and their bounds (`thumbnails/`), the cache
   folder and the loop files of the disk cache (`disk_cache/`), the folder prefetch
   (`folder_prefetch/`) and the grid loops (`grid_loops/`).
-- `ui/`: the ratatui drawing: `mod.rs` (the views and the info panel), `status/` (the parts of
+- `ui/`: the ratatui drawing: `mod.rs` (the views, the info pane and `panes`, the one source of the
+  areas: `Panes { info, main, status }`), `status/` (the parts of
   the `BarView` for `tuilibr::frame::draw_bar`), `grid/`, `help.rs` (the `HelpView` sections
   for `tuilibr::frame::draw_help`).
 - `gallery/`: the grid geometry and the cursor.
@@ -249,8 +250,17 @@ decisions. Read the long form before you change the code that an item names.
   video in every view, with no still and no Enter in the fullscreen view (`docs/video.md`,
   "Animated images"). A running slideshow holds it for at least the interval
   (`Player::play_at_least`).
-- **Slideshow view:** a running or paused slideshow has no status row (`ui::status_rows`), so
-  `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal
+- **Panes:** the info pane is the left pane of the tuilibr frame and the grid or the picture the
+  main pane (2026-11-19). Maximal (the default, `[gallery] layout`) puts each pane in a box
+  (`frame::split_boxed`, `pane_box`), minimal draws one divider (`frame::split`, `divider`), and
+  `B` toggles the layout for the session. The info pane is dim (`frame::dim_pane`), the main pane
+  keeps the focus. Below `NARROW_BELOW` (60 columns) the info pane sits above the main pane. A pane
+  change (`App::change_panes`) deletes the pictures, and only the grid marks itself dirty; the
+  fullscreen view keeps its decode and fits it to the new `image_rect`. An unknown layout value
+  keeps maximal with a start note (`Config::layout_note`).
+- **Slideshow view:** a running or paused slideshow has no panes and no status row
+  (`App::slideshow_fills_screen`, `ui::status_rows`), and Tab, `B` and the right click do nothing
+  there. So `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal
   scales it to the fill of the box with `r=` or `c=` alone (`filled_placement` in
   `tuilibr::pictures::kitty::placement`). Outside a slideshow, an image shows at its own size. A badge at
   the bottom right shows the play or pause glyph, the interval, the note or the error. The image and
@@ -315,7 +325,7 @@ decisions. Read the long form before you change the code that an item names.
   `App::gallery_dir` without a newline.
 - **Status notes:** the note lives in `LoopState`, not in `App`. The next key press or mouse
   button press clears it. A scan read error lives in `App::scan_error`.
-- **Status row:** the row is the bar of `tuilibr::frame::draw_bar` (phase 4a of the tuilibr
+- **Status row:** the row spans both panes and is the bar of `tuilibr::frame::draw_bar` (phase 4a of the tuilibr
   plan, 2026-11-19). `ui/status/mod.rs` fills a `BarView` per view: the mode block (NORMAL,
   FULLSCREEN, SEARCH, HELP, one letter below `NARROW_BELOW`) as `ModeView`, the folder path with
   the home folder as `~` (`App::home_dir`, set in `main`, never read from `HOME` in a test) as
@@ -361,7 +371,7 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   pictures at the cell positions of the last draw. A popup must delete the pictures first
   (`graphics_delete_all`), because Kitty draws them above the text. A zoom or a resize calls
   `mark_dirty`, and the grid write deletes the old pictures itself. A key handler deletes the
-  pictures only before an overlay. A delete without a later draw leaves black cells.
+  pictures only before an overlay or a pane change (`App::change_panes`). A delete without a later draw leaves black cells.
 - **Kitty emits:** a pass writes the new thumbnails in grid order, in one synchronized update, up
   to `EMIT_PASS_BYTES`.
 - **Kitty temp file medium:** `t=t` wins only when the probe answer is `OK` and the terminal
@@ -404,7 +414,8 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   pass the clock to `Screen::answer_at`.
 - **Mouse:** phewr enables only the mouse modes 1000, 1002 and 1006, never 1003. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. A test that needs the screen
-  regions calls `test_support::draw_frame` first. The double-click uses `handle_event_at` with a
+  regions calls `test_support::draw_frame` first. The click areas come from `ui::panes`, and a
+  click in the info pane does nothing. The double-click uses `handle_event_at` with a
   clock, so tests never sleep. `[gallery] mouse = false` turns the capture off. The run loop
   releases the mouse while an mpv window plays. A horizontal
   wheel does nothing in the grid, so a touchpad scroll never zooms by accident (2026-11-17).
