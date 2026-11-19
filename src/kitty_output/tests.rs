@@ -295,6 +295,59 @@ fn fullscreen_without_image_only_deletes() {
     assert!(!text.contains(TRANSMIT));
 }
 
+/// The bytes of an update in order: sync start, save, content, restore, sync end.
+fn assert_inside_update(text: &str) {
+    let start = text.find("\x1b[?2026h").expect("the sync starts");
+    let save = text.find("\x1b7").expect("the update saves the cursor");
+    let restore = text.rfind("\x1b8").expect("the update restores the cursor");
+    let end = text.rfind("\x1b[?2026l").expect("the sync ends");
+    assert!(start < save && save < restore && restore < end, "{text}");
+    assert_eq!(text.matches("\x1b[?2026h").count(), 1, "{text}");
+    assert!(text.starts_with("\x1b[?2026h\x1b7"), "{text}");
+    assert!(text.ends_with("\x1b8\x1b[?2026l"), "{text}");
+}
+
+#[test]
+fn fullscreen_image_writes_inside_one_update() {
+    let mut app = App::new((8, 16), SharedImageList::new());
+    app.image_rect = Rect::new(0, 0, 10, 10);
+    app.loaded = Some(RgbaImage::from_pixel(16, 32, image::Rgba([9, 9, 9, 255])).into());
+    let mut out = Vec::new();
+
+    render_fullscreen_image_to(&mut app, &mut out).unwrap();
+
+    for path in tuilibr::pictures::kitty::protocol::temp_file_paths(&out) {
+        std::fs::remove_file(path).unwrap();
+    }
+    let text = text(&out);
+    assert_inside_update(&text);
+    // The delete and the picture sit in the same update: the swap shows no blank view.
+    let delete = text.find(DELETE_ALL).expect("the delete");
+    let picture = text.find(TRANSMIT).expect("the picture");
+    assert!(delete < picture, "{text}");
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn video_frame_writes_inside_one_update() {
+    let app = playing_app();
+    let mut out = Vec::new();
+
+    super::render_video_frame_to(&app, &mut out, true).unwrap();
+
+    for path in tuilibr::pictures::kitty::protocol::temp_file_paths(&out) {
+        std::fs::remove_file(path).unwrap();
+    }
+    let text = text(&out);
+    assert_inside_update(&text);
+    let clear = text.find("a=d").expect("the clear");
+    let frame = text.find("a=T").expect("the frame");
+    assert!(
+        clear < frame,
+        "the clear and the frame share the update: {text}"
+    );
+}
+
 #[cfg(feature = "video")]
 #[test]
 fn video_without_frame_writes_nothing() {

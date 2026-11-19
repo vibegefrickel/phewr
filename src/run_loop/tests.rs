@@ -713,11 +713,24 @@ fn draw_pass_puts_the_cursor_back_on_the_search_field() {
     assert!(placement.is_some(), "the pass places the thumbnail");
     // The omnibox is the last row, and the cursor sits after `/ab`: CUP is 1-based.
     let field = "\x1b[31;4H";
-    let last_move = text.rfind(field).expect("the cursor goes to the field");
-    assert!(last_move > placement.unwrap(), "the cursor move comes last");
-    let after = text.get(last_move + field.len()..).unwrap_or_default();
+    let cursor_set = text
+        .find(field)
+        .expect("the draw sets the cursor on the field");
+    let placement = placement.unwrap();
     assert!(
-        !after.contains("\x1b_G") && !after.contains('H'),
-        "no write moves the cursor after the field: {after:?}"
+        cursor_set < placement,
+        "the draw sets the cursor before the Kitty write"
+    );
+    let save = text.find("\x1b7").expect("the update saves the cursor");
+    assert!(
+        cursor_set < save && save < placement,
+        "the save comes after the cursor"
+    );
+    let restore = text.rfind("\x1b8").expect("the update restores the cursor");
+    assert!(restore > placement, "the restore comes after the placement");
+    let after = text.get(restore..).unwrap_or_default();
+    assert!(
+        !after.contains('H'),
+        "no write moves the cursor after the restore: {after:?}"
     );
 }

@@ -12,6 +12,7 @@ pub(crate) use loops::play_grid_loops;
 use std::io::{self, Write};
 use tuilibr::pictures::kitty;
 use tuilibr::pictures::kitty::placement::{filled_placement, native_placement, within_payload_cap};
+use tuilibr::pictures::kitty::screen::Update;
 
 pub(crate) fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
     app.with_graphics_out(render_fullscreen_image_to)
@@ -19,11 +20,9 @@ pub(crate) fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
 
 /// Write the fullscreen image. An opaque image is RGB already and needs no scan.
 pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) -> io::Result<()> {
-    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-
-    // The synchronized update swaps the images without a blank view between.
-    queue!(out, BeginSynchronizedUpdate)?;
-    app.graphics_delete_all_to(out)?;
+    // The update swaps the images without a blank view between.
+    let mut update = Update::new(out);
+    app.graphics_delete_all_to(&mut update)?;
 
     if let Some(img) = &app.loaded {
         let fitted = within_payload_cap(img);
@@ -32,9 +31,9 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
         } else {
             native_placement(app.image_rect, app.cell_px, img, &fitted)
         };
-        queue!(out, cursor::MoveTo(placement.cells.x, placement.cells.y))?;
+        queue!(update, cursor::MoveTo(placement.cells.x, placement.cells.y))?;
         app.graphics.transmit(
-            out,
+            &mut update,
             fitted.as_ref().into(),
             &kitty::DisplayOptions {
                 columns: placement.columns,
@@ -46,8 +45,7 @@ pub(crate) fn render_fullscreen_image_to(app: &mut App, out: &mut impl Write) ->
         )?;
     }
 
-    queue!(out, EndSynchronizedUpdate)?;
-    out.flush()
+    update.finish()
 }
 
 /// The image id of the terminal player. Each frame replaces the last one under this id, and no
@@ -83,8 +81,6 @@ pub(crate) fn render_video_frame_to(
     out: &mut impl Write,
     clear: bool,
 ) -> io::Result<bool> {
-    use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-
     let frame = app
         .video
         .as_ref()
@@ -103,13 +99,13 @@ pub(crate) fn render_video_frame_to(
     if cells.width == 0 || cells.height == 0 {
         return Ok(false);
     }
-    queue!(out, BeginSynchronizedUpdate)?;
+    let mut update = Update::new(out);
     if clear {
-        kitty::protocol::clear_placements_to(out)?;
+        kitty::protocol::clear_placements_to(&mut update)?;
     }
-    queue!(out, cursor::MoveTo(cells.x, cells.y))?;
+    queue!(update, cursor::MoveTo(cells.x, cells.y))?;
     app.graphics.transmit(
-        out,
+        &mut update,
         pixels,
         &kitty::DisplayOptions {
             id: Some(VIDEO_IMAGE_ID),
@@ -122,8 +118,7 @@ pub(crate) fn render_video_frame_to(
             transient: true,
         },
     )?;
-    queue!(out, EndSynchronizedUpdate)?;
-    out.flush()?;
+    update.finish()?;
     Ok(true)
 }
 

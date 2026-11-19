@@ -200,31 +200,25 @@ pub(crate) fn sync_mouse_capture(
 
 /// Draw the chrome, write the Kitty pictures, and draw again when the pictures ask for it.
 ///
-/// Each Kitty placement moves the terminal cursor (`CUP` before `C=1`), so the pass ends with the
-/// cursor back on the search field. A Kitty write after this pass must put the cursor back too.
+/// The draw sets the search cursor. Each Kitty write runs in an `Update` that saves and restores
+/// the cursor, so the cursor stays on the search field.
 pub(crate) fn draw_pass<B: Backend<Error = io::Error>>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     state: &LoopState,
     pending_emits: &mut Vec<usize>,
 ) -> io::Result<()> {
-    let mut cursor = None;
-    terminal.draw(|frame| cursor = draw_ui(frame, app, state))?;
+    terminal.draw(|frame| draw_ui(frame, app, state))?;
     if render_images(app, pending_emits)? {
-        terminal.draw(|frame| cursor = draw_ui(frame, app, state))?;
-    }
-    if let Some(position) = cursor {
-        terminal.set_cursor_position(position)?;
+        terminal.draw(|frame| draw_ui(frame, app, state))?;
     }
     Ok(())
 }
 
-/// Draw the chrome and remember the fullscreen box for the gallery pre-decode. Returns the cell
-/// of the terminal cursor while the search line takes keys.
-fn draw_ui(frame: &mut Frame<'_>, app: &mut App, state: &LoopState) -> Option<Position> {
-    let cursor = ui::draw(frame, app, state.status.as_deref());
+/// Draw the chrome and remember the fullscreen box for the gallery pre-decode.
+fn draw_ui(frame: &mut Frame<'_>, app: &mut App, state: &LoopState) {
+    ui::draw(frame, app, state.status.as_deref());
     app.fullscreen_box = fullscreen_box(frame.area(), app);
-    cursor
 }
 
 fn fullscreen_box(area: Rect, app: &App) -> Rect {
