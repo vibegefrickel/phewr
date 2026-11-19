@@ -45,18 +45,10 @@ fn text(part: impl Into<String>, style: Style) -> BarText {
     }
 }
 
-/// The file facts as the right group. A note, a question, an error or the search line hides
-/// them.
-fn facts(app: &App, status: Option<&str>) -> Vec<String> {
-    let busy = status.is_some()
-        || app.error.is_some()
-        || app.scan_error.is_some()
-        || app.gallery.search_active;
-    (!busy)
-        .then(|| app.meta_line())
-        .flatten()
-        .into_iter()
-        .collect()
+/// The file facts as the right group. The note, the error and the search line sit in the
+/// omnibox, so only a narrow row hides the facts.
+fn facts(app: &App) -> Vec<String> {
+    app.meta_line().into_iter().collect()
 }
 
 /// The name of the current file.
@@ -66,15 +58,8 @@ fn file_name(app: &App) -> String {
         .map_or_default(|n| n.to_string_lossy().into_owned())
 }
 
-/// An error, or the name, the position, the zoom and the note. A slideshow has no status row.
-pub(super) fn fullscreen_bar(app: &App, status: Option<&str>) -> BarParts {
-    let right = facts(app, status);
-    if let Some(error) = error_text(app) {
-        return BarParts {
-            middle: vec![error],
-            right,
-        };
-    }
+/// The name, the position and the zoom. A slideshow has no status row.
+pub(super) fn fullscreen_bar(app: &App) -> BarParts {
     let mut parts = vec![format!(
         "{} [{}/{}]",
         file_name(app),
@@ -85,13 +70,14 @@ pub(super) fn fullscreen_bar(app: &App, status: Option<&str>) -> BarParts {
     if app.zoom > 1.0 {
         parts.push(format!("{:.0}%", app.zoom * 100.0));
     }
-    let mut middle = vec![BarText {
-        parts,
-        style: STYLES.text,
-        keep_end: false,
-    }];
-    middle.extend(status.map(|note| text(note, STYLES.text)));
-    BarParts { middle, right }
+    BarParts {
+        middle: vec![BarText {
+            parts,
+            style: STYLES.text,
+            keep_end: false,
+        }],
+        right: facts(app),
+    }
 }
 /// The badge at the bottom right of a slideshow: the picture stays visible around it, because the
 /// picture sits below the cell backgrounds.
@@ -142,12 +128,12 @@ fn slideshow_badge(app: &App, status: Option<&str>) -> Option<Line<'static>> {
 }
 
 #[cfg(feature = "video")]
-fn video_error(app: &App) -> Option<&str> {
+pub(super) fn video_error(app: &App) -> Option<&str> {
     app.video.as_ref().and_then(|v| v.error.as_deref())
 }
 
 #[cfg(not(feature = "video"))]
-fn video_error(_app: &App) -> Option<&str> {
+pub(super) fn video_error(_app: &App) -> Option<&str> {
     None
 }
 
@@ -157,20 +143,9 @@ const PLAYING_GLYPH: &str = "\u{25b6}";
 #[cfg(feature = "video")]
 const FINISHED_GLYPH: &str = "\u{23f8}";
 
-/// An error, or the state, the name, the time, the position and the note.
+/// The state, the name, the time and the position.
 #[cfg(feature = "video")]
-pub(super) fn video_bar(app: &App, status: Option<&str>) -> BarParts {
-    let right = facts(app, status);
-    let error = app
-        .error
-        .as_deref()
-        .or_else(|| app.video.as_ref().and_then(|v| v.error.as_deref()));
-    if let Some(err) = error {
-        return BarParts {
-            middle: vec![text(format!("Error: {err}"), STYLES.error)],
-            right,
-        };
-    }
+pub(super) fn video_bar(app: &App) -> BarParts {
     let (glyph, position, duration) = match &app.video {
         Some(v) => {
             let glyph = if v.playing() {
@@ -195,43 +170,24 @@ pub(super) fn video_bar(app: &App, status: Option<&str>) -> BarParts {
     if cfg!(debug_assertions) && dropped > 0 {
         parts.push(format!("[dropped {dropped}]"));
     }
-    let mut middle = vec![BarText {
-        parts,
-        style: STYLES.text,
-        keep_end: false,
-    }];
-    middle.extend(status.map(|note| text(note, STYLES.text)));
-    BarParts { middle, right }
+    BarParts {
+        middle: vec![BarText {
+            parts,
+            style: STYLES.text,
+            keep_end: false,
+        }],
+        right: facts(app),
+    }
 }
 
-/// An error, the search query while typing, or the name, the position, the selection, the scan
-/// and the note in the middle. The facts and the entry counts sit at the right.
-pub(super) fn gallery_bar(app: &App, filtered_count: usize, status: Option<&str>) -> BarParts {
-    // An error shows alone.
-    if let Some(error) = error_text(app) {
-        return BarParts {
-            middle: vec![error],
-            right: Vec::new(),
-        };
-    }
-    let mut right = facts(app, status);
-    let search = app.gallery.search_active;
-    if app.folder_count > 0 && !search {
+/// The name, the position, the selection and the scan in the middle. The facts and the entry
+/// counts sit at the right. The search line sits in the omnibox.
+pub(super) fn gallery_bar(app: &App, filtered_count: usize) -> BarParts {
+    let mut right = facts(app);
+    if app.folder_count > 0 {
         right.push(entry_counts(app));
     }
-    let mut middle = Vec::new();
-    if search {
-        middle.push(text(
-            format!("/{}\u{2588}", app.gallery.search_query),
-            STYLES.text,
-        ));
-        middle.push(text(
-            format!("{filtered_count}/{} matches", app.images.len()),
-            STYLES.dim,
-        ));
-    } else {
-        middle.extend(selected_position(app, filtered_count));
-    }
+    let mut middle: Vec<_> = selected_position(app, filtered_count).into_iter().collect();
     if !app.selection.is_empty() {
         middle.push(text(
             format!("{} selected", app.selection.len()),
@@ -241,12 +197,7 @@ pub(super) fn gallery_bar(app: &App, filtered_count: usize, status: Option<&str>
     if app.is_scanning() {
         middle.push(text("scanning\u{2026}", STYLES.dim));
     }
-    if search {
-        return BarParts { middle, right };
-    }
-    if let Some(status) = status {
-        middle.push(text(status, STYLES.text));
-    } else if is_empty_folder(app) {
+    if is_empty_folder(app) {
         middle.push(text("No images or folders here", STYLES.text));
     }
     BarParts { middle, right }
@@ -347,12 +298,6 @@ fn shorten_path(text: &str, budget: usize) -> Option<String> {
     (1..parts.len())
         .map(|start| format!("\u{2026}/{}", parts[start..].join("/")))
         .find(|candidate| candidate.width() <= budget)
-}
-
-/// The error or the scan error, in this order.
-fn error_text(app: &App) -> Option<BarText> {
-    let err = app.error.as_ref().or(app.scan_error.as_ref())?;
-    Some(text(format!("Error: {err}"), STYLES.error))
 }
 
 /// The name and the position of the cursor. `None` when the filter matches nothing.

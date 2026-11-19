@@ -138,7 +138,7 @@ mod tests {
 
         char_key(&mut app, 't');
 
-        assert_eq!(app.gallery.search_query, "t");
+        assert_eq!(app.gallery.search_query.text(), "t");
     }
 
     #[test]

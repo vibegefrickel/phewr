@@ -2,8 +2,8 @@
 use crate::app::ViewMode;
 use crate::ui::tests::{
     app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows, assert_symbol,
-    assert_terminal_background, cell_of, render, render_buffer, screen_rows, status_parts,
-    status_row,
+    assert_terminal_background, cell_of, omnibox_row, render, render_buffer, screen_rows,
+    status_parts, status_row,
 };
 use image::RgbaImage;
 use ratatui::layout::Rect;
@@ -20,7 +20,7 @@ fn gallery_shows_position_without_hints() {
     assert_hides(&screen, "Search");
     assert_eq!(
         app.gallery.grid_rect,
-        Rect::new(1, 1, 98, 27),
+        Rect::new(1, 1, 98, 26),
         "inside the main box"
     );
 }
@@ -62,14 +62,17 @@ fn empty_folder_shows_note() {
 fn search_shows_query_and_matches() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
     app.gallery.search_active = true;
-    app.gallery.search_query = "b".to_owned();
+    app.gallery.search_query = tuilibr::text_field::TextField::from("b");
     app.gallery.filtered_indices = vec![1];
     let screen = render(&mut app, None, 100, 30);
     assert_eq!(
         status_parts(&screen),
-        ["SEARCH", "/b\u{2588}", "1/2 matches"],
-        "{screen}"
+        ["SEARCH", "b.jpg [1/1]"],
+        "the search line sits in the omnibox: {screen}"
     );
+    let omnibox = omnibox_row(&screen);
+    assert!(omnibox.starts_with("/b "), "{omnibox:?}");
+    assert!(omnibox.trim_end().ends_with("1/2 matches"), "{omnibox:?}");
 
     // After Enter, the filter stays and the position counts the matches.
     app.gallery.search_active = false;
@@ -102,29 +105,24 @@ fn gallery_row_holds_search_and_scan() {
 
     app.selection.insert(app.images[0].clone());
     app.gallery.search_active = true;
-    app.gallery.search_query = "a".to_owned();
+    app.gallery.search_query = tuilibr::text_field::TextField::from("a");
     app.gallery.filtered_indices = vec![0];
     let buffer = render_buffer(&mut app, None, 100, 30);
     let screen = screen_rows(&buffer).join("\n");
     assert_eq!(
         status_parts(&screen),
-        [
-            "SEARCH",
-            "/a\u{2588}",
-            "1/2 matches",
-            "1 selected",
-            "scanning\u{2026}"
-        ],
+        ["SEARCH", "a.jpg [1/1]", "1 selected", "scanning\u{2026}"],
         "{screen}"
     );
-    assert_default_fg(cell_of(&buffer, "/a\u{2588}"), Modifier::empty());
+    assert_eq!(buffer[(1, 29)].symbol(), "a", "{screen}");
+    assert_default_fg(&buffer[(1, 29)], Modifier::empty());
     assert_ansi(cell_of(&buffer, "1/2 matches"), Color::DarkGray);
     assert_ansi(cell_of(&buffer, "1 selected"), Color::Yellow);
     assert_ansi(cell_of(&buffer, "scanning"), Color::DarkGray);
 }
 
 #[test]
-fn file_facts_show_until_note() {
+fn file_facts_stay_during_note() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = crate::test_support::app_with_files(dir.path(), &["a.png"]);
     app.request_meta();
@@ -150,8 +148,19 @@ fn file_facts_show_until_note() {
     assert_ansi(cell_of(&buffer, "8\u{d7}8"), Color::White);
 
     let screen = render(&mut app, Some("copied"), 100, 30);
-    assert_hides(&screen, "PNG");
-    assert_shows(&screen, "copied");
+    assert!(
+        status_row(&screen).contains(" \u{b7} PNG \u{b7} "),
+        "{screen}"
+    );
+    assert_eq!(omnibox_row(&screen).trim(), "copied");
+
+    app.error = Some("broken".to_owned());
+    let screen = render(&mut app, None, 100, 30);
+    assert!(
+        status_row(&screen).contains(" \u{b7} PNG \u{b7} "),
+        "{screen}"
+    );
+    assert_eq!(omnibox_row(&screen).trim(), "Error: broken");
 }
 
 #[test]
@@ -159,17 +168,17 @@ fn scan_error_comes_after_error() {
     let mut app = app_with(&["a.jpg"]);
     app.scan_error = Some("denied".to_owned());
     let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Error: denied ");
+    assert_eq!(omnibox_row(&screen).trim(), "Error: denied");
 
     app.error = Some("scan failed".to_owned());
     let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Error: scan failed ");
+    assert_eq!(omnibox_row(&screen).trim(), "Error: scan failed");
     assert_hides(&screen, "denied");
 }
 
-/// An error in the grid shows alone, without the entry counts at the right.
+/// An error in the grid sits in the omnibox, and the bar keeps the entry counts.
 #[test]
-fn grid_error_shows_alone() {
+fn grid_error_keeps_the_bar() {
     let mut app = app_with(&["sub", "a.jpg"]);
     app.folder_count = 1;
     let screen = render(&mut app, None, 100, 30);
@@ -182,20 +191,18 @@ fn grid_error_shows_alone() {
     let screen = render(&mut app, None, 100, 30);
     assert_eq!(
         status_parts(&screen),
-        ["NORMAL", "Error: denied"],
+        ["NORMAL", "sub [1/2]", "1 folder, 1 image"],
         "{screen}"
     );
+    assert_eq!(omnibox_row(&screen).trim(), "Error: denied");
 }
 
 #[test]
-fn note_replaces_hints() {
+fn note_sits_in_the_omnibox() {
     let mut app = app_with(&["a.jpg"]);
     let screen = render(&mut app, Some("1 file marked"), 100, 30);
-    assert_eq!(
-        status_parts(&screen),
-        ["NORMAL", "a.jpg [1/1]", "1 file marked"],
-        "{screen}"
-    );
+    assert_eq!(status_parts(&screen), ["NORMAL", "a.jpg [1/1]"], "{screen}");
+    assert_eq!(omnibox_row(&screen).trim(), "1 file marked");
     assert_hides(&screen, "Enter: open");
 }
 
@@ -212,8 +219,8 @@ fn fullscreen_shows_name_and_position() {
     );
     assert_eq!(
         app.image_rect,
-        Rect::new(1, 1, 98, 27),
-        "inside the main box, 1 status row"
+        Rect::new(1, 1, 98, 26),
+        "inside the main box, above the status row and the omnibox"
     );
     assert_eq!(
         screen.matches(" b.jpg ").count(),
@@ -254,7 +261,7 @@ fn fullscreen_shows_errors() {
     app.mode = ViewMode::Fullscreen;
     app.error = Some("decode failed".to_owned());
     let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Error: decode failed ");
+    assert_eq!(omnibox_row(&screen).trim(), "Error: decode failed");
 }
 
 #[test]
@@ -266,7 +273,7 @@ fn fullscreen_uses_ansi_roles() {
     assert_symbol(&buffer, (1, 1), " ", Color::Reset, Modifier::empty());
     assert_symbol(
         &buffer,
-        (1, 29),
+        (1, 28),
         "F",
         Color::LightGreen,
         Modifier::REVERSED | Modifier::BOLD,
@@ -291,16 +298,16 @@ fn video_row_shows_time_and_note() {
     assert_hides(&screen, "Space: pause");
     assert_eq!(
         app.image_rect,
-        Rect::new(1, 1, 98, 27),
-        "inside the main box, 1 status row"
+        Rect::new(1, 1, 98, 26),
+        "inside the main box, above the status row and the omnibox"
     );
 
     let screen = render(&mut app, Some("mpv not found"), 100, 30);
-    assert_shows(&screen, " mpv not found ");
+    assert_eq!(omnibox_row(&screen).trim(), "mpv not found");
 
     app.error = Some("no video stream".to_owned());
     let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Error: no video stream ");
+    assert_eq!(omnibox_row(&screen).trim(), "Error: no video stream");
 }
 
 #[cfg(feature = "video")]
@@ -350,7 +357,10 @@ fn video_row_shows_player_error() {
         "no frame again: the error"
     );
     let screen = render(&mut app, None, 100, 30);
-    assert_shows(&screen, " Error: ffmpeg could not decode clip.mp4 ");
+    assert_eq!(
+        omnibox_row(&screen).trim(),
+        "Error: ffmpeg could not decode clip.mp4"
+    );
 }
 
 use super::{display_path, shorten_path};
@@ -486,13 +496,7 @@ fn fullscreen_row_starts_with_folder_path() {
     let screen = render(&mut app, Some("a note"), 100, 30);
     assert_eq!(
         status_parts(&screen),
-        [
-            "FULLSCREEN",
-            "/Volumes/disk/trip",
-            "a.jpg [1/2]",
-            "200%",
-            "a note"
-        ],
+        ["FULLSCREEN", "/Volumes/disk/trip", "a.jpg [1/2]", "200%"],
         "{screen}"
     );
 }
@@ -517,7 +521,7 @@ fn video_row_starts_with_folder_path() {
 fn assert_mode(buffer: &ratatui::buffer::Buffer, letter: &str, color: Color) {
     assert_symbol(
         buffer,
-        (1, 29),
+        (1, 28),
         letter,
         color,
         Modifier::REVERSED | Modifier::BOLD,
@@ -557,7 +561,7 @@ fn mode_is_one_letter_on_a_narrow_screen() {
     assert_eq!(status_parts(&screen), ["N", "a.jpg [1/1]"], "{screen}");
     app.gallery.search_active = true;
     let screen = render(&mut app, None, 59, 30);
-    assert_eq!(status_parts(&screen)[..2], ["/", "/\u{2588}"], "{screen}");
+    assert_eq!(status_parts(&screen), ["/", "a.jpg [1/1]"], "{screen}");
     app.gallery.search_active = false;
     app.mode = ViewMode::Fullscreen;
     let screen = render(&mut app, None, 59, 30);
@@ -576,7 +580,9 @@ fn slideshow_shows_a_box_at_the_bottom_left() {
     app.start_slideshow();
     let buffer = render_buffer(&mut app, None, 100, 30);
     let screen = screen_rows(&buffer).join("\n");
-    assert!(status_row(&screen).starts_with(" SLIDESHOW "), "{screen}");
+    // A slideshow has no bar and no omnibox: the box sits in the last row.
+    let last_row = |screen: &str| screen.lines().last().unwrap_or_default().to_owned();
+    assert!(last_row(&screen).starts_with(" SLIDESHOW "), "{screen}");
     assert_symbol(&buffer, (1, 29), "S", Color::Black, Modifier::BOLD);
     assert_eq!(buffer[(1, 29)].bg, Color::Gray, "the look of the badge");
     assert_eq!(
@@ -585,5 +591,5 @@ fn slideshow_shows_a_box_at_the_bottom_left() {
         "the box sits on the picture"
     );
     let screen = render(&mut app, None, 50, 30);
-    assert!(status_row(&screen).starts_with(" S "), "{screen}");
+    assert!(last_row(&screen).starts_with(" S "), "{screen}");
 }

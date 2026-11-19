@@ -149,7 +149,7 @@ impl App {
 
         self.filter_rx = Some(
             self.filter_worker
-                .submit(&self.gallery.search_query, &self.filenames),
+                .submit(self.gallery.search_query.text(), &self.filenames),
         );
     }
 
@@ -171,6 +171,7 @@ mod tests {
     use crate::test_support::{app_with, wait_until};
 
     use std::path::{Path, PathBuf};
+    use tuilibr::text_field::TextField;
 
     use crate::image_list::SharedImageList;
 
@@ -250,7 +251,7 @@ mod tests {
     fn results_respect_active_filter() {
         let list = SharedImageList::new();
         let mut app = App::new((8, 16), list.clone());
-        app.gallery.search_query = "be".to_owned();
+        app.gallery.search_query = TextField::from("be");
         list.push_batch(vec![
             PathBuf::from("/x/zebra.png"),
             PathBuf::from("/x/berry.png"),
@@ -277,7 +278,7 @@ mod tests {
     fn filter_runs_in_background_and_resets() {
         let mut app = app_with(&["apple.png", "berry.png", "cherry.png"]);
         app.poll_filter();
-        app.gallery.search_query = "rry".to_owned();
+        app.gallery.search_query = TextField::from("rry");
         app.gallery.cursor = 1;
         app.update_filter();
         wait_until(|| {
@@ -384,9 +385,9 @@ mod tests {
     #[test]
     fn old_query_never_wins() {
         let mut app = app_with(&["apple.png", "berry.png", "cherry.png"]);
-        app.gallery.search_query = "app".to_owned();
+        app.gallery.search_query = TextField::from("app");
         app.update_filter();
-        app.gallery.search_query = "che".to_owned();
+        app.gallery.search_query = TextField::from("che");
         app.update_filter();
         wait_until(|| {
             app.poll_filter();

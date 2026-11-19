@@ -2,6 +2,7 @@
 //! box and the columns come from the tuilibr frame.
 
 use ratatui::Frame;
+use ratatui::layout::Rect;
 use tuilibr::frame::{HelpView, Section, draw_help};
 use tuilibr::pictures::kitty::{
     Loops, Transfer,
@@ -43,8 +44,8 @@ const GALLERY_COLUMN: &[Section<'static>] = &[
     (
         "Search",
         &[
-            ("<type>, Backspace", "Filter by filename"),
-            ("Enter / Esc", "Confirm / cancel"),
+            ("<type>, Enter / Esc", "Filter, confirm / cancel"),
+            ("\u{2190}/\u{2192}, ^w/^u/^k", "Cursor, readline edits"),
         ],
     ),
 ];
@@ -78,8 +79,14 @@ const FULLSCREEN_SECTIONS: [Section<'static>; 2] = [
 ];
 
 /// The help popup: two columns on a wide screen, else one column when it fits the height. The
-/// last section names the Kitty medium and the loop path.
-pub(super) fn draw_help_popup(frame: &mut Frame<'_>, transfer: Transfer, loops: Option<Loops>) {
+/// last section names the Kitty medium and the loop path. The box sits in `area`, above the
+/// omnibox.
+pub(super) fn draw_help_popup(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    transfer: Transfer,
+    loops: Option<Loops>,
+) {
     let kitty = kitty_rows(transfer, loops);
     let mut right = FULLSCREEN_SECTIONS.to_vec();
     right.push(("Kitty graphics", &kitty));
@@ -89,7 +96,6 @@ pub(super) fn draw_help_popup(frame: &mut Frame<'_>, transfer: Transfer, loops: 
         key_width: KEY_WIDTH,
         text_width: TEXT_WIDTH,
     };
-    let area = frame.area();
     draw_help(frame, area, &view);
 }
 
@@ -145,10 +151,11 @@ mod tests {
                 assert!(text.width() <= usize::from(TEXT_WIDTH), "{text}");
             }
         }
-        // The border and the padding take 2 rows each, and the margin 2.
+        // The border and the padding take 2 rows each, and the margin 2. The box sits above the
+        // omnibox, so a screen of 30 rows gives it 29. The margin keeps the bar free.
         let right = [FULLSCREEN_SECTIONS.as_slice(), &kitty[..1]].concat();
         for column in [GALLERY_COLUMN, &right] {
-            assert!(column_rows(column) + 6 <= 30, "the box fits 30 rows");
+            assert!(column_rows(column) + 6 <= 29, "the box fits 30 rows");
         }
     }
 
@@ -177,6 +184,14 @@ mod tests {
         assert_shows(&screen, &key("Transfer", "direct (t=d)"));
         assert_shows(&screen, &key("Grid loops", "ticks (a=p)"));
         assert_shows(&screen, &key("[ / ]", "Interval -/+ (image)"));
+        assert_shows(
+            &screen,
+            &key("<type>, Enter / Esc", "Filter, confirm / cancel"),
+        );
+        assert_shows(
+            &screen,
+            &key("\u{2190}/\u{2192}, ^w/^u/^k", "Cursor, readline edits"),
+        );
         assert_shows(&screen, " Fullscreen / video player");
         assert_shows(&screen, " Mouse");
         assert_hides(&screen, "Play animation");

@@ -13,6 +13,7 @@ use crate::icons;
 use ratatui::layout::Rect;
 use std::ops::Range;
 use tuilibr::pictures::shape::DEFAULT_IMAGE_ASPECT;
+use tuilibr::text_field::TextField;
 
 /// The gap in terminal cells between two cells and at the grid edges. The borders sit in it.
 pub(crate) const GAP: u16 = 1;
@@ -43,7 +44,8 @@ pub(crate) struct GalleryState {
     pub visible_rows: usize,
     pub grid_rect: Rect,
     pub search_active: bool,
-    pub search_query: String,
+    /// The typed filter with its cursor. The filter thread reads its text.
+    pub search_query: TextField,
     /// The zoom level: the thumbnail rows that the grid shows.
     pub zoom_rows: usize,
     /// The base thumbnail area in terminal cells. Every thumbnail is decoded for this size.
@@ -108,7 +110,7 @@ impl GalleryState {
             visible_rows: 1,
             grid_rect: Rect::default(),
             search_active: false,
-            search_query: String::new(),
+            search_query: TextField::default(),
             zoom_rows,
             thumb_cols: DEFAULT_THUMB_COLS,
             thumb_rows: DEFAULT_THUMB_ROWS,

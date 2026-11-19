@@ -343,7 +343,7 @@ fn cut_cell_stays_open_at_edge() {
     let mut app = app_with(&["a.jpg", "b.jpg"]);
     app.gallery.cursor = 1;
     app.selection.insert(app.images[0].clone());
-    let buffer = render_buffer(&mut app, None, 12, 8);
+    let buffer = render_buffer(&mut app, None, 12, 9);
     let grid = app.gallery.grid_rect;
     let border = app.gallery.border_rect(1);
     assert!(border.right() > grid.right(), "the cell overflows");

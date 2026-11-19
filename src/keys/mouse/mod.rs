@@ -38,8 +38,8 @@ fn regions(app: &App) -> ui::Panes {
     ui::panes(app.layout.screen, app)
 }
 
-/// A left click on the status row opens the help, and a left click on the info pane does
-/// nothing. Returns `true` for such a click.
+/// A left click on the status row opens the help, and a left click on the info pane or on the
+/// omnibox does nothing. Returns `true` for such a click.
 fn shared_click(app: &mut App, regions: &ui::Panes, at: Position) -> io::Result<bool> {
     if regions.status.contains(at) {
         app.graphics_delete_all()?;
@@ -47,7 +47,7 @@ fn shared_click(app: &mut App, regions: &ui::Panes, at: Position) -> io::Result<
         app.needs_render = true;
         return Ok(true);
     }
-    Ok(regions.info.is_some_and(|info| info.contains(at)))
+    Ok(regions.omnibox.contains(at) || regions.info.is_some_and(|info| info.contains(at)))
 }
 
 fn gallery_mouse(app: &mut App, mouse: MouseEvent, at: Position, now: Instant) -> io::Result<bool> {

@@ -84,12 +84,16 @@ pub(super) fn loop_pass(
 ) -> (usize, u64, usize) {
     poll_background(app, pending);
     screen
-        .draw(|frame| crate::ui::draw(frame, app, None))
+        .draw(|frame| {
+            crate::ui::draw(frame, app, None);
+        })
         .unwrap();
     app.fullscreen_box = fullscreen_rect();
     if render_images(app, pending).unwrap() {
         screen
-            .draw(|frame| crate::ui::draw(frame, app, None))
+            .draw(|frame| {
+                crate::ui::draw(frame, app, None);
+            })
             .unwrap();
     }
     let out = app.graphics_out.take_bytes();

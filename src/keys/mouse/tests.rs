@@ -75,7 +75,7 @@ fn click_ends_search_typing() {
 
     click_cell(&mut app, 0, Instant::now());
     assert!(!app.gallery.search_active);
-    assert_eq!(app.gallery.search_query, "0");
+    assert_eq!(app.gallery.search_query.text(), "0");
 }
 
 #[test]
@@ -248,6 +248,37 @@ fn status_row_click_toggles_help() {
     mouse(&mut app, RIGHT, (10, 5));
     assert!(!app.help_visible);
     assert!(app.needs_render);
+}
+
+/// A click on the omnibox does nothing in each view: no help, no step, no way back.
+#[test]
+fn omnibox_click_does_nothing() {
+    let mut app = gallery_app(9);
+    draw_frame(&mut app, 120, 24);
+    let omnibox = ui::panes(app.layout.screen, &app).omnibox;
+    assert_eq!(omnibox, ratatui::layout::Rect::new(0, 23, 120, 1));
+    char_key(&mut app, '/');
+    click(&mut app, (3, omnibox.y));
+    assert!(!app.help_visible);
+    assert!(app.gallery.search_active, "the search line keeps the keys");
+
+    let mut app = fullscreen_app(3, 1);
+    draw_frame(&mut app, 120, 24);
+    click(&mut app, (3, omnibox.y));
+    assert!(!app.help_visible);
+    assert_eq!((app.mode, app.current), (ViewMode::Fullscreen, 1));
+}
+
+/// A click on the omnibox of the player is no click beside the frame.
+#[cfg(feature = "video")]
+#[test]
+fn omnibox_click_keeps_the_player() {
+    let mut app = crate::test_support::video::video_app();
+    draw_frame(&mut app, 120, 24);
+    let omnibox = ui::panes(app.layout.screen, &app).omnibox;
+    click(&mut app, (3, omnibox.y));
+    assert_eq!(app.mode, ViewMode::Video);
+    assert!(!app.help_visible);
 }
 
 /// A click in the info pane does nothing, and a click in the main pane keeps its meaning in the

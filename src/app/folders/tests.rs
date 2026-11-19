@@ -6,6 +6,7 @@ use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::fs;
 use std::path::PathBuf;
+use tuilibr::text_field::TextField;
 
 #[test]
 fn folders_form_prefix_with_own_kind() {
@@ -172,7 +173,7 @@ fn marks_skip_folders() {
 #[test]
 fn search_matches_folder_names() {
     let mut app = folder_app(&["..", "summer"], &["winter.jpg"]);
-    app.gallery.search_query = "summ".to_owned();
+    app.gallery.search_query = TextField::from("summ");
     app.update_filter();
     wait_until(|| {
         app.poll_filter();

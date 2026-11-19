@@ -3,31 +3,31 @@
 use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io;
+use tuilibr::text_field::edit_for_key;
 
+/// The keys of the search line: Enter applies the filter, Esc clears it, and the readline keys of
+/// `edit_for_key` edit the field. Only a change of the text runs the filter again.
 pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.gallery.search_active = false;
-            if !app.gallery.search_query.is_empty() {
-                app.gallery.search_query.clear();
+            if app.gallery.search_query.clear() {
                 app.update_filter();
             }
         }
         KeyCode::Enter => {
             app.gallery.search_active = false;
         }
-        KeyCode::Backspace if app.gallery.search_query.pop().is_some() => {
-            app.update_filter();
+        _ => {
+            let Some(edit) = edit_for_key(&key) else {
+                return;
+            };
+            // The loop draws the text on each pass, so a cursor move needs no picture write.
+            let before = app.gallery.search_query.text().to_owned();
+            if app.gallery.search_query.apply(edit) && app.gallery.search_query.text() != before {
+                app.update_filter();
+            }
         }
-        KeyCode::Char(c)
-            if !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-        {
-            app.gallery.search_query.push(c);
-            app.update_filter();
-        }
-        _ => {}
     }
 }
 
@@ -362,9 +362,8 @@ mod tests {
         char_key(&mut app, '/');
         char_key(&mut app, 'q');
         press_with(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
-        press_with(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
         press_with(&mut app, KeyCode::Char('w'), KeyModifiers::ALT);
-        assert_eq!(app.gallery.search_query, "q");
+        assert_eq!(app.gallery.search_query.text(), "q");
     }
 
     #[test]
@@ -375,14 +374,22 @@ mod tests {
         assert!(app.gallery.search_active);
         char_key(&mut app, 'q');
         char_key(&mut app, '7');
-        assert_eq!(app.gallery.search_query, "q7", "q is text in the search");
+        assert_eq!(
+            app.gallery.search_query.text(),
+            "q7",
+            "q is text in the search"
+        );
         press(&mut app, KeyCode::Backspace);
-        assert_eq!(app.gallery.search_query, "q");
+        assert_eq!(app.gallery.search_query.text(), "q");
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.gallery.search_query, "q");
+        assert_eq!(app.gallery.search_query.text(), "q");
         press(&mut app, KeyCode::Enter);
         assert!(!app.gallery.search_active);
-        assert_eq!(app.gallery.search_query, "q", "Enter keeps the filter");
+        assert_eq!(
+            app.gallery.search_query.text(),
+            "q",
+            "Enter keeps the filter"
+        );
 
         char_key(&mut app, '/');
         press(&mut app, KeyCode::Esc);
@@ -395,5 +402,95 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert!(!app.gallery.search_active);
         assert_eq!(app.mode, ViewMode::Gallery);
+    }
+
+    /// Types `text` into an open search line.
+    fn type_text(app: &mut crate::app::App, text: &str) {
+        for character in text.chars() {
+            char_key(app, character);
+        }
+    }
+
+    #[test]
+    fn search_cursor_moves_and_inserts() {
+        let mut app = gallery_app(3);
+        char_key(&mut app, '/');
+        type_text(&mut app, "bc");
+        press(&mut app, KeyCode::Home);
+        assert_eq!(app.gallery.search_query.cursor(), 0);
+        char_key(&mut app, 'a');
+        assert_eq!(app.gallery.search_query.text(), "abc");
+        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Left);
+        char_key(&mut app, 'x');
+        assert_eq!(app.gallery.search_query.text(), "abxc");
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.gallery.search_query.cursor(), 4);
+        press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.gallery.search_query.cursor(),
+            0,
+            "Ctrl-A goes to the start"
+        );
+        press_with(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.gallery.search_query.cursor(),
+            4,
+            "Ctrl-E goes to the end"
+        );
+    }
+
+    #[test]
+    fn search_word_keys() {
+        let mut app = gallery_app(3);
+        char_key(&mut app, '/');
+        type_text(&mut app, "red car");
+        press_with(&mut app, KeyCode::Left, KeyModifiers::ALT);
+        assert_eq!(
+            app.gallery.search_query.cursor(),
+            4,
+            "Alt-Left goes to the word start"
+        );
+        press_with(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.gallery.search_query.text(),
+            "red ",
+            "Ctrl-K deletes to the end"
+        );
+        type_text(&mut app, "big car");
+        press_with(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.gallery.search_query.text(),
+            "red big ",
+            "Ctrl-W deletes a word"
+        );
+        press_with(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert!(
+            app.gallery.search_query.is_empty(),
+            "Ctrl-U deletes to the start"
+        );
+        assert!(
+            app.gallery.search_active,
+            "an edit keeps the search line open"
+        );
+    }
+
+    #[test]
+    fn search_cursor_move_keeps_the_filter() {
+        let mut app = gallery_app(3);
+        char_key(&mut app, '/');
+        // An empty query resets the list at once, so a run of the filter shows in the list.
+        app.gallery.filtered_indices = vec![1];
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.gallery.filtered_indices, [1], "no edit runs no filter");
+        char_key(&mut app, 'a');
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(
+            app.gallery.filtered_indices,
+            [0, 1, 2],
+            "an edit runs the filter"
+        );
     }
 }

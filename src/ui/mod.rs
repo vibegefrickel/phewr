@@ -2,12 +2,14 @@
 
 mod grid;
 mod help;
+mod omnibox;
 mod status;
 
 use crate::app::{App, ViewMode};
 use crate::styles::STYLES;
 use grid::draw_thumbnail_cells;
 use help::draw_help_popup;
+use omnibox::{OMNIBOX_ROWS, draw_omnibox};
 use ratatui::{
     prelude::*,
     widgets::{Paragraph, Wrap},
@@ -35,10 +37,13 @@ pub(crate) struct Panes {
     pub(crate) main: Rect,
     /// The status row under both panes. A slideshow has none.
     pub(crate) status: Rect,
+    /// The omnibox under the status row. A slideshow has none.
+    pub(crate) omnibox: Rect,
 }
 
-/// Draw the whole frame. `status` is a note of the run loop in place of the file facts.
-pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
+/// Draw the whole frame. `status` is the note of the run loop for the omnibox. Returns the cell
+/// of the terminal cursor while the search line takes keys.
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) -> Option<Position> {
     let area = frame.area();
     app.layout.screen = area;
     // Only the grid asks for icons.
@@ -46,11 +51,12 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     let panes = panes(area, app);
     draw_pane_lines(frame.buffer_mut(), app, area);
     match app.mode {
-        ViewMode::Gallery => draw_gallery(frame, app, panes, status),
+        ViewMode::Gallery => draw_gallery(frame, app, panes),
         ViewMode::Fullscreen => draw_fullscreen(frame, app, panes, status),
         #[cfg(feature = "video")]
         ViewMode::Video => draw_video(frame, app, panes, status),
     }
+    let cursor = draw_omnibox(frame, app, panes.omnibox, status);
     if let Some(info) = panes.info {
         draw_info_panel(frame, app, info);
     }
@@ -58,20 +64,31 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     frame::dim_pane(frame.buffer_mut(), panes.info);
     if app.help_visible {
         let loops = app.grid_loops.enabled.then(|| app.graphics.loops());
-        draw_help_popup(frame, app.graphics.transfer(), loops);
+        // The margin of the box keeps the bar free, so the box gets every row above the omnibox.
+        let above_omnibox = Rect {
+            height: area.height - panes.omnibox.height,
+            ..area
+        };
+        draw_help_popup(frame, above_omnibox, app.graphics.transfer(), loops);
     }
+    cursor
 }
 
-/// The info pane and the main pane above the status row, in the minimal or the maximal layout of
+/// The info pane and the main pane above the status row and the omnibox, in the minimal or the maximal layout of
 /// the frame. Below `NARROW_BELOW` columns, the info pane sits above the main pane. A slideshow
 /// gives the whole screen to the picture.
 pub(crate) fn panes(area: Rect, app: &App) -> Panes {
-    let (middle, status) = middle_and_status(area, app);
+    let Rows {
+        middle,
+        status,
+        omnibox,
+    } = rows(area, app);
     if app.slideshow_fills_screen() {
         return Panes {
             info: None,
             main: middle,
             status,
+            omnibox,
         };
     }
     let shown = app.info_visible;
@@ -89,6 +106,7 @@ pub(crate) fn panes(area: Rect, app: &App) -> Panes {
         info: shown.then_some(info),
         main,
         status,
+        omnibox,
     }
 }
 
@@ -98,7 +116,7 @@ fn draw_pane_lines(buffer: &mut Buffer, app: &App, area: Rect) {
     if app.slideshow_fills_screen() {
         return;
     }
-    let (middle, _) = middle_and_status(area, app);
+    let middle = rows(area, app).middle;
     let shown = app.info_visible;
     if app.pane_layout == frame::Layout::Minimal {
         let (_, split, _) = frame::split(middle, shown);
@@ -131,19 +149,43 @@ fn main_title(app: &App) -> String {
     )
 }
 
-/// The rows of both panes, and the status row under them.
-fn middle_and_status(area: Rect, app: &App) -> (Rect, Rect) {
-    let rows = status_rows(app);
+/// The rows of one draw from the top: both panes, the status row and the omnibox.
+struct Rows {
+    middle: Rect,
+    status: Rect,
+    omnibox: Rect,
+}
+
+/// The rows of both panes, the status row under them and the omnibox at the bottom, as in
+/// every app of the frame. A screen too low for all of them keeps the omnibox first.
+fn rows(area: Rect, app: &App) -> Rows {
+    // A slideshow gives the whole screen to the picture.
+    let (status_rows, omnibox_rows) = if app.slideshow_fills_screen() {
+        (0, 0)
+    } else {
+        (STATUS_ROWS, OMNIBOX_ROWS)
+    };
+    let omnibox_height = area.height.min(omnibox_rows);
+    let status_height = (area.height - omnibox_height).min(status_rows);
     let middle = Rect {
-        height: area.height.saturating_sub(rows),
+        height: area.height - omnibox_height - status_height,
         ..area
     };
     let status = Rect {
         y: area.y + middle.height,
-        height: area.height.min(rows),
+        height: status_height,
         ..area
     };
-    (middle, status)
+    let omnibox = Rect {
+        y: status.y + status_height,
+        height: omnibox_height,
+        ..area
+    };
+    Rows {
+        middle,
+        status,
+        omnibox,
+    }
 }
 
 fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, inner: Rect) {
@@ -181,7 +223,7 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, inner: Rect) {
 }
 
 fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, panes: Panes, status: Option<&str>) {
-    draw_status_row(frame, app, panes.status, fullscreen_bar(app, status));
+    draw_status_row(frame, app, panes.status, fullscreen_bar(app));
     if app.slideshow_fills_screen() {
         draw_slideshow_mode(frame, app, panes.main);
         draw_slideshow_badge(frame, app, panes.main, status);
@@ -191,7 +233,7 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, panes: Panes, status: O
 
 #[cfg(feature = "video")]
 fn draw_video(frame: &mut Frame<'_>, app: &mut App, panes: Panes, status: Option<&str>) {
-    draw_status_row(frame, app, panes.status, video_bar(app, status));
+    draw_status_row(frame, app, panes.status, video_bar(app));
     if app.slideshow_fills_screen() {
         draw_slideshow_mode(frame, app, panes.main);
         draw_slideshow_badge(frame, app, panes.main, status);
@@ -199,22 +241,14 @@ fn draw_video(frame: &mut Frame<'_>, app: &mut App, panes: Panes, status: Option
     app.image_rect = panes.main;
 }
 
-fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, panes: Panes, status: Option<&str>) {
+fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, panes: Panes) {
     app.gallery.update_grid(panes.main);
     let filtered_count = app.gallery.filtered_indices.len();
-    let parts = gallery_bar(app, filtered_count, status);
+    let parts = gallery_bar(app, filtered_count);
     draw_status_row(frame, app, panes.status, parts);
     let mut wanted = std::mem::take(&mut app.grid_icons.wanted);
     draw_thumbnail_cells(frame, app, panes.main, &mut wanted);
     app.grid_icons.wanted = wanted;
-}
-
-fn status_rows(app: &App) -> u16 {
-    if app.slideshow_fills_screen() {
-        0
-    } else {
-        STATUS_ROWS
-    }
 }
 
 #[cfg(test)]
@@ -250,7 +284,7 @@ mod tests {
         let mut app = crate::test_support::fullscreen_app(3, 0);
         app.info_visible = true;
         render_buffer(&mut app, None, 80, 12);
-        assert_eq!(app.image_rect, Rect::new(37, 1, 42, 9));
+        assert_eq!(app.image_rect, Rect::new(37, 1, 42, 8));
 
         app.start_slideshow();
         let screen = render(&mut app, Some("a note"), 80, 12);
@@ -261,7 +295,53 @@ mod tests {
         app.stop_slideshow();
         app.info_visible = false;
         render_buffer(&mut app, None, 80, 12);
-        assert_eq!(app.image_rect, Rect::new(1, 1, 78, 9));
+        assert_eq!(app.image_rect, Rect::new(1, 1, 78, 8));
+    }
+
+    /// The panes end above the bar, the bar sits above the omnibox, and the picture and the grid
+    /// follow the panes.
+    #[test]
+    fn panes_end_above_bar_and_omnibox() {
+        let mut app = crate::test_support::fullscreen_app(3, 0);
+        let screen = Rect::new(0, 0, 100, 30);
+        for (layout, info) in [
+            (Layout::Maximal, false),
+            (Layout::Maximal, true),
+            (Layout::Minimal, false),
+            (Layout::Minimal, true),
+        ] {
+            app.pane_layout = layout;
+            app.info_visible = info;
+            let panes = super::panes(screen, &app);
+            assert_eq!(panes.status, Rect::new(0, 28, 100, 1));
+            assert_eq!(panes.omnibox, Rect::new(0, 29, 100, 1));
+            assert!(panes.main.bottom() <= 28, "{layout:?}: {panes:?}");
+            assert!(
+                panes.info.is_none_or(|pane| pane.bottom() <= 28),
+                "{panes:?}"
+            );
+            render_buffer(&mut app, None, 100, 30);
+            assert_eq!(app.image_rect, panes.main);
+        }
+        app.mode = crate::app::ViewMode::Gallery;
+        render_buffer(&mut app, None, 100, 30);
+        assert!(
+            app.gallery.grid_rect.bottom() <= 28,
+            "{:?}",
+            app.gallery.grid_rect
+        );
+    }
+
+    /// A screen too low for the panes keeps the omnibox first, then the bar.
+    #[test]
+    fn low_screen_keeps_the_omnibox() {
+        let app = crate::test_support::gallery_app(3);
+        let panes = super::panes(Rect::new(0, 0, 80, 1), &app);
+        assert_eq!(panes.omnibox, Rect::new(0, 0, 80, 1));
+        assert_eq!((panes.status.height, panes.main.height), (0, 0));
+        let panes = super::panes(Rect::new(0, 0, 80, 2), &app);
+        assert_eq!(panes.status, Rect::new(0, 0, 80, 1));
+        assert_eq!(panes.omnibox, Rect::new(0, 1, 80, 1));
     }
 
     /// The badge sits at the bottom right of a slideshow: the state, a note or an error.
@@ -304,7 +384,11 @@ mod tests {
         height: u16,
     ) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| draw(frame, app, status)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, app, status);
+            })
+            .unwrap();
         terminal.backend().buffer().clone()
     }
 
@@ -337,14 +421,14 @@ mod tests {
         &buffer[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())]
     }
 
-    /// Fail when a cell sets a background. The status row in the last row has the black of the
+    /// Fail when a cell sets a background. The status row above the omnibox has the black of the
     /// palette as the ground of the bar.
     pub(super) fn assert_terminal_background(buffer: &Buffer) {
         let area = buffer.area;
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
                 let bg = buffer[(x, y)].bg;
-                let bar = y + 1 == area.bottom() && bg == Color::Black;
+                let bar = y + 2 == area.bottom() && bg == Color::Black;
                 assert!(
                     bg == Color::Reset || bar,
                     "cell ({x}, {y}) sets the background {bg:?}"
@@ -368,7 +452,13 @@ mod tests {
         );
     }
 
+    /// The status bar: the row above the omnibox.
     pub(super) fn status_row(screen: &str) -> &str {
+        screen.lines().rev().nth(1).unwrap_or_default()
+    }
+
+    /// The omnibox: the last row.
+    pub(super) fn omnibox_row(screen: &str) -> &str {
         screen.lines().last().unwrap_or_default()
     }
 
@@ -442,7 +532,7 @@ mod tests {
         let rows = screen_rows(&render_buffer(&mut app, None, 50, 30));
         assert!(rows[0].starts_with("\u{256d}\u{2500} Info "), "{rows:?}");
         assert!(rows[9].starts_with("\u{256d}\u{2500} Files "), "{rows:?}");
-        assert_eq!(app.gallery.grid_rect, Rect::new(1, 10, 48, 18));
+        assert_eq!(app.gallery.grid_rect, Rect::new(1, 10, 48, 17));
     }
 
     /// The maximal layout boxes both panes, the main box in the accent with the folder name. The
@@ -455,7 +545,7 @@ mod tests {
         let screen = render(&mut app, None, 100, 20);
         assert!(screen.starts_with("\u{256d}\u{2500} summer "), "{screen}");
         assert_hides(&screen, "Info");
-        assert_eq!(app.gallery.grid_rect, Rect::new(1, 1, 98, 17));
+        assert_eq!(app.gallery.grid_rect, Rect::new(1, 1, 98, 16));
         let buffer = render_buffer(&mut app, None, 100, 20);
         assert_eq!(cell_of(&buffer, "summer").fg, tuilibr::frame::accent());
 
@@ -463,20 +553,20 @@ mod tests {
         let screen = render(&mut app, None, 100, 20);
         assert!(screen.starts_with("\u{256d}\u{2500} Info "), "{screen}");
         assert_shows(&screen, "\u{256d}\u{2500} summer ");
-        assert_eq!(app.gallery.grid_rect, Rect::new(37, 1, 62, 17));
+        assert_eq!(app.gallery.grid_rect, Rect::new(37, 1, 62, 16));
 
         app.pane_layout = Layout::Minimal;
         let rows = screen_rows(&render_buffer(&mut app, None, 100, 20));
         assert_eq!(rows[0].chars().nth(36), Some('\u{2502}'), "{rows:?}");
-        assert_eq!(rows[18].chars().nth(36), Some('\u{2502}'), "{rows:?}");
+        assert_eq!(rows[17].chars().nth(36), Some('\u{2502}'), "{rows:?}");
         assert!(rows[0].starts_with("File "), "no title: {rows:?}");
         assert_hides(&rows.join("\n"), "\u{256d}");
-        assert_eq!(app.gallery.grid_rect, Rect::new(37, 0, 63, 19));
+        assert_eq!(app.gallery.grid_rect, Rect::new(37, 0, 63, 18));
 
         app.info_visible = false;
         let screen = render(&mut app, None, 100, 20);
         assert_hides(&screen, "\u{2502}");
-        assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 19));
+        assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 18));
     }
 
     /// The fullscreen box carries the file name, and the picture goes inside it.
@@ -491,7 +581,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert_shows(&screen, &format!("\u{256d}\u{2500} {name} "));
-        assert_eq!(app.image_rect, Rect::new(37, 1, 62, 17));
+        assert_eq!(app.image_rect, Rect::new(37, 1, 62, 16));
     }
 
     #[test]

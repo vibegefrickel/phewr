@@ -589,17 +589,19 @@ fn draw_records_fullscreen_box() {
         app.pane_layout = layout;
         app.info_visible = info;
         terminal
-            .draw(|frame| draw_ui(frame, &mut app, &state))
+            .draw(|frame| {
+                draw_ui(frame, &mut app, &state);
+            })
             .unwrap();
         boxes.push(app.fullscreen_box);
     }
     assert_eq!(
         boxes,
         [
-            Rect::new(1, 1, 78, 21),
-            Rect::new(37, 1, 42, 21),
-            Rect::new(0, 0, 80, 23),
-            Rect::new(37, 0, 43, 23),
+            Rect::new(1, 1, 78, 20),
+            Rect::new(37, 1, 42, 20),
+            Rect::new(0, 0, 80, 22),
+            Rect::new(37, 0, 43, 22),
         ]
     );
 }
@@ -641,9 +643,81 @@ fn unknown_layout_note_shows_at_start() {
     let mut app = gallery_app(3);
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal
-        .draw(|frame| draw_ui(frame, &mut app, &state))
+        .draw(|frame| {
+            draw_ui(frame, &mut app, &state);
+        })
         .unwrap();
     let buffer = terminal.backend().buffer();
     let status_row: String = (0..100).map(|x| buffer[(x, 23)].symbol()).collect();
     assert!(status_row.contains(note), "{status_row}");
+}
+
+/// A writer into the byte buffer of the Kitty output, so the backend and the Kitty writes share
+/// one stream in the order of the terminal.
+struct SharedStream(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A Kitty placement moves the terminal cursor, so the draw pass ends with the cursor on the
+/// search field.
+#[test]
+fn draw_pass_puts_the_cursor_back_on_the_search_field() {
+    use ratatui::backend::CrosstermBackend;
+    use ratatui::{Terminal, TerminalOptions, Viewport};
+    use tuilibr::pictures::kitty::GraphicsOutput;
+
+    let mut app = app_with(&["a.jpg"]);
+    app.scan_complete = true;
+    app.gallery.zoom_rows = 4;
+    let image = image::RgbaImage::from_pixel(160, 96, image::Rgba([9, 9, 9, 255]));
+    let picture = tuilibr::pictures::resize::padding::pad_for_grid(image, (160, 96), (8, 16), true);
+    app.thumb_cache.insert(0, picture);
+    app.gallery.search_active = true;
+    app.gallery.search_query = tuilibr::text_field::TextField::from("ab");
+    let GraphicsOutput::Buffer(stream) = &app.graphics_out else {
+        panic!("a test app writes to a buffer");
+    };
+    let stream = std::sync::Arc::clone(stream);
+    let mut terminal = Terminal::with_options(
+        CrosstermBackend::new(SharedStream(std::sync::Arc::clone(&stream))),
+        TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, 106, 31)),
+        },
+    )
+    .unwrap();
+    let state = LoopState::new(&Config::default());
+    // A thumbnail that arrives later goes out without a second draw, and no draw moves the
+    // cursor after it.
+    let mut pending = vec![0];
+    app.needs_render = false;
+
+    super::draw_pass(&mut terminal, &mut app, &state, &mut pending).unwrap();
+    let out = app.graphics_out.take_bytes();
+    for path in tuilibr::pictures::kitty::protocol::temp_file_paths(&out) {
+        std::fs::remove_file(path).unwrap();
+    }
+    let text = crate::test_support::text(&out);
+    let placement = text.find("a=p,").or_else(|| text.find("a=T,"));
+    assert!(placement.is_some(), "the pass places the thumbnail");
+    // The omnibox is the last row, and the cursor sits after `/ab`: CUP is 1-based.
+    let field = "\x1b[31;4H";
+    let last_move = text.rfind(field).expect("the cursor goes to the field");
+    assert!(last_move > placement.unwrap(), "the cursor move comes last");
+    let after = text.get(last_move + field.len()..).unwrap_or_default();
+    assert!(
+        !after.contains("\x1b_G") && !after.contains('H'),
+        "no write moves the cursor after the field: {after:?}"
+    );
 }

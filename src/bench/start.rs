@@ -105,7 +105,9 @@ fn start_once(dir: &Path, cache_dir: &Path) -> StartTimes {
     loop {
         poll_background(&mut app, &mut pending);
         terminal
-            .draw(|frame| crate::ui::draw(frame, &mut app, None))
+            .draw(|frame| {
+                crate::ui::draw(frame, &mut app, None);
+            })
             .unwrap();
         render_images(&mut app, &mut pending).unwrap();
         let now = start.elapsed();

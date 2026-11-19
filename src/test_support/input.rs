@@ -7,6 +7,7 @@ use crossterm::event::{
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::layout::Position;
 use std::time::Instant;
 
 pub(crate) fn press(app: &mut App, code: KeyCode) -> bool {
@@ -77,10 +78,13 @@ pub(crate) fn mouse_cell(app: &mut App, kind: MouseEventKind, vis: usize) -> boo
     mouse(app, kind, at)
 }
 
-/// Draw one frame into a test backend. The app records the screen layout.
-pub(crate) fn draw_frame(app: &mut App, width: u16, height: u16) {
+/// Draw one frame into a test backend. The app records the screen layout. Returns the cell of the
+/// terminal cursor.
+pub(crate) fn draw_frame(app: &mut App, width: u16, height: u16) -> Option<Position> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut cursor = None;
     terminal
-        .draw(|frame| crate::ui::draw(frame, app, None))
+        .draw(|frame| cursor = crate::ui::draw(frame, app, None))
         .unwrap();
+    cursor
 }

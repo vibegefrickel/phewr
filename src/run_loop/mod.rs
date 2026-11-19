@@ -97,11 +97,7 @@ pub(crate) fn run(
         #[cfg(feature = "video")]
         play_videos(app, state, &mut mpv::SystemRunner);
 
-        terminal.draw(|frame| draw_ui(frame, app, state))?;
-
-        if render_images(app, &mut pending_emits)? {
-            terminal.draw(|frame| draw_ui(frame, app, state))?;
-        }
+        draw_pass(terminal, app, state, &mut pending_emits)?;
         // After the render: the grid jobs of this pass pause the folder prefetch.
         app.tick_folder_prefetch(Instant::now());
 
@@ -202,10 +198,33 @@ pub(crate) fn sync_mouse_capture(
     Ok(())
 }
 
-/// Draw the chrome and remember the fullscreen box for the gallery pre-decode.
-fn draw_ui(frame: &mut Frame<'_>, app: &mut App, state: &LoopState) {
-    ui::draw(frame, app, state.status.as_deref());
+/// Draw the chrome, write the Kitty pictures, and draw again when the pictures ask for it.
+///
+/// Each Kitty placement moves the terminal cursor (`CUP` before `C=1`), so the pass ends with the
+/// cursor back on the search field. A Kitty write after this pass must put the cursor back too.
+pub(crate) fn draw_pass<B: Backend<Error = io::Error>>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    state: &LoopState,
+    pending_emits: &mut Vec<usize>,
+) -> io::Result<()> {
+    let mut cursor = None;
+    terminal.draw(|frame| cursor = draw_ui(frame, app, state))?;
+    if render_images(app, pending_emits)? {
+        terminal.draw(|frame| cursor = draw_ui(frame, app, state))?;
+    }
+    if let Some(position) = cursor {
+        terminal.set_cursor_position(position)?;
+    }
+    Ok(())
+}
+
+/// Draw the chrome and remember the fullscreen box for the gallery pre-decode. Returns the cell
+/// of the terminal cursor while the search line takes keys.
+fn draw_ui(frame: &mut Frame<'_>, app: &mut App, state: &LoopState) -> Option<Position> {
+    let cursor = ui::draw(frame, app, state.status.as_deref());
     app.fullscreen_box = fullscreen_box(frame.area(), app);
+    cursor
 }
 
 fn fullscreen_box(area: Rect, app: &App) -> Rect {
@@ -237,7 +256,8 @@ pub(crate) fn poll_background(app: &mut App, pending_emits: &mut Vec<usize>) {
     }
 }
 
-/// Write the Kitty images of the view. `true` asks for a second draw: the pictures of a full
+/// Write the Kitty images of the view. Each placement moves the terminal cursor, so in the run
+/// loop only `draw_pass` calls this. `true` asks for a second draw: the pictures of a full
 /// render cover the text.
 pub(crate) fn render_images(app: &mut App, pending_emits: &mut Vec<usize>) -> io::Result<bool> {
     // The key that closes the help renders the view again. No picture goes out while the help is
