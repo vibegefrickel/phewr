@@ -205,7 +205,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **One file argument:** `cli::start_paths` turns one file argument into its canonical folder
   and a cursor target (`App::place_cursor_after_scan`, the `return_to` of `Backspace`). Several
   arguments stay a plain file list. yazi starts phewr with the hovered path (`phewr %h`).
-- **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `TerminalSession::restore`, only when
+- **yazi reveal:** `reveal_in_yazi` in `yazi.rs` runs after `Session::restore` (tuilibr), only when
   `YAZI_ID` is set and `ya` is on PATH. It waits at most 1 s for `ya` (`YA_TIMEOUT`), so a yazi
   that does not answer cannot hold phewr. Tests pass a closure and never start `ya`.
 - **Marks to yazi (2026-11-09):** after the reveal, `select_in_yazi` writes the marks
@@ -217,7 +217,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   the pairs of the folder at quit cover every mark. A name with a line break stays out of the
   list. Without the plugin in yazi, nothing happens, and the list stays in the temp folder.
 - **Shell directory on exit:** `--cwd-file <PATH>` writes `App::gallery_dir` into the file after
-  `TerminalSession::restore`, without a newline, like `yazi --cwd-file`. A shell function reads
+  `Session::restore`, without a newline, like `yazi --cwd-file`. A shell function reads
   it and does the `cd` (README, "Change the shell directory on exit"). A failed run writes
   nothing, and a failed write is the exit error of phewr.
 - **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
@@ -308,7 +308,9 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   never 1003, so a pointer move without a button does not wake the run loop. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. `[gallery] mouse = false` turns
   the capture off. The run loop releases the mouse while an mpv window plays
-  (`sync_mouse_capture`), and `TerminalSession::restore` releases it on exit and on a panic.
+  (`sync_mouse_capture`, through `tuilibr::terminal::{enable_mouse, disable_mouse}`), and
+  `Session::restore` of tuilibr releases it on exit and on a panic. The session, the mouse modes
+  and their tests live in `tuilibr::terminal` since 2026-11-19.
   `ui::draw` records `app.layout`, and a mouse handler reads the regions through
   `ui::split_info`, `ui::content_area` and `ui::status_area`. A test that needs them calls
   `test_support::draw_frame` first. The double-click (400 ms) uses `handle_event_at` with a
@@ -333,7 +335,8 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   DA1 before the OSC 10 answer and the Kitty answers. Without the grace, the temp-file probe saw
   no `OK` and picked `t=d`, and the late answers reached the keys as text. An OSC 10 answer that
   is still missing after the grace stays owed (2026-11-17), so `LateAnswerFilter` drops it.
-  `LateAnswerFilter` in `keys/mod.rs` is armed after a timeout of the whole round trip, and
+  `LateAnswerFilter` (`tuilibr::terminal::answers` since 2026-11-19, before `keys/mod.rs`) is
+  armed after a timeout of the whole round trip, and
   after DA1 when the OSC 10 answer is still missing. It drops the key events of each owed late
   answer: a Kitty answer from Alt+`_` to Alt+`\`, and the OSC 10 answer from Alt+`]` to
   Ctrl+`g` (BEL) or Alt+`\`. A missing OSC 10 answer counts as owed after a timeout or after
@@ -354,8 +357,9 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   `AnswerKeys` (`tuilibr::pictures::kitty::answers`) rebuilds the bytes from the events and holds the
   events of a possible answer for at most 50 ms (`ANSWER_WAIT`). The run loop wakes at the end
   of the hold (`release_held`). phewr drops the events of a started answer that never ends,
-  because their letters run the actions of their keys. `handle_input` runs `AnswerKeys` first,
-  then `LateAnswerFilter`. An `ENOENT` goes to `Screen::answer`, and the screen forgets the
+  because their letters run the actions of their keys. `handle_input` reads each event through
+  `LateAnswerFilter`, which holds `AnswerKeys` inside and returns the answers before the events.
+  An `ENOENT` goes to `Screen::answer`, and the screen forgets the
   picture and its placements. While `Screen::has_lost` is true, `sync_grid_icons` writes a grid
   pass, and that pass sends the lost picture again. The measurement of 2026-11-11: after ten
   scrolls in a herdr pane, phewr lost 2 to 5 cells before the self check, schnattr 0 and plain

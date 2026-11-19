@@ -183,7 +183,7 @@ the picture plan). It holds `Placements`, `Screen`, `Update`, `Placing` and `Lay
   RGBA frame of the player or of a grid loop.
 - The file name contains `tty-graphics-protocol`, as the protocol requires.
 - A terminal that answers the probe later than 300 ms sends the answer as key presses
-  (`LateAnswerFilter` in `keys/mod.rs`).
+  (`tuilibr::terminal::answers::LateAnswerFilter`).
 - Animation frames of the grid loops and of the terminal player go out as RGBA as they are
   (`Pixels::keep_alpha`). An opaque frame is `f=32`, and the temp file is 18 % larger.
 - The direct and PNG media keep the RGB conversion, and so does a grid picture.

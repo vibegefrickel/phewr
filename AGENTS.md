@@ -158,15 +158,18 @@ its `make.sh`, and the real-file tests by name.
 `docs/layout.md` holds the full module map with the main types and functions of each file. The
 short form:
 
-- `main.rs`: the module list and a thin `main`. `check_paths`, `apply_cli_overrides`,
-  `probe_terminal` and `prepare_app` hold the logic with tests.
+- `main.rs`: the module list and a thin `main`. `check_paths`, `apply_cli_overrides`, the start
+  query (`tuilibr::terminal::start::query`, `query_with` in the tests) and `prepare_app` hold the
+  logic with tests. `delete_pictures` runs before `Session::restore`, and `install_panic_exit`
+  wraps the panic hook of the crate with the exit.
 - `cli.rs`: the clap arguments, the start paths and `write_cwd_file` (`--cwd-file`).
-- `terminal.rs`: `TerminalSession` and the mouse modes. The start probe and `read_answer` are in
-  `tuilibr::pictures::kitty::query`.
+- The terminal session with the mouse modes, the start query and the late answer filter come
+  from `tuilibr::terminal` (`Session`, `Modes`, `release_terminal_to`, `install_panic_hook`,
+  `start::query`, `answers::LateAnswerFilter`) since tuilibr phase 4 step 1 (2026-11-19).
 - `run_loop.rs`: `LoopState` (the status note, the `VideoState`), `run`, the background polls,
   `render_images` and `next_timeout`.
-- `keys/`: the key handlers. `mod.rs` routes the overlays and the view modes and holds
-  `LateAnswerFilter`. One file per view, and `mouse.rs`.
+- `keys/`: the key handlers. `mod.rs` routes the overlays and the view modes. One file per view,
+  and `mouse.rs`.
 - `kitty_output/`: the Kitty writes of phewr per frame. Each `render_*` has a `*_to` twin that
   writes to any `Write`. `mod.rs` holds the fullscreen image and the video frame, `grid.rs` the
   thumbnails, `loops.rs` the grid loops, `grid_icons.rs` the SVG icons. The generic part is in
@@ -289,7 +292,7 @@ decisions. Read the long form before you change the code that an item names.
   listing of the home folder triggers no macOS privacy prompt.
 - **One file argument:** `cli::start_paths` turns it into its folder and a cursor target. Several
   arguments stay a plain file list without folders and without Live pairs.
-- **yazi reveal, marks and `--cwd-file`:** all run after `TerminalSession::restore`. The marks
+- **yazi reveal, marks and `--cwd-file`:** all run after `Session::restore` of `tuilibr::terminal`. The marks
   become the selection of the yazi that started phewr, through the plugin `phewr-select`. Each
   `ya` call gets at most 1 s (`YA_TIMEOUT`). Tests pass a closure and never start `ya`. `--cwd-file` writes
   `App::gallery_dir` without a newline.
@@ -368,15 +371,15 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
 - **Late probe answer:** the read ends when every owed answer came, or at the DA1 answer. Before
   DA1, the read also waits for the OSC 10 answer. Ghostty 1.4 sends DA1 before the OSC 10 answer
   and the Kitty answers. So when an answer is missing at DA1, a second read waits at most
-  `LATE_ANSWER_GRACE` (100 ms) for it. `LateAnswerFilter` drops the key events of the late
-  answers. It counts the owed Kitty answers and the owed OSC 10 answer apart (`LateAnswers`).
-  `AnswerKeys` reads every Kitty answer first, also a late probe answer. Each one lowers only the
-  Kitty count (`kitty_answers_came`), so a self check `ENOENT` does not pay for a late OSC 10
-  answer.
+  `LATE_ANSWER_GRACE` (100 ms) for it. `tuilibr::terminal::answers::LateAnswerFilter` drops the
+  key events of the late answers. It counts the owed Kitty answers and the owed OSC 10 answer
+  apart (`LateAnswers`), reads every Kitty answer first, also a late probe answer, and lowers only
+  the Kitty count for each one, so a self check `ENOENT` does not pay for a late OSC 10 answer.
+  The ten filter cases are tests in tuilibr.
 - **Self check:** the engine places with `q=1` (`Screen::with_self_check`). phewr turns it on,
   and `PHEWR_KITTY_SELF_CHECK=0` turns it off. A transfer keeps `q=2`, else each transfer gets an
-  `OK`. `handle_input` runs `AnswerKeys` first, then `LateAnswerFilter`. An `ENOENT` goes to
-  `Screen::answer`, and `sync_grid_icons` writes a grid pass while `Screen::has_lost` is true. A
+  `OK`. `handle_input` reads each event through the filter: the Kitty answers (`Filtered::answers`)
+  go to `Screen::answer` first, then the events to the app. An `ENOENT` goes to `Screen::answer`, and `sync_grid_icons` writes a grid pass while `Screen::has_lost` is true. A
   hold of key events ends after 50 ms of quiet input (`ANSWER_WAIT`). phewr drops the keys of a
   started answer that never ends.
   After `MAX_LOSSES` (3) losses of one picture within `LOSS_WINDOW` (10 s), `Screen::answer`

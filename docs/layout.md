@@ -10,24 +10,24 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
 - `main.rs`: the module list and `main`: the lookup of ffmpeg and ffprobe
   (`video::find_session_tools`), the CLI checks, the terminal
   session and the start of the run loop. `main` is a thin shell. `check_paths`,
-  `apply_cli_overrides`, `probe_terminal` (the start probe and the cell size, `StartProbe`) and
-  `prepare_app` hold the logic with tests.
+  `apply_cli_overrides`, the start query (`tuilibr::terminal::start::query`, `Start`, `query_with`
+  in the tests), `delete_pictures`, `install_panic_exit` and `prepare_app` hold the logic with
+  tests.
 - `cli.rs`: the clap arguments (`Cli`), the value parsers of `--threads` and `--interval`, the
   start directory and `write_cwd_file` (the folder of the grid for `--cwd-file`).
-- `terminal.rs`: `TerminalSession` (raw mode, the alternate screen) and the mouse modes
-  (`enable_mouse`, `disable_mouse`). The start probe and the cell size are in
-  `tuilibr::pictures::kitty::query`.
-- `run_loop.rs`: `LoopState` (the status note, `answers` (an `AnswerKeys`), `late_answers` (the
-  `LateAnswerFilter`) and, with the `video` feature, the `VideoState`), `run`, the background
-  polls, `render_images` and `next_timeout`. The status note lives here, not in `App`.
-  `handle_input` takes one input event: it runs `AnswerKeys` first, hands each answer to
-  `Screen::answer` and calls `handle_events`. `handle_events` drops a late probe answer and calls
-  `handle_app_event` for the rest (the status note, the cell size after a resize, `handle_event`).
+- The terminal session (raw mode, the alternate screen, the mouse modes), the start query and the
+  late answer filter are `tuilibr::terminal` since 2026-11-19 (`Session`, `Modes`,
+  `enable_mouse`, `disable_mouse`, `release_terminal_to`, `install_panic_hook`, `start::query`,
+  `answers::LateAnswerFilter`). phewr has no `terminal.rs`.
+- `run_loop.rs`: `LoopState` (the status note, `answers` (the `LateAnswerFilter` of tuilibr),
+  `cell_size_from_terminal` and, with the `video` feature, the `VideoState`), `run`, the
+  background polls, `render_images` and `next_timeout`. The status note lives here, not in `App`.
+  `handle_input` takes one input event: the filter returns `Filtered { answers, events }`, each
+  answer goes to `Screen::answer`, then `handle_events` calls `handle_app_event` for the events (the status note, the cell size after a resize, `handle_event`).
   `release_held` ends a hold of key events after `ANSWER_WAIT`, and the poll of `run` wakes for
   it. The tests are in `run_loop/tests.rs`.
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
-  `match` that routes the overlays and the view modes, and `LateAnswerFilter` (the late probe
-  answers, with `kitty_answers_came`). One file per view: `fullscreen.rs`,
+  `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `video.rs` (feature `video`).
   `mouse.rs` holds the mouse handler per view.
 - `kitty_output/`: the Kitty writes of phewr per frame (the generic part is `tuilibr::pictures::kitty`). Each `render_*` has a `*_to` twin that writes to
