@@ -39,8 +39,8 @@ tree of tuilibr has a warning or an error, the `just check` of phewr fails.
 ## Build, test, run
 
 ```sh
-just                 # = just check: fmt --check, clippy (3 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny
-just audit           # taplo, just --fmt, shellcheck, shfmt, typos, cargo-shear (outside check)
+just                 # = just check: fmt --check, clippy (3 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny, audit
+just audit           # taplo, just --fmt, shellcheck, shfmt, typos, cargo-shear (part of check)
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
 just test-lean [FILTER]  # the tests without heic, jxl and turbo (the lean set: video,sips)
@@ -73,7 +73,7 @@ The repository pins the toolchain, the formatter and the lints:
   In `just check`, every warning is an error through `CARGO_BUILD_WARNINGS=deny` in the recipes
   (no `-D warnings` flag, so the build cache stays). phewr is a binary crate: `missing_docs` and
   `missing_debug_implementations` find nothing, and there is no doctest step.
-- `just audit` (outside `check` until every repo is clean): `taplo fmt --check` with
+- `just audit` (part of `check` since 2026-11-19): `taplo fmt --check` with
   `.taplo.toml`, `just --fmt --check --unstable`, `shellcheck` and `shfmt` on the `make.sh`
   scripts, `typos` with `_typos.toml`, `cargo shear`. The tools: `brew install taplo shellcheck
   shfmt typos-cli cargo-shear cargo-insta`. A missing tool fails the recipe with its brew line.
