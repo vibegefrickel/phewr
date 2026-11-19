@@ -4,6 +4,11 @@
 use crate::info;
 use std::path::Path;
 use tuilibr::pictures::decode;
+#[cfg(feature = "video")]
+use tuilibr::pictures::motion::first_frame::is_video;
+#[cfg(feature = "video")]
+use tuilibr::pictures::motion::probe::{probe_cached, probe_peek};
+use tuilibr::time::{LengthStyle, media_length};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct FileMeta {
@@ -78,14 +83,14 @@ pub(crate) fn read(path: &Path) -> FileMeta {
 /// True for every video, with or without `ffprobe` and a probe.
 #[cfg(feature = "video")]
 fn read_video(path: &Path, meta: &mut FileMeta) -> bool {
-    use crate::player::tone_map::Hdr;
-    if !crate::video::is_video(path) {
+    use tuilibr::pictures::motion::tone_map::Hdr;
+    if !is_video(path) {
         return false;
     }
     let Some(ffprobe) = crate::video::session_tools().ffprobe.as_deref() else {
         return true;
     };
-    let Ok(probe) = crate::player::probe_cached(ffprobe, path) else {
+    let Ok(probe) = probe_cached(ffprobe, path) else {
         return true;
     };
     meta.size = Some((probe.width, probe.height));
@@ -114,7 +119,7 @@ fn known_length(seconds: f64) -> Option<f64> {
 /// The length of a motion from the probe cache, without a probe.
 #[cfg(feature = "video")]
 pub(crate) fn motion_length_cached(motion: &Path) -> Option<f64> {
-    crate::player::probe_peek(motion).and_then(|probe| known_length(probe.duration))
+    probe_peek(motion).and_then(|probe| known_length(probe.duration))
 }
 
 #[cfg(not(feature = "video"))]
@@ -126,7 +131,7 @@ pub(crate) fn motion_length_cached(_motion: &Path) -> Option<f64> {
 #[cfg(feature = "video")]
 pub(crate) fn motion_length_probed(motion: &Path) -> Option<f64> {
     let ffprobe = crate::video::session_tools().ffprobe.as_deref()?;
-    crate::player::probe_cached(ffprobe, motion)
+    probe_cached(ffprobe, motion)
         .ok()
         .and_then(|probe| known_length(probe.duration))
 }
@@ -146,7 +151,10 @@ impl FileMeta {
     pub(crate) fn describe(&self) -> String {
         let mut parts = Vec::new();
         if let Some(video) = &self.video {
-            parts.push(format_time(video.duration));
+            parts.push(media_length(
+                whole_seconds(video.duration),
+                LengthStyle::Padded,
+            ));
         }
         if let Some((width, height)) = self.size {
             parts.push(format!("{width}\u{d7}{height}"));
@@ -171,26 +179,22 @@ impl FileMeta {
     }
 }
 
-/// `mm:ss`, or `h:mm:ss` from one hour on.
-pub(crate) fn format_time(seconds: f64) -> String {
+/// The whole seconds of a player time for `tuilibr::time::media_length`: a negative time is 0.
+pub(crate) fn whole_seconds(seconds: f64) -> u64 {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "a clip length is never negative or near 2^64 seconds"
     )]
     let whole = seconds.max(0.0) as u64;
-    let (hours, minutes, seconds) = (whole / 3600, whole / 60 % 60, whole % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
-    }
+    whole
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FileMeta, VideoMeta, format_in, format_local, format_motion, format_time, read};
+    use super::{FileMeta, VideoMeta, format_in, format_local, format_motion, read, whole_seconds};
     use image::RgbImage;
+    use tuilibr::time::{LengthStyle, media_length};
 
     #[test]
     fn format_in_pads_and_matches_the_old_text() {
@@ -330,9 +334,10 @@ mod tests {
 
     #[test]
     fn time_gets_hours_from_one_hour() {
-        assert_eq!(format_time(59.9), "00:59");
-        assert_eq!(format_time(3725.0), "1:02:05");
-        assert_eq!(format_time(-1.0), "00:00");
+        let padded = |seconds| media_length(whole_seconds(seconds), LengthStyle::Padded);
+        assert_eq!(padded(59.9), "00:59");
+        assert_eq!(padded(3725.0), "1:02:05");
+        assert_eq!(padded(-1.0), "00:00");
     }
 
     #[test]

@@ -18,23 +18,26 @@ use std::time::Instant;
 use tuilibr::pictures::decode::color;
 use tuilibr::pictures::kitty::KittyBackend;
 use tuilibr::pictures::kitty::Transfer;
+use tuilibr::pictures::motion::decoder::{Decoder, SystemDecoder};
 
 /// The real ffmpeg and a decoder with the real ffprobe, or `None` with a note.
-fn video_programs(label: &str) -> Option<(PathBuf, crate::player::SystemDecoder)> {
+fn video_programs(label: &str) -> Option<(PathBuf, SystemDecoder)> {
     let tools = crate::video::Tools::find(std::env::var_os("PATH").as_deref());
     let (Some(ffmpeg), Some(ffprobe)) = (tools.ffmpeg, tools.ffprobe) else {
         report(&format!("{label}: no ffmpeg or ffprobe on PATH"));
         return None;
     };
-    Some((ffmpeg, crate::player::SystemDecoder::new(Some(ffprobe))))
+    Some((ffmpeg, SystemDecoder::new(Some(ffprobe))))
 }
 
 /// The decode side of the terminal player: ffmpeg frames into a sink at two frame boxes.
 #[test]
 #[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn player_decode_rate() {
-    use crate::player::{Decoder, Pipeline, VideoInfo, frame_box};
     use std::sync::mpsc::TryRecvError;
+    use tuilibr::pictures::motion::decoder::{Pipeline, args, cube_for, pixel_format};
+    use tuilibr::pictures::motion::frame_box::frame_box;
+    use tuilibr::pictures::motion::probe::VideoInfo;
 
     const FRAMES: usize = 300;
 
@@ -57,7 +60,7 @@ fn player_decode_rate() {
     };
     let info: VideoInfo = decoder.probe(video).unwrap();
     let cache = tempfile::tempdir().unwrap();
-    let cube = crate::player::cube_for(&info, color::target(), &[cache.path()]);
+    let cube = cube_for(&info, color::target(), &[cache.path()]);
     report(&format!(
         "terminal player: {} {}x{} {:.2} fps, hdr {:?}, rotation {}",
         video.file_name().unwrap().to_string_lossy(),
@@ -69,10 +72,10 @@ fn player_decode_rate() {
     ));
     for limit in [(1280, 720), (1920, 1080)] {
         let frame = frame_box((info.width, info.height), limit);
-        let args = crate::player::args(video, &info, frame, cube.as_deref(), 0.0, Pipeline::Gpu);
-        let bytes = frame.0 as usize * frame.1 as usize * crate::player::pixel_format(&info).1;
+        let args = args(video, &info, frame, cube.as_deref(), 0.0, Pipeline::Gpu);
+        let bytes = frame.0 as usize * frame.1 as usize * pixel_format(&info).1;
         let start = Instant::now();
-        let mut stream = decoder.start(&ffmpeg, &args, bytes).unwrap();
+        let stream = decoder.start(&ffmpeg, &args, bytes).unwrap();
         let mut first = None;
         let mut frames = 0;
         while frames < FRAMES {
@@ -138,7 +141,7 @@ fn player_realtime() {
     let cache = tempfile::tempdir().unwrap();
     app.enter_video(index);
     app.image_rect = fullscreen_rect();
-    let limit = crate::player::frame_limit(fullscreen_rect(), CELL_PX);
+    let limit = tuilibr::pictures::motion::frame_box::frame_limit(fullscreen_rect(), CELL_PX);
     let player = Player::open(
         Rc::new(decoder),
         &ffmpeg,
@@ -211,7 +214,6 @@ fn report_video_frame_write(app: &App, frames: usize, file_bytes: u64) {
 #[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn player_first_frame_after_enter() {
     use crate::config::VideoPlayer;
-    use crate::player::Decoder;
     use crate::run_loop::LoopState;
     use std::rc::Rc;
 
@@ -464,7 +466,7 @@ fn animation_open() {
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap()
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| crate::player::is_animated(path))
+        .filter(|path| tuilibr::pictures::motion::animation::is_animated(path))
         .collect();
     files.sort();
     if files.is_empty() {
@@ -473,10 +475,10 @@ fn animation_open() {
     for path in files {
         let size = std::fs::metadata(&path).map_or(0, |meta| meta.len());
         let start = Instant::now();
-        assert!(crate::player::is_animated(&path));
+        assert!(tuilibr::pictures::motion::animation::is_animated(&path));
         let check = start.elapsed();
         let start = Instant::now();
-        let info = crate::player::Decoder::probe(&decoder, &path).unwrap();
+        let info = Decoder::probe(&decoder, &path).unwrap();
         let probe = start.elapsed();
         report(&format!(
             "animation open {}: {} MB, header check {:.2} ms, probe {:.1} ms, {:.1} fps, {:.2} s",
@@ -519,17 +521,18 @@ fn probe_and_first_frame() {
     for path in files {
         // The probe without the cache of the session, as at the first open of a video.
         let start = Instant::now();
-        let info = crate::player::probe_file(&ffprobe, &path).unwrap();
+        let info = tuilibr::pictures::motion::probe::probe(&ffprobe, &path).unwrap();
         let probe = start.elapsed();
         // The thumbnail job: the probe misses the cache and fills it.
         let start = Instant::now();
-        let frame =
-            crate::video::decode_first_frame(&decoder, &ffmpeg, &path, target, &cube_dirs, wait)
-                .unwrap();
+        let frame = tuilibr::pictures::motion::first_frame::decode_first_frame(
+            &decoder, &ffmpeg, &path, target, &cube_dirs, wait,
+        )
+        .unwrap();
         let first = start.elapsed();
         // The probe of `Player::open` after the thumbnail: a cache hit.
         let start = Instant::now();
-        crate::player::Decoder::probe(&decoder, &path).unwrap();
+        Decoder::probe(&decoder, &path).unwrap();
         let cached = start.elapsed();
         report(&format!(
             "video {}: probe {:.1} ms, first frame {:.1} ms (probe included), probe after \

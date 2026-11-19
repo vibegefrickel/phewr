@@ -214,7 +214,7 @@ fn video_picture(app: &App) -> Rect {
     let Some(frame) = frame else {
         return app.image_rect;
     };
-    crate::player::cell_box(frame, app.image_rect, app.cell_px)
+    tuilibr::pictures::motion::frame_box::cell_box(frame, app.image_rect, app.cell_px)
 }
 
 #[cfg(test)]

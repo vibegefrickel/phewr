@@ -1,31 +1,21 @@
-//! The first frame of a video for the grid thumbnails, the video extensions and the lookup of
-//! the `ffmpeg` and `ffprobe` programs.
+//! The lookup of the `ffmpeg` and `ffprobe` programs, and the first frame and the grid loop
+//! with the programs of the session.
 //!
 //! phewr links no `FFmpeg` library. It starts the programs when PATH has them. Without them, a
-//! video cell keeps its play icon, and a video opens in the mpv window.
+//! video cell keeps its play icon, and a video opens in the mpv window. The decode code is in
+//! `tuilibr::pictures::motion`.
 
-use crate::player::{
-    Decoder, SystemDecoder, VideoInfo, cube_for, first_frame_args, frame_box, with_fallback,
-};
 use crate::yazi::find_on_path;
 use image::RgbaImage;
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::mpsc::RecvTimeoutError;
-use std::time::Duration;
-use tuilibr::pictures::decode::color::{self, ColorTarget};
+use std::sync::atomic::AtomicBool;
+use tuilibr::pictures::motion::first_frame::first_frame_of;
+use tuilibr::pictures::motion::loop_frames::{LoopFrames, loop_of};
 
-/// The longest wait for a thumbnail's first frame and for each grid loop frame. A 4K HLG clip
-/// takes about 240 ms. A file that hangs ffmpeg must not hold a thumbnail slot for longer.
-pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
-
-pub(crate) fn is_video(path: &Path) -> bool {
-    tuilibr::pictures::decode::extensions::has_extension(path, crate::scanner::VIDEO_EXTENSIONS)
-}
-
-/// `None` when PATH has no such program.
+/// `None` when PATH has no such program. `file_meta` runs ffprobe without ffmpeg.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Tools {
     pub(crate) ffmpeg: Option<PathBuf>,
@@ -39,6 +29,20 @@ impl Tools {
             ffmpeg: find_on_path("ffmpeg", path),
             ffprobe: find_on_path("ffprobe", path),
         }
+    }
+
+    /// Without one of the programs, the error is `NotFound` and no process starts.
+    fn motion(&self) -> io::Result<tuilibr::pictures::motion::Tools> {
+        let (Some(ffmpeg), Some(ffprobe)) = (&self.ffmpeg, &self.ffprobe) else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "ffmpeg or ffprobe not found on PATH",
+            ));
+        };
+        Ok(tuilibr::pictures::motion::Tools {
+            ffmpeg: ffmpeg.clone(),
+            ffprobe: ffprobe.clone(),
+        })
     }
 }
 
@@ -60,125 +64,81 @@ pub(crate) fn session_tools() -> &'static Tools {
     SESSION_TOOLS.get().unwrap_or(&NO_TOOLS)
 }
 
-/// `cache_dir`, else `$TMPDIR/phewr`.
-pub(crate) struct CubeDirs([PathBuf; 2]);
-
-impl CubeDirs {
-    pub(crate) fn paths(&self) -> [&Path; 2] {
-        [self.0[0].as_path(), self.0[1].as_path()]
-    }
-}
-
-pub(crate) fn cube_dirs(cache_dir: &Path) -> CubeDirs {
-    CubeDirs([cache_dir.to_path_buf(), std::env::temp_dir().join("phewr")])
-}
-
-/// Without one of the session programs, the error is `NotFound` and no process starts.
-pub(crate) fn session_decoder() -> io::Result<(&'static Path, SystemDecoder)> {
-    decoder_of(session_tools())
-}
-
-/// The twin of [`session_decoder`] for any `tools`: a test reaches the path with both programs.
-fn decoder_of(tools: &Tools) -> io::Result<(&Path, SystemDecoder)> {
-    let (Some(ffmpeg), Some(_)) = (tools.ffmpeg.as_deref(), tools.ffprobe.as_ref()) else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "ffmpeg or ffprobe not found on PATH",
-        ));
-    };
-    Ok((ffmpeg, SystemDecoder::new(tools.ffprobe.clone())))
-}
-
 /// The first frame of `path` for a grid thumbnail, with the programs of the session.
 pub(crate) fn session_first_frame(
     path: &Path,
     target: (u32, u32),
     cache_dir: &Path,
 ) -> io::Result<RgbaImage> {
-    first_frame_of(session_tools(), path, target, cache_dir)
+    first_frame_of(&session_tools().motion()?, path, target, cache_dir)
 }
 
-fn first_frame_of(
-    tools: &Tools,
+/// The grid loop of `path`, with the programs of the session.
+pub(crate) fn session_loop(
     path: &Path,
     target: (u32, u32),
     cache_dir: &Path,
-) -> io::Result<RgbaImage> {
-    let (ffmpeg, decoder) = decoder_of(tools)?;
-    decode_first_frame(
-        &decoder,
-        ffmpeg,
-        path,
-        target,
-        &cube_dirs(cache_dir).paths(),
-        FIRST_FRAME_TIMEOUT,
-    )
-}
-
-/// Only an HLG or PQ first frame gets a cube. ffmpeg parses a cube at each start (about 16 ms
-/// for an SDR cube), and the conversion of one small SDR frame costs well below 1 ms.
-pub(crate) fn first_frame_cube(
-    info: &VideoInfo,
-    target: ColorTarget,
-    dirs: &[&Path],
-) -> Option<PathBuf> {
-    info.hdr.and_then(|_| cube_for(info, target, dirs))
-}
-
-/// An SDR frame converts as a still image. An HDR frame left ffmpeg in the target already.
-pub(crate) fn convert_first_frame(
-    image: RgbaImage,
-    info: &VideoInfo,
-    target: ColorTarget,
-) -> RgbaImage {
-    if info.hdr.is_some() {
-        image
-    } else {
-        color::convert(
-            image,
-            &info.primaries.source_color(),
-            target,
-            tuilibr::pictures::decode::hdr::Peak::DEFAULT,
-        )
-    }
-}
-
-/// The first frame of `path`, fitted into `target` pixels, for a grid thumbnail.
-///
-/// ffmpeg runs the filter chain of the terminal player, with its software retry. A run
-/// without a frame after `timeout` is killed, and the error is `TimedOut`.
-pub(crate) fn decode_first_frame(
-    decoder: &dyn Decoder,
-    ffmpeg: &Path,
-    path: &Path,
-    target: (u32, u32),
-    cube_dirs: &[&Path],
-    timeout: Duration,
-) -> io::Result<RgbaImage> {
-    let info = decoder.probe(path)?;
-    let frame = frame_box((info.width, info.height), target);
-    let color_target = color::target();
-    let cube = first_frame_cube(&info, color_target, cube_dirs);
-    let frame_bytes = frame.0 as usize * frame.1 as usize * 4;
-    let pixels = with_fallback(decoder, path, &info, |pipeline| {
-        let args = first_frame_args(path, &info, frame, cube.as_deref(), pipeline);
-        // The drop of the stream kills ffmpeg after a timeout.
-        match decoder
-            .start(ffmpeg, &args, frame_bytes)?
-            .wait_next(timeout)
-        {
-            Ok(pixels) => Ok(Some(pixels)),
-            Err(RecvTimeoutError::Timeout) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "ffmpeg gave no frame in time",
-            )),
-            Err(RecvTimeoutError::Disconnected) => Ok(None),
-        }
-    })?;
-    RgbaImage::from_raw(frame.0, frame.1, pixels)
-        .map(|image| convert_first_frame(image, &info, color_target))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid frame"))
+    cancel: &AtomicBool,
+) -> io::Result<LoopFrames> {
+    loop_of(&session_tools().motion()?, path, target, cache_dir, cancel)
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::{Tools, session_first_frame};
+    use std::ffi::OsString;
+    use std::path::Path;
+    use tuilibr::pictures::motion::first_frame::first_frame_of;
+
+    #[test]
+    fn lookup_finds_tools_on_path() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["ffmpeg", "ffprobe"] {
+            let program = dir.path().join(name);
+            std::fs::write(&program, "#!/bin/sh\n").unwrap();
+            let mut permissions = std::fs::metadata(&program).unwrap().permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+            std::fs::set_permissions(&program, permissions).unwrap();
+        }
+        let path = OsString::from(dir.path());
+        let tools = Tools::find(Some(&path));
+        assert_eq!(tools.ffmpeg, Some(dir.path().join("ffmpeg")));
+        assert_eq!(tools.ffprobe, Some(dir.path().join("ffprobe")));
+        assert_eq!(Tools::find(None), Tools::default());
+    }
+
+    #[test]
+    fn no_session_lookup_starts_nothing() {
+        let error = session_first_frame(Path::new("clip.mp4"), (32, 24), Path::new("/dev/null"))
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// Fake paths that hold no program: the probe fails to start, and no ffmpeg runs.
+    #[test]
+    fn tools_reach_the_decoder() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = Tools {
+            ffmpeg: Some(dir.path().join("ffmpeg")),
+            ffprobe: Some(dir.path().join("ffprobe")),
+        };
+        let motion = tools.motion().unwrap();
+        assert_eq!(motion.ffmpeg, dir.path().join("ffmpeg"));
+        assert_eq!(motion.ffprobe, dir.path().join("ffprobe"));
+        let missing = Tools {
+            ffprobe: None,
+            ..tools
+        };
+        let missing_error = missing.motion().unwrap_err();
+        assert_eq!(missing_error.kind(), std::io::ErrorKind::NotFound);
+
+        let clip = dir.path().join("clip.mp4");
+        std::fs::write(&clip, b"no video").unwrap();
+        let error = first_frame_of(&motion, &clip, (32, 24), dir.path()).unwrap_err();
+        assert_ne!(
+            error.to_string(),
+            missing_error.to_string(),
+            "the tools pass the lookup"
+        );
+    }
+}

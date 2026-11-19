@@ -1,9 +1,5 @@
-//! The folder and the loop files of the disk cache. The thumbnail part of the disk cache lives in
-//! `tuilibr::pictures::jobs::disk_cache`.
-
-mod loop_file;
-
-pub(super) use self::loop_file::{try_load_loop, try_save_loop};
+//! The folder of the disk cache. The thumbnail part of the disk cache lives in
+//! `tuilibr::pictures::jobs::disk_cache`, the loop files in `tuilibr::pictures::motion::loop_file`.
 
 use directories::ProjectDirs;
 use std::path::PathBuf;

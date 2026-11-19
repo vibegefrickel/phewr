@@ -99,7 +99,7 @@ fn fullscreen_rect() -> Rect {
 
 #[cfg(feature = "video")]
 fn is_video(path: &Path) -> bool {
-    crate::video::is_video(path)
+    tuilibr::pictures::motion::first_frame::is_video(path)
 }
 
 #[cfg(not(feature = "video"))]
@@ -109,7 +109,7 @@ fn is_video(_path: &Path) -> bool {
 
 #[cfg(feature = "video")]
 fn is_animated(path: &Path) -> bool {
-    crate::player::is_animated(path)
+    tuilibr::pictures::motion::animation::is_animated(path)
 }
 
 #[cfg(not(feature = "video"))]

@@ -22,4 +22,4 @@ flate2 = "flate2"
 clli = "clli"
 
 [files]
-extend-exclude = ["tests/fixtures/**", "Cargo.lock", "target/**"]
+extend-exclude = ["Cargo.lock", "target/**"]

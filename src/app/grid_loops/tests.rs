@@ -96,13 +96,18 @@ fn warm_folder_reads_loops_from_cache() {
     let mut app = grid_app(dir.path(), &["clip.mp4"], &Config::default());
     let target =
         tuilibr::pictures::resize::padding::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
-    let frames = super::LoopFrames {
+    let frames = tuilibr::pictures::motion::loop_frames::LoopFrames {
         frames: vec![RgbaImage::new(80, 48), RgbaImage::new(80, 48)],
         delays: vec![Duration::from_millis(333); 2],
         shown: (160, 96),
     };
-    crate::app::disk_cache::try_save_loop(&app.disk_cache_dir, &app.images[0], target, &frames)
-        .unwrap();
+    tuilibr::pictures::motion::loop_file::try_save_loop(
+        &app.disk_cache_dir,
+        &app.images[0],
+        target,
+        &frames,
+    )
+    .unwrap();
 
     app.poll_grid_loops();
     finish_jobs(&mut app);
@@ -134,13 +139,19 @@ fn live_still_loops_its_motion() {
     assert_eq!(app.loop_source(0), Some(motion.clone()));
     let target =
         tuilibr::pictures::resize::padding::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
-    let frames = super::LoopFrames {
+    let frames = tuilibr::pictures::motion::loop_frames::LoopFrames {
         frames: vec![RgbaImage::new(80, 48); 3],
         delays: vec![Duration::from_millis(333); 3],
         shown: (160, 96),
     };
     // The loop of the motion sits in the cache under the path of the motion.
-    crate::app::disk_cache::try_save_loop(&app.disk_cache_dir, &motion, target, &frames).unwrap();
+    tuilibr::pictures::motion::loop_file::try_save_loop(
+        &app.disk_cache_dir,
+        &motion,
+        target,
+        &frames,
+    )
+    .unwrap();
 
     app.poll_grid_loops();
     assert!(app.grid_loops_pending(), "the still gets a loop job");
@@ -317,8 +328,8 @@ fn stills_and_other_views_cancel_jobs() {
     });
 }
 
-/// The job with the fake ffmpeg of the `grid_loop` tests. Without a queued run, ffmpeg gives no
-/// frame, and the decode waits until the cancel.
+/// The job with the fake ffmpeg of the `loop_frames` tests of tuilibr. Without a queued run,
+/// ffmpeg gives no frame, and the decode waits until the cancel.
 #[cfg(feature = "video")]
 #[test]
 fn quit_ends_running_ffmpeg() {
@@ -333,7 +344,7 @@ fn quit_ends_running_ffmpeg() {
     let (tx, rx) = mpsc::channel();
     let job = std::thread::spawn(move || {
         let decoder = fake_decoder(clip_info());
-        let result = crate::grid_loop::decode_loop(
+        let result = tuilibr::pictures::motion::loop_frames::decode_loop(
             decoder.as_ref(),
             Path::new("ffmpeg"),
             Path::new("clip.mp4"),
@@ -433,10 +444,15 @@ fn same_screen_keeps_hidden_list() {
     );
 }
 
+/// A range of 9 ids: the allocator wraps once, skips the live loop, the other loop and the
+/// stale id, and finds the last free run. The allocator itself has its tests in tuilibr.
 #[test]
 fn wrapped_ids_skip_live_loops() {
     use tuilibr::pictures::kitty::Loops;
+    use tuilibr::pictures::motion::loop_ids::LoopIds;
     let mut loops = super::GridLoops::new(true);
+    let base = super::LOOP_ID_BASE;
+    loops.ids = LoopIds::new(base..base + 9);
     let delays = [Duration::from_millis(100); 3];
     loops.insert(
         0,
@@ -447,23 +463,14 @@ fn wrapped_ids_skip_live_loops() {
     let live = loops.loops[&0].ids.clone();
     loops.insert(1, vec![picture()], &delays[..1], Loops::Ticks);
     loops.stale_ids.push(live[live.len() - 1] + 2);
-    // `MAX - 2` overflows the sum and wraps to the base, onto the live loop. `MAX - 3` ends on
-    // `MAX`, which the filter refuses because `MAX - 1` is the video frame.
-    for (index, start) in [(2, u32::MAX - 2), (3, u32::MAX - 3)] {
-        loops.next_id = start;
-        let frames = vec![picture(), picture(), picture()];
-        loops.insert(index, frames, &delays, Loops::Ticks);
-        let fresh = &loops.loops[&index].ids;
-        assert!(
-            fresh
-                .iter()
-                .all(|id| *id >= super::LOOP_ID_BASE && *id < u32::MAX - 1)
-        );
-        for id in fresh {
-            assert!(!live.contains(id), "id {id} belongs to a live loop");
-            assert!(!loops.loops[&1].ids.contains(id));
-            assert!(!loops.stale_ids.contains(id));
-        }
+    let frames = vec![picture(), picture(), picture()];
+    loops.insert(2, frames, &delays, Loops::Ticks);
+    let fresh = &loops.loops[&2].ids;
+    assert_eq!(fresh, &[base + 6, base + 7, base + 8]);
+    for id in fresh {
+        assert!(!live.contains(id), "id {id} belongs to a live loop");
+        assert!(!loops.loops[&1].ids.contains(id));
+        assert!(!loops.stale_ids.contains(id));
     }
 }
 
@@ -473,10 +480,10 @@ fn wrapped_ids_skip_live_loops() {
 #[test]
 #[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe"]
 fn real_live_still_loops_its_motion() {
-    use crate::player::SystemDecoder;
     use crate::test_support::live::{index_of, real_live_dir, scanned_app};
     use crate::test_support::video::{real_ffmpeg, real_ffprobe};
     use std::sync::atomic::AtomicBool;
+    use tuilibr::pictures::motion::decoder::SystemDecoder;
     let (Some(dir), Some(ffmpeg), Some(ffprobe)) = (real_live_dir(), real_ffmpeg(), real_ffprobe())
     else {
         return;
@@ -492,7 +499,7 @@ fn real_live_still_loops_its_motion() {
 
     let decoder = SystemDecoder::new(Some(ffprobe));
     let start = std::time::Instant::now();
-    let frames = crate::grid_loop::decode_loop(
+    let frames = tuilibr::pictures::motion::loop_frames::decode_loop(
         &decoder,
         &ffmpeg,
         &motion,
@@ -507,7 +514,13 @@ fn real_live_still_loops_its_motion() {
         frames.frames[0].dimensions(),
         start.elapsed()
     );
-    crate::app::disk_cache::try_save_loop(&app.disk_cache_dir, &motion, target, &frames).unwrap();
+    tuilibr::pictures::motion::loop_file::try_save_loop(
+        &app.disk_cache_dir,
+        &motion,
+        target,
+        &frames,
+    )
+    .unwrap();
     app.thumb_cache.insert(
         still,
         pad_for_grid(

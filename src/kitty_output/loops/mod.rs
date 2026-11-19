@@ -1,14 +1,13 @@
-//! The grid loops of the video and animated cells: the transfer of the frames or of the Kitty
-//! animation, and the loop frame that a cell shows at a tick. The frame engine swaps the
-//! placements.
+//! The grid loops of the video and animated cells: the grid order and the budget of the
+//! transfers. The per-frame write is in `tuilibr::pictures::kitty::loops`. The frame engine swaps
+//! the placements.
 
 use super::grid::{GridPass, grid_placement, visible_image_ids, write_grid_to};
 use crate::app::App;
 use std::io::{self, Write};
 use std::time::Instant;
-use tuilibr::pictures::kitty;
 use tuilibr::pictures::kitty::EMIT_PASS_BYTES;
-use tuilibr::pictures::kitty::protocol;
+use tuilibr::pictures::kitty::loops;
 use tuilibr::pictures::kitty::screen::{Placements, Update};
 
 /// Put the loop frame of `img_idx` at `tick` into `frame` when the terminal stores every frame
@@ -23,26 +22,10 @@ pub(super) fn place_loop_frame(
 ) -> Option<bool> {
     let shown = app.grid_loops_shown();
     let cell_loop = app.grid_loops.loops.get_mut(&img_idx)?;
-    for &id in &cell_loop.ids {
-        frame.keep(id);
-    }
-    // A running loop needs only its frame of this tick. A lost frame breaks the loop: the cell
-    // shows its still, and the loop goes out again.
-    let started = cell_loop.placed.is_none();
-    let stored = if started {
-        cell_loop.ids.iter().all(|&id| app.screen.stores(id))
-    } else {
-        app.screen.stores(cell_loop.id_at(tick))
-    };
-    if !shown || !stored {
-        cell_loop.placed = None;
-        return None;
-    }
-    cell_loop.start_at(tick);
-    let id = cell_loop.id_at(tick);
-    cell_loop.placed = Some(id);
-    frame.place(id, grid_placement(&app.gallery, vis_idx, cell_loop.cells()));
-    Some(started)
+    let gallery = &app.gallery;
+    loops::place_loop_frame(cell_loop, &app.screen, frame, shown, tick, |cells| {
+        grid_placement(gallery, vis_idx, cells)
+    })
 }
 
 /// Write the new loops at `now`, then the due frames. Returns `true` when a cell started its
@@ -134,62 +117,7 @@ fn transmit_loop_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::
     let Some(cell_loop) = app.grid_loops.loops.get(&img_idx) else {
         return Ok(());
     };
-    if cell_loop.animation {
-        return transmit_animation_to(app, out, img_idx);
-    }
-    for (frame, &id) in cell_loop.frames.iter().zip(&cell_loop.ids) {
-        if app.screen.stores(id) {
-            continue;
-        }
-        app.graphics.transmit(
-            out,
-            (&frame.image).into(),
-            &kitty::DisplayOptions {
-                id: Some(id),
-                placement: None,
-                cell_box: None,
-                columns: None,
-                rows: None,
-                below_backgrounds: false,
-                transmit_only: true,
-                transient: true,
-            },
-        )?;
-        app.screen.record(id, frame.image.as_raw().len());
-    }
-    Ok(())
-}
-
-/// Send the loop of `img_idx` as one Kitty animation under one id: the root image (`a=t`), each
-/// further frame with its gap (`a=f`), then the endless run (`a=a`).
-fn transmit_animation_to(app: &mut App, out: &mut impl Write, img_idx: usize) -> io::Result<()> {
-    let Some(cell_loop) = app.grid_loops.loops.get(&img_idx) else {
-        return Ok(());
-    };
-    let (Some(&id), Some(root)) = (cell_loop.ids.first(), cell_loop.frames.first()) else {
-        return Ok(());
-    };
-    app.graphics.transmit(
-        out,
-        (&root.image).into(),
-        &kitty::DisplayOptions {
-            id: Some(id),
-            placement: None,
-            cell_box: None,
-            columns: None,
-            rows: None,
-            below_backgrounds: false,
-            transmit_only: true,
-            transient: true,
-        },
-    )?;
-    for (frame, picture) in cell_loop.frames.iter().enumerate().skip(1) {
-        app.graphics
-            .transmit_frame(out, (&picture.image).into(), id, cell_loop.gap_ms(frame))?;
-    }
-    protocol::animate_to(out, id, cell_loop.gap_ms(0))?;
-    app.screen.record(id, cell_loop.bytes());
-    Ok(())
+    loops::transmit_loop_to(app.graphics, &mut app.screen, out, cell_loop)
 }
 
 #[cfg(test)]

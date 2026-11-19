@@ -1,12 +1,13 @@
 //! The loop jobs: one thread per cell reads the disk cache or decodes the loop.
 
-use super::{LoopFrames, LoopOutcome, LoopResult};
-use crate::app::disk_cache::{try_load_loop, try_save_loop};
+use super::{LoopOutcome, LoopResult};
 use crate::app::{App, ViewMode};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, mpsc};
+use tuilibr::pictures::motion::loop_file::{try_load_loop, try_save_loop};
+use tuilibr::pictures::motion::loop_frames::LoopFrames;
 use tuilibr::pictures::resize::padding::{pad_loop_frame, thumb_target_px};
 
 /// As many as the thumbnail decodes. A job waits for ffmpeg most of the time and runs on a
@@ -176,7 +177,7 @@ fn loop_frames(
     if let Some(frames) = try_load_loop(cache_dir, path, target) {
         return Ok(frames);
     }
-    let frames = decode_loop(cache_dir, path, target, cancel)?;
+    let frames = decode_session_loop(cache_dir, path, target, cancel)?;
     #[expect(
         clippy::let_underscore_must_use,
         reason = "a loop that misses the disk cache decodes again on the next visit"
@@ -186,17 +187,17 @@ fn loop_frames(
 }
 
 #[cfg(feature = "video")]
-fn decode_loop(
+fn decode_session_loop(
     cache_dir: &Path,
     path: &Path,
     target: (u32, u32),
     cancel: &AtomicBool,
 ) -> io::Result<LoopFrames> {
-    crate::grid_loop::session_loop(path, target, cache_dir, cancel)
+    crate::video::session_loop(path, target, cache_dir, cancel)
 }
 
 #[cfg(not(feature = "video"))]
-fn decode_loop(
+fn decode_session_loop(
     _cache_dir: &Path,
     _path: &Path,
     _target: (u32, u32),

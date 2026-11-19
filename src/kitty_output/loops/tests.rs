@@ -78,7 +78,7 @@ fn place_stills(app: &mut App, terminal: &mut FakeTerminal) {
 /// Write the loops at `tick`. Returns the output and whether a loop started.
 fn play_at(app: &mut App, tick: u64) -> (String, bool) {
     let mut out = Vec::new();
-    let now = app.grid_loops.instant_of(tick);
+    let now = app.grid_loops.clock.instant_of(tick);
     let started = play_grid_loops_to(app, &mut out, now).unwrap().started;
     (text(&out), started)
 }
@@ -136,7 +136,7 @@ fn tick_swaps_placement_without_pixels() {
     assert!(terminal.black_cells.is_empty());
 
     // In the middle of a frame, nothing is due, and the pass writes nothing.
-    let now = app.grid_loops.instant_of(FRAME_TICKS + 3);
+    let now = app.grid_loops.clock.instant_of(FRAME_TICKS + 3);
     assert!(!app.loop_frames_due(now));
     assert!(!play_grid_loops(&mut app, now, &mut Vec::new()).unwrap());
     assert!(app.graphics_out.take_bytes().is_empty());
@@ -159,7 +159,7 @@ fn run_loop_pass_writes_graphics_output() {
     let ids = add_loop(&mut app, 1, 3);
     let mut pending = vec![99];
 
-    let now = app.grid_loops.instant_of(0);
+    let now = app.grid_loops.clock.instant_of(0);
     assert!(play_grid_loops(&mut app, now, &mut pending).unwrap());
     let written = text(&app.graphics_out.take_bytes());
     terminal.feed(written.as_bytes());
@@ -241,7 +241,7 @@ fn animation_needs_no_tick() {
     terminal.feed(play_at(&mut app, 0).0.as_bytes());
 
     for tick in [1, FRAME_TICKS, 3 * FRAME_TICKS + 1] {
-        let now = app.grid_loops.instant_of(tick);
+        let now = app.grid_loops.clock.instant_of(tick);
         assert!(!app.loop_frames_due(now), "tick {tick}");
         assert_eq!(app.grid_loop_timeout(now), None, "tick {tick}");
         assert!(!play_grid_loops(&mut app, now, &mut Vec::new()).unwrap());
@@ -432,11 +432,14 @@ fn new_animation_deletes_old_image() {
 #[test]
 fn run_loop_sleeps_until_next_frame() {
     let mut app = clip_app(3);
-    assert_eq!(app.grid_loop_timeout(app.grid_loops.instant_of(0)), None);
+    assert_eq!(
+        app.grid_loop_timeout(app.grid_loops.clock.instant_of(0)),
+        None
+    );
     add_loop(&mut app, 1, 3);
     play_at(&mut app, 0);
-    let timeout = app.grid_loop_timeout(app.grid_loops.instant_of(2));
-    let frame = app.grid_loops.instant_of(FRAME_TICKS) - app.grid_loops.instant_of(2);
+    let timeout = app.grid_loop_timeout(app.grid_loops.clock.instant_of(2));
+    let frame = app.grid_loops.clock.instant_of(FRAME_TICKS) - app.grid_loops.clock.instant_of(2);
     assert_eq!(timeout, Some(frame));
     assert!(crate::run_loop::next_timeout(&app, &[]) <= Duration::from_millis(334));
 
@@ -625,7 +628,10 @@ fn overlays_and_fullscreen_stop_loops() {
     assert!(text(&app.graphics_out.take_bytes()).contains("\x1b_Ga=d,d=A,"));
     assert!(!app.loop_plays(1));
     assert!(!app.loops_to_send());
-    assert_eq!(app.grid_loop_timeout(app.grid_loops.instant_of(1)), None);
+    assert_eq!(
+        app.grid_loop_timeout(app.grid_loops.clock.instant_of(1)),
+        None
+    );
     assert!(
         play_at(&mut app, FRAME_TICKS).0.is_empty(),
         "no frame above the popup"

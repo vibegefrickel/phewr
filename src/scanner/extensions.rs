@@ -11,7 +11,7 @@ use tuilibr::pictures::decode::extensions::SIPS_EXTENSIONS;
 use tuilibr::pictures::decode::extensions::{IMAGE_EXTENSIONS, has_extension};
 
 #[cfg(feature = "video")]
-pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
+use tuilibr::pictures::motion::first_frame::VIDEO_EXTENSIONS;
 
 pub(crate) fn is_supported(path: &Path) -> bool {
     let lists: &[&[&str]] = &[

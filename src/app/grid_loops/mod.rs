@@ -4,30 +4,19 @@
 //! paths ([`Loops`]) then plays the loop: one Kitty animation that the terminal plays, or one
 //! image per frame that a tick of the shared clock swaps.
 
-mod cell;
 mod jobs;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::cell::CellLoop;
-use self::cell::TICKS_PER_SECOND;
 use super::{App, ViewMode};
-use image::RgbaImage;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
 use tuilibr::pictures::kitty::Loops;
-
-/// The decoded frames of one loop, before the padding. The disk cache keeps them.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct LoopFrames {
-    pub(crate) frames: Vec<RgbaImage>,
-    pub(crate) delays: Vec<Duration>,
-    /// The pixel size of the still.
-    pub(crate) shown: (u32, u32),
-}
+use tuilibr::pictures::motion::clock::{CellLoop, LoopClock};
+use tuilibr::pictures::motion::loop_ids::LoopIds;
 
 /// The thumbnails count up from 1 and the video frame is `u32::MAX - 1`.
 const LOOP_ID_BASE: u32 = 1 << 31;
@@ -59,10 +48,11 @@ pub(crate) struct GridLoops {
     generation: u32,
     tx: mpsc::Sender<LoopResult>,
     rx: mpsc::Receiver<LoopResult>,
-    next_id: u32,
+    ids: LoopIds,
     /// The ids of the hidden loops. The next grid write deletes them.
     pub(crate) stale_ids: Vec<u32>,
-    epoch: Instant,
+    /// The shared clock of the tick path.
+    pub(crate) clock: LoopClock,
 }
 
 impl GridLoops {
@@ -78,23 +68,10 @@ impl GridLoops {
             generation: 0,
             tx,
             rx,
-            next_id: LOOP_ID_BASE,
+            ids: LoopIds::new(LOOP_ID_BASE..u32::MAX - 1),
             stale_ids: Vec::new(),
-            epoch: Instant::now(),
+            clock: LoopClock::starting_at(Instant::now()),
         }
-    }
-
-    pub(crate) fn tick_at(&self, now: Instant) -> u64 {
-        let ticks = now.saturating_duration_since(self.epoch).as_nanos()
-            * u128::from(TICKS_PER_SECOND)
-            / 1_000_000_000;
-        u64::try_from(ticks).unwrap_or(u64::MAX)
-    }
-
-    /// The time of `tick`, rounded up to the nanosecond: `tick_at` of it is `tick` again.
-    pub(crate) fn instant_of(&self, tick: u64) -> Instant {
-        let nanos = (u128::from(tick) * 1_000_000_000).div_ceil(u128::from(TICKS_PER_SECOND));
-        self.epoch + Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
     }
 
     /// Forget every placement after the terminal deleted them.
@@ -123,21 +100,13 @@ impl GridLoops {
     /// The first id of a free run of `count` ids. The run skips the ids of the loops in the map
     /// and of the loops that wait for their delete, which only matters after the counter wraps.
     fn allocate_ids(&mut self, count: u32) -> u32 {
-        loop {
-            let first = self.next_id;
-            let end = first.checked_add(count).filter(|end| *end < u32::MAX);
-            let Some(end) = end else {
-                self.next_id = LOOP_ID_BASE;
-                continue;
-            };
-            self.next_id = end;
-            let in_run = |id: &u32| (first..end).contains(id);
-            let used = self.loops.values().any(|cell| cell.ids.iter().any(in_run))
-                || self.stale_ids.iter().any(in_run);
-            if !used {
-                return first;
-            }
-        }
+        let (loops, stale_ids) = (&self.loops, &self.stale_ids);
+        self.ids.allocate(count, |run| {
+            loops
+                .values()
+                .any(|cell| cell.ids.iter().any(|id| run.contains(id)))
+                || stale_ids.iter().any(|id| run.contains(id))
+        })
     }
 
     /// The terminal budget has no room. The cell keeps its still.
@@ -202,7 +171,7 @@ impl App {
     }
 
     pub(crate) fn loop_frames_due(&self, now: Instant) -> bool {
-        let tick = self.grid_loops.tick_at(now);
+        let tick = self.grid_loops.clock.tick_at(now);
         self.grid_loops_shown()
             && self
                 .grid_loops
@@ -216,7 +185,7 @@ impl App {
         if !self.grid_loops_shown() {
             return None;
         }
-        let tick = self.grid_loops.tick_at(now);
+        let tick = self.grid_loops.clock.tick_at(now);
         self.grid_loops
             .loops
             .values()
@@ -225,6 +194,7 @@ impl App {
             .min()
             .map(|next| {
                 self.grid_loops
+                    .clock
                     .instant_of(next)
                     .saturating_duration_since(now)
             })

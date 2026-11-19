@@ -415,8 +415,8 @@ fn uses_terminal_defaults_and_ansi_roles() {
 #[test]
 #[cfg(feature = "video")]
 fn animated_still_carries_play_stamp() {
-    use crate::test_support::{fixture, module_fixture};
-    let anim = fixture("anim.gif");
+    use crate::test_support::module_fixture;
+    let anim = module_fixture("anim.gif");
     let still = module_fixture("still.gif");
     let mut app = app_with(&[anim.to_str().unwrap(), still.to_str().unwrap()]);
     app.filenames = vec!["anim.gif".to_owned(), "still.gif".to_owned()];

@@ -320,7 +320,7 @@ impl App {
     pub(crate) fn is_video(&self, index: usize) -> bool {
         self.images
             .get(index)
-            .is_some_and(|path| crate::video::is_video(path))
+            .is_some_and(|path| tuilibr::pictures::motion::first_frame::is_video(path))
     }
 
     /// True when a thumbnail job found an animated GIF, WebP, APNG or AVIS. The draw reads no file.
@@ -339,7 +339,7 @@ impl App {
     fn reads_as_animated(&self, index: usize) -> bool {
         self.images
             .get(index)
-            .is_some_and(|path| crate::player::is_animated(path))
+            .is_some_and(|path| tuilibr::pictures::motion::animation::is_animated(path))
     }
 
     /// True for each file that plays: a video, an animated image and a Live Photo still. Every
@@ -457,10 +457,10 @@ mod tests {
 
     #[test]
     fn animated_image_opens_in_player() {
-        use crate::test_support::{char_key, fixture, module_fixture, press};
+        use crate::test_support::{char_key, module_fixture, press};
         use crossterm::event::KeyCode;
         let still = module_fixture("still.gif");
-        let anim = fixture("anim.webp");
+        let anim = module_fixture("anim.webp");
         let mut app = app_with(&[still.to_str().unwrap(), anim.to_str().unwrap()]);
         assert!(!app.opens_in_player(0));
         assert!(

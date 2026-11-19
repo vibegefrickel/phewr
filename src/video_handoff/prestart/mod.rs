@@ -16,13 +16,14 @@
 
 use super::terminal_player_program;
 use crate::app::{App, ViewMode};
-use crate::player::{Player, frame_limit};
+use crate::player::Player;
 use crate::run_loop::LoopState;
-use crate::video::cube_dirs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
+use tuilibr::pictures::motion::first_frame::cube_dirs;
+use tuilibr::pictures::motion::frame_box::frame_limit;
 
 /// A key repeat moves the cursor every 30 ms to 50 ms. A scroll through the grid starts no
 /// ffmpeg.
@@ -84,8 +85,8 @@ pub(crate) fn prestart_timeout(app: &App, now: Instant) -> Option<Duration> {
     let prestart = &app.video_prestart;
     let rest = prestart.rest.as_ref()?;
     if prestart.tried.is_some()
-        || !(crate::video::is_video(&rest.path)
-            || crate::player::animation::has_animation_extension(&rest.path))
+        || !(tuilibr::pictures::motion::first_frame::is_video(&rest.path)
+            || tuilibr::pictures::motion::animation::has_animation_extension(&rest.path))
     {
         return None;
     }

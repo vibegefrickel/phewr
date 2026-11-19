@@ -343,10 +343,10 @@ fn real_mismatch_note() {
 #[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe, plays 2.8 s"]
 fn real_motion_plays_once() {
     use crate::config::Config;
-    use crate::player::{Decoder, SystemDecoder};
     use crate::test_support::live::{real_live_dir, scanned_app};
     use crate::test_support::video::{real_ffmpeg, real_ffprobe, state_with_decoder};
     use std::time::{Duration, Instant};
+    use tuilibr::pictures::motion::decoder::{Decoder, SystemDecoder};
     let (Some(dir), Some(ffmpeg), Some(ffprobe)) = (real_live_dir(), real_ffmpeg(), real_ffprobe())
     else {
         return;
@@ -399,10 +399,10 @@ fn real_motion_plays_once() {
 #[ignore = "needs PHEWR_TEST_LIVE_DIR, ffmpeg and ffprobe, runs about 30 s"]
 fn real_rest_starts_motion_ahead() {
     use crate::config::Config;
-    use crate::player::{Decoder, SystemDecoder};
     use crate::test_support::live::{real_live_dir, scanned_app};
     use crate::test_support::video::{real_ffmpeg, real_ffprobe, state_with_decoder};
     use std::time::Duration;
+    use tuilibr::pictures::motion::decoder::{Decoder, SystemDecoder};
     let (Some(dir), Some(ffmpeg), Some(ffprobe)) = (real_live_dir(), real_ffmpeg(), real_ffprobe())
     else {
         return;

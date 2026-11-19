@@ -95,7 +95,11 @@ pub(crate) fn render_video_frame_to(
         return Ok(false);
     };
     let pixels = frame.pixels();
-    let cells = crate::player::cell_box(pixels.dimensions(), app.image_rect, app.cell_px);
+    let cells = tuilibr::pictures::motion::frame_box::cell_box(
+        pixels.dimensions(),
+        app.image_rect,
+        app.cell_px,
+    );
     if cells.width == 0 || cells.height == 0 {
         return Ok(false);
     }

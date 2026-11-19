@@ -225,9 +225,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = live_app(dir.path());
         let motion = app.images[0].with_extension("mov");
-        crate::player::seed_probe(
+        tuilibr::pictures::motion::probe::seed_probe(
             &motion,
-            crate::player::VideoInfo {
+            tuilibr::pictures::motion::probe::VideoInfo {
                 duration: 2.83,
                 ..crate::test_support::video::clip_info()
             },

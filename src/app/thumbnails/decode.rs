@@ -2,8 +2,6 @@
 //! flag.
 
 use super::AnimationFlag;
-#[cfg(feature = "video")]
-use crate::player::{animation::has_animation_extension, is_animated};
 use image::RgbaImage;
 use std::io;
 use std::path::Path;
@@ -13,6 +11,8 @@ use tuilibr::pictures::decode::embedded_jpeg;
 #[cfg(feature = "heic")]
 use tuilibr::pictures::decode::libheif::{decode_heif_preview, decodes_with_libheif};
 use tuilibr::pictures::jobs::disk_cache::{CacheEntry, LazyEntry};
+#[cfg(feature = "video")]
+use tuilibr::pictures::motion::animation::{has_animation_extension, is_animated};
 use tuilibr::pictures::resize::load_and_resize_px;
 
 /// The animation flag of an animation format, `None` for the other formats.
@@ -60,7 +60,7 @@ static HEADER_READS: tuilibr::pictures::jobs::disk_cache::PathCounter =
 /// True for a video or an animated image: its still gets the play stamp.
 #[cfg(feature = "video")]
 pub(super) fn is_playable(path: &Path, animated: Option<bool>) -> bool {
-    crate::video::is_video(path) || animated == Some(true)
+    tuilibr::pictures::motion::first_frame::is_video(path) || animated == Some(true)
 }
 
 #[cfg(not(feature = "video"))]
@@ -135,7 +135,7 @@ pub(super) fn preview_or_cached(
 /// `cache_dir`.
 fn decode_thumbnail(cache_dir: &Path, path: &Path, target: (u32, u32)) -> io::Result<RgbaImage> {
     #[cfg(feature = "video")]
-    if crate::video::is_video(path) {
+    if tuilibr::pictures::motion::first_frame::is_video(path) {
         return crate::video::session_first_frame(path, target, cache_dir);
     }
     #[cfg(not(feature = "video"))]

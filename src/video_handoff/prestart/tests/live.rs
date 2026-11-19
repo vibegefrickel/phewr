@@ -3,7 +3,6 @@
 use super::FRAME;
 use crate::app::{App, ViewMode};
 use crate::config::VideoPlayer;
-use crate::player::frame_limit;
 use crate::run_loop::{LoopState, poll_background};
 use crate::test_support::live::{LIVE_ID, grid_on_still, select};
 use crate::test_support::video::{
@@ -19,6 +18,7 @@ use ratatui::layout::Rect;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use tuilibr::pictures::motion::frame_box::frame_limit;
 
 fn terminal(decoder: &Rc<FakeDecoder>) -> LoopState {
     state_with(VideoPlayer::Terminal, Rc::clone(decoder))

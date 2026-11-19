@@ -146,6 +146,8 @@ const FINISHED_GLYPH: &str = "\u{23f8}";
 /// The state, the name, the time and the position.
 #[cfg(feature = "video")]
 pub(super) fn video_bar(app: &App) -> BarParts {
+    use crate::file_meta::whole_seconds;
+    use tuilibr::time::{LengthStyle, media_length};
     let (glyph, position, duration) = match &app.video {
         Some(v) => {
             let glyph = if v.playing() {
@@ -160,8 +162,8 @@ pub(super) fn video_bar(app: &App) -> BarParts {
     let mut parts = vec![format!(
         "{glyph} {} {}/{} [{}/{}]",
         file_name(app),
-        crate::file_meta::format_time(position),
-        crate::file_meta::format_time(duration),
+        media_length(whole_seconds(position), LengthStyle::Padded),
+        media_length(whole_seconds(duration), LengthStyle::Padded),
         app.current + 1,
         app.images.len(),
     )];

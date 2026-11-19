@@ -339,7 +339,11 @@ fn video_row_shows_player_error() {
         ["FULLSCREEN", "\u{25b6} clip.mp4 00:00/1:02:05 [1/2]"],
         "{screen}"
     );
-    assert_eq!(crate::file_meta::format_time(65.9), "01:05");
+    let position = crate::file_meta::whole_seconds(65.9);
+    assert_eq!(
+        tuilibr::time::media_length(position, tuilibr::time::LengthStyle::Padded),
+        "01:05"
+    );
 
     decoder.end();
     assert!(

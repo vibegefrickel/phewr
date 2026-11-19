@@ -5,7 +5,6 @@ use crate::app::ViewMode;
 use crate::config::VideoPlayer;
 use crate::keys::fullscreen::handle_fullscreen_key;
 use crate::mpv;
-use crate::player::SystemDecoder;
 use crate::test_support::video::{
     FakeRunner, clip_info, fake_decoder, fake_runner, fullscreen_app_on_video,
     fullscreen_video_app, gallery_app_on_video, last_start, slideshow_video_app, starts,
@@ -14,6 +13,7 @@ use crate::test_support::video::{
 use crate::test_support::{char_key, press};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tuilibr::pictures::kitty::{KittyBackend, Transfer};
+use tuilibr::pictures::motion::decoder::SystemDecoder;
 
 const NAMES: &[&str] = &["a.jpg", "clip.mp4", "b.jpg"];
 
@@ -70,10 +70,10 @@ fn slideshow_plays_video_once() {
 #[test]
 fn slideshow_holds_animation() {
     use crate::test_support::video::{animation_info, with_temp_file_medium};
-    use crate::test_support::{app_with, fixture, module_fixture};
+    use crate::test_support::{app_with, module_fixture};
     let decoder = fake_decoder(animation_info());
     let still = module_fixture("still.png");
-    let anim = fixture("anim.gif");
+    let anim = module_fixture("anim.gif");
     let mut app =
         with_temp_file_medium(app_with(&[still.to_str().unwrap(), anim.to_str().unwrap()]));
     app.enter_fullscreen_at(0);
@@ -567,9 +567,9 @@ mod live;
 
 /// An app in the fullscreen view on the photo before an animation.
 fn app_before_animation() -> crate::app::App {
-    use crate::test_support::{app_with, fixture, module_fixture, video::with_temp_file_medium};
+    use crate::test_support::{app_with, module_fixture, video::with_temp_file_medium};
     let still = module_fixture("still.gif");
-    let anim = fixture("anim.webp");
+    let anim = module_fixture("anim.webp");
     let mut app =
         with_temp_file_medium(app_with(&[still.to_str().unwrap(), anim.to_str().unwrap()]));
     app.enter_fullscreen_at(0);

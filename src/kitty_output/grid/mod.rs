@@ -55,7 +55,7 @@ pub(super) fn write_grid_to<W: Write + ?Sized>(
     }
     deleted.extend(app.thumb_cache.take_evicted_ids());
     deleted.append(&mut app.grid_loops.stale_ids);
-    let tick = app.grid_loops.tick_at(now);
+    let tick = app.grid_loops.clock.tick_at(now);
     let (mut frame, stills, icon_cells, started) = grid_frame(app, tick, &mut deleted);
     app.screen.write_frame(
         update,

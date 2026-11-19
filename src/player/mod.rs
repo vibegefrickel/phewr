@@ -1,40 +1,23 @@
 //! The terminal video player.
 //!
-//! ffmpeg decodes small frames into a pipe ([`decoder`]). The player paces them at the frame
-//! rate of the video and hands the due frame to the Kitty write. The terminal scales the frame
-//! to the window with `c=` and `r=`.
+//! ffmpeg decodes small frames into a pipe (`tuilibr::pictures::motion::decoder`). The player
+//! paces them at the frame rate of the video and hands the due frame to the Kitty write. The
+//! terminal scales the frame to the window with `c=` and `r=`.
 //!
 //! The player keeps real time: a slow decode or a slow terminal drops frames, and a clip never
 //! plays in slow motion. It has no pause, no seek and no sound: `p` opens the video in the mpv
 //! window.
-
-pub(crate) mod animation;
-mod decoder;
-mod layout;
-mod probe;
-pub(crate) mod tone_map;
-
-pub(crate) use animation::is_animated;
-pub(crate) use decoder::{
-    Decoder, FrameStream, LoopSampling, Pipeline, PooledFrame, SystemDecoder, args, cube_for,
-    first_frame_args, loop_args, pixel_format, with_fallback,
-};
-pub(crate) use layout::{cell_box, frame_box, frame_limit};
-#[cfg(test)]
-pub(crate) use probe::Rate;
-#[cfg(test)]
-pub(crate) use probe::Samples;
-#[cfg(test)]
-pub(crate) use probe::probe as probe_file;
-#[cfg(test)]
-pub(crate) use probe::seed_probe;
-pub(crate) use probe::{VideoInfo, probe_cached, probe_peek};
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 use tuilibr::pictures::kitty::Pixels;
+use tuilibr::pictures::motion::decoder::{
+    Decoder, FrameStream, Pipeline, PooledFrame, args, cube_for, pixel_format,
+};
+use tuilibr::pictures::motion::frame_box::frame_box;
+use tuilibr::pictures::motion::probe::VideoInfo;
 
 const IDLE_POLL: Duration = Duration::from_millis(250);
 const DECODE_POLL: Duration = Duration::from_millis(10);
@@ -221,7 +204,7 @@ impl Player {
         }
         loop {
             if self.pending.is_none() {
-                match self.stream.as_mut().map(FrameStream::try_next_pooled) {
+                match self.stream.as_ref().map(FrameStream::try_next_pooled) {
                     Some(Ok(frame)) => self.pending = Some(frame),
                     Some(Err(TryRecvError::Empty)) => {
                         if !self.run.delivered
@@ -250,7 +233,7 @@ impl Player {
                 self.decoder.remember_software(&self.path);
             }
             if now > due + self.interval
-                && let Some(Ok(newer)) = self.stream.as_mut().map(FrameStream::try_next_pooled)
+                && let Some(Ok(newer)) = self.stream.as_ref().map(FrameStream::try_next_pooled)
             {
                 self.pending = Some(newer);
                 self.run.due_frames += 1;

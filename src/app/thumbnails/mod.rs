@@ -440,7 +440,7 @@ mod folder_switch_tests {
         let other = root.join("other");
         fs::create_dir(&other).unwrap();
         fs::copy(
-            crate::test_support::fixture("anim.gif"),
+            crate::test_support::module_fixture("anim.gif"),
             root.join("anim.gif"),
         )
         .unwrap();

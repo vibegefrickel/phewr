@@ -167,9 +167,6 @@ kamadak-exif = "0.6"
 # The tests and the benches name the types of libheif. The decode goes through tuilibr.
 libheif-rs = { version = "3", optional = true }
 lru = "0.19"
-# The color profiles of the tone map cubes of the player (`player/tone_map/`). `image` still uses
-# moxcms 0.8.
-moxcms = { version = "0.9.2", optional = true }
 nucleo-matcher = "0.3"
 ratatui = "0.30"
 rayon = "1.12"
@@ -177,7 +174,7 @@ rayon = "1.12"
 # No text, no fonts and no raster images: the icons are paths only.
 resvg = { version = "0.50", default-features = false }
 serde = { version = "1", features = ["derive"] }
-# The JSON output of `ffprobe`.
+# The JSON events of the mpv window (`--input-ipc-server`).
 serde_json = { version = "1", optional = true }
 toml = "1"
 # The shared parts of the apps (../tuilibr): the status row, the dialog boxes and the picture
@@ -207,9 +204,10 @@ turbo = ["tuilibr/turbo", "dep:turbojpeg"]
 heic = ["tuilibr/heic", "dep:libheif-rs"]
 # JPEG XL in pure Rust (jxl-oxide).
 jxl = ["tuilibr/jxl"]
-# Video playback and first-frame thumbnails through the `ffmpeg` and `ffprobe` programs on PATH,
-# and the mpv window. phewr links no FFmpeg library.
-video = ["dep:serde_json", "dep:moxcms"]
+# The terminal player, the grid loops and the first-frame thumbnails through the `ffmpeg` and
+# `ffprobe` programs on PATH (`tuilibr::pictures::motion`), and the mpv window. phewr links no
+# FFmpeg library.
+video = ["dep:serde_json"]
 # Camera RAW, PSD, PDF, SVG and the other ImageIO formats through macOS `/usr/bin/sips`. The
 # feature has no effect on other systems.
 sips = ["tuilibr/sips"]

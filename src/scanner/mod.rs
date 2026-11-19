@@ -4,8 +4,6 @@
 mod extensions;
 mod live;
 
-#[cfg(feature = "video")]
-pub(crate) use extensions::VIDEO_EXTENSIONS;
 pub(crate) use extensions::is_supported;
 pub(crate) use live::LivePhotos;
 #[cfg(feature = "video")]

@@ -1,10 +1,12 @@
 //! Tests of the pacing, the restart and the fallback of the terminal player.
 
-use super::{DECODE_POLL, Frame, IDLE_POLL, Player, VideoInfo};
+use super::{DECODE_POLL, Frame, IDLE_POLL, Player};
 use crate::test_support::video::{FakeDecoder, fake_decoder, info_of, shared};
 use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use tuilibr::pictures::motion::decoder::{Decoder, SystemDecoder};
+use tuilibr::pictures::motion::probe::VideoInfo;
 
 const FRAME: Duration = Duration::from_millis(100);
 
@@ -357,7 +359,7 @@ fn animation_decodes_in_software() {
 #[test]
 fn variable_rate_paces_at_output_rate() {
     let decoder = fake_decoder(VideoInfo {
-        rate: super::Rate::Variable,
+        rate: tuilibr::pictures::motion::probe::Rate::Variable,
         ..info_of(640, 480, 20.0)
     });
     let mut player = player(&decoder, true);
@@ -423,8 +425,7 @@ fn play_to_end(
     path: &Path,
     real_clock: bool,
 ) -> (Player, u32, f64) {
-    let decoder: Rc<dyn super::Decoder> =
-        Rc::new(super::SystemDecoder::new(Some(ffprobe.to_path_buf())));
+    let decoder: Rc<dyn Decoder> = Rc::new(SystemDecoder::new(Some(ffprobe.to_path_buf())));
     let mut player = Player::open(decoder, program, path, (32, 24), &[], false).unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut clock = Instant::now();
