@@ -73,10 +73,11 @@ The repository pins the toolchain, the formatter and the lints:
   In `just check`, every warning is an error through `CARGO_BUILD_WARNINGS=deny` in the recipes
   (no `-D warnings` flag, so the build cache stays). phewr is a binary crate: `missing_docs` and
   `missing_debug_implementations` find nothing, and there is no doctest step.
-- `just audit` (part of `check` since 2026-11-19): `taplo fmt --check` with
-  `.taplo.toml`, `just --fmt --check --unstable`, `shellcheck` and `shfmt` on the `make.sh`
-  scripts, `typos` with `_typos.toml`, `cargo shear`. The tools: `brew install taplo shellcheck
-  shfmt typos-cli cargo-shear cargo-insta`. A missing tool fails the recipe with its brew line.
+- `just audit` (part of `check` since 2026-11-19, one text in all five repositories): `taplo fmt
+  --check` with `.taplo.toml`, `just --fmt --check --unstable`, `typos` with `_typos.toml`, `cargo
+  shear`, `shellcheck` and `shfmt` on every tracked `*.sh`, and `cargo insta test` only in a
+  repository that uses insta (phewr does not). The tools come from the Brewfile of the dotfiles
+  (`scripts/Brewfile`). A missing tool fails with "command not found".
 - `clippy.toml`: the thresholds.
 - `deny.toml`: licenses, advisories, duplicate versions, git sources.
 - `rust-analyzer.toml`: clippy as the checker of the editor, its own target directory.
