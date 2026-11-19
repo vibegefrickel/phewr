@@ -2637,6 +2637,7 @@ dependencies = [
  "crossterm",
  "fast_image_resize",
  "image",
+ "jiff",
  "jxl-oxide",
  "jxl-render",
  "kamadak-exif",
