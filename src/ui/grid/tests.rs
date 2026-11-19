@@ -5,7 +5,7 @@ use crate::styles::STYLES;
 use crate::test_support::folder_app;
 use crate::ui::tests::{
     app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows, assert_symbol,
-    assert_terminal_background, cell_of, render, render_buffer, screen_rows, status_row,
+    assert_terminal_background, cell_of, render, render_buffer, screen_rows, status_parts,
 };
 use image::RgbaImage;
 use ratatui::buffer::{Buffer, Cell};
@@ -184,11 +184,10 @@ fn borders_reach_edges() {
 
     // The status row below the grid stays text.
     let screen = screen_rows(&buffer).join("\n");
-    assert!(
-        status_row(&screen).starts_with(&format!(
-            " NORMAL  {last:02}.jpg [{}/40]  1 selected",
-            last + 1
-        )),
+    let position = format!("{last:02}.jpg [{}/40]", last + 1);
+    assert_eq!(
+        status_parts(&screen)[..3],
+        ["NORMAL", position.as_str(), "1 selected"],
         "{screen}"
     );
     assert_terminal_background(&buffer);
@@ -256,8 +255,8 @@ fn folder_cell_shows_icon_and_name() {
     );
     assert_hides(&screen, "a.jpg");
     assert_eq!(
-        status_row(&screen).trim_end(),
-        " NORMAL  .. [1/3]  1 folder, 1 image",
+        status_parts(&screen),
+        ["NORMAL", ".. [1/3]", "1 folder, 1 image"],
         "{screen}"
     );
 

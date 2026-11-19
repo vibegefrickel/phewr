@@ -13,10 +13,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 #[cfg(feature = "video")]
-use status::video_status_line;
+use status::video_bar;
 use status::{
-    draw_slideshow_badge, draw_slideshow_mode, draw_status_row, fullscreen_status_line,
-    gallery_status_line,
+    draw_slideshow_badge, draw_slideshow_mode, draw_status_row, fullscreen_bar, gallery_bar,
 };
 
 /// The preferred info panel width, with its border.
@@ -102,9 +101,8 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 
 fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
     let status_area = status_area(area, app);
-    let bottom_line = fullscreen_status_line(app, status, status_area.width);
     let inner = content_area(area, app);
-    draw_status_row(frame, app, status_area, bottom_line, status);
+    draw_status_row(frame, app, status_area, fullscreen_bar(app, status));
     if status_rows(app) == 0 {
         draw_slideshow_mode(frame, app, inner);
         draw_slideshow_badge(frame, app, inner, status);
@@ -116,8 +114,7 @@ fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Opt
 #[cfg(feature = "video")]
 fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
     let status_area = status_area(area, app);
-    let bottom_line = video_status_line(app, status, status_area.width);
-    draw_status_row(frame, app, status_area, bottom_line, status);
+    draw_status_row(frame, app, status_area, video_bar(app, status));
     let inner = content_area(area, app);
     if status_rows(app) == 0 {
         draw_slideshow_mode(frame, app, inner);
@@ -131,8 +128,8 @@ fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option
     app.gallery.update_grid(grid_rect);
     let filtered_count = app.gallery.filtered_indices.len();
     let status_area = status_area(area, app);
-    let line = gallery_status_line(app, filtered_count, status, status_area.width);
-    draw_status_row(frame, app, status_area, line, status);
+    let parts = gallery_bar(app, filtered_count, status);
+    draw_status_row(frame, app, status_area, parts);
     let mut wanted = std::mem::take(&mut app.grid_icons.wanted);
     draw_thumbnail_cells(frame, app, grid_rect, &mut wanted);
     app.grid_icons.wanted = wanted;
@@ -277,13 +274,18 @@ mod tests {
         &buffer[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())]
     }
 
-    /// Fail when a cell sets a background.
+    /// Fail when a cell sets a background. The status row in the last row has the black of the
+    /// palette as the ground of the bar.
     pub(super) fn assert_terminal_background(buffer: &Buffer) {
         let area = buffer.area;
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
                 let bg = buffer[(x, y)].bg;
-                assert_eq!(bg, Color::Reset, "cell ({x}, {y}) sets the background");
+                let bar = y + 1 == area.bottom() && bg == Color::Black;
+                assert!(
+                    bg == Color::Reset || bar,
+                    "cell ({x}, {y}) sets the background {bg:?}"
+                );
             }
         }
     }
@@ -305,6 +307,16 @@ mod tests {
 
     pub(super) fn status_row(screen: &str) -> &str {
         screen.lines().last().unwrap_or_default()
+    }
+
+    /// The groups of the status row: the texts between runs of two or more spaces. The bar sets
+    /// its parts apart with two spaces and centers the middle.
+    pub(super) fn status_parts(screen: &str) -> Vec<&str> {
+        status_row(screen)
+            .split("  ")
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect()
     }
 
     pub(super) fn assert_default_fg(cell: &Cell, modifier: Modifier) {

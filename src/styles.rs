@@ -9,7 +9,6 @@ pub(crate) struct Styles {
     pub text: Style,
     pub title: Style,
     pub border: Style,
-    pub popup_border: Style,
     /// The thick border and the folder name of the cell under the cursor.
     pub cursor_cell: Style,
     /// The plain border of a marked file, and the selection count.
@@ -18,8 +17,6 @@ pub(crate) struct Styles {
     pub error: Style,
     /// Counts, notes and the info panel labels.
     pub dim: Style,
-    /// Key hints and the help key column.
-    pub key: Style,
     /// The slideshow badge on top of the picture. The background hides the picture below it.
     pub badge: Style,
     /// An error in the slideshow badge.
@@ -35,12 +32,10 @@ pub(crate) const STYLES: Styles = Styles {
     text: Style::new().fg(Color::Reset),
     title: Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
     border: Style::new().fg(Color::DarkGray),
-    popup_border: Style::new(),
     cursor_cell: Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD),
     marked: Style::new().fg(Color::Yellow),
     error: Style::new().fg(Color::Red),
     dim: Style::new().fg(Color::DarkGray),
-    key: Style::new().fg(Color::Cyan),
     badge: Style::new().fg(Color::Black).bg(Color::Gray),
     badge_error: Style::new().fg(Color::Black).bg(Color::Red),
     mode_normal: Color::Red,

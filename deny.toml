@@ -37,6 +37,8 @@ private = { ignore = true }
 # Several versions of one crate are reported, not fatal.
 multiple-versions = "warn"
 wildcards = "deny"
+# A path dependency without a version (tuilibr) is no wildcard of crates.io.
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]

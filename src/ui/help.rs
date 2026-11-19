@@ -1,212 +1,226 @@
-//! The help popup: the keys of the gallery and of the fullscreen view, and the Kitty medium.
+//! The help popup: the keys of the gallery and of the fullscreen view, and the Kitty medium. The
+//! box and the columns come from the tuilibr frame.
 
-use crate::pictures::kitty::placement::centered;
-use crate::styles::STYLES;
-use ratatui::{
-    prelude::*,
-    widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph},
+use crate::pictures::kitty::{
+    Loops, Transfer,
+    protocol::{describe, describe_loops},
 };
+use ratatui::Frame;
+use std::sync::{Mutex, PoisonError};
+use tuilibr::frame::{HelpView, Section, draw_help};
 
-/// A key and its description. An empty key makes a heading, and both empty make a blank line.
-type HelpRow = (&'static str, &'static str);
+/// The cells of the key column: the longest key, `Enter, double-click`, and one space.
+const KEY_WIDTH: u16 = 20;
 
-const HELP_TWO_COLUMN_WIDTH: u16 = 102;
-
-/// The width of the longest key, `Enter, double-click`.
-const HELP_KEY_WIDTH: usize = 19;
-
-const HELP_SINGLE_WIDTH: u16 = 58;
+/// The cells of the description column: the longest ones, `Mark, yazi selects on quit` and
+/// `Slideshow on / off (image)`. Both columns fit 102 screen columns side by side.
+const TEXT_WIDTH: u16 = 26;
 
 /// The left column: the gallery and its search line.
-const HELP_GALLERY_ROWS: &[HelpRow] = &[
-    ("", "Gallery"),
-    ("h/j/k/l, click", "Move in the grid"),
-    ("g / G, Home / End", "First / last"),
-    ("Enter, double-click", "Open image or folder"),
-    ("Backspace", "Parent folder"),
-    ("+ / -, Shift+wheel", "Grid size (Shift if sent)"),
-    ("0", "Reset thumbnail size"),
-    ("Wheel", "Scroll the grid"),
-    ("PgDn/PgUp, ^f/^b", "Page down / up"),
-    ("Tab / right click", "Toggle info panel"),
-    ("s", "Slideshow from cursor"),
-    #[cfg(feature = "video")]
-    ("p", "Open in the mpv window"),
-    ("Space", "Mark (yazi selects on quit)"),
-    ("a / A", "Mark all / clear marks"),
-    ("/", "Search"),
-    ("?", "Toggle help"),
-    ("q", "Quit"),
-    ("", ""),
-    ("", "Search"),
-    ("<type>, Backspace", "Filter by filename"),
-    ("Enter / Esc", "Confirm / cancel"),
+const GALLERY_COLUMN: &[Section] = &[
+    (
+        "Gallery",
+        &[
+            ("h/j/k/l, click", "Move in the grid"),
+            ("g / G, Home / End", "First / last"),
+            ("Enter, double-click", "Open image or folder"),
+            ("Backspace", "Parent folder"),
+            ("+ / -, Shift+wheel", "Grid size (Shift if sent)"),
+            ("0", "Reset thumbnail size"),
+            ("Wheel", "Scroll the grid"),
+            ("PgDn/PgUp, ^f/^b", "Page down / up"),
+            ("Tab / right click", "Toggle info panel"),
+            ("s", "Slideshow from cursor"),
+            #[cfg(feature = "video")]
+            ("p", "Open in the mpv window"),
+            ("Space", "Mark, yazi selects on quit"),
+            ("a / A", "Mark all / clear marks"),
+            ("/", "Search"),
+            ("?", "Toggle help"),
+            ("q", "Quit"),
+        ],
+    ),
+    (
+        "Search",
+        &[
+            ("<type>, Backspace", "Filter by filename"),
+            ("Enter / Esc", "Confirm / cancel"),
+        ],
+    ),
 ];
 
-/// The right column: the fullscreen view with the video player, and the mouse. The player has no
-/// sound, so the `p` row names the mpv window "with sound".
-const HELP_FULLSCREEN_ROWS: &[HelpRow] = &[
-    ("", "Fullscreen / video player"),
-    ("\u{2190} / \u{2192}, h j / k l", "Previous / next file"),
-    ("Edge click", "Previous / next (image)"),
-    ("Home / End", "First / last file"),
-    ("+ / -, wheel", "Zoom in / out (image)"),
-    ("0", "Reset zoom to fit (image)"),
-    #[cfg(feature = "video")]
-    ("Enter, click middle", "Play animation"),
-    #[cfg(feature = "video")]
-    ("Enter on Live Photo", "Play the motion once"),
-    ("h/j/k/l, drag", "Pan when zoomed (image)"),
-    ("Tab / right click", "Toggle info panel (image)"),
-    ("s", "Start / stop slideshow (image)"),
-    #[cfg(feature = "video")]
-    ("p", "Open in mpv, with sound"),
-    ("Space", "Pause / resume slideshow"),
-    ("[ / ]", "Shorter / longer interval (image)"),
-    ("q / Esc", "Back to gallery"),
-    ("?", "Toggle help"),
-    #[cfg(feature = "video")]
-    ("Right click", "Back (video)"),
-    ("", ""),
-    ("", "Mouse"),
-    ("Shift+drag", "Select terminal text"),
+/// The right column without the Kitty section: the fullscreen view with the video player, and
+/// the mouse. The player has no sound, so the `p` row names the mpv window "with sound".
+const FULLSCREEN_SECTIONS: [Section; 2] = [
+    (
+        "Fullscreen / video player",
+        &[
+            ("\u{2190} / \u{2192}, h j / k l", "Previous / next file"),
+            ("Edge click", "Previous / next (image)"),
+            ("Home / End", "First / last file"),
+            ("+ / -, wheel", "Zoom in / out (image)"),
+            ("0", "Reset zoom to fit (image)"),
+            ("h/j/k/l, drag", "Pan when zoomed (image)"),
+            ("Tab / right click", "Toggle info panel (image)"),
+            ("s", "Slideshow on / off (image)"),
+            #[cfg(feature = "video")]
+            ("p", "Open in mpv, with sound"),
+            ("Space", "Pause / resume slideshow"),
+            ("[ / ]", "Interval -/+ (image)"),
+            ("q / Esc", "Back to gallery"),
+            ("?", "Toggle help"),
+            #[cfg(feature = "video")]
+            ("Right click", "Back (video)"),
+        ],
+    ),
+    ("Mouse", &[("Shift+drag", "Select terminal text")]),
 ];
 
-fn help_lines<'a>(rows: impl IntoIterator<Item = &'a HelpRow>) -> Vec<Line<'static>> {
-    rows.into_iter()
-        .map(|&(key, description)| {
-            if key.is_empty() {
-                Line::from(Span::styled(format!(" {description}"), STYLES.title))
-            } else {
-                Line::from(vec![
-                    Span::styled(format!(" {key:>HELP_KEY_WIDTH$}  "), STYLES.key),
-                    Span::styled(description, STYLES.text),
-                ])
-            }
-        })
-        .collect()
+/// The help popup: two columns on a wide screen, else one column when it fits the height. The
+/// last section names the Kitty medium and the loop path.
+pub(super) fn draw_help_popup(frame: &mut Frame<'_>, transfer: Transfer, loops: Option<Loops>) {
+    let mut right = FULLSCREEN_SECTIONS.to_vec();
+    right.push(("Kitty graphics", kitty_rows(transfer, loops)));
+    let view = HelpView {
+        title: "phewr keys",
+        columns: [GALLERY_COLUMN, &right],
+        key_width: KEY_WIDTH,
+        text_width: TEXT_WIDTH,
+    };
+    let area = frame.area();
+    draw_help(frame, area, &view);
 }
 
-/// The help popup. From 102 columns on it has two columns and fits into 40 rows. A narrower
-/// terminal gets one column that the popup clips. The last row names the Kitty medium.
-pub(super) fn draw_help_popup(
-    frame: &mut Frame<'_>,
-    transfer: crate::pictures::kitty::Transfer,
-    loops: Option<crate::pictures::kitty::Loops>,
-) {
-    let area = frame.area();
-    let two_columns = area.width >= HELP_TWO_COLUMN_WIDTH;
-    let (left, right) = (HELP_GALLERY_ROWS, HELP_FULLSCREEN_ROWS);
-    let content_rows = if two_columns {
-        left.len().max(right.len())
-    } else {
-        left.len() + 1 + right.len()
-    };
+/// The rows of one section, borrowed for the whole run.
+type Rows = &'static [(&'static str, &'static str)];
 
-    let height = u16::try_from(content_rows + 6)
-        .unwrap_or(u16::MAX)
-        .min(area.height.saturating_sub(2));
-    let width = if two_columns {
-        area.width.saturating_sub(4).min(112)
-    } else {
-        HELP_SINGLE_WIDTH.min(area.width.saturating_sub(4))
-    };
-    let popup_area = centered(area, width, height);
+/// The Kitty rows of each pair of a medium and a loop path that a run showed.
+type KittyRows = Vec<((Transfer, Option<Loops>), Rows)>;
 
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(STYLES.popup_border)
-        .padding(Padding::uniform(1))
-        .title(Line::from(Span::styled("\u{2500} Help ", STYLES.title)));
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
-    if two_columns {
-        let columns = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(chunks[0]);
-        frame.render_widget(Paragraph::new(help_lines(left)), columns[0]);
-        frame.render_widget(Paragraph::new(help_lines(right)), columns[1]);
-    } else {
-        let single = left.iter().chain(&[("", "")]).chain(right);
-        frame.render_widget(Paragraph::new(help_lines(single)), chunks[0]);
+/// The rows of the Kitty section. A `Section` borrows its rows for the whole run, so each pair of
+/// a medium and a loop path gets its rows one time. The start probe sets both, so a run holds one
+/// pair, and all pairs together are 9 rows of two.
+// TODO: when tuilibr gives `Section` a lifetime (`&'a [(&'a str, &'a str)]`), build the rows on
+// the stack in `draw_help_popup` and delete `kitty_rows`, `KittyRows` and the leak.
+fn kitty_rows(transfer: Transfer, loops: Option<Loops>) -> Rows {
+    static KNOWN: Mutex<KittyRows> = Mutex::new(Vec::new());
+    let mut known = KNOWN.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, rows)) = known.iter().find(|(key, _)| *key == (transfer, loops)) {
+        return rows;
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(
-                " press any key to close \u{b7} Kitty transfer: {} \u{b7} loops: {}",
-                crate::pictures::kitty::protocol::describe(transfer),
-                crate::pictures::kitty::protocol::describe_loops(loops)
-            ),
-            STYLES.dim,
-        ))),
-        chunks[1],
-    );
+    let rows: Rows = Box::leak(Box::new([
+        ("Transfer", describe(transfer)),
+        ("Grid loops", describe_loops(loops)),
+    ]));
+    known.push(((transfer, loops), rows));
+    rows
 }
 
 #[cfg(test)]
 mod tests {
-    use super::HELP_TWO_COLUMN_WIDTH;
+    use super::{FULLSCREEN_SECTIONS, GALLERY_COLUMN, KEY_WIDTH, TEXT_WIDTH, kitty_rows};
+    use crate::pictures::kitty::{Loops, Transfer};
     use crate::ui::tests::{
         app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows,
         assert_terminal_background, cell_of, render, render_buffer, screen_rows,
     };
     use ratatui::style::{Color, Modifier};
+    use tuilibr::frame::{Section, column_rows};
+    use unicode_width::UnicodeWidthStr as _;
+
+    /// Every Kitty section that a run can show.
+    fn kitty_sections() -> Vec<Section> {
+        let transfers = [Transfer::Direct, Transfer::Png, Transfer::TempFile];
+        let loops = [None, Some(Loops::Animation), Some(Loops::Ticks)];
+        transfers
+            .iter()
+            .flat_map(|transfer| {
+                loops
+                    .iter()
+                    .map(|loops| ("Kitty graphics", kitty_rows(*transfer, *loops)))
+            })
+            .collect()
+    }
+
+    /// The widths are fixed, so the frame cuts a longer key or description without a sign.
+    #[test]
+    fn every_entry_fits_its_column() {
+        let kitty = kitty_sections();
+        let sections = GALLERY_COLUMN
+            .iter()
+            .chain(&FULLSCREEN_SECTIONS)
+            .chain(&kitty);
+        for (title, keys) in sections {
+            assert!(
+                title.width() <= usize::from(KEY_WIDTH + TEXT_WIDTH),
+                "{title}"
+            );
+            for (key, text) in *keys {
+                assert!(key.width() < usize::from(KEY_WIDTH), "{key}");
+                assert!(text.width() <= usize::from(TEXT_WIDTH), "{text}");
+            }
+        }
+        // The border and the padding take 2 rows each, and the margin 2.
+        let right = [FULLSCREEN_SECTIONS.as_slice(), &kitty[..1]].concat();
+        for column in [GALLERY_COLUMN, &right] {
+            assert!(column_rows(column) + 6 <= 30, "the box fits 30 rows");
+        }
+    }
+
+    #[test]
+    fn kitty_rows_name_the_medium_and_the_loops() {
+        let rows = kitty_rows(Transfer::TempFile, None);
+        assert_eq!(
+            rows,
+            [("Transfer", "temp file (t=t)"), ("Grid loops", "off")]
+        );
+        assert!(
+            std::ptr::eq(rows, kitty_rows(Transfer::TempFile, None)),
+            "one pair gets its rows one time"
+        );
+    }
 
     #[test]
     fn lists_keys_in_two_columns() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let screen = render(&mut app, None, 120, 52);
-        assert_shows(&screen, " Help ");
-        assert_shows(&screen, "h/j/k/l, click  Move in the grid");
-        assert_shows(&screen, "Open image or folder");
-        assert_shows(&screen, "Backspace  Parent folder");
-        assert_hides(&screen, "delete for good");
-        assert_shows(&screen, " Fullscreen");
-        assert_shows(&screen, "Pan when zoomed");
-        assert_shows(&screen, "Shorter / longer interval");
-        assert_shows(&screen, " Mouse");
-        assert_shows(&screen, "Shift+drag  Select terminal text");
-        assert_shows(
-            &screen,
-            " press any key to close \u{b7} Kitty transfer: direct (t=d) \u{b7} loops: ticks (a=p)",
-        );
+        assert_shows(&screen, "\u{2500} phewr keys ");
+        assert_shows(&screen, "any key closes");
+        let key =
+            |key: &str, text: &str| format!("{key:<width$}{text}", width = usize::from(KEY_WIDTH));
+        assert_shows(&screen, &key("h/j/k/l, click", "Move in the grid"));
+        assert_shows(&screen, &key("Backspace", "Parent folder"));
+        assert_shows(&screen, &key("Shift+drag", "Select terminal text"));
+        assert_shows(&screen, &key("Transfer", "direct (t=d)"));
+        assert_shows(&screen, &key("Grid loops", "ticks (a=p)"));
+        assert_shows(&screen, &key("[ / ]", "Interval -/+ (image)"));
         assert_shows(&screen, " Fullscreen / video player");
-        assert_shows(&screen, "Previous / next file");
-        assert_hides(&screen, "Video player");
+        assert_shows(&screen, " Mouse");
+        assert_hides(&screen, "Play animation");
+        assert_hides(&screen, "Play the motion once");
         #[cfg(feature = "video")]
         assert_shows(&screen, "Open in mpv, with sound");
 
         let rows = screen_rows(&render_buffer(&mut app, None, 120, 52));
-        let top = rows.iter().position(|row| row.contains(" Help ")).unwrap();
-        let bottom = rows
-            .iter()
-            .position(|row| row.contains("press any key to close"))
-            .unwrap();
-        let height = bottom - top + 2;
-        assert!(height <= 40, "the popup takes {height} rows");
-        let gallery_row = rows
-            .iter()
-            .position(|row| row.contains(" Gallery"))
-            .unwrap();
+        let gallery_row = rows.iter().position(|row| row.contains(" Gallery"));
+        assert!(gallery_row.is_some());
         assert_eq!(
             rows.iter().position(|row| row.contains(" Fullscreen")),
-            Some(gallery_row),
+            gallery_row,
             "the two columns start in the same row"
         );
 
         let buffer = render_buffer(&mut app, None, 120, 52);
         assert_terminal_background(&buffer);
-        assert_default_fg(cell_of(&buffer, "Help "), Modifier::BOLD);
-        assert_default_fg(cell_of(&buffer, "Gallery   "), Modifier::BOLD);
-        assert_ansi(cell_of(&buffer, "h/j/k/l"), Color::Cyan);
+        let heading = cell_of(&buffer, "Gallery");
+        assert_eq!(
+            (heading.fg, heading.modifier),
+            (Color::Yellow, Modifier::BOLD)
+        );
+        assert_default_fg(cell_of(&buffer, "h/j/k/l"), Modifier::BOLD);
         assert_default_fg(cell_of(&buffer, "Move in the grid"), Modifier::empty());
-        assert_ansi(cell_of(&buffer, "press any key"), Color::DarkGray);
+        assert_ansi(cell_of(&buffer, "any key closes"), Color::DarkGray);
     }
 
     #[test]
@@ -227,27 +241,28 @@ mod tests {
             "one column, one below the other"
         );
         let screen = rows.join("\n");
+        assert_shows(&screen, "\u{2500} phewr keys ");
         assert_shows(&screen, "Move in the grid");
         assert_shows(&screen, "Pan when zoomed");
         assert_shows(&screen, " Mouse");
+        assert_shows(&screen, " Kitty graphics");
     }
 
+    /// One column does not fit 30 rows, so the box keeps two columns and cuts text, not keys.
     #[test]
-    fn clips_in_small_terminal() {
+    fn low_narrow_terminal_keeps_two_columns() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let rows = screen_rows(&render_buffer(&mut app, None, 80, 30));
-        let top = rows.iter().position(|row| row.contains(" Help ")).unwrap();
-        let bottom = rows
-            .iter()
-            .position(|row| row.contains("press any key to close"))
-            .unwrap();
-        assert!(top < bottom && bottom < 30);
-        assert_shows(&rows.join("\n"), "Move in the grid");
-        assert!(
-            !rows.iter().any(|row| row.contains(" Mouse")),
-            "the end of the one column is clipped"
+        let gallery = rows.iter().position(|row| row.contains(" Gallery"));
+        assert!(gallery.is_some());
+        assert_eq!(
+            rows.iter().position(|row| row.contains(" Fullscreen")),
+            gallery
         );
+        let screen = rows.join("\n");
+        assert_shows(&screen, "h/j/k/l, click");
+        assert_shows(&screen, " Mouse");
     }
 
     #[test]
@@ -261,13 +276,10 @@ mod tests {
             assert!(gallery.is_some() && fullscreen.is_some(), "{width} columns");
             (gallery == fullscreen, rows.join("\n"))
         };
-        let (two, screen) = two_columns(HELP_TWO_COLUMN_WIDTH);
-        assert!(two, "{HELP_TWO_COLUMN_WIDTH} columns");
+        let (two, screen) = two_columns(102);
+        assert!(two, "102 columns");
         assert_shows(&screen, "Pause / resume slideshow");
         assert_shows(&screen, "Grid size (Shift if sent)");
-        assert!(
-            !two_columns(HELP_TWO_COLUMN_WIDTH - 1).0,
-            "one column below"
-        );
+        assert!(!two_columns(101).0, "one column below");
     }
 }

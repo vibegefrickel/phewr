@@ -157,6 +157,9 @@ serde_json = { version = "1", optional = true }
 # The temp TIFF of the `sips` route.
 tempfile = { version = "3.27", optional = true }
 toml = "1"
+# The shared screen frame of the apps, later the pictures too (../tuilibr): the status row and
+# the dialog boxes.
+tuilibr = { path = "../tuilibr" }
 # Without the default feature `cmake`, turbojpeg-sys finds the Homebrew libjpeg-turbo through
 # pkgconf and never builds it from source.
 turbojpeg = { version = "1.5", default-features = false, features = ["pkg-config", "require-simd"], optional = true }

@@ -1682,6 +1682,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "tuilibr",
  "turbojpeg",
  "unicode-width",
 ]
@@ -2666,6 +2667,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "tuilibr"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "crossterm",
+ "fast_image_resize",
+ "image",
+ "kamadak-exif",
+ "lru 0.19.0",
+ "moxcms 0.9.2",
+ "ratatui",
+ "rayon",
+ "rustix",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

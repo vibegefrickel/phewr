@@ -1,78 +1,97 @@
-//! The status row of each view: a question, an error or the position at the left, and the file
-//! facts at the right.
+//! The status row of each view, as the bar of the tuilibr frame: the mode block, the folder path,
+//! the name and the position in the middle, and the file facts at the right.
 
 use super::STYLES;
 use crate::app::{App, ViewMode};
 use ratatui::{prelude::*, widgets::Paragraph};
 use std::path::Path;
+use tuilibr::frame::{BarText, BarView, ModeView, SEPARATOR, draw_bar, split::NARROW_BELOW};
 use unicode_width::UnicodeWidthStr;
 
-/// `line` at the left, the file facts at the right. A note, a question, an error or a long line
-/// hides the facts.
-pub(super) fn draw_status_row(
-    frame: &mut Frame<'_>,
-    app: &App,
-    area: Rect,
-    line: Line<'static>,
-    status: Option<&str>,
-) {
-    // A slideshow has no status row.
+/// The middle texts and the right groups of one view.
+pub(super) struct BarParts {
+    /// The texts in the middle, the most important first.
+    pub middle: Vec<BarText>,
+    /// The groups at the right. The first group goes first when the row is too narrow.
+    pub right: Vec<String>,
+}
+
+/// The bar of a view: the mode block, the folder path and `parts`. phewr shows no clock and no
+/// icons. A slideshow has no status row.
+pub(super) fn draw_status_row(frame: &mut Frame<'_>, app: &App, area: Rect, parts: BarParts) {
     if area.height == 0 {
         return;
     }
+    let mode = mode_view(app);
+    let left = folder_span(app, &mode, &parts.middle, area.width);
+    let view = BarView {
+        mode,
+        left: left.into_iter().collect(),
+        middle: parts.middle,
+        right: parts.right,
+        time: String::new(),
+        icons: Vec::new(),
+    };
+    // The folder path takes no click, so the places of the left group do not matter.
+    draw_bar(frame, view, area, 0);
+}
+
+/// One text of the middle in one style.
+fn text(part: impl Into<String>, style: Style) -> BarText {
+    BarText {
+        parts: vec![part.into()],
+        style,
+    }
+}
+
+/// The file facts as the right group. A note, a question, an error or the search line hides
+/// them.
+fn facts(app: &App, status: Option<&str>) -> Vec<String> {
     let busy = status.is_some()
         || app.error.is_some()
         || app.scan_error.is_some()
         || app.gallery.search_active;
-    let facts = (!busy).then(|| app.meta_line()).flatten();
-    let left_width = line.width();
-    frame.render_widget(Paragraph::new(line), area);
-    let Some(facts) = facts else {
-        return;
-    };
-    let facts = format!(" {facts} ");
-    if !facts_fit(left_width, &facts, area.width) {
-        return;
-    }
-    frame.render_widget(
-        Paragraph::new(Span::styled(facts, STYLES.dim)).alignment(Alignment::Right),
-        area,
-    );
+    (!busy)
+        .then(|| app.meta_line())
+        .flatten()
+        .into_iter()
+        .collect()
 }
 
-/// Both sides count display columns, so a wide character in the facts cannot overlap the left part.
-fn facts_fit(left_width: usize, facts: &str, area_width: u16) -> bool {
-    left_width + facts.width() <= usize::from(area_width)
+/// The name of the current file.
+fn file_name(app: &App) -> String {
+    app.current_path()
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// An error, or the name, the position, the zoom and the note. A slideshow has no status row.
-pub(super) fn fullscreen_status_line(app: &App, status: Option<&str>, width: u16) -> Line<'static> {
-    if let Some(line) = error_line(app) {
-        return with_mode(app, line, width);
+pub(super) fn fullscreen_bar(app: &App, status: Option<&str>) -> BarParts {
+    let right = facts(app, status);
+    if let Some(error) = error_text(app) {
+        return BarParts {
+            middle: vec![error],
+            right,
+        };
     }
-    let filename = app
-        .current_path()
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let zoom = if app.zoom > 1.0 {
-        format!(" {:.0}%", app.zoom * 100.0)
-    } else {
-        String::new()
-    };
-    let mut spans = vec![Span::styled(
-        format!(
-            " {} [{}/{}]{zoom} ",
-            filename,
-            app.current + 1,
-            app.images.len(),
-        ),
-        STYLES.text,
+    let mut parts = vec![format!(
+        "{} [{}/{}]",
+        file_name(app),
+        app.current + 1,
+        app.images.len()
     )];
-    spans.extend(status.map(|note| Span::styled(format!(" {note} "), STYLES.text)));
-    with_folder(app, Line::from(spans), width)
+    // The zoom goes before the name when the row is too narrow.
+    if app.zoom > 1.0 {
+        parts.push(format!("{:.0}%", app.zoom * 100.0));
+    }
+    let mut middle = vec![BarText {
+        parts,
+        style: STYLES.text,
+    }];
+    middle.extend(status.map(|note| text(note, STYLES.text)));
+    BarParts { middle, right }
 }
-
 /// The badge at the bottom right of a slideshow: the picture stays visible around it, because the
 /// picture sits below the cell backgrounds.
 pub(super) fn draw_slideshow_badge(
@@ -139,20 +158,18 @@ const FINISHED_GLYPH: &str = "\u{23f8}";
 
 /// An error, or the state, the name, the time, the position and the note.
 #[cfg(feature = "video")]
-pub(super) fn video_status_line(app: &App, status: Option<&str>, width: u16) -> Line<'static> {
+pub(super) fn video_bar(app: &App, status: Option<&str>) -> BarParts {
+    let right = facts(app, status);
     let error = app
         .error
         .as_deref()
         .or_else(|| app.video.as_ref().and_then(|v| v.error.as_deref()));
     if let Some(err) = error {
-        let line = Line::from(Span::styled(format!(" Error: {err} "), STYLES.error));
-        return with_mode(app, line, width);
+        return BarParts {
+            middle: vec![text(format!("Error: {err}"), STYLES.error)],
+            right,
+        };
     }
-    let filename = app
-        .current_path()
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
     let (glyph, position, duration) = match &app.video {
         Some(v) => {
             let glyph = if v.playing() {
@@ -164,113 +181,105 @@ pub(super) fn video_status_line(app: &App, status: Option<&str>, width: u16) -> 
         }
         None => (PLAYING_GLYPH, 0.0, 0.0),
     };
+    let mut parts = vec![format!(
+        "{glyph} {} {}/{} [{}/{}]",
+        file_name(app),
+        crate::file_meta::format_time(position),
+        crate::file_meta::format_time(duration),
+        app.current + 1,
+        app.images.len(),
+    )];
     // A debug build shows the dropped frames of a slow terminal.
     let dropped = app.video.as_ref().map_or(0, |v| v.dropped);
-    let drops = if cfg!(debug_assertions) && dropped > 0 {
-        format!("[dropped {dropped}] ")
-    } else {
-        String::new()
-    };
-    let line = Line::from(vec![
-        Span::styled(
-            format!(
-                " {} {} {}/{} [{}/{}] {}",
-                glyph,
-                filename,
-                crate::file_meta::format_time(position),
-                crate::file_meta::format_time(duration),
-                app.current + 1,
-                app.images.len(),
-                drops,
-            ),
-            STYLES.text,
-        ),
-        status.map_or_else(Span::default, |note| {
-            Span::styled(format!(" {note} "), STYLES.text)
-        }),
-    ]);
-    with_folder(app, line, width)
+    if cfg!(debug_assertions) && dropped > 0 {
+        parts.push(format!("[dropped {dropped}]"));
+    }
+    let mut middle = vec![BarText {
+        parts,
+        style: STYLES.text,
+    }];
+    middle.extend(status.map(|note| text(note, STYLES.text)));
+    BarParts { middle, right }
 }
 
-/// An error, the search query while typing, or the name, the position, the
-/// counts, the selection, the scan and the note.
-pub(super) fn gallery_status_line(
-    app: &App,
-    filtered_count: usize,
-    status: Option<&str>,
-    width: u16,
-) -> Line<'static> {
-    if let Some(line) = error_line(app) {
-        return with_mode(app, line, width);
+/// An error, the search query while typing, or the name, the position, the selection, the scan
+/// and the note in the middle. The facts and the entry counts sit at the right.
+pub(super) fn gallery_bar(app: &App, filtered_count: usize, status: Option<&str>) -> BarParts {
+    // An error shows alone.
+    if let Some(error) = error_text(app) {
+        return BarParts {
+            middle: vec![error],
+            right: Vec::new(),
+        };
     }
-
-    let mut spans = if app.gallery.search_active {
-        vec![
-            Span::styled(
-                format!(" /{}\u{2588}", app.gallery.search_query),
-                STYLES.text,
-            ),
-            Span::styled(
-                format!("  {filtered_count}/{} matches ", app.images.len()),
-                STYLES.dim,
-            ),
-        ]
+    let mut right = facts(app, status);
+    let search = app.gallery.search_active;
+    if app.folder_count > 0 && !search {
+        right.push(entry_counts(app));
+    }
+    let mut middle = Vec::new();
+    if search {
+        middle.push(text(
+            format!("/{}\u{2588}", app.gallery.search_query),
+            STYLES.text,
+        ));
+        middle.push(text(
+            format!("{filtered_count}/{} matches", app.images.len()),
+            STYLES.dim,
+        ));
     } else {
-        selected_position(app, filtered_count)
-    };
-    if app.folder_count > 0 && !app.gallery.search_active {
-        spans.push(Span::styled(entry_counts(app), STYLES.dim));
+        middle.extend(selected_position(app, filtered_count));
     }
     if !app.selection.is_empty() {
-        spans.push(Span::styled(
-            format!(" {} selected ", app.selection.len()),
+        middle.push(text(
+            format!("{} selected", app.selection.len()),
             STYLES.marked,
         ));
     }
     if app.is_scanning() {
-        spans.push(Span::styled(" scanning\u{2026} ", STYLES.dim));
+        middle.push(text("scanning\u{2026}", STYLES.dim));
     }
-    if app.gallery.search_active {
-        return with_folder(app, Line::from(spans), width);
+    if search {
+        return BarParts { middle, right };
     }
     if let Some(status) = status {
-        spans.push(Span::styled(format!(" {status} "), STYLES.text));
+        middle.push(text(status, STYLES.text));
     } else if is_empty_folder(app) {
-        spans.push(Span::styled(" No images or folders here ", STYLES.text));
+        middle.push(text("No images or folders here", STYLES.text));
     }
-    with_folder(app, Line::from(spans), width)
+    BarParts { middle, right }
 }
 
-/// `rest` behind the folder path, so the path is the first thing on the row.
-fn with_folder(app: &App, rest: Line<'static>, width: u16) -> Line<'static> {
-    let Some(dir) = app.current_dir.as_deref().filter(|_| !app.file_list) else {
-        return with_mode(app, rest, width);
+/// The folder path as the left group, with the home folder as `~`. The frame leaves out a left
+/// part that does not fit, so `shorten_path` cuts the path to the room that the mode block and
+/// the whole middle leave, from its start. A file list shows no path.
+fn folder_span(
+    app: &App,
+    mode: &ModeView,
+    middle: &[BarText],
+    width: u16,
+) -> Option<Span<'static>> {
+    let dir = app.current_dir.as_deref().filter(|_| !app.file_list)?;
+    let name = if width < NARROW_BELOW {
+        &mode.short_name
+    } else {
+        &mode.name
     };
-    let block = mode_span(app, width);
-    let text = display_path(dir, app.home_dir.as_deref());
-    // The path span adds one space at each side.
-    let budget = usize::from(width).saturating_sub(block.width() + rest.width() + 2);
-    let Some(text) = shorten_path(&text, budget) else {
-        return with_mode(app, rest, width);
-    };
-    let mut spans = vec![block, Span::styled(format!(" {text} "), STYLES.dim)];
-    spans.extend(rest.spans);
-    Line::from(spans)
+    let middle_width: usize = middle
+        .iter()
+        .map(|text| text.parts.join(SEPARATOR).width())
+        .filter(|width| *width > 0)
+        .map(|width| width + 2)
+        .sum();
+    // The mode block and the path add one space at each side.
+    let budget = usize::from(width).saturating_sub(name.width() + 2 + middle_width + 2);
+    let path = shorten_path(&display_path(dir, app.home_dir.as_deref()), budget)?;
+    Some(Span::styled(format!(" {path} "), STYLES.dim))
 }
 
-/// `rest` behind the mode block.
-fn with_mode(app: &App, rest: Line<'static>, width: u16) -> Line<'static> {
-    let mut spans = vec![mode_span(app, width)];
-    spans.extend(rest.spans);
-    Line::from(spans)
-}
-
-/// Below this many columns the mode block shows one letter.
-const MODE_SHORT_WIDTH: u16 = 60;
-
-/// The block of the mode that the status row shows: the help overlay, the search line, the grid
-/// or the fullscreen view and the player.
-fn mode_span(app: &App, width: u16) -> Span<'static> {
+/// The mode block of the view: the help overlay, the fullscreen view and the player, the search
+/// line or the grid.
+fn mode_view(app: &App) -> ModeView {
     let (name, short_name, color) = if app.help_visible {
         ("HELP", "?", STYLES.mode_help)
     } else if app.mode != ViewMode::Gallery {
@@ -280,28 +289,11 @@ fn mode_span(app: &App, width: u16) -> Span<'static> {
     } else {
         ("NORMAL", "N", STYLES.mode_normal)
     };
-    mode_block(name, short_name, color, width)
-}
-
-/// `short_name` on a screen narrower than `MODE_SHORT_WIDTH`, else `name`.
-fn mode_text<'a>(name: &'a str, short_name: &'a str, width: u16) -> &'a str {
-    if width < MODE_SHORT_WIDTH {
-        short_name
-    } else {
-        name
+    ModeView {
+        name: name.to_owned(),
+        short_name: short_name.to_owned(),
+        color,
     }
-}
-
-/// A block with the mode name in reversed `color`. A screen narrower than `MODE_SHORT_WIDTH`
-/// gets `short_name`.
-fn mode_block(name: &str, short_name: &str, color: Color, width: u16) -> Span<'static> {
-    Span::styled(
-        format!(" {} ", mode_text(name, short_name, width)),
-        Style::default()
-            .fg(color)
-            .bg(Color::Reset)
-            .add_modifier(Modifier::REVERSED | Modifier::BOLD),
-    )
 }
 
 /// The box SLIDESHOW at the bottom left of a slideshow, on top of the picture.
@@ -309,9 +301,14 @@ pub(super) fn draw_slideshow_mode(frame: &mut Frame<'_>, app: &App, area: Rect) 
     if app.slideshow.is_none() || area.height == 0 {
         return;
     }
-    // The look of the badge at the bottom right.
+    // The look of the badge at the bottom right, and one letter where the mode block has one.
+    let name = if area.width < NARROW_BELOW {
+        "S"
+    } else {
+        "SLIDESHOW"
+    };
     let block = Span::styled(
-        format!(" {} ", mode_text("SLIDESHOW", "S", area.width)),
+        format!(" {name} "),
         STYLES.badge.add_modifier(Modifier::BOLD),
     );
     let width = u16::try_from(block.width())
@@ -351,24 +348,19 @@ fn shorten_path(text: &str, budget: usize) -> Option<String> {
 }
 
 /// The error or the scan error, in this order.
-fn error_line(app: &App) -> Option<Line<'static>> {
+fn error_text(app: &App) -> Option<BarText> {
     let err = app.error.as_ref().or(app.scan_error.as_ref())?;
-    Some(Line::from(Span::styled(
-        format!(" Error: {err} "),
-        STYLES.error,
-    )))
+    Some(text(format!("Error: {err}"), STYLES.error))
 }
 
-/// Empty when the filter matches nothing.
-fn selected_position(app: &App, filtered_count: usize) -> Vec<Span<'static>> {
-    let Some(index) = app.gallery.selected_index() else {
-        return Vec::new();
-    };
+/// The name and the position of the cursor. `None` when the filter matches nothing.
+fn selected_position(app: &App, filtered_count: usize) -> Option<BarText> {
+    let index = app.gallery.selected_index()?;
     let name = &app.filenames[index];
-    vec![Span::styled(
-        format!(" {name} [{}/{filtered_count}] ", app.gallery.cursor + 1),
+    Some(text(
+        format!("{name} [{}/{filtered_count}]", app.gallery.cursor + 1),
         STYLES.text,
-    )]
+    ))
 }
 
 /// The folder cells without `..`.
@@ -389,7 +381,7 @@ fn entry_counts(app: &App) -> String {
     let folder_word = if folders == 1 { "folder" } else { "folders" };
     let images = app.file_count();
     let image_word = if images == 1 { "image" } else { "images" };
-    format!(" {folders} {folder_word}, {images} {image_word} ")
+    format!("{folders} {folder_word}, {images} {image_word}")
 }
 
 #[cfg(test)]
