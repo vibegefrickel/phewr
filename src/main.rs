@@ -23,7 +23,6 @@ mod run_loop;
 mod scanner;
 mod search;
 mod styles;
-mod terminal;
 #[cfg(test)]
 mod test_support;
 mod ui;
@@ -37,21 +36,16 @@ use app::App;
 use clap::Parser;
 use cli::{Cli, initial_dir_from_paths, start_paths, write_cwd_file};
 use config::Config;
-use crossterm::{
-    cursor, execute,
-    terminal::{LeaveAlternateScreen, disable_raw_mode},
-};
 use image_list::SharedImageList;
+use ratatui::{Terminal, backend::CrosstermBackend};
 use run_loop::{LoopState, run};
 use scanner::canonicalize_or_self;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use terminal::TerminalSession;
-use tuilibr::pictures::kitty::query::{
-    LateAnswers, StartAnswers, query_cell_pixel_size, query_cell_size_and_probe,
-    window_cell_pixel_size,
-};
-use tuilibr::pictures::kitty::{KittyBackend, Loops};
+use tuilibr::pictures::kitty::KittyBackend;
+use tuilibr::terminal::answers::LateAnswerFilter;
+use tuilibr::terminal::start::{self, StartOptions};
+use tuilibr::terminal::{Modes, Session, install_panic_hook};
 use yazi::{reveal_in_yazi, run_briefly, select_in_yazi};
 // Only the tests and the benches name these crates. The binary decodes through tuilibr.
 #[cfg(all(not(test), feature = "heic"))]
@@ -76,46 +70,12 @@ fn self_check_on(override_value: Option<&str>) -> bool {
     })
 }
 
-/// Give the terminal back in the order of `TerminalSession::restore`. Every step runs, and the
-/// first error returns. A failed picture delete cannot leave the shell in raw mode.
-fn release_terminal_to(
-    out: &mut impl Write,
-    mouse: bool,
-    disable_raw: impl FnOnce() -> io::Result<()>,
-) -> io::Result<()> {
-    let mut first_error = tuilibr::pictures::kitty::protocol::delete_all_to(out)
-        .and_then(|()| out.flush())
-        .err();
-    if mouse
-        && let Err(error) = terminal::disable_mouse(out)
-        && first_error.is_none()
-    {
-        first_error = Some(error);
-    }
-    if let Err(error) = disable_raw()
-        && first_error.is_none()
-    {
-        first_error = Some(error);
-    }
-    if let Err(error) = execute!(out, cursor::Show, LeaveAlternateScreen)
-        && first_error.is_none()
-    {
-        first_error = Some(error);
-    }
-    if let Err(error) = out.flush()
-        && first_error.is_none()
-    {
-        first_error = Some(error);
-    }
-    first_error.map_or(Ok(()), Err)
-}
-
-/// Leave the alternate screen before the panic message prints. Otherwise the restore discards
-/// the message. A worker panic does not release the terminal.
+/// Delete the pictures before the panic message prints, and end the process after it. The hook
+/// of tuilibr leaves the alternate screen and exits nowhere.
 ///
 /// A main thread panic ends the process after the message. The unwind must not restore the
 /// terminal again on the normal screen, where `CSI ?1049l` moves the cursor.
-fn install_panic_hook(mouse: bool) {
+fn install_panic_exit() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if std::thread::current().name() != Some("main") {
@@ -124,9 +84,9 @@ fn install_panic_hook(mouse: bool) {
         }
         #[expect(
             clippy::let_underscore_must_use,
-            reason = "the terminal is in a panic, a failed release cannot be reported"
+            reason = "the terminal is in a panic, a failed delete cannot be reported"
         )]
-        let _ = release_terminal_to(&mut io::stdout(), mouse, disable_raw_mode);
+        let _ = delete_pictures(&mut io::stdout());
         previous(info);
         #[expect(
             clippy::exit,
@@ -134,6 +94,12 @@ fn install_panic_hook(mouse: bool) {
         )]
         std::process::exit(101);
     }));
+}
+
+/// Delete every picture of the terminal. The session deletes none.
+fn delete_pictures(out: &mut impl Write) -> io::Result<()> {
+    tuilibr::pictures::kitty::protocol::delete_all_to(out)?;
+    out.flush()
 }
 
 /// The paths of the command line, or the working directory.
@@ -189,52 +155,6 @@ fn apply_cli_overrides(config: &mut Config, interval: Option<f64>, info: bool) {
     }
 }
 
-struct StartProbe {
-    graphics: KittyBackend,
-    cell_px: Option<(u32, u32)>,
-    /// The Kitty answers and the OSC 10 answer that can still come late, as key presses.
-    late_answers: LateAnswers,
-    /// The terminal foreground. Without the round trip of the probe, phewr does not ask for it.
-    foreground: Option<[u8; 3]>,
-}
-
-/// Probe the transfer, the loop path and the cell size in one round trip. Without a probe, the
-/// cell size query goes out alone.
-fn probe_terminal(
-    transfer_override: Option<&str>,
-    loops: Option<Loops>,
-    ssh: bool,
-    query_start: impl FnOnce(&[u8], usize) -> StartAnswers,
-    query_cell: impl FnOnce() -> Option<(u32, u32)>,
-) -> StartProbe {
-    let mut cell_px = None;
-    let mut asked_cell_size = false;
-    let mut late_answers = LateAnswers::default();
-    let mut foreground = None;
-    let graphics = tuilibr::pictures::kitty::protocol::detect_backend(
-        transfer_override,
-        loops,
-        ssh,
-        |sequence, answers| {
-            let start = query_start(sequence, answers);
-            asked_cell_size = true;
-            cell_px = start.cell_px;
-            late_answers = start.late_answers;
-            foreground = start.foreground;
-            start.probe
-        },
-    );
-    if !asked_cell_size {
-        cell_px = query_cell();
-    }
-    StartProbe {
-        graphics,
-        cell_px,
-        late_answers,
-        foreground,
-    }
-}
-
 /// Point the app at the start folder: its zoom level, the cursor target and the slideshow. The
 /// screen gets the self check of its placements.
 fn prepare_app(
@@ -282,30 +202,35 @@ fn main() -> io::Result<()> {
     let shared_list = SharedImageList::new();
     scanner::spawn_with(paths, shared_list.clone(), config.live_photos);
 
-    install_panic_hook(config.mouse);
-    let mut session = TerminalSession::enter(config.mouse)?;
+    let modes = Modes {
+        mouse: config.mouse,
+        ..Modes::default()
+    };
+    install_panic_hook(modes);
+    install_panic_exit();
+    let mut session = Session::enter(modes)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     let loops = tuilibr::pictures::kitty::protocol::chosen_loops(
         std::env::var(LOOPS_OVERRIDE).ok().as_deref(),
         config.loops,
         tuilibr::pictures::kitty::protocol::is_herdr(),
     );
-    let probe = probe_terminal(
-        std::env::var(TRANSFER_OVERRIDE).ok().as_deref(),
+    let transfer_override = std::env::var(TRANSFER_OVERRIDE).ok();
+    let start = start::query(StartOptions {
+        transfer_override: transfer_override.as_deref(),
         loops,
-        tuilibr::pictures::kitty::protocol::is_ssh(),
-        query_cell_size_and_probe,
-        query_cell_pixel_size,
-    );
+        ssh: tuilibr::pictures::kitty::protocol::is_ssh(),
+    });
     // A terminal that answers the cell size query gets it again after each resize.
-    state.cell_size_from_terminal = probe.cell_px.is_some();
-    let cell_px = probe.cell_px.unwrap_or_else(window_cell_pixel_size);
-    state.late_answers = keys::LateAnswerFilter::new(probe.late_answers);
+    state.cell_size_from_terminal = start.cell_from_terminal;
+    let cell_px = (u32::from(start.cell.width), u32::from(start.cell.height));
+    state.answers = LateAnswerFilter::new(start.owed);
     let mut app = App::with_config(cell_px, shared_list, &config, config_paths.state);
-    app.grid_icons.set_color(probe.foreground);
+    app.grid_icons.set_color(start.foreground);
     prepare_app(
         &mut app,
-        probe.graphics,
+        start.backend,
         self_check_on(std::env::var(SELF_CHECK_OVERRIDE).ok().as_deref()),
         &initial_dir,
         cursor_target,
@@ -313,14 +238,15 @@ fn main() -> io::Result<()> {
     );
     app.file_list = file_list;
     app.home_dir = std::env::home_dir();
-    let run_result = run(session.terminal_mut(), &mut app, &mut state);
+    let run_result = run(&mut terminal, &mut app, &mut state);
+    let delete_result = delete_pictures(terminal.backend_mut());
     let restore_result = session.restore();
     let reveal_path = app.reveal_path();
     let marked = app.marked_paths();
     let gallery_dir = app.gallery_dir();
     // The drop cancels the loop jobs. Their ffmpeg runs end before the process.
     drop(app);
-    let mut result = run_result.and(restore_result);
+    let mut result = run_result.and(delete_result).and(restore_result);
     if result.is_ok() {
         // phewr quits anyway. A yazi that does not answer keeps its old cursor.
         reveal_in_yazi(
@@ -348,34 +274,20 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_cli_overrides, check_paths, default_paths, prepare_app, probe_terminal,
-        release_terminal_to, self_check_on,
+        apply_cli_overrides, check_paths, default_paths, delete_pictures, prepare_app,
+        self_check_on,
     };
     use crate::config::Config;
     use std::path::PathBuf;
     use tuilibr::pictures::kitty::query::{LateAnswers, StartAnswers};
     use tuilibr::pictures::kitty::{KittyBackend, Loops, Transfer};
+    use tuilibr::terminal::start::{StartOptions, query_with};
 
     #[test]
-    fn release_deletes_pictures_first() {
+    fn delete_pictures_writes_delete_all() {
         let mut out = Vec::new();
-        let mut raw_calls = 0;
-        release_terminal_to(&mut out, true, || {
-            raw_calls += 1;
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(raw_calls, 1);
-        let text = String::from_utf8_lossy(&out);
-        let delete = text.find("a=d").expect("delete all");
-        let mouse = text.find("\x1b[?1006l").expect("mouse off");
-        let show = text.find("\x1b[?25h").expect("cursor shown");
-        let leave = text.find("\x1b[?1049l").expect("alternate screen left");
-        assert!(delete < mouse && mouse < show && show < leave);
-
-        let mut without_mouse = Vec::new();
-        release_terminal_to(&mut without_mouse, false, || Ok(())).unwrap();
-        assert!(!String::from_utf8_lossy(&without_mouse).contains("\x1b[?1006l"));
+        delete_pictures(&mut out).unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("a=d"));
     }
 
     #[test]
@@ -418,14 +330,15 @@ mod tests {
     }
 
     #[test]
-    fn probe_brings_cell_size() {
-        let probe = probe_terminal(
-            Some("direct"),
-            None,
-            false,
+    fn start_brings_cell_size() {
+        let start = query_with(
+            StartOptions {
+                transfer_override: Some("direct"),
+                ..StartOptions::default()
+            },
             |sequence, answers| {
                 assert!(!sequence.is_empty());
-                assert_eq!(answers, 1, "only the animation probe goes out");
+                assert_eq!(answers, 2, "the plain query and the animation probe");
                 StartAnswers {
                     cell_px: Some((10, 20)),
                     probe: None,
@@ -436,35 +349,45 @@ mod tests {
                     foreground: Some([200, 200, 200]),
                 }
             },
-            || panic!("the cell size goes out with the probe"),
         );
-        assert_eq!(probe.cell_px, Some((10, 20)));
+        assert_eq!((start.cell.width, start.cell.height), (10, 20));
+        assert!(start.cell_from_terminal);
         assert_eq!(
-            probe.late_answers,
+            start.owed,
             LateAnswers {
                 kitty: 1,
                 foreground: false
             }
         );
-        assert_eq!(probe.foreground, Some([200, 200, 200]));
-        assert_eq!(probe.graphics.transfer(), Transfer::Direct);
-        assert_eq!(probe.graphics.loops(), Loops::Ticks);
+        assert_eq!(start.foreground, Some([200, 200, 200]));
+        assert_eq!(start.backend.transfer(), Transfer::Direct);
+        assert_eq!(start.backend.loops(), Loops::Ticks);
     }
 
     #[test]
-    fn fixed_backend_asks_cell_size_alone() {
-        let probe = probe_terminal(
-            Some("png"),
-            Some(Loops::Animation),
-            false,
-            |_, _| panic!("a fixed backend sends no probe"),
-            || Some((7, 14)),
+    fn fixed_backend_asks_the_plain_query_alone() {
+        let start = query_with(
+            StartOptions {
+                transfer_override: Some("png"),
+                loops: Some(Loops::Animation),
+                ssh: false,
+            },
+            |sequence, answers| {
+                assert_eq!(answers, 1, "only the plain query goes out");
+                assert!(sequence.starts_with(b"\x1b_Ga=q,i=30"));
+                StartAnswers {
+                    cell_px: Some((7, 14)),
+                    probe: None,
+                    late_answers: LateAnswers::default(),
+                    foreground: None,
+                }
+            },
         );
-        assert_eq!(probe.cell_px, Some((7, 14)));
-        assert_eq!(probe.late_answers, LateAnswers::default());
-        assert_eq!(probe.foreground, None);
-        assert_eq!(probe.graphics.transfer(), Transfer::Png);
-        assert_eq!(probe.graphics.loops(), Loops::Animation);
+        assert_eq!((start.cell.width, start.cell.height), (7, 14));
+        assert_eq!(start.owed, LateAnswers::default());
+        assert_eq!(start.foreground, None);
+        assert_eq!(start.backend.transfer(), Transfer::Png);
+        assert_eq!(start.backend.loops(), Loops::Animation);
     }
 
     #[test]

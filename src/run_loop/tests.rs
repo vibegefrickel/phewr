@@ -14,6 +14,7 @@ use tuilibr::pictures::kitty::answers::ANSWER_WAIT;
 use tuilibr::pictures::kitty::query::LateAnswers;
 use tuilibr::pictures::kitty::screen::Screen;
 use tuilibr::pictures::test_support::key_events;
+use tuilibr::terminal::answers::LateAnswerFilter;
 
 #[test]
 fn leftover_emits_need_no_wait() {
@@ -320,8 +321,8 @@ fn state_starts_without_status() {
 }
 
 /// A filter that owes one late Kitty answer and no OSC 10 answer.
-fn owing_kitty_answer() -> crate::keys::LateAnswerFilter {
-    crate::keys::LateAnswerFilter::new(LateAnswers {
+fn owing_kitty_answer() -> LateAnswerFilter {
+    LateAnswerFilter::new(LateAnswers {
         kitty: 1,
         foreground: false,
     })
@@ -331,7 +332,7 @@ fn owing_kitty_answer() -> crate::keys::LateAnswerFilter {
 fn late_answer_keeps_note() {
     let mut app = gallery_app(3);
     let mut state = LoopState::new(&Config::default());
-    state.late_answers = owing_kitty_answer();
+    state.answers = owing_kitty_answer();
     state.status = Some("note".into());
     let alt_underscore = Event::Key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT));
     assert!(!handle_input(&mut app, &mut state, &alt_underscore).unwrap());
@@ -396,7 +397,7 @@ fn self_check_answer_wins_over_an_owed_probe_answer() {
     app.screen.record(7, 16);
     let mut state = LoopState::new(&Config::default());
     // The probe answer timed out and never comes. The first Kitty answer is an ENOENT.
-    state.late_answers = owing_kitty_answer();
+    state.answers = owing_kitty_answer();
     for event in key_events(b"\x1b_Gi=7,p=1;ENOENT: image not found\x1b\\") {
         assert!(!handle_input(&mut app, &mut state, &event).unwrap());
     }
@@ -415,7 +416,7 @@ fn late_probe_answer_then_self_check_answer() {
     app.screen = Screen::default().with_self_check(true);
     app.screen.record(7, 16);
     let mut state = LoopState::new(&Config::default());
-    state.late_answers = owing_kitty_answer();
+    state.answers = owing_kitty_answer();
     let mut input = b"\x1b_Gi=31;OK\x1b\\".to_vec();
     input.extend_from_slice(b"\x1b_Gi=7,p=1;ENOENT: image not found\x1b\\");
     for event in key_events(&input) {
@@ -431,7 +432,7 @@ fn self_check_answer_leaves_a_late_foreground_owed() {
     app.screen = Screen::default().with_self_check(true);
     app.screen.record(7, 16);
     let mut state = LoopState::new(&Config::default());
-    state.late_answers = crate::keys::LateAnswerFilter::new(LateAnswers {
+    state.answers = LateAnswerFilter::new(LateAnswers {
         kitty: 0,
         foreground: true,
     });

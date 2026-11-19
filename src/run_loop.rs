@@ -2,7 +2,7 @@
 
 use crate::app::{App, ViewMode};
 use crate::config::Config;
-use crate::keys::{LateAnswerFilter, handle_event};
+use crate::keys::handle_event;
 #[cfg(feature = "video")]
 use crate::kitty_output::render_video_frame;
 use crate::kitty_output::{
@@ -11,7 +11,6 @@ use crate::kitty_output::{
 };
 #[cfg(feature = "video")]
 use crate::mpv;
-use crate::terminal::{disable_mouse, enable_mouse};
 use crate::ui;
 #[cfg(feature = "video")]
 use crate::video_handoff::{VideoState, play_videos, poll_mpv_window};
@@ -19,8 +18,8 @@ use crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::prelude::*;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
-use tuilibr::pictures::kitty::answers::AnswerKeys;
 use tuilibr::pictures::kitty::query::query_cell_pixel_size;
+use tuilibr::terminal::{answers::LateAnswerFilter, disable_mouse, enable_mouse};
 
 /// The wait while a background result is on its way.
 const BUSY_POLL: Duration = Duration::from_millis(10);
@@ -42,9 +41,8 @@ pub(crate) const WINDOW_POLL: Duration = Duration::from_millis(100);
 pub(crate) struct LoopState {
     /// A one-line note for the status row. The next key press clears it.
     pub(crate) status: Option<String>,
-    pub(crate) late_answers: LateAnswerFilter,
-    /// The answers of the terminal for the self check of the screen, read from the keys.
-    pub(crate) answers: AnswerKeys,
+    /// Reads the Kitty answers out of the keys and drops the late answers of the start.
+    pub(crate) answers: LateAnswerFilter,
     /// `[gallery] mouse`.
     pub(crate) mouse: bool,
     /// True while the terminal reports the mouse.
@@ -59,8 +57,7 @@ impl LoopState {
     pub(crate) fn new(config: &Config) -> Self {
         Self {
             status: None,
-            late_answers: LateAnswerFilter::default(),
-            answers: AnswerKeys::default(),
+            answers: LateAnswerFilter::default(),
             cell_size_from_terminal: false,
             mouse: config.mouse,
             mouse_captured: config.mouse,
@@ -120,25 +117,24 @@ pub(crate) fn run(
 /// the screen, and the next grid pass sends a lost picture again. An event that can belong to
 /// an answer waits for the next event or for [`release_held`].
 fn handle_input(app: &mut App, state: &mut LoopState, event: &Event) -> io::Result<bool> {
-    let read = state.answers.read(event.clone(), Instant::now());
-    state.late_answers.kitty_answers_came(read.ends);
-    for answer in &read.answers {
+    let filtered = state.answers.read(event.clone(), Instant::now());
+    for answer in &filtered.answers {
         app.screen.answer(answer);
     }
-    handle_events(app, state, &read.events)
+    handle_events(app, state, &filtered.events)
 }
 
 /// Ends a hold of key events that waited `ANSWER_WAIT` for the end of an answer, after the
 /// input went quiet. Returns `true` when an event that comes back quits phewr.
 fn release_held(app: &mut App, state: &mut LoopState, now: Instant) -> io::Result<bool> {
-    let events = state.answers.release_stale(now);
-    handle_events(app, state, &events)
+    let filtered = state.answers.release_stale(now);
+    handle_events(app, state, &filtered.events)
 }
 
-/// The events that belong to no Kitty answer: a late OSC answer goes, the rest goes to the app.
+/// The events that belong to no answer. The filter dropped the late answers already.
 fn handle_events(app: &mut App, state: &mut LoopState, events: &[Event]) -> io::Result<bool> {
     for event in events {
-        if !state.late_answers.swallows(event) && handle_app_event(app, state, event)? {
+        if handle_app_event(app, state, event)? {
             return Ok(true);
         }
     }

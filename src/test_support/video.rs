@@ -323,8 +323,7 @@ pub(crate) fn state_with_decoder(
 ) -> LoopState {
     LoopState {
         status: None,
-        late_answers: crate::keys::LateAnswerFilter::default(),
-        answers: tuilibr::pictures::kitty::answers::AnswerKeys::default(),
+        answers: tuilibr::terminal::answers::LateAnswerFilter::default(),
         cell_size_from_terminal: false,
         mouse: true,
         mouse_captured: true,
