@@ -2647,6 +2647,8 @@ dependencies = [
  "ratatui",
  "rayon",
  "rustix",
+ "serde",
+ "serde_json",
  "tempfile",
  "turbojpeg",
  "unicode-segmentation",
