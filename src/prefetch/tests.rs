@@ -1,6 +1,6 @@
 //! The tests of the prefetch: the jobs, the cache, the generations and the neighbor order.
 
-use super::{Prefetcher, capped_box};
+use super::{Prefetcher, capped_box, decode_for_screen};
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::fs;
@@ -20,6 +20,39 @@ fn save_image(dir: &Path, name: &str, width: u32, height: u32) -> PathBuf {
     let path = dir.join(name);
     RgbaImage::new(width, height).save(&path).unwrap();
     path
+}
+
+type Gate = Arc<(Mutex<bool>, Condvar)>;
+
+/// Opens the gate when it drops, so a failed assertion never leaves a blocked rayon worker.
+struct GateGuard(Gate);
+
+impl Drop for GateGuard {
+    fn drop(&mut self) {
+        open_gate(&self.0);
+    }
+}
+
+/// Hold every decode of `prefetcher` until `open_gate`, so a test never races the rayon pool.
+fn gate_decodes(prefetcher: &mut Prefetcher) -> GateGuard {
+    let gate: Gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let held = Arc::clone(&gate);
+    prefetcher.decode = Arc::new(move |path, hint| {
+        let (open, signal) = &*held;
+        let mut open = open.lock().unwrap();
+        while !*open {
+            open = signal.wait(open).unwrap();
+        }
+        drop(open);
+        decode_for_screen(path, hint)
+    });
+    GateGuard(gate)
+}
+
+fn open_gate(gate: &Gate) {
+    let (open, signal) = &**gate;
+    *open.lock().unwrap() = true;
+    signal.notify_all();
 }
 
 fn wait_until_idle(prefetcher: &mut Prefetcher) {
@@ -327,6 +360,7 @@ fn two_jobs_run_rest_wait() {
         .collect();
 
     let mut prefetcher = Prefetcher::new();
+    let gate = gate_decodes(&mut prefetcher);
     prefetcher.kick(4, 0, &paths);
     assert_eq!(
         prefetcher.pending_jobs(),
@@ -340,6 +374,7 @@ fn two_jobs_run_rest_wait() {
     prefetcher.kick(4, 0, &paths);
     assert_eq!(prefetcher.pending_count(), 6);
 
+    open_gate(&gate.0);
     wait_until_idle(&mut prefetcher);
     for i in [1, 2, 3, 5, 6, 7] {
         assert!(
@@ -351,11 +386,13 @@ fn two_jobs_run_rest_wait() {
     }
 
     let mut prefetcher = Prefetcher::new();
+    let gate = gate_decodes(&mut prefetcher);
     prefetcher.kick(4, 0, &paths);
     prefetcher.kick_gallery(8, &paths);
     let waiting: Vec<usize> = prefetcher.queue.iter().map(|job| job.0).collect();
     assert_eq!(waiting, vec![8]);
     assert_eq!(prefetcher.pending_jobs(), 2);
+    open_gate(&gate.0);
     wait_until_idle(&mut prefetcher);
 }
 
@@ -387,7 +424,8 @@ fn smaller_box_decode_unused() {
 
 #[test]
 fn invalidated_jobs_count_to_limit() {
-    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let gate: Gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release = GateGuard(Arc::clone(&gate));
     let started = Arc::new(AtomicUsize::new(0));
     let active = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
@@ -434,11 +472,7 @@ fn invalidated_jobs_count_to_limit() {
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(started.load(Ordering::SeqCst), 2);
 
-    {
-        let (open, signal) = &*gate;
-        *open.lock().unwrap() = true;
-        signal.notify_all();
-    }
+    open_gate(&gate);
     wait_until_idle(&mut prefetcher);
     assert!(peak.load(Ordering::SeqCst) <= 2);
 }
