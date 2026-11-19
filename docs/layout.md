@@ -163,14 +163,15 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `write_heif_sized` with a thumbnail of any size).
 - `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
   `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
-  view. `status.rs` holds the status row of each view (`draw_status_row`, `error_line`,
-  `gallery_status_line`, `fullscreen_status_line`, `video_status_line`, `is_empty_folder`).
+  view. `status.rs` fills the `BarView` of each view for `tuilibr::frame::draw_bar`
+  (`draw_status_row`, `BarParts`, `gallery_bar`, `fullscreen_bar`, `video_bar`, `folder_span`,
+  `shorten_path`, `display_path`, `is_empty_folder`).
   `grid.rs` holds the grid cells: the borders, the folder names (`folder_name_text`, the column width
-  through `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` holds the help popup: two columns
-  from 102 terminal columns on (`HELP_TWO_COLUMN_WIDTH`, the rows in `HELP_GALLERY_ROWS` and
-  `HELP_FULLSCREEN_ROWS`, one block "Fullscreen / video player"), else one column that clips. The
-  box has rounded corners, one cell of padding on every side and the title after one line cell,
-  like the help box of schnattr (2026-11-18). The gallery, the fullscreen view and the
+  through `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` fills the `HelpView` for
+  `tuilibr::frame::draw_help` (`GALLERY_COLUMN`, `FULLSCREEN_SECTIONS`, `kitty_rows`,
+  `draw_help_popup`): the sections Gallery, Search, Fullscreen / video player, Mouse and Kitty
+  graphics (the transfer medium and the loop path), two columns from 102 terminal columns on,
+  else one column. The frame draws the box with rounded corners, the padding and the title. The gallery, the fullscreen view and the
   video view have no frame. They use the full area minus 1 status row (`content_area`,
   `status_area`). The help popup and the info panel keep their borders.
 - `gallery/`: `mod.rs` holds the grid geometry and the cursor.

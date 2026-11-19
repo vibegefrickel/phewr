@@ -21,8 +21,9 @@ It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT).
   plans no Homebrew release. Users clone the repository and build phewr with `just install`,
   and the dotfiles install does the same. There is no CI.
 
-The stack: ratatui 0.30, crossterm 0.29, clap, image 0.25, fast_image_resize, rayon, lru,
-serde/toml, jxl-oxide and jxl-render (both with exact pins), moxcms, resvg (without default
+The stack: ratatui 0.30, crossterm 0.29, clap, tuilibr (the shared screen frame of the three
+apps, a path dependency `../tuilibr`, `deny.toml` allows the wildcard path), image 0.25,
+fast_image_resize, rayon, lru, serde/toml, jxl-oxide and jxl-render (both with exact pins), moxcms, resvg (without default
 features, for the grid icons). The features `turbo` (libjpeg-turbo) and `heic` (libheif) link
 native Homebrew libraries. The feature `jxl` makes jxl-oxide and jxl-render optional. The feature
 `video` links no library: it starts `ffmpeg`, `ffprobe` and `mpv` from PATH when they exist, and
@@ -195,8 +196,9 @@ short form:
   scan, slideshow, meta, mouse, the thumbnail jobs and their bounds (`thumbnails/`), the cache
   folder and the loop files of the disk cache (`disk_cache/`), the folder prefetch
   (`folder_prefetch/`) and the grid loops (`grid_loops/`).
-- `ui/`: the ratatui drawing: `mod.rs` (the views and the info panel), `status.rs`, `grid.rs`,
-  `help.rs`.
+- `ui/`: the ratatui drawing: `mod.rs` (the views and the info panel), `status.rs` (the parts of
+  the `BarView` for `tuilibr::frame::draw_bar`), `grid.rs`, `help.rs` (the `HelpView` sections
+  for `tuilibr::frame::draw_help`).
 - `gallery/`: the grid geometry and the cursor.
 - `scanner/`: the background scan, the video extensions and the Live Photo pairing (`live/`).
 - `image_list.rs`: `SharedImageList`, the list that the scanner fills and the UI reads.
@@ -311,12 +313,15 @@ decisions. Read the long form before you change the code that an item names.
   `App::gallery_dir` without a newline.
 - **Status notes:** the note lives in `LoopState`, not in `App`. The next key press or mouse
   button press clears it. A scan read error lives in `App::scan_error`.
-- **Status row:** the row starts with the mode block (NORMAL, FULLSCREEN, SEARCH, HELP, one
-  letter below 60 columns, the shape of the schnattr mode block, `ui::status::mode_block`), then
-  the folder path with the home folder as `~` (`App::home_dir`, set in `main`, never read from
-  `HOME` in a test), then the name and the position. A narrow row shortens the path from its
-  start with `…/`. A file list (several file arguments, `App::file_list`) shows no path. The row
-  shows no key hints, only the facts of the selected file (`file_meta.rs`) at the right. A thread
+- **Status row:** the row is the bar of `tuilibr::frame::draw_bar` (phase 4a of the tuilibr
+  plan, 2026-11-19). `ui/status.rs` fills a `BarView` per view: the mode block (NORMAL,
+  FULLSCREEN, SEARCH, HELP, one letter below `NARROW_BELOW`) as `ModeView`, the folder path with
+  the home folder as `~` (`App::home_dir`, set in `main`, never read from `HOME` in a test) as
+  the `left` span, the name and the position, the zoom, the player time, the search line, the
+  selection count and the note as `middle` texts, the facts of the selected file (`file_meta.rs`)
+  and the entry counts as the `right` groups, no time and no icons. The middle sits in the
+  center of the free room. A narrow row shortens the path from its start with `…/`. A file list
+  (several file arguments, `App::file_list`) shows no path. The row shows no key hints. A thread
   reads them, so a cursor move never waits. A status note, a question, an error, the search line
   and a row too narrow for both hide the facts. A slideshow has no status row: a box SLIDESHOW
   in the badge style sits at the bottom left of the picture.

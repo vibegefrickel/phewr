@@ -226,13 +226,21 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   scan lives in `App::scan_error`, not in `App::error`. The status row shows it after `error`. It
   survives the first decode, and a key press or a folder
   switch clears it.
-- **Status row:** the row starts with the mode block (2026-11-19, asked by the maintainer after
-  the schnattr status bar): NORMAL in the grid (red), FULLSCREEN in the fullscreen view and the
+- **Status row:** since phase 4a of the tuilibr plan (2026-11-19), the row is the bar of
+  `tuilibr::frame::draw_bar`. `ui/status.rs` fills one `BarView` per view (`gallery_bar`,
+  `fullscreen_bar`, `video_bar`, the shared `BarParts`): the mode as `ModeView`, the folder path
+  as the `left` span, the name and the position, the zoom, the player time, the search line, the
+  selection count and the note or the error as `middle` texts (the first text gets the room
+  first), the facts and the entry counts as the `right` groups, an empty time, no icons. The bar
+  has the ground of the frame, the middle sits in the center of the free room, and the facts are
+  white. An error shows alone, without the counts. Two frame limits went to tuilibr: an empty
+  time costs 3 columns at the right edge, and the help rows need `'static`, so the two Kitty rows
+  of the help leak one time per pair (`kitty_rows`, at most 9). The mode block (2026-11-19, asked
+  by the maintainer after the schnattr status bar): NORMAL in the grid (red), FULLSCREEN in the fullscreen view and the
   terminal player (light green), SEARCH on the search line (blue), HELP while the help overlay is
   open (light cyan). The block has the shape of the schnattr `mode_block` (foreground color,
-  reversed, bold), written as one function `ui::status::mode_block`, so a later move into a shared
-  module is a copy. The colors are roles of `STYLES` (`mode_*`). Below 60 columns
-  (`MODE_SHORT_WIDTH`) the block shows one letter. Then the folder path follows, dim, with the home
+  reversed, bold), drawn by the frame since phase 4a. The colors are roles of `STYLES` (`mode_*`).
+  Below `NARROW_BELOW` (60 columns) the block shows one letter. Then the folder path follows, dim, with the home
   folder as `~` (`display_path`, the home folder is `App::home_dir`, set in `main`, so a test
   never reads `HOME`). A narrow row shortens the path from its start with `…/` and keeps the last
   folder whole (`shorten_path`); if `…/last` does not fit, the path hides. A file list (several
