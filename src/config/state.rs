@@ -494,7 +494,7 @@ mod tests {
             save_visible_rows(&state_path, Some(&folder), 3);
         }
 
-        let state: StateFile = read_state(&state_path);
+        let state = read_state(&state_path);
         assert_eq!(state.zoom.len(), MAX_ZOOM_FOLDERS);
         assert!(
             !state.zoom.contains_key(&PathBuf::from("/photos/0")),

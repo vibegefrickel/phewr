@@ -1,5 +1,12 @@
-# The nextest configuration for `just test`.
+# The nextest profiles. The default profile serves `just test`. The `ci` profile runs every test
+# and writes a junit report: `cargo nextest run --profile ci`.
 
 [profile.default]
 # A test that hangs is a failure, not a stuck gate.
 slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"

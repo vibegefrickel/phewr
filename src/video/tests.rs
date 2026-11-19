@@ -312,11 +312,11 @@ fn failed_probe_or_start_fails() {
     let target = (32, 48);
     let ffmpeg = Path::new("/bin/ffmpeg");
     let path = Path::new("/v/clip.mp4");
-    assert!(decode_first_frame(&*decoder, ffmpeg, path, target, &[], WAIT).is_err());
+    decode_first_frame(&*decoder, ffmpeg, path, target, &[], WAIT).unwrap_err();
     assert!(decoder.starts().is_empty(), "no ffmpeg without a probe");
     decoder.fail_probe.set(false);
     decoder.fail_start.set(true);
-    assert!(decode_first_frame(&*decoder, ffmpeg, path, target, &[], WAIT).is_err());
+    decode_first_frame(&*decoder, ffmpeg, path, target, &[], WAIT).unwrap_err();
 }
 
 #[test]
@@ -435,7 +435,7 @@ fn non_video_files_fail() {
     let dir = test_dir();
     let text = dir.path().join("notes.mp4");
     std::fs::write(&text, "not a video").unwrap();
-    assert!(decode_first_frame(&decoder, &ffmpeg, &text, (32, 48), &[], WAIT).is_err());
+    decode_first_frame(&decoder, &ffmpeg, &text, (32, 48), &[], WAIT).unwrap_err();
 
     let audio = dir.path().join("tone.m4a");
     let audio_text = audio.to_str().unwrap();
@@ -461,7 +461,7 @@ fn frameless_video_tries_both_chains() {
         &[],
         WAIT,
     );
-    assert!(result.is_err());
+    result.unwrap_err();
     let starts = decoder.starts();
     assert_eq!(starts.len(), 2, "{starts:?}");
     assert!(starts[0].contains("-hwaccel_output_format"), "{starts:?}");
@@ -480,7 +480,7 @@ fn frameless_animation_stays_in_software() {
         &[],
         WAIT,
     );
-    assert!(result.is_err());
+    result.unwrap_err();
     let starts = decoder.starts();
     assert_eq!(starts.len(), 1, "{starts:?}");
     assert!(!starts[0].contains("-hwaccel_output_format"), "{starts:?}");

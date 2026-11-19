@@ -537,10 +537,8 @@ mod tests {
         let args = [OsString::from("-c"), OsString::from("exit 5")];
         let exit = SystemRunner.spawn(shell, &args, None).unwrap();
         assert_eq!(exit.recv_timeout(Duration::from_secs(10)), Ok(Some(5)));
-        assert!(
-            SystemRunner
-                .spawn(Path::new("/nonexistent/mpv"), &[], None)
-                .is_err()
-        );
+        SystemRunner
+            .spawn(Path::new("/nonexistent/mpv"), &[], None)
+            .unwrap_err();
     }
 }

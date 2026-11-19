@@ -280,7 +280,7 @@ mod tests {
         // A file that ends inside a block is not animated and gives no panic.
         let path = dir.path().join("cut.gif");
         std::fs::write(&path, &two[..20]).unwrap();
-        assert!(read_is_animated(&path).is_err());
+        read_is_animated(&path).unwrap_err();
         assert!(!is_animated(&path));
     }
 

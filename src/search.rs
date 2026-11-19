@@ -171,7 +171,7 @@ mod tests {
         let new = worker.submit("rep", &filenames);
 
         assert_eq!(answer(&new), vec![1]);
-        assert!(new.recv_timeout(Duration::from_millis(50)).is_err());
+        new.recv_timeout(Duration::from_millis(50)).unwrap_err();
         drop(old);
     }
 

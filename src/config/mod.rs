@@ -431,7 +431,8 @@ mod tests {
             .unwrap();
             let config = load_at(&config_path, &state_path);
             assert_eq!(
-                config.slideshow_interval, DEFAULT_SLIDESHOW_INTERVAL,
+                config.slideshow_interval.to_bits(),
+                DEFAULT_SLIDESHOW_INTERVAL.to_bits(),
                 "interval = {interval}"
             );
         }

@@ -649,6 +649,6 @@ mod tests {
             &[],
             &AtomicBool::new(false),
         );
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }

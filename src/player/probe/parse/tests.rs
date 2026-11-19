@@ -73,7 +73,7 @@ fn frame_metadata_gives_peak() {
     let bare = r#"{"frames":[{"side_data_list":[{"side_data_type":"H.26[45] User Data Unregistered SEI message"}]}]}"#;
     assert_eq!(parse_frame_peak(bare.as_bytes()).unwrap(), None);
     assert_eq!(parse_frame_peak(b"{}").unwrap(), None);
-    assert!(parse_frame_peak(b"not json").is_err());
+    parse_frame_peak(b"not json").unwrap_err();
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn missing_stream_or_json_fails() {
     ] {
         assert_eq!(parse(json.as_bytes(), None).unwrap_err().to_string(), text);
     }
-    assert!(parse(b"not json", None).is_err());
+    parse(b"not json", None).unwrap_err();
     let bare = parse(br#"{"streams":[{"index":0}]}"#, None).unwrap();
     assert_eq!((bare.fps, bare.duration), (24.0, 0.0), "the fallbacks");
 }

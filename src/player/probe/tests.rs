@@ -84,7 +84,7 @@ fn cache_probes_until_file_changes() {
     );
     let error = || Err(std::io::Error::other("no video stream"));
     let other = tempfile::NamedTempFile::new().unwrap();
-    assert!(cache.get_or_probe(other.path(), error).is_err());
+    cache.get_or_probe(other.path(), error).unwrap_err();
     cache.get_or_probe(other.path(), run).unwrap();
     assert_eq!(runs.get(), 3, "an error does not go into the cache");
 }
@@ -170,7 +170,7 @@ fn second_caller_waits_for_running_probe() {
             std::thread::sleep(Duration::from_millis(10));
         }
         release_tx.send(()).unwrap();
-        assert!(second.join().unwrap().is_ok());
+        second.join().unwrap().unwrap();
     });
     assert_eq!(
         second_runs.load(Ordering::SeqCst),
@@ -186,7 +186,7 @@ fn panicked_probe_frees_path() {
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         cache.get_or_probe(file.path(), || panic!("synthetic probe panic"))
     }));
-    assert!(panicked.is_err());
+    panicked.unwrap_err();
     let info = cache.get_or_probe(file.path(), || Ok(crate::test_support::video::clip_info()));
     assert!(info.is_ok(), "the next caller probes and does not wait");
 }
@@ -338,8 +338,8 @@ fn non_video_fails_probe() {
     std::fs::write(file.path(), "not a video").unwrap();
     let error = probe(&ffprobe, file.path()).unwrap_err();
     assert!(error.to_string().contains("Invalid data"), "{error}");
-    assert!(probe(&ffprobe, Path::new("/nonexistent/a.mov")).is_err());
-    assert!(probe(Path::new("/nonexistent/ffprobe"), &fixture("anim.gif")).is_err());
+    probe(&ffprobe, Path::new("/nonexistent/a.mov")).unwrap_err();
+    probe(Path::new("/nonexistent/ffprobe"), &fixture("anim.gif")).unwrap_err();
 }
 
 /// A real video: `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`.

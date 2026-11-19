@@ -186,7 +186,7 @@ mod tests {
         assert!(Cli::try_parse_from(["phewr", "-n", "-1"]).is_err());
         assert!(Cli::try_parse_from(["phewr", "-n", "inf"]).is_err());
         assert!(Cli::try_parse_from(["phewr", "-n", "NaN"]).is_err());
-        assert!(Cli::try_parse_from(["phewr", "-j", "1", "-n", "0.5"]).is_ok());
+        Cli::try_parse_from(["phewr", "-j", "1", "-n", "0.5"]).unwrap();
     }
 
     #[test]
