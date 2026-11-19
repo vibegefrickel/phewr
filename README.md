@@ -21,20 +21,25 @@ and mpv are optional. Without ffmpeg, videos have no thumbnails and play only in
 ```sh
 brew install rustup just pkgconf jpeg-turbo libheif ffmpeg mpv
 git clone https://codeberg.org/webgefrickel/phewr.git
+git clone <the tuilibr clone URL> tuilibr
 cd phewr
 just install
 ```
 
+The build needs the clone of tuilibr (the shared crate) at `../tuilibr`, next to the phewr folder.
+phewr uses it as a path dependency. tuilibr has no public URL yet.
+
 `just install` builds a release binary and copies it to `~/.local/bin/phewr`. Set `PREFIX` to
 install into another prefix. `just uninstall` removes the binary again.
 
-All features are on by default. To build without some of them, use cargo directly, for example
+All features are on by default. The features `turbo`, `heic`, `jxl` and `sips` forward to tuilibr. To build without some of them, use cargo directly, for example
 `cargo install --path . --no-default-features --features turbo`.
 
 | Feature | Needs |
 |---------|-------|
 | `turbo` | libjpeg-turbo, the JPEG decoder with DCT scaling |
 | `heic` | libheif 1.19 or later, for HEIC, HEIF and AVIF |
+| `jxl` | the JPEG XL decoder, no native library |
 | `video` | `ffmpeg` and `ffprobe` 7 or later on `PATH` at run time |
 | `sips` | macOS `/usr/bin/sips`, for camera RAW, PSD, PDF, SVG and other formats |
 
@@ -285,7 +290,7 @@ just --list   # all recipes
 Some tests decode real files from your library. A test without its variable skips:
 
 ```sh
-PHEWR_TEST_HEIC=~/Pictures/IMG_0001.HEIC PHEWR_TEST_JPEG=~/Pictures/IMG_0002.JPG just test-real
+PHEWR_TEST_RAW=~/Pictures/DSCF0001.RAF just test-real
 ```
 
 `AGENTS.md` has the code layout, the rules and the workflow for contributors. `docs/` has the

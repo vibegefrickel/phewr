@@ -1,5 +1,7 @@
 # Gotchas in detail
 
+The code of the Kitty layer and of the decoders lives in `tuilibr::pictures` since 2026-11-19. A change of these items goes into tuilibr. `tuilibr/docs/pictures.md` is the master of the module.
+
 This page holds the long form of each gotcha in `AGENTS.md`. Each item names the code, the measured numbers and the decisions with their dates. Read the item before you change the code that it names.
 
 - **Terminal player:** ffmpeg runs as a subprocess with VideoToolbox and writes raw frames to a
@@ -108,7 +110,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   against 0.51 to 0.56), so HDR keeps 33 points. `SDR_WHITE_NITS = 500` matches the macOS SDR
   export on three iPhone clips. A PQ video or still maps with the peak of its HDR10 metadata:
   `MaxCLL` from 100 to 10000 nits, else the mastering display maximum, else 1000 nits
-  (`pictures::decode::hdr::hdr10_peak`). The peak goes to the smallest bucket at or above it: 500, 1000,
+  (`tuilibr::pictures::decode::hdr::hdr10_peak`). The peak goes to the smallest bucket at or above it: 500, 1000,
   2000, 4000 or 10000 nits (`Peak::bucket`). The 500 bucket is SDR white and has no roll-off.
   HLG keeps 1000 nits. The probe reads `max_content` and `max_luminance` of the stream side
   data. A stream can carry HDR10 only in the SEI, without `mdcv` and `clli` in its sample entry.
@@ -121,7 +123,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   a JPEG XL that is mastered at 10000 nits maps with 1000 nits. An 8-bit PQ HEIF reads `clli` and
   `mdcv` too, and the 8-bit path maps through `color::convert`. A PQ or HLG still
   (AVIF, HEIC, JPEG XL, 16-bit PNG with `cICP`) maps with a copy of the same math in
-  `pictures/decode/hdr/`, per pixel and without a cube, after the resize. The primaries are
+  `tuilibr::pictures::decode::hdr`, per pixel and without a cube, after the resize. The primaries are
   BT.2020, Display P3, DCI-P3 (with the Bradford adaptation) or BT.709, and libheif decodes such a
   file in 16 bit. A test compares the still map with each point of the player cubes, so a change of one
   copy fails it.
@@ -287,7 +289,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   and placed centered with `c=` and `r=`, and the borders live in the gaps. The geometry, the
   padding and the borders are in `docs/grid-and-kitty.md` ("Grid gaps and borders") and in the
   module doc of `gallery/mod.rs`.
-- **Terminal storage:** `TerminalImages` in `pictures/kitty/terminal_images.rs` tracks the images that the
+- **Terminal storage:** `TerminalImages` in `tuilibr::pictures::kitty::terminal_images` tracks the images that the
   terminal stores. The grid deletes evicted and replaced ids and trims the oldest unshown images
   above `TERMINAL_IMAGE_BUDGET` (128 MB). The trim skips the shown ids and goes on with the next
   older image. The in-memory cache never evicts a visible cell. The
@@ -349,7 +351,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   transfer keeps `q=2`, else each transfer gets an `OK`. phewr turns the self check on by
   default, and `PHEWR_KITTY_SELF_CHECK=0` turns it off (`SELF_CHECK_OVERRIDE` in `main.rs`).
   crossterm reads an answer as key events (Alt+`_`, `G`, `i`, `=`, ... and Alt+`\`).
-  `AnswerKeys` (`pictures/kitty/answers.rs`) rebuilds the bytes from the events and holds the
+  `AnswerKeys` (`tuilibr::pictures::kitty::answers`) rebuilds the bytes from the events and holds the
   events of a possible answer for at most 50 ms (`ANSWER_WAIT`). The run loop wakes at the end
   of the hold (`release_held`). phewr drops the events of a started answer that never ends,
   because their letters run the actions of their keys. `handle_input` runs `AnswerKeys` first,
@@ -399,7 +401,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   frames are in `docs/video.md` ("Grid loop frames"). The two paths, the ids, the jobs and the
   loop cache are in `docs/app-state.md` ("Grid loops"). In herdr (`HERDR_ENV` or
   `TERM_PROGRAM=herdr`), the loops take the ticks without the animation probe
-  (`pictures::kitty::protocol::probe::chosen_loops`). herdr 0.9.5 keeps its own Kitty image store with
+  (`tuilibr::pictures::kitty::protocol::probe::chosen_loops`). herdr 0.9.5 keeps its own Kitty image store with
   animation frames and answers the probe itself, but it plays no Kitty animation. The ticks
   play there (maintainer, 2026-11-03). `PHEWR_KITTY_LOOPS` and `[gallery] loops` win over herdr.
 - **Cell icons:** a grid cell without a thumbnail shows a large dim Lucide icon: `image` for a
@@ -410,10 +412,10 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   hides the pictures. A HEIC preview counts as a thumbnail. The design is in
   `docs/grid-and-kitty.md` ("Grid icons").
 - **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64) files
-  on a thread, once per scan (`pictures/shape/mod.rs`). The shape stays until the next directory switch,
+  on a thread, once per scan (`tuilibr::pictures::shape`). The shape stays until the next directory switch,
   so the columns never move while the user browses. The buckets and the per-format rules are in
   `docs/grid-and-kitty.md` ("Cell shape").
-- **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `pictures/resize/mod.rs`). It is
+- **Resize filter:** every resize uses Catmull-Rom (`resize_options` in `tuilibr::pictures::resize`). It is
   one third faster than Lanczos3, and the difference is not visible.
 - **Pixel layouts:** every resize picks the fastest layout of `fast_image_resize`
   (`resize::Layout`, `rgb_resize_is_fastest`). An opaque RGBA image (`Decoded::opaque`,
@@ -440,7 +442,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   before (v21 since the DCT scale follows the fit). When the thumbnail output changes, increase
   the `v22` part. If several workers change the thumbnail output at the same time, each takes its
   own version, higher than main and than every branch in flight. `thumbnail_entry` in
-  `pictures/jobs/disk_cache/mod.rs` computes the key, and `CacheEntry` holds the file and the
+  `tuilibr::pictures::jobs::disk_cache` computes the key, and `CacheEntry` holds the file and the
   stamp (the length and the mtime). A job computes it at most one time, and the folder prefetch
   one time per file (`warm_disk_cache` and `sharp_thumbnail` call `decode_into_cache` with the same key). A test
   rebuilds the hash from its inputs, so a change of the input or of its order fails the test. The
@@ -473,10 +475,10 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   profile renders in its own space, and `moxcms` converts it (16 bit for deeper files, in tasks
   of 64 rows). A transform error, XYB and the SDR enum encodings stay with jxl-oxide. A PQ or HLG
   file (an enum encoding, or an ICC profile with a PQ or HLG `cicp` tag) keeps its 16-bit signal
-  for the tone map of `pictures/decode/hdr/`. jxl-oxide 0.12 clips XYB samples outside the sRGB gamut
+  for the tone map of `tuilibr::pictures::decode::hdr`. jxl-oxide 0.12 clips XYB samples outside the sRGB gamut
   before the BT.2020 conversion, so a lossy HDR JPEG XL loses saturation there, and a test marks
   the limit. The codestream orientation applies, the EXIF orientation does not. A gray file with
-  a PQ or HLG enum encoding renders its 16-bit signal and takes the tone map of `pictures/decode/hdr/`
+  a PQ or HLG enum encoding renders its 16-bit signal and takes the tone map of `tuilibr::pictures::decode::hdr`
   like an RGB file (`Cicp` BT.2100). A gray file with a PQ or HLG ICC profile stays with
   jxl-oxide. 34 of 40 public JPEG XL files match their reference within 4 levels
   (`docs/images-and-colors.md`, "JPEG XL").
@@ -494,7 +496,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Embedded HEIC thumbnails:** a cold HEIC cell decodes in two phases. Phase 1 decodes the
   embedded thumbnail (iPhone: 320x240) and shows it as a preview (`start_preview_decode`, at most
   `MAX_PREVIEW_JOBS`). The thumbnail must have the same `irot` and `imir` as the primary image.
-  `pictures/decode/heif_boxes.rs` reads them. The preview goes out at its own resolution, padded to the
+  `tuilibr::pictures::decode::heif_boxes` reads them. The preview goes out at its own resolution, padded to the
   whole cells of its own aspect, and the terminal scales it to those cells with `c=` / `r=`. A
   preview of another aspect than the primary image shows other margins than the sharp picture,
   never a stretch (`kitty_output::grid::tests::square_preview_of_wide_photo_keeps_its_shape`).
@@ -514,13 +516,13 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   file. The grid and the fullscreen view ask for a copy at the size of their box (`-Z`), and the
   zoom gets the full image. A relative path gets `./` in front, because sips reads `-x` as a
   function name. JPEG, PNG and HEIC never take this route. RAW and PSD try the embedded JPEG
-  first (`pictures/decode/embedded_jpeg/`): the largest JPEG of the TIFF IFDs, the CR3 boxes, the RAF
+  first (`tuilibr::pictures::decode::embedded_jpeg`): the largest JPEG of the TIFF IFDs, the CR3 boxes, the RAF
   header, the ORF maker note or PSD resource 1036. It is the grid preview. A JPEG covers a box
   when its fit into the box needs no upscale: one side reaches the box (`EmbeddedJpeg::covers`).
   A JPEG that covers the box is the sharp thumbnail and goes into the disk cache, so sips does
   not run for the cell. The fullscreen view and the prefetch also take a JPEG that covers their
   box, so a 3200x2400 preview serves the 2736x2052 fit of a 3392x2052 box. The zoom keeps sips.
-  An ORF holds its preview in the Olympus maker note (`pictures/decode/embedded_jpeg/orf.rs`). An OM-1
+  An ORF holds its preview in the Olympus maker note (`tuilibr::pictures::decode::embedded_jpeg::orf`). An OM-1
   ORF gives a 3200x2400 preview in about 1 ms, and its grid cell decodes in about 20 ms instead
   of 1.3 s to 1.6 s of sips. `sips -Z` reads no preview: it develops the RAW and then scales (0.5 s to
   1.1 s per file). The real-file numbers are in `docs/images-and-colors.md` ("sips").

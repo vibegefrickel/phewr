@@ -111,10 +111,10 @@ filter `bench::` finds all 26 benches. `just bench-live` runs only the group `be
   first loop comes after 1016 ms (before: 1168 ms). Every Live cell loops after 1354 ms with Kitty
   animations (before: 1425 ms) and after 1365 ms with ticks (before: 1592 ms).
 
-## Test helpers (`src/test_support/`, `src/pictures/test_support/`)
+## Test helpers (`src/test_support/`, `tuilibr::pictures::test_support`)
 
 - The animated fixtures (`anim.gif`, `anim.webp`, `anim.png`, `anim.avif`) hold 3 frames of
-  16x12 pixels. The stills hold one frame. `jxl/` holds the color charts of `jxl/make.sh`.
+  16x12 pixels. The stills hold one frame. `jxl/` (in tuilibr) holds the color charts of its `make.sh`.
 - The benches use the camera size 1620x1080 for `write_cr3_with_preview`, and
   `write_tiff_raw_with_preview` for a full-size preview. Both writers are in
-  `pictures/test_support/files.rs`.
+  `tuilibr::pictures::test_support::files`.

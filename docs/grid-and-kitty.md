@@ -1,5 +1,7 @@
 # Grid and Kitty output
 
+The Kitty layer of this page lives in `tuilibr::pictures::kitty` since 2026-11-19. `tuilibr/docs/pictures.md` is the master.
+
 This page holds the design facts of the grid geometry, the Kitty writes and the run loop waits.
 AGENTS.md holds the rules and the layout of the files.
 
@@ -16,7 +18,7 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 
 - The decode job pads every grid picture with transparent pixels to whole cells, at most the base
   cell box.
-- `pad_for_grid` in `pictures/resize/padding.rs` gives a `GridPicture` with its cell count.
+- `pad_for_grid` in `tuilibr::pictures::resize::padding` gives a `GridPicture` with its cell count.
 - The grid places the picture centered in its cell in whole cells. It uses `c=` and `r=` of that
   count and no `X=` and `Y=`.
 - The content is centered to within half a cell.
@@ -77,55 +79,41 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 
 ## Kitty output
 
-The generic Kitty output is in `pictures::kitty`: the writer, the pixels, `EMIT_PASS_BYTES`, the
-temp file medium and the storage budget. `pictures/kitty/placement.rs` holds `box_px`,
-`centered`, `native_placement` and `filled_placement`. `pictures/kitty/query.rs` holds the start
+The generic Kitty output is in `tuilibr::pictures::kitty`: the writer, the pixels, `EMIT_PASS_BYTES`, the
+temp file medium and the storage budget. `tuilibr::pictures::kitty::placement` holds `box_px`,
+`centered`, `native_placement` and `filled_placement`. `tuilibr::pictures::kitty::query` holds the start
 probe and the cell size. The grid writes stay in `kitty_output/grid.rs`. The grid icons and the
 loops stay in `kitty_output/`.
 
 ### The frame engine
 
-`pictures/kitty/screen.rs` is the frame engine of the shared picture module (phase 2 of
-`docs/picture-refactor.md`). It holds `Placements`, `Screen`, `Update`, `Placing` and `Layer`.
+`tuilibr::pictures::kitty::screen` is the frame engine of the shared picture module (phase 2 of
+the picture plan). It holds `Placements`, `Screen`, `Update`, `Placing` and `Layer`.
 
 - The app puts the places of a frame into `Placements`: `place`, `place_under` (below the cell
-  grounds, `kitty-layers`), `place_over` (a preview that keeps its place while its sharp picture
-  waits), `keep` (stored, without a place) and `hide` (an overlay frame places no picture,
-  `kitty-overlay`).
-- One `Screen::write_frame` (or `flush`, `kitty-flush`) writes one synchronized update: the
+  grounds), `place_over` (a preview that keeps its place while its sharp picture
+  waits), `keep` (stored, without a place) and `hide` (an overlay frame places no picture).
+- One `Screen::write_frame` (or `flush`) writes one synchronized update: the
   deletes, the removed placements, the transfers up to the byte cap in the order of the frame,
   the changed placements, and the trim of the budget.
 - Each place has its own placement id. An unchanged place keeps its id, and a moved place takes a
   free id of its picture. The first place of a new picture goes out as one `a=T` with `p=`.
 - `Placing::Changed` (the default) sends only a new or a moved placement. `Placing::EveryFrame`
-  places every picture on each flush (`with_placing`, `kitty-placing`). youtr uses it until
+  places every picture on each flush (`with_placing`). youtr uses it until
   phase 5 of the plan.
 - `Screen` holds `TerminalImages` (`App::screen`), the ids after a clear (`maybe_stored`) and
-  the pictures to send again after a focus gain (`focus_gained`, `kitty-events`).
+  the pictures to send again after a focus gain (`focus_gained`).
 - A started `Update` always ends its synchronized update. Its `Drop` writes `ESC 8` and
   `END_SYNC` after an early error.
 - phewr calls `write_frame`, `wipe`, `record`, `forget_placements`, `stores`, `bytes_of`,
-  `budget` and `waiting`. Each other part of the interface has a cargo feature (phase 4b). An app
-  turns on the features that it calls. phewr turns on none, and its tests build every part.
+  `budget` and `waiting`. The former `kitty-*` features of phewr are gone. Each part of the
+  interface is always available in tuilibr.
 
-  | Feature | It gates |
-  |---|---|
-  | `kitty-flush` | `Screen::flush` |
-  | `kitty-events` | `Screen::resized`, `cleared`, `focus_gained`, `delete_all`, the field `Screen::size`, `TerminalImages::ids` |
-  | `kitty-layers` | `Placements::place_under` |
-  | `kitty-overlay` | `Placements::hide`, `Screen::unplace_all` |
-  | `kitty-placing` | `Screen::with_placing` |
-  | `kitty-pass-bytes` | `Screen::with_pass_bytes` |
-  | `kitty-store` | `Screen::lost`, `Screen::stored_bytes` |
-
-  `Screen::with_self_check`, `Screen::answer`, `Screen::has_lost` and `pictures::kitty::answers`
-  have no feature gate, because phewr calls them.
-
-- `Loops`, `transmit_frame_to` and `animate_to` stay in `pictures::kitty`, because the usage hint
+- `Loops`, `transmit_frame_to` and `animate_to` stay in `tuilibr::pictures::kitty`, because the usage hint
   `N=1` depends on the probe result. The loop logic of phewr stays in `kitty_output/loops.rs`.
   It writes the frames into the update of the pass and calls `Screen::record`.
 - A lost frame of a visible loop gives the still and a new transfer of the loop. Nothing calls
-  `Screen::lost` (`kitty-store`) today, and the trim keeps every frame of a visible loop. So
+  `Screen::lost` today, and the trim keeps every frame of a visible loop. So
   this path has no trigger yet. `Screen::answer` takes the same path for a lost picture of the
   self check, and `Screen::lost` sets `has_lost` too.
 
@@ -141,7 +129,7 @@ loops stay in `kitty_output/`.
   screen no longer stores, and every other error, change nothing. `Screen::has_lost` is true
   from a loss until the next `write_frame` or `flush`, so the app writes a frame soon. That
   frame sends the pixels of the lost picture again.
-- `pictures/kitty/answers.rs` holds two readers. `AnswerReader::read` finds the answers in the
+- `tuilibr::pictures::kitty::answers` holds two readers. `AnswerReader::read` finds the answers in the
   input bytes, gives the other bytes back in their order and keeps a split answer for the next
   read. It ignores an `OK` and counts each whole answer (`ends`). Above `MAX_ANSWER_BYTES`
   (1024), it gives an unterminated APC back as keys, so a broken answer cannot eat the keys
@@ -175,7 +163,7 @@ loops stay in `kitty_output/`.
 
 - A pass writes the new thumbnails, the previews, the loop frames and the icons in grid order, as
   one frame of the engine in one synchronized update. It stops at `EMIT_PASS_BYTES`
-  (`pictures/kitty/mod.rs`). One run-loop pass writes at most one grid pass. A waiting picture or
+  (`tuilibr::pictures::kitty`). One run-loop pass writes at most one grid pass. A waiting picture or
   icon brings the next pass at once (`GridPass::waiting`).
 - A redraw (the return from fullscreen or video, the close of an overlay, a page scroll) writes
   only the changed placements and no `d=a`. It has no byte cap (`Update::uncapped`) and sends
@@ -202,7 +190,7 @@ loops stay in `kitty_output/`.
 
 ### Terminal storage
 
-- `TerminalImages` (`pictures/kitty/terminal_images.rs`, inside `Screen`) tracks the images that
+- `TerminalImages` (`tuilibr::pictures::kitty::terminal_images`, inside `Screen`) tracks the images that
   the terminal stores, with their bytes. It counts 4 bytes per pixel, also for a picture that went out as RGB.
   So the count is an upper bound.
 - The grid deletes evicted and replaced ids with `a=d,d=I`.
@@ -228,7 +216,7 @@ loops stay in `kitty_output/`.
 
 - The icons are the Lucide SVGs in `assets/icons/` (ISC license, `assets/icons/LICENSE`), with
   `stroke-width` 1.5 instead of 2. `include_str!` puts them into the binary.
-- The start write (`pictures/kitty/query.rs`) asks for the terminal foreground with OSC 10,
+- The start write (`tuilibr::pictures::kitty::query`) asks for the terminal foreground with OSC 10,
   before the Kitty probes. The
   terminal answers in order, so the read needs no end condition of its own. The query ends with
   BEL, and an answer with `ESC \` does not count as a Kitty answer.

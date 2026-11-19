@@ -1,14 +1,14 @@
 # App state
 
 This page holds the design facts of the background jobs and the caches of `src/app/`. AGENTS.md
-holds the rules and the layout of the files.
+holds the rules and the layout of the files. The jobs, the queues and the caches of the picture module live in `tuilibr::pictures::jobs`.
 
 ## Thumbnail jobs
 
 The code is in `app/thumbnails/`. `mod.rs` holds `ThumbnailJobs`, the scheduling, the job bounds
-and `THUMB_CACHE_LIMITS`. `decode.rs` holds the work of one job. `pictures/jobs/queue.rs` holds
-the queues and `Priority`, and `pictures/jobs/pool.rs` holds the pool of the cache reads.
-`pictures/jobs/thumbnail_cache.rs` holds the memory cache.
+and `THUMB_CACHE_LIMITS`. `decode.rs` holds the work of one job. `tuilibr::pictures::jobs::queue` holds
+the queues and `Priority`, and `tuilibr::pictures::jobs::pool` holds the pool of the cache reads.
+`tuilibr::pictures::jobs::thumbnail_cache` holds the memory cache.
 
 ### Slots and limits
 
@@ -33,7 +33,7 @@ the queues and `Priority`, and `pictures/jobs/pool.rs` holds the pool of the cac
 - A failed thumbnail decode sends `None` and frees its slot.
 - The thumbnail and preview queues are `JobSlots` with an image index per job. A job whose index
   left the list starts nothing.
-- `pictures::decode::spawn_foreground` runs a foreground decode on the thread pool and returns
+- `tuilibr::pictures::decode::spawn_foreground` runs a foreground decode on the thread pool and returns
   its receiver.
 
 ### Phases of a job
@@ -77,12 +77,12 @@ the queues and `Priority`, and `pictures/jobs/pool.rs` holds the pool of the cac
   `THUMB_CACHE_LIMITS` (512 MB, at least 200 entries) are in `app/thumbnails/mod.rs`.
 - `park_thumbnails`: the folder switch calls it before it drops the image list.
 - `warm_disk_cache`: the folder prefetch calls it.
-- `pad_for_grid`, `pad_loop_frame` and `thumb_target_px` are in `pictures/resize/padding.rs`. The
+- `pad_for_grid`, `pad_loop_frame` and `thumb_target_px` are in `tuilibr::pictures::resize::padding`. The
   placement rules are in [Grid and Kitty](grid-and-kitty.md#padding-and-placement).
 
 ## Disk cache
 
-- The code is in `pictures/jobs/disk_cache/`. `mod.rs` holds `FileStamp`, `CacheEntry`,
+- The code is in `tuilibr::pictures::jobs::disk_cache`. `mod.rs` holds `FileStamp`, `CacheEntry`,
   `LazyEntry`, `thumbnail_dir_below` and the key. `write.rs` holds the temp file write and the
   prune.
 - The module has no default folder. `app/disk_cache/mod.rs` holds `default_disk_cache_dir`, the
@@ -160,7 +160,7 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
 - The help popup, the info panel and the other views stop the loops.
 - `[gallery] animate = false` turns the loops off.
 - In herdr, the loops take the ticks, and the animation probe does not go out (`chosen_loops`
-  in `pictures/kitty/protocol/probe.rs`). herdr 0.9.5 answers the probe itself but plays no Kitty
+  in `tuilibr::pictures::kitty::protocol::probe`). herdr 0.9.5 answers the probe itself but plays no Kitty
   animation. `PHEWR_KITTY_LOOPS` and `[gallery] loops` win over herdr.
 - With `[gallery] animate = false`, the help popup shows `loops: off`.
 - `App::drop_hidden_loops`: the render of the grid calls it, also after a cursor move without a

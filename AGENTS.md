@@ -21,23 +21,28 @@ It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT).
   plans no Homebrew release. Users clone the repository and build phewr with `just install`,
   and the dotfiles install does the same. There is no CI.
 
-The stack: ratatui 0.30, crossterm 0.29, clap, tuilibr (the shared screen frame of the three
-apps, a path dependency `../tuilibr`, `deny.toml` allows the wildcard path), image 0.25,
-fast_image_resize, rayon, lru, serde/toml, jxl-oxide and jxl-render (both with exact pins), moxcms, resvg (without default
-features, for the grid icons). The features `turbo` (libjpeg-turbo) and `heic` (libheif) link
-native Homebrew libraries. The feature `jxl` makes jxl-oxide and jxl-render optional. The feature
-`video` links no library: it starts `ffmpeg`, `ffprobe` and `mpv` from PATH when they exist, and
-reads ffprobe's JSON with serde_json. The feature `sips` runs the macOS tool `/usr/bin/sips`. All
-five features are on by default. Seven `kitty-*` features gate the parts of the frame engine that
-phewr does not call. They are off by default.
+The stack: ratatui 0.30, crossterm 0.29, clap, tuilibr (the shared crate of the three apps, a path
+dependency `../tuilibr`, `deny.toml` allows the wildcard path), rayon, lru, serde/toml, resvg
+(without default features, for the grid icons). tuilibr holds the screen frame and the picture
+module `tuilibr::pictures`. The image decoders and jxl-oxide, jxl-render (both with exact pins),
+libheif, turbojpeg, fast_image_resize and moxcms (for the stills) come in through tuilibr. phewr
+keeps `libheif-rs` and `turbojpeg` for its tests and benches, `moxcms` for the player cubes and
+`fast_image_resize` as a dev dependency. The features `turbo` (libjpeg-turbo) and `heic`
+(libheif) link native Homebrew libraries, and `jxl` turns on the JPEG XL decoder. All three
+forward to tuilibr. The feature `video` links no library: it starts `ffmpeg`, `ffprobe` and `mpv`
+from PATH when they exist, and reads ffprobe's JSON with serde_json. The feature `sips` runs the
+macOS tool `/usr/bin/sips` and forwards to tuilibr. All five features are on by default. The
+build needs the clone of tuilibr at `../tuilibr`. A herdr worktree needs the symlink
+`~/.herdr/worktrees/phewr/tuilibr`. A path dependency builds the working tree of tuilibr. If the
+tree of tuilibr has a warning or an error, the `just check` of phewr fails.
 
 ## Build, test, run
 
 ```sh
-just                 # = just check: fmt --check, clippy -D warnings (4 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny
+just                 # = just check: fmt --check, clippy -D warnings (3 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
-just test-lean [FILTER]  # the tests without heic, jxl and turbo (the lean set: video,sips), with the kitty-* features
+just test-lean [FILTER]  # the tests without heic, jxl and turbo (the lean set: video,sips)
 just test-real [FILTER]  # also the ignored tests that decode real files (PHEWR_TEST_*)
 just coverage        # line coverage summary (cargo-llvm-cov)
 just coverage-html   # line coverage as HTML in target/llvm-cov/html
@@ -46,8 +51,6 @@ just bench [DIR] [FILTER]  # the speed measurements of src/bench/ on PHEWR_TEST_
 just build | run | install | uninstall
 just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | outdated   # the single steps
-just pictures-sync TARGET   # copy src/pictures/ and the module fixtures to TARGET, write both SOURCE files, fmt + clippy
-just pictures-check TARGET  # fail when the copy or its fixtures in TARGET drifted from the master copy
 ```
 
 Plain cargo works too. Homebrew's rustup is keg-only, so run
@@ -97,25 +100,18 @@ Files at run time:
 - **No output on stdout or stderr while the TUI runs.** A stray `eprintln!` breaks the screen.
   Only the CLI checks before the TUI starts print, behind an `#[expect(clippy::print_stderr)]`.
 - **No `unsafe`.** The crate denies `unsafe_code`.
-- **Each feature set builds.** `just lint` runs clippy with the default features, with the
-  default features and the seven `kitty-*` features, with `--no-default-features` and with the
-  lean set (`video,sips`). Then it runs `cargo check --all-targets` with `-D warnings` for each
-  of `turbo`, `heic`, `jxl`, `video` and `sips` alone. It also runs that check for each `kitty-*`
-  feature alone on top of the default features. Code behind `#[cfg(feature = "...")]` must
-  compile in all of them.
+- **Each feature set builds.** `just lint` runs clippy with the default features, with
+  `--no-default-features` and with the lean set (`video,sips`). Then it runs `cargo check
+  --all-targets` with `-D warnings` for each of `turbo`, `heic`, `jxl`, `video` and `sips` alone.
+  Code behind `#[cfg(feature = "...")]` must compile in all of them.
 - **Terminal colors only.** The TUI uses the terminal default colors and the 16 ANSI colors from
   `styles.rs`. Do not add RGB values or 256-color indexes. The grid icons use the foreground
   that the terminal reports (OSC 10).
 - **One formatter, one style.** Use rustfmt with `rustfmt.toml`. The hook runs
   `cargo fmt --check`.
-- **`src/pictures/` is the master copy of the shared picture module.** Change the module only
-  here. The module imports no app module of phewr. It takes the app name from `CARGO_PKG_NAME`
-  (`pictures::names`). The module holds no lint level for the whole module. Each project sets
-  that lint level on its `mod pictures;` line (`main.rs`). An app turns on the `kitty-*`
-  features that it calls. If an app leaves an item of "Dead items for an app"
-  (`docs/picture-refactor.md`) without a caller, the app keeps `expect(dead_code)` on its
-  `mod pictures;` line. A sync into another project needs the go of the session of that project.
-  `docs/picture-refactor.md` holds the plan.
+- **The picture module is `tuilibr::pictures`.** Change it in tuilibr, not in phewr.
+  `tuilibr/docs/pictures.md` holds its rules and its module tree. `main` calls
+  `tuilibr::pictures::names::set_app_name(env!("CARGO_PKG_NAME"))` first. phewr holds no copy.
 - **Language:** code, comments and docs are in English.
 
 ### Tests
@@ -124,24 +120,25 @@ Files at run time:
 its `make.sh`, and the real-file tests by name.
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module. A long test module
-  moves into `tests.rs` of the module directory (`pictures/decode/jxl.rs` and
-  `pictures/decode/jxl/tests.rs`).
-- A test that needs a real file is `#[ignore = "..."]` and reads a `PHEWR_TEST_*` variable.
+  moves into a `tests.rs` file of the module directory.
+- A test that needs a real file is `#[ignore = "..."]` and reads a `PHEWR_TEST_*` variable (for example `PHEWR_TEST_RAW`).
   `just test-real` runs these tests. A test without its variable skips with a note.
   `just test-real` skips the benches (`--skip bench::`), because they set the global color target
   of the process.
-- The fixtures live in `tests/fixtures/` (animations, `color/`, `png/`, `jxl/`, `hdr/`,
-  `video/`). Each folder has a `make.sh` that rebuilds it. `test_support::fixture(name)` finds a
-  file.
+- The fixtures of phewr live in `tests/fixtures/` (`anim.*` and `video/`). The root `make.sh` and
+  the `make.sh` of `video/` rebuild them. `test_support::fixture(name)` finds a file. The folders
+  `color/`, `png/`, `jxl/` and `hdr/` and the stills `still.*` are in tuilibr.
+  `test_support::module_fixture(name)` finds them. The module tests read `TUILIBR_TEST_*`.
 - A real ffmpeg playback test uses a virtual clock that jumps to each due frame. Its wall-time
   twin is `#[ignore]`.
 - The `sips` tests run `/usr/bin/sips`. The synthetic libheif tests encode with the aom and x265
   plugins of Homebrew's libheif. If a plugin is missing, `just check` fails.
 - `cargo nextest run --no-default-features` passes too. `just test-lean` runs every test with the
-  lean set (`video,sips`) and the `kitty-*` features, and `just check` runs it.
+  lean set (`video,sips`), and `just check` runs it.
 - A test that writes files uses `tempfile::tempdir()` or `tempfile::NamedTempFile`.
-- The helpers that the tests of more than one module share live in `test_support/`. The fake
-  Kitty terminal is `test_support::kitty`.
+- The helpers that the tests of more than one module share live in `test_support/`. It
+  re-exports `tuilibr::pictures::test_support` (feature `test-support` of the dev dependency).
+  The fake Kitty terminal is `test_support::kitty`.
 - A test app writes the Kitty sequences to a buffer (`GraphicsOutput::Buffer`). Read them with
   `app.graphics_out.take_bytes()`. A test that needs a config uses `App::new_with_config`, never
   `App::with_config`.
@@ -163,7 +160,7 @@ short form:
   `probe_terminal` and `prepare_app` hold the logic with tests.
 - `cli.rs`: the clap arguments, the start paths and `write_cwd_file` (`--cwd-file`).
 - `terminal.rs`: `TerminalSession` and the mouse modes. The start probe and `read_answer` are in
-  `pictures/kitty/query.rs`.
+  `tuilibr::pictures::kitty::query`.
 - `run_loop.rs`: `LoopState` (the status note, the `VideoState`), `run`, the background polls,
   `render_images` and `next_timeout`.
 - `keys/`: the key handlers. `mod.rs` routes the overlays and the view modes and holds
@@ -171,27 +168,9 @@ short form:
 - `kitty_output/`: the Kitty writes of phewr per frame. Each `render_*` has a `*_to` twin that
   writes to any `Write`. `mod.rs` holds the fullscreen image and the video frame, `grid.rs` the
   thumbnails, `loops.rs` the grid loops, `grid_icons.rs` the SVG icons. The generic part is in
-  `pictures::kitty`.
-- `pictures/`: the shared picture module, the master copy for `just pictures-sync`. It imports
-  no app module.
-  - `decode/`: the decoders and the routes. `Route::for_path` picks the route by extension.
-    `pictures::decode::dimensions` reads the size. `extensions.rs` holds the extension lists
-    and `has_extension`. Submodules: `raster`, `turbo`, `libheif/`, `jxl`, `sips`, `embedded_jpeg/`,
-    `heif_boxes`, `screen/`, `tonemap`, `hdr/` and `color/`.
-  - `resize/`: the `fast_image_resize` helpers and `padding.rs` (the pad to whole cells).
-  - `shape/`: the folder aspect from the headers and `DEFAULT_IMAGE_ASPECT`. `copies.rs` holds
-    the box copies and `corners.rs` the rounded corners.
-  - `jobs/`: `pool.rs` (`spawn_job` and the cache read pool), `queue.rs` (`JobQueue`,
-    `JobSlots`, `Priority`), `thumbnail_cache.rs` (the memory cache with `CacheLimits`) and
-    `disk_cache/` (`thumbnail_dir_below`, no default folder).
-  - `names.rs`: `APP_NAME` from `CARGO_PKG_NAME` and the `<APP>_TEST_*` names.
-  - `kitty/`: the Kitty graphics protocol (`KittyBackend`, `Transfer`, `Loops`, `Pixels`,
-    `EMIT_PASS_BYTES`). `protocol/` holds the escape sequences, and `protocol/probe.rs` the start
-    probes. `placement.rs` holds the placements, `terminal_images.rs` the storage budget and
-    `query.rs` the start probe and the cell size. `answers.rs` holds the answers of the terminal
-    for the self check: `AnswerReader` reads bytes, and `AnswerKeys` reads the key events of
-    crossterm.
-  - `test_support/`: the test file builders.
+  `tuilibr::pictures::kitty`.
+- `pictures`: the shared picture module is `tuilibr::pictures`. See `tuilibr/docs/pictures.md` for
+  its module tree. phewr holds no copy.
 - `app/`: `App`, the whole view state, one file per topic: fullscreen, zoom, marks, folders,
   scan, slideshow, meta, mouse, the thumbnail jobs and their bounds (`thumbnails/`), the cache
   folder and the loop files of the disk cache (`disk_cache/`), the folder prefetch
@@ -212,7 +191,8 @@ short form:
 - Feature `video`: `video/` (the tool lookup, the first-frame thumbnails), `player/` (the
   terminal player, the decoder, the probe, the tone map cubes), `video_handoff/` (the player
   start, the prestart, the mpv window), `grid_loop.rs` (the loop frames) and `mpv.rs`.
-- `test_support/` and `bench/`: test only. `docs/benchmarks.md` holds what each bench measures.
+- `test_support/` (the re-export of `tuilibr::pictures::test_support`, `module_fixture` and the app
+  builders) and `bench/`: test only. `docs/benchmarks.md` holds what each bench measures.
 
 ## Gotchas
 
@@ -250,7 +230,7 @@ decisions. Read the long form before you change the code that an item names.
 - **Slideshow view:** a running or paused slideshow has no status row (`ui::status_rows`), so
   `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal
   scales it to the fill of the box with `r=` or `c=` alone (`filled_placement` in
-  `pictures/kitty/placement.rs`). Outside a slideshow, an image shows at its own size. A badge at
+  `tuilibr::pictures::kitty::placement`). Outside a slideshow, an image shows at its own size. A badge at
   the bottom right shows the play or pause glyph, the interval, the note or the error. The image and
   the video frame sit below the cell backgrounds (`BELOW_BACKGROUNDS`), so the badge covers them.
 - **Slideshow and videos:** a running slideshow plays a video one time and moves on, and a Live
@@ -273,8 +253,8 @@ decisions. Read the long form before you change the code that an item names.
 - **HDR in the terminal:** for HLG and PQ, `player::tone_map` writes a 3D cube into the cache
   directory. `CUBE_VERSION` is the one version for all cube names: change it when the cube output
   changes. HDR keeps 33 points. A PQ video or still maps with its HDR10 peak, rounded up to the
-  buckets 500, 1000, 2000, 4000 or 10000 nits (`pictures::decode::hdr::hdr10_peak`). The stills
-  in `pictures/decode/hdr/` copy the math of the player cubes, and a test compares both copies.
+  buckets 500, 1000, 2000, 4000 or 10000 nits (`tuilibr::pictures::decode::hdr::hdr10_peak`). The stills
+  in `tuilibr::pictures::decode::hdr` copy the math of the player cubes, and a test compares both copies.
   `SDR_WHITE_NITS` is 500, and HLG keeps 1000 nits.
 - **Video programs:** phewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
   time, and the tests never do. The probe cache keys each `VideoInfo` by path, mtime and length.
@@ -353,6 +333,8 @@ decisions. Read the long form before you change the code that an item names.
 
 ### Kitty output and the terminal
 
+The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes into tuilibr. The writes per frame (`kitty_output/`), the grid loops, `LateAnswerFilter` and the key handling of the answers stay in phewr.
+
 - **Kitty images are not ratatui widgets.** ratatui draws the frame, then phewr writes the
   pictures at the cell positions of the last draw. A popup must delete the pictures first
   (`graphics_delete_all`), because Kitty draws them above the text. A zoom or a resize calls
@@ -367,7 +349,7 @@ decisions. Read the long form before you change the code that an item names.
   and placed centered with `c=` and `r=`, and the borders live in the gaps.
 - **Terminal storage:** `TerminalImages` tracks the images that the terminal stores, and the
   grid trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB,
-  `pictures/kitty/terminal_images.rs`).
+  `tuilibr::pictures::kitty::terminal_images`).
 - **Image ids:** the thumbnails count up from 1. The icons start at `ICON_ID_BASE`, the loops at
   `LOOP_ID_BASE` (`1 << 31`), and the video frame is `u32::MAX - 1`. The probes use 31 and 32.
 - **Grid loops:** every visible video, animated and Live cell loops after its still, as a Kitty
@@ -409,12 +391,15 @@ decisions. Read the long form before you change the code that an item names.
 
 ### Decoders and colors
 
+Most code of this section lives in `tuilibr::pictures`, and a change of it goes into tuilibr, not into phewr. Three items name code that stays in phewr: "Thumbnail cache folder", "Embedded HEIC thumbnails" and "Process start".
+
 - **Thumbnail cache key:** the key hashes `THUMBNAIL_CACHE_VERSION`, the path, the size, the
-  mtime, the target size and the color target. The version is
-  `concat!(env!("CARGO_PKG_NAME"), "-thumbnail-v22")`. When the thumbnail output changes,
-  increase the `v22` part. If several workers change the output at the same time, each takes its
+  mtime, the target size and the color target. The code is in `tuilibr::pictures::jobs::disk_cache`.
+  The version is `format!("{}-thumbnail-v22", app_name())`, and `set_app_name` in `main` gives
+  `phewr`, so the key stays `phewr-thumbnail-v22`. When the thumbnail output changes, increase the
+  `v22` part in tuilibr. If several workers change the output at the same time, each takes its
   own version, higher than main and than every branch in flight.
-- **Thumbnail cache folder:** the thumbnails of phewr sit at the top of `~/Library/Caches/phewr`
+- **Thumbnail cache folder** (phewr code, `app/disk_cache/`): the thumbnails of phewr sit at the top of `~/Library/Caches/phewr`
   (`default_disk_cache_dir`). Do not move them. The prune refuses a folder that holds a
   subfolder, so phewr must keep no subfolder there.
 - **Disk cache format:** QOI files. A hit reads and decodes in about 0.75 ms.
@@ -431,9 +416,9 @@ decisions. Read the long form before you change the code that an item names.
   `jxl-oxide = "=0.12.6"` and `jxl-render = "=0.12.4"` are exact pins. An update is a deliberate
   step: run `parallel_copy_matches_stream` and a byte comparison on real files.
 - **`image` decoders:** the `image` crate has only the decoders that
-  `pictures/decode/extensions.rs` lists. If you add a format to these lists, add the `image`
+  `tuilibr::pictures::decode::extensions` lists. If you add a format to these lists, add the `image`
   feature too.
-- **Embedded HEIC thumbnails:** a cold HEIC cell shows its embedded thumbnail first, then the
+- **Embedded HEIC thumbnails** (phewr code: `sharp_job_waits` in `app/thumbnails/mod.rs`, the emit in `kitty_output/grid.rs`): a cold HEIC cell shows its embedded thumbnail first, then the
   sharp decode. The thumbnail must have the same `irot` and `imir` as the primary image. A
   preview never goes into the disk cache. The sharp jobs of libheif files wait until every
   preview is out (`sharp_job_waits`). The sharp image gets a new Kitty id, and the emit deletes
@@ -441,16 +426,16 @@ decisions. Read the long form before you change the code that an item names.
 - **libheif reads through a stream** (`libheif_rs::StreamReader`).
   `HeifContext::read_from_file` copies the whole file first, 30 ms to 40 ms per 24 MP photo.
 - **The `sips` route:** camera RAW, PSD, PDF, SVG and other ImageIO formats. RAW and PSD try the
-  embedded JPEG first (`pictures/decode/embedded_jpeg/`). A JPEG that covers the fit of the box is
+  embedded JPEG first (`tuilibr::pictures::decode::embedded_jpeg`). A JPEG that covers the fit of the box is
   the thumbnail, and sips does not run. sips ignores the orientation of RAF and ARW, so phewr turns
-  or flips the develop (`pictures::decode::sips::flip_gap`). A relative path gets `./` in front.
+  or flips the develop (`tuilibr::pictures::decode::sips::flip_gap`). A relative path gets `./` in front.
   If `IMAGE_EXTENSIONS` does not list the extension of a file, the file tries sips after a failed
   raster decode. A listed raster extension never tries sips. A sips run gets 10 s
   (`SIPS_TIMEOUT`), and then a kill.
 - **Embedded JPEG orientation:** the container orientation wins over the EXIF of the embedded
   JPEG. libjpeg-turbo decodes at the smallest of 1/8, 1/4, 1/2 and 1 that covers the fit. The
   other eighths run without NEON and are slower than the full decode.
-- **Process start:** about 30 ms pass before `main`, most of it the dylib load of libheif.
+- **Process start** (the build profile of phewr): about 30 ms pass before `main`, most of it the dylib load of libheif.
   `just install` builds `--release`. A profile with full LTO and stripped symbols gave no
   measurable gain.
 

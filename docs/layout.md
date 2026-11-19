@@ -16,7 +16,7 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   start directory and `write_cwd_file` (the folder of the grid for `--cwd-file`).
 - `terminal.rs`: `TerminalSession` (raw mode, the alternate screen) and the mouse modes
   (`enable_mouse`, `disable_mouse`). The start probe and the cell size are in
-  `pictures/kitty/query.rs`.
+  `tuilibr::pictures::kitty::query`.
 - `run_loop.rs`: `LoopState` (the status note, `answers` (an `AnswerKeys`), `late_answers` (the
   `LateAnswerFilter`) and, with the `video` feature, the `VideoState`), `run`, the background
   polls, `render_images` and `next_timeout`. The status note lives here, not in `App`.
@@ -30,7 +30,7 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   answers, with `kitty_answers_came`). One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `video.rs` (feature `video`).
   `mouse.rs` holds the mouse handler per view.
-- `kitty_output/`: the Kitty writes per frame. Each `render_*` has a `*_to` twin that writes to
+- `kitty_output/`: the Kitty writes of phewr per frame (the generic part is `tuilibr::pictures::kitty`). Each `render_*` has a `*_to` twin that writes to
   any `Write`, so that the tests read the escape sequences. `App::with_graphics_out` runs a write
   against the graphics output. `mod.rs` holds the fullscreen image and the video frame and
   re-exports the writes of the grid. `grid.rs` holds the grid pass (`write_grid_to`, `GridPass`,
@@ -84,83 +84,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `decode.rs` holds the work of one job (`warm_disk_cache`, the embedded preview, the animation
   flag)), `disk_cache/` (`default_disk_cache_dir` in `mod.rs`, the cache folder of phewr, and the
   loop files in `loop_file.rs`). `grid_loops/` is listed above.
-- `pictures/`: the shared picture module, the master copy for `just pictures-sync`
-  (`docs/picture-refactor.md`). It imports no app module of phewr. `names.rs` holds `APP_NAME`
-  (`CARGO_PKG_NAME`) and the names of the `<APP>_TEST_*` variables (`test_file`).
-- `pictures/decode/`: the decoders and the decode routes. `Route::for_path` in `mod.rs` picks the
-  route by extension, `decode_image_with_hint` runs it, `foreground` marks the decode that the
-  user waits for. `pictures::decode::dimensions` gives the size from the header.
-  `extensions.rs` holds the extension lists (`IMAGE_EXTENSIONS`, `JXL_EXTENSIONS`,
-  `SIPS_EXTENSIONS`, `LIBHEIF_EXTENSIONS`, the one list for the libheif route) and
-  `has_extension(path, list)`, the extension test of the scanner and the decoders, without an
-  allocation. `raster.rs` (the `image` crate, the EXIF orientation and `header_dimensions`, the
-  size from the header for `pictures::decode::dimensions` and `shape::shown_size`), `turbo.rs`
-  (libjpeg-turbo with DCT scaling), `libheif/` (HEIC, HEIF, AVIF: `mod.rs` the decode and the core
-  share `LibheifSlot`, `thumbnails.rs` the embedded thumbnails and `fitted_size` on
-  `scaled_down_size`, `plane.rs` the interleaved plane), `screen/`
-  (`ScreenImage` with `Rgb`, `Rgba` and `Opaque`, and `load_for_screen`, the fullscreen decode),
-  `jxl.rs` (JPEG XL, ICC profiles through `moxcms`, the sample copy on all cores
-  `render_samples`), `sips.rs` (camera RAW, PSD, PDF, SVG and
-  other ImageIO formats), `tonemap.rs` (EXR and HDR to 8 bit), `hdr/` (the tone map of PQ and HLG
-  stills: `mod.rs` the math of the HDR cube of the player, `primaries.rs` the primaries and the
-  matrices), `heif_boxes.rs` (the safe ISOBMFF reader for `irot`, `imir`, `ispe`, `clli` and `mdcv`), `embedded_jpeg/` (the safe
-  reader for the JPEG inside camera RAW and PSD files: `mod.rs` with RAF and `decode_reference`,
-  `tiff.rs`, `cr3.rs`, `orf.rs`,
-  `psd.rs`), `color/` (the conversion into the color space of the terminal: `mod.rs` with
-  `ColorTarget`, `SourceColor` and `convert`, `transform.rs` the transform cache, `jpeg.rs` the
-  JPEG segment walk `jpeg_segments`, the APP2 ICC profile and the Adobe RGB mark, `tags.rs` the
-  PNG chunks, the TIFF tag and the `cicp` tag of an ICC profile). `decode_image` returns
-  `Decoded` (the pixels and their `SourceColor`). `Decoded::fit_within` resizes, then converts.
-  `decode_image_with_hint` converts at the decoded size. A module directory keeps its long test
-  module in `tests.rs`.
-- `pictures/resize/`: `mod.rs` holds `load_and_resize_px`, Catmull-Rom, `Layout`,
-  `rgb_resize_is_fastest`, `scaled_down_size` and `resize_region`, a resize of a region through a
-  view. `padding.rs` holds the padding to whole cells (`pad_for_grid`, `pad_loop_frame`,
-  `thumb_target_px`).
-- `pictures/shape/`: `mod.rs` holds the image dimensions from the file headers, for the cell
-  shape (`folder_aspect`, `shown_size`, `DEFAULT_IMAGE_ASPECT`). `copies.rs` holds the box copies
-  (`Kind`, `Bitmap`, `boxed`, `dimmed`, `capped`), with its tests in `copies/tests.rs`.
-  `corners.rs` holds `round_corners` and `CORNER_RADIUS`. phewr calls no box copy.
-- `pictures/jobs/`: `pool.rs` holds `spawn_job` and `ThumbPhase`. `queue.rs` holds `ThumbJob`,
-  `JobQueue`, `JobSlots` and `Priority`. `thumbnail_cache.rs` holds the in-memory thumbnail cache
-  (`ThumbnailCache`, `CacheLimits`, `GridPicture`, `ParkKey`) with the parked pictures.
-  `disk_cache/` holds the thumbnail disk cache: `CacheEntry`, `LazyEntry`, `FileStamp` and
-  `thumbnail_dir_below` in `mod.rs`, the temp file write and the prune in `write.rs`. The module
-  has no default cache folder.
-- `pictures/kitty/`: the Kitty graphics protocol. `mod.rs` holds `KittyBackend`, `Transfer`,
-  `Loops`, `Pixels` and `EMIT_PASS_BYTES`. `screen.rs` holds the frame engine (`Placements`,
-  `Screen`, `Update`, `Placing`, `Layer`, the self check `with_self_check`, `answer` and
-  `has_lost`), and `screen/tests.rs` its fake writer tests. `answers.rs` holds the answers of the
-  terminal for the self check: `Answer`, `AnswerReader` (bytes), `AnswerKeys` (the key events of
-  crossterm, with `KeyRead`), `ANSWER_WAIT` and `MAX_ANSWER_BYTES`. Its tests are in
-  `answers/tests.rs`. `protocol/probe.rs` holds the start probes
-  (`detect_backend`, `chosen_loops`, `describe`, `describe_loops`, `is_ssh`).
-  `Transfer` picks the medium: direct,
-  PNG (SSH) or a temp file (`t=t`). `Loops` picks the path of the grid loops: Kitty animations or
-  the ticks. `detect_backend` probes the terminal at start with `a=q` and with one animation
-  frame, and `chosen_loops` reads the override value and the config key. `main.rs` reads
-  `PHEWR_KITTY_LOOPS` and `PHEWR_KITTY_TRANSFER` and passes the values in.
-  `PHEWR_KITTY_TRANSFER=direct|png|file` skips the transfer probe. `main.rs` also reads
-  `PHEWR_KITTY_SELF_CHECK` (`SELF_CHECK_OVERRIDE`, `self_check_on`): `0`, `off`, `false` or `no`
-  turns the self check of `Screen` off, else `prepare_app` turns it on. `Pixels` is a view of
-  RGB or RGBA pixels. `transmit` sends an RGBA image without a transparent pixel as RGB (`f=24`)
-  through every medium. The check and the copy go in chunks of 4096 pixels and stop at the
-  first transparent chunk, so a padded grid thumbnail stays RGBA at almost no cost.
-  `KittyBackend` has
-  `transmit` and `transmit_frame`. The writers without state are free functions of
-  `pictures::kitty::protocol` (`delete_all_to`, `delete_image_to`, `place_by_id_to`,
-  `animate_to`), and `apc` writes each command frame (`ESC _ G ... ESC \`). `placement.rs` holds
-  `box_px` (the pixel box of a rect), `centered` (a box centered in a rect), `native_placement`
-  and `filled_placement`.
-  `terminal_images.rs` holds `TerminalImages`, `TERMINAL_IMAGE_BUDGET`, `delete_image_to` and
-  `trim_to_budget`. `query.rs` holds `query_cell_size_and_probe` (`CSI 16 t`, the OSC 10
-  foreground query, the Kitty probes and the DA1 query in one write, the DA1 answer ends the
-  read) and the cell pixel size. `read_answer` is the poll loop of the tty read, over any fd.
-- `pictures/test_support/` (test only): the builders of the test files that the picture tests and
-  the app tests share. `mod.rs` holds `fixture` and `key_events` (the crossterm key events of
-  input bytes, a model of the crossterm parse), `files.rs` the JPEG, TIFF RAW, CR3, RAF and PSD
-  writers (feature `sips` on macOS), `heif.rs` the HEIF writers (feature `heic`,
-  `write_heif_sized` with a thumbnail of any size).
+- `tuilibr::pictures`: the shared picture module (decoders, resize, shape, jobs, the Kitty layer,
+  the test builders). It lives in tuilibr since 2026-11-19. `tuilibr/docs/pictures.md` holds its module tree. This page lists only the files of phewr.
 - `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
   `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
   view. `status.rs` fills the `BarView` of each view for `tuilibr::frame::draw_bar`
@@ -180,7 +105,7 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   and the pixel size of a terminal cell.
 - `scanner/`: the background directory scan (`mod.rs`) and the test of supported files
   (`extensions.rs`: `VIDEO_EXTENSIONS` and `is_supported`, on the lists of
-  `pictures/decode/extensions.rs`). `name_key` is the sort
+  `tuilibr::pictures::decode::extensions`). `name_key` is the sort
   key of the batches and the folders (the lowercase name, then the path). `read_folder` is the one
   `read_dir` of a folder argument for its folders and its files. `folder_listing` gives the
   subfolders (`..` first) and the sorted files of one folder from one read, without a thread and
@@ -219,7 +144,7 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
 - `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
   and the `Runner` trait for the process start.
 - `test_support/` (test only): the helpers that the tests of more than one module share.
-  `mod.rs` holds the app builders and the waits and re-exports `pictures::test_support`.
+  `mod.rs` holds the app builders and the waits and re-exports `tuilibr::pictures::test_support` (feature `test-support`) and holds `module_fixture`.
   `input.rs` holds the key and mouse helpers, `kitty.rs` the fake terminal (`FakeTerminal`, with
   the `ENOENT` answers of the self check in `answers` and `lose`) and `video.rs`
   `FakeRunner`,

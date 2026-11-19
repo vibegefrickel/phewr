@@ -3,9 +3,10 @@
 This page holds the long form of the test rules in `AGENTS.md`: the variables of the real-file tests, the fixtures and their make scripts. Read `AGENTS.md` ("Tests") first.
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module.
-- Tests that need a real file are `#[ignore = "..."]` and read `PHEWR_TEST_JPEG`,
-  `PHEWR_TEST_HEIC`, `PHEWR_TEST_AVIF`, `PHEWR_TEST_JXL`, `PHEWR_TEST_RAW`, `PHEWR_TEST_PSD`,
-  `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. `real_flipped_copy_shows_upright` copies `PHEWR_TEST_RAW`
+- Tests that need a real file are `#[ignore = "..."]` and read `PHEWR_TEST_RAW`,
+  `PHEWR_TEST_ORF`, `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. The real-file tests of the
+  decoders (JPEG, HEIC, AVIF, JXL, PSD) are in tuilibr and read `TUILIBR_TEST_*`.
+  `real_flipped_copy_shows_upright` copies `PHEWR_TEST_RAW`
   (a RAF or ARW) into a temp dir and writes the orientations 2, 3 and 4 with exiftool.
   `PHEWR_TEST_LIVE_DIR` is the folder of real Live Photo files
   (`~/Pictures/phewr-test/12-live-photos/`, its `README.md` lists the cases, 15 file cells since
@@ -21,43 +22,24 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   and 6 with exiftool, and compares the preview with the sips develop.
   `PHEWR_TEST_SDR_VIDEO` also feeds the first
   frame test `video::tests::real_clip_first_frame`. The bench `previews::raw_files` reads every
-  RAW file of `PHEWR_TEST_RAW_DIR`. `real_jxl_matches_reference` compares `PHEWR_TEST_JXL` with
-  `PHEWR_TEST_JXL_REF` (a djxl rendering, or the player cube for PQ and HLG) and fails above 4
-  levels. `PHEWR_TEST_JXL_MAX` sets another limit, and `PHEWR_TEST_JXL_OUT` writes the decode.
-  `bench::decoders::jpeg_xl` reads `PHEWR_TEST_JXL`, measures the decode and both copies, and
-  names the path of the copy. `parallel_copy_matches_stream` compares the copy with the stream
-  on every fixture.
-- The tests of `src/pictures/` read `<APP>_TEST_*` through `names::test_file` (for example
-  `names::test_file("JPEG")`). `<APP>` is the package name in capitals, so phewr reads
-  `PHEWR_TEST_*`, and a copy in schnattr reads `SCHNATTR_TEST_*`.
+  RAW file of `PHEWR_TEST_RAW_DIR`.
+- The picture module is `tuilibr::pictures`. Its tests, its fixtures and their `make.sh` files are
+  in tuilibr (`tuilibr/docs/pictures.md`). The module tests read `TUILIBR_TEST_*`. The tests of
+  phewr read `PHEWR_TEST_*`.
+- The dev dependency on tuilibr has the feature `test-support`. `test_support` of phewr re-exports
+  `tuilibr::pictures::test_support`. `test_support::fixture(name)` finds the fixtures of phewr
+  (`tests/fixtures/anim.*` and `video/`). `test_support::module_fixture(name)` finds the fixtures
+  of tuilibr (`color/`, `png/`, `jxl/`, `hdr/` and `still.*`).
 - `just test-lean` runs every test with the lean set (`--no-default-features --features
-  video,sips`) and the seven `kitty-*` features, without `heic`, `jxl` and `turbo`. `just check`
-  runs it. It covers the picture module as a copy without these decoders.
-- `just pictures-sync` copies the module fixtures into `tests/fixtures/` of the target: the
-  folders `color/`, `hdr/`, `jxl/` and `png/` in full, and the 4 stills `still.avif`,
-  `still.gif`, `still.png` and `still.webp`. `pictures_fixtures` in the justfile lists them. If a
-  new module test reads another fixture, add the fixture to `pictures_fixtures`. The root
-  `make.sh` builds the stills and the animations together, so it stays out of the copy.
-- `tests/fixtures/color/` holds a Display P3 chart as JPEG, PNG, WebP, TIFF and HEIC with an ICC
-  profile, as HEIC and AVIF with nclx, and as PNG with cICP and with gAMA and cHRM, plus an
-  Adobe RGB JPEG and untagged sRGB files. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures with
-  the sRGB target.
-- `tests/fixtures/png/` holds 10 PNG layouts (16 bit, palette, tRNS, gray, gray with alpha,
-  RGBA, interlaced, EXIF orientation 6), and `make.sh` rebuilds them with magick and exiftool.
-- `tests/fixtures/` holds 8 small animated and still files (GIF, WebP, APNG, AVIF), and
-  `test_support::fixture(name)` finds them. `make.sh` rebuilds them from FFmpeg `testsrc` with
-  magick, avifenc, ffmpeg and img2webp, and its optional argument selects the output folder. The
-  AVIF options `-q 30 -s 6` reproduce the committed pixels. The real ffmpeg
-  test skips WebP without FFmpeg 9 (`webp_anim` decoder). `tests/fixtures/jxl/` holds 19 JPEG XL
-  color charts and gradients, `ref/` their djxl renderings, and `make.sh` rebuilds both with
-  cjxl, djxl, magick, exiftool and sips. `jxl/ref/` holds no `pq.png`: djxl maps PQ to a 255-nit
-  display, and phewr maps like the player. `tests/fixtures/hdr/` holds a PQ and an HLG chart with
-  BT.2020 primaries as 10-bit AVIF and HEIC (nclx), JPEG XL (lossless and lossy, and `pq-icc.jxl`)
-  and 16-bit PNG (`cICP`), `ref/` their renderings through the HDR cube of the player (ffmpeg
-  `lut3d`), and `make.sh` rebuilds them. `pq-4000.avif`, `pq-4000.heic` and `pq-4000-8bit.heic`
-  carry a `clli` box of 4000 nits, `pq-4000.png` and `pq-icc-4000.png` a `cLLI` chunk, and
-  `pq-4000.jxl` an intensity target of 4000 nits, all with `ref/pq4000-*.png`. `pq-4000-thumb.heic` is
-  `pq-4000.heic` with an embedded thumbnail of 32x16 pixels, for the peak of the preview.
+  video,sips`), without `heic`, `jxl` and `turbo`. `just check` runs it.
+- The folders `color/`, `png/`, `jxl/` and `hdr/` and the 4 stills `still.avif`, `still.gif`,
+  `still.png` and `still.webp` are in tuilibr. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures
+  with the sRGB target.
+- `tests/fixtures/` holds 8 small animated files (GIF, WebP, APNG, AVIF), and
+  `test_support::fixture(name)` finds them. The root `make.sh` rebuilds them from FFmpeg
+  `testsrc` with magick, avifenc, ffmpeg and img2webp, and its optional argument selects the
+  output folder. The AVIF options `-q 30 -s 6` reproduce the committed pixels. The real ffmpeg
+  test skips WebP without FFmpeg 9 (`webp_anim` decoder).
   `tests/fixtures/video/` holds two HDR10 clips (64x64, 3 frames, 10-bit HEVC, PQ) and `make.sh`:
   `hdr10-container.mp4` carries `mdcv` (1000 nits) and `clli` (MaxCLL 4000 nits) in its sample
   entry, and `hdr10-sei.mp4` carries MaxCLL 2000 nits only in the SEI.
@@ -79,17 +61,17 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
 - A test that writes files uses `tempfile::tempdir()` (`TempDir`) or `tempfile::NamedTempFile`.
   The directory goes away on drop, also when the test panics.
 - The app builders and the key press helpers that tests of more than one module share live in
-  `test_support/`. The synthetic file writers live in `pictures/test_support/`, and
+  `test_support/`. The synthetic file writers live in `tuilibr::pictures::test_support`, and
   `test_support/` re-exports them. The fake Kitty terminal is `test_support::kitty`. The frame
-  engine has its own fake writer tests in `pictures/kitty/screen/tests.rs`: the bytes of each
+  engine has its own fake writer tests in `tuilibr::pictures::kitty::screen::tests`: the bytes of each
   rule, the byte cap over several passes, the recovery after a clear and a focus gain, and both
   placement policies.
 - `FakeTerminal` models the self check. For a placement with `q=1` of an image that it does not
   store, it writes an `ENOENT` answer into `FakeTerminal::answers`, the input of the app.
   `FakeTerminal::lose` drops an image and its placements without a delete, as herdr does when
-  it resets its delivery. `pictures::test_support::key_events` gives the crossterm key events of
+  it resets its delivery. `tuilibr::pictures::test_support::key_events` gives the crossterm key events of
   input bytes: an `ESC` and a key is Alt and that key, and an upper case letter has Shift. It is
-  a model of the crossterm parse. The tests of `AnswerKeys` (`pictures/kitty/answers/tests.rs`)
+  a model of the crossterm parse. The tests of `AnswerKeys` (`tuilibr::pictures::kitty::answers::tests`)
   and of the run loop (`run_loop/tests.rs`) feed the answers through it.
 - A test app writes the Kitty sequences to a buffer (`GraphicsOutput::Buffer`). Read them with
   `app.graphics_out.take_bytes()`. A test that needs a config uses `App::new_with_config`, never
