@@ -106,7 +106,9 @@ Files at run time:
   Code behind `#[cfg(feature = "...")]` must compile in all of them.
 - **Terminal colors only.** The TUI uses the terminal default colors and the 16 ANSI colors from
   `styles.rs`. Do not add RGB values or 256-color indexes. The grid icons use the foreground
-  that the terminal reports (OSC 10).
+  that the terminal reports (OSC 10). The highlight of the active state (the cursor border of the
+  grid) is `tuilibr::frame::accent()`, white, like in every app of the crate (tuilibr phase 4c,
+  2026-11-19): never an own colour literal for it.
 - **One formatter, one style.** Use rustfmt with `rustfmt.toml`. The hook runs
   `cargo fmt --check`.
 - **The picture module is `tuilibr::pictures`.** Change it in tuilibr, not in phewr.
