@@ -54,6 +54,8 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Later
 
+- tuilibr phase 4 step 4 (the maintainer, 2026-11-19: the layout of schnattr is the master of every app): phewr gets the omnibox (`frame::omnibox`, the rows under the bar with one thing at a time) for the search line with its cursor, the status notes in gray and the errors in red, and the two-pane layout (`frame::split_boxed`, `pane_box`, `dim_pane`) for the info panel as the left pane and the picture or the grid as the main pane. phewr asks no question. The phewr inventory went to the tuilibr session on 2026-11-19. The schnattr session writes the omnibox interface, phewr reviews it when the step comes.
+
 - `just audit` is part of `just check` since `5e64e7a` (the maintainer installed the tools on 2026-11-19, the dotfiles Brewfile lists them, shellcheck and shfmt were added there uncommitted). The shared audit text of the five repositories is in since `4226e18` (the maintainer said yes on 2026-11-19): the tools come from the Brewfile, the shell step runs on every tracked `*.sh`, `cargo insta test` only in a repo with insta.
 - The pre-commit hook of the dotfiles is `just fmt-check lint` on the working tree (decision of 2026-11-19), the full `just check` runs at the worker merge and in the pre-push hook. The error at the first commit of the day came from a tuilibr tree that did not compile for a few minutes.
 
