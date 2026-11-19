@@ -336,8 +336,8 @@ decisions. Read the long form before you change the code that an item names.
   the readline keys of `edit_for_key`), else an error in red (`Tone::Alert`), else the note in gray
   (`Tone::Note`), else an empty row (a hidden row would move the panes and write every picture
   again). A slideshow has no omnibox, and a click on it does nothing. A Kitty placement moves the
-  terminal cursor: `run_loop::draw_pass` puts it back on the search field after the Kitty writes,
-  and a Kitty write after that point breaks the search cursor.
+  terminal cursor. The omnibox of tuilibr sets the frame cursor on the search field, and the
+  `Update` of each Kitty write saves and restores the cursor (`ESC 7`, `ESC 8`).
 - **Status row:** the row spans both panes and is the bar of `tuilibr::frame::draw_bar` (phase 4a of the tuilibr
   plan, 2026-11-19). `ui/status/mod.rs` fills a `BarView` per view: the mode block (NORMAL,
   FULLSCREEN, SEARCH, HELP, one letter below `NARROW_BELOW`) as `ModeView`, the folder path with
@@ -385,6 +385,9 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   (`graphics_delete_all`), because Kitty draws them above the text. A zoom or a resize calls
   `mark_dirty`, and the grid write deletes the old pictures itself. A key handler deletes the
   pictures only before an overlay or a pane change (`App::change_panes`). A delete without a later draw leaves black cells.
+  Every Kitty write runs in an `Update` of the `Screen`: the grid pass, the loops, the icons,
+  the fullscreen picture and the player frame (2026-11-19). An `Update` writes one synchronized
+  update and saves and restores the terminal cursor. Do not write a Kitty sequence outside it.
 - **Kitty emits:** a pass writes the new thumbnails in grid order, in one synchronized update, up
   to `EMIT_PASS_BYTES`.
 - **Kitty temp file medium:** `t=t` wins only when the probe answer is `OK` and the terminal

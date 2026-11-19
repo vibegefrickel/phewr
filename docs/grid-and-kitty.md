@@ -210,7 +210,9 @@ the picture plan). It holds `Placements`, `Screen`, `Update`, `Placing` and `Lay
   (`ThumbnailCache::park`, `take_parked`). The key is the path and the decode size, with the
   mtime and the length of the file. A changed file decodes again.
 - Parked pictures count against the limit and go first.
-- The grid writes run in a synchronized update.
+- Every Kitty write of phewr runs in an `Update` of the `Screen`: the grid pass, the loops, the
+  icons, the fullscreen picture and the player frame. Each one is one synchronized update that
+  saves and restores the terminal cursor.
 
 ### Grid icons
 

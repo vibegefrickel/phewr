@@ -55,8 +55,10 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
 - **Omnibox (2026-11-19):** the row under the bar shows the search line, else the error, else the
   note, else nothing, and stays one row high when it is empty, because a row that comes and goes
   moves the panes and writes every picture again. A Kitty placement moves the terminal cursor
-  (CUP before `C=1`), so `run_loop::draw_pass` puts the cursor back on the search field after the
-  Kitty writes, and a test with one shared byte stream covers it. The help box takes the rows
+  (CUP before `C=1`). The omnibox of tuilibr sets the frame cursor on the search field, and the
+  `Update` of each Kitty write saves and restores the cursor. A test with one shared byte stream
+  covers it. Until 2026-11-19, `run_loop::draw_pass` put the cursor back after the Kitty writes.
+  The reset went when the fullscreen picture and the player frame moved into an `Update`. The help box takes the rows
   above the omnibox, so its right column keeps its padding on a screen of 30 rows.
 - **Panes (2026-11-19):** the info pane is the left pane of the tuilibr frame, the grid or the
   picture the main pane, and the status row spans both. The maintainer decided that every app with
@@ -300,6 +302,9 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   A key handler deletes the pictures only before an overlay. A zoom or a resize calls
   `mark_dirty`, and the grid write deletes the old pictures itself. A delete without a later
   draw leaves black cells.
+  Every Kitty write runs in an `Update` of the `Screen` (2026-11-19). The fullscreen picture
+  and the player frame put the delete, the clear of the placements and the picture into one
+  update, so the swap shows no blank view.
 - **Grid gaps and borders:** the cells have 1-cell gaps, every picture is padded to whole cells
   and placed centered with `c=` and `r=`, and the borders live in the gaps. The geometry, the
   padding and the borders are in `docs/grid-and-kitty.md` ("Grid gaps and borders") and in the
