@@ -49,9 +49,13 @@ just coverage-html   # line coverage as HTML in target/llvm-cov/html
 just bench-live      # only the Live Photo benches (bench::live), on PHEWR_TEST_LIVE_DIR
 just bench [DIR] [FILTER]  # the speed measurements of src/bench/ on PHEWR_TEST_DIR (default ~/Pictures/phewr-test/01-mixed-big), FILTER selects a bench (default bench::)
 just build | run | install | uninstall
-just hooks           # install the pre-commit hook (fmt + clippy). `git commit -n` skips it once
 just fmt | lint | doc | deny | outdated   # the single steps
 ```
+
+The shared pre-commit hook of the dotfiles (`core.hooksPath = ~/.config/git/hooks`) runs
+`just fmt-check lint` on the working tree before each commit. The full `just check` runs at a
+worker merge (`merge.sh`) and in the pre-push hook. `SKIP_CHECK=1 git commit` or `git commit -n`
+skips the hook once.
 
 Plain cargo works too. Homebrew's rustup is keg-only, so run
 `export PATH="/opt/homebrew/opt/rustup/bin:$PATH"` first. The justfile does this itself.

@@ -40,6 +40,17 @@ wildcards = "deny"
 # A path dependency without a version (tuilibr) is no wildcard of crates.io.
 allow-wildcard-paths = true
 highlight = "all"
+# The older version of each duplicate pair, with the crate that pulls it. phewr and tuilibr use
+# the newer one. The pre-commit hook of the dotfiles runs this check at every commit, so the
+# known pairs stay silent. Remove an entry when its parent moves on.
+skip = [
+    { crate = "lru@0.18.5", reason = "ratatui-core 0.1 uses lru 0.18, phewr and tuilibr 0.19" },
+    { crate = "miniz_oxide@0.8.9", reason = "exr and png (image, resvg) use 0.8, flate2 and tiff use 0.9" },
+    { crate = "moxcms@0.8.1", reason = "image and jxl-oxide use moxcms 0.8, phewr and tuilibr 0.9 for the ICC curves" },
+    { crate = "syn@2.0.119", reason = "derive_more (crossterm) uses syn 2, the other derives use syn 3" },
+    { crate = "thiserror@1.0.69", reason = "turbojpeg uses thiserror 1, fast_image_resize and kasuari use 2" },
+    { crate = "thiserror-impl@1.0.69", reason = "the derive of thiserror 1 for turbojpeg" },
+]
 
 [sources]
 # crates.io only: no git dependencies, no other registries.

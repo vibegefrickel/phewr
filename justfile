@@ -120,8 +120,3 @@ uninstall:
 clean:
     cargo clean
     rm -rf dist
-
-# Install the git pre-commit hook (fmt + clippy on every commit).
-hooks:
-    git config core.hooksPath .githooks
-    @echo "pre-commit hook active; 'git config --unset core.hooksPath' turns it off"
