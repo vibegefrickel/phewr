@@ -20,8 +20,6 @@ mod zoom;
 
 pub(crate) use mouse::{Drag, MouseState, ScreenLayout};
 pub(crate) use slideshow::Slideshow;
-#[cfg(feature = "video")]
-pub(crate) use video::VideoReturn;
 
 use crate::config::{self, Config};
 use crate::gallery::GalleryState;
@@ -130,8 +128,6 @@ pub(crate) struct App {
     /// The motion of the Live Photo that the player plays. `current` stays on the still.
     #[cfg(feature = "video")]
     motion: Option<PathBuf>,
-    #[cfg(feature = "video")]
-    pub(crate) video_return: VideoReturn,
     /// `p` asked for the mpv window. The run loop takes the request.
     #[cfg(feature = "video")]
     video_window_request: bool,
@@ -262,8 +258,6 @@ impl App {
             video: None,
             #[cfg(feature = "video")]
             motion: None,
-            #[cfg(feature = "video")]
-            video_return: VideoReturn::Gallery,
             #[cfg(feature = "video")]
             video_window_request: false,
             #[cfg(feature = "video")]

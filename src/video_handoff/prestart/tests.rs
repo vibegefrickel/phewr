@@ -233,7 +233,7 @@ fn new_frame_box_restarts_player() {
     assert!(decoder.last_args().contains("scale_vt=w=400:h=300,"));
     let limit = crate::player::frame_limit(app.fullscreen_box, app.cell_px);
     let path = app.images[1].clone();
-    assert!(take_prestart(&mut app, &path, true, limit, later).is_some());
+    assert!(take_prestart(&mut app, &path, limit, later).is_some());
 }
 
 #[test]
@@ -338,8 +338,7 @@ fn deadline_counts_from_enter() {
     rest_until_started(&mut app, &decoder, rest);
     let path = app.images[1].clone();
     let limit = crate::player::frame_limit(app.fullscreen_box, app.cell_px);
-    let mut player =
-        take_prestart(&mut app, &path, true, limit, rest + Duration::from_secs(9)).unwrap();
+    let mut player = take_prestart(&mut app, &path, limit, rest + Duration::from_secs(9)).unwrap();
     // 9 s after the start of ffmpeg, past the first-frame deadline, but 1 s after Enter: the
     // run still waits.
     assert!(!player.poll_at(rest + Duration::from_secs(10)));
@@ -354,7 +353,7 @@ fn enter_restarts_stale_player() {
     let due = rest_until_started(&mut app, &decoder, Instant::now());
     let path = app.images[1].clone();
     let other = crate::player::frame_limit(Rect::new(0, 0, 50, 20), app.cell_px);
-    assert!(take_prestart(&mut app, &path, true, other, due).is_none());
+    assert!(take_prestart(&mut app, &path, other, due).is_none());
     assert!(
         !app.video_prestart.running(),
         "a resize in the pass of Enter drops the player"
@@ -364,7 +363,7 @@ fn enter_restarts_stale_player() {
     rest_until_started(&mut app, &decoder, Instant::now());
     let limit = crate::player::frame_limit(app.fullscreen_box, app.cell_px);
     let photo = app.images[0].clone();
-    assert!(take_prestart(&mut app, &photo, true, limit, due).is_none());
+    assert!(take_prestart(&mut app, &photo, limit, due).is_none());
     assert!(app.video_prestart.running(), "another file keeps the rest");
 }
 

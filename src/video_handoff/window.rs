@@ -15,7 +15,7 @@ pub(crate) fn poll_mpv_window(app: &mut App, state: &mut LoopState) {
 #[cfg(test)]
 mod tests {
     use super::poll_mpv_window;
-    use crate::app::{App, VideoReturn, ViewMode};
+    use crate::app::{App, ViewMode};
     use crate::config::VideoPlayer;
     use crate::mpv;
     use crate::run_loop::LoopState;
@@ -275,7 +275,6 @@ mod tests {
             .unwrap();
         poll_mpv_window(&mut app, &mut state);
         assert_eq!(app.mode, ViewMode::Video);
-        assert_eq!(app.video_return, VideoReturn::Gallery);
         play_videos(&mut app, &mut state, &mut runner);
         assert!(last_start(&log).ends_with(" -- /videos/next.mov"));
         assert_eq!(app.mode, ViewMode::Gallery);

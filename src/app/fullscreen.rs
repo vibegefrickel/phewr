@@ -1,7 +1,5 @@
 //! The fullscreen view: enter and leave, the steps through the list and the decode.
 
-#[cfg(feature = "video")]
-use super::VideoReturn;
 use super::{App, ViewMode};
 use crate::pictures::decode::screen::load_for_screen;
 use crate::pictures::decode::{ScreenImage, spawn_foreground};
@@ -136,12 +134,10 @@ impl App {
         self.fullscreen_decode = None;
         self.reset_zoom_and_source();
 
+        // A step onto a file that plays opens the player, except on the still of a slideshow.
         #[cfg(feature = "video")]
-        if self.opens_in_player(self.current) {
-            self.mode = ViewMode::Video;
-            self.video_return = VideoReturn::Fullscreen;
-            self.loaded = None;
-            self.clear_before_video = true;
+        if self.opens_in_player(target) && !self.slideshow_shows_still(target) {
+            self.enter_video(target);
             return;
         }
 

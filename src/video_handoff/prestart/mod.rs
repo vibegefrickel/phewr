@@ -1,10 +1,10 @@
-//! The start of the terminal player while the view rests on a video or a Live Photo.
+//! The start of the terminal player while the gallery cursor rests on a file that plays.
 //!
-//! After the gallery cursor rests on a video cell for `PRESTART_DELAY` and the grid has no
-//! work, the cell's player starts. The fullscreen view of a Live Photo still starts the player
-//! of its motion in the same way, as a run that plays once. Enter then takes it with its first
-//! frame ready ([`take_prestart`]). The clock of a run starts at its first frame. The clip
-//! plays in real time from Enter.
+//! After the gallery cursor rests on a video, an animation or a Live Photo cell for
+//! `PRESTART_DELAY` and the grid has no work, the cell's player starts as a loop. A Live Photo
+//! cell starts the player of its motion. Enter then takes it with its first frame ready
+//! ([`take_prestart`]). The clock of a run starts at its first frame. The clip plays in real
+//! time from Enter.
 //!
 //! At most one such player exists. It belongs to the file of the rest and to the frame box. A
 //! cursor move, a step, a view change, an overlay, a slideshow and an mpv window drop it. A
@@ -12,8 +12,7 @@
 //! gets no second try until the rest moves.
 //!
 //! The UI thread runs no ffprobe. Without an entry in the probe cache, a thread probes the file
-//! and writes its cube, and the start waits for it. After a motion played, the rest on its still
-//! starts nothing until a step to another file.
+//! and writes its cube, and the start waits for it.
 
 use super::terminal_player_program;
 use crate::app::{App, ViewMode};
@@ -32,28 +31,11 @@ const PRESTART_DELAY: Duration = Duration::from_millis(200);
 /// buffers.
 const PRESTART_LIFETIME: Duration = Duration::from_secs(10);
 
-/// The file of the player that a rest starts, and the way it plays.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct RestTarget<'a> {
-    path: &'a Path,
-    /// A video cell of the grid loops. The motion of a Live Photo plays once.
-    repeat: bool,
-}
-
-/// The file of the rest, the way its player plays and the time when the rest began.
+/// The file of the player that a rest starts, and the time when the rest began. The player
+/// loops, as the player of Enter outside a slideshow.
 struct Rest {
     path: PathBuf,
-    repeat: bool,
     since: Instant,
-}
-
-impl Rest {
-    fn target(&self) -> RestTarget<'_> {
-        RestTarget {
-            path: &self.path,
-            repeat: self.repeat,
-        }
-    }
 }
 
 /// The player that starts ahead of Enter, and the rest that it belongs to.
@@ -65,27 +47,12 @@ pub(crate) struct VideoPrestart {
     player: Option<(Player, Instant)>,
     /// The probe of the rest file on a thread, while the probe cache holds no entry for it.
     preparing: Option<mpsc::Receiver<bool>>,
-    /// The Live Photo still whose motion played. Its rest starts no second motion until a step
-    /// to another file.
-    played: Option<PathBuf>,
 }
 
 impl VideoPrestart {
     #[cfg(test)]
     pub(crate) fn running(&self) -> bool {
         self.player.is_some()
-    }
-
-    /// True while a rest on a file that can play ahead runs.
-    #[cfg(test)]
-    pub(crate) fn rests(&self) -> bool {
-        self.rest.is_some()
-    }
-
-    /// The motion of the still `still` plays. A rest on the still then holds no second ffmpeg
-    /// that waits 10 s.
-    pub(crate) fn mark_played(&mut self, still: PathBuf) {
-        self.played = Some(still);
     }
 
     /// A new run ends the prestarted ffmpeg before its own start.
@@ -126,51 +93,41 @@ pub(crate) fn prestart_timeout(app: &App, now: Instant) -> Option<Duration> {
     Some(due.saturating_duration_since(now).max(HELD_POLL))
 }
 
-/// The file under the gallery cursor, or the motion of the Live Photo still in the fullscreen
-/// view, while no overlay, no slideshow and no mpv window is on.
-fn rest_target(app: &App) -> Option<RestTarget<'_>> {
-    if app.help_visible || app.slideshow_running() || app.watches_video_window() {
+/// The file under the gallery cursor, while no overlay, no slideshow and no mpv window is on.
+/// A Live Photo cell gives its motion: the player of Enter plays the motion.
+fn rest_target(app: &App) -> Option<&Path> {
+    if app.mode != ViewMode::Gallery
+        || app.help_visible
+        || app.slideshow_running()
+        || app.watches_video_window()
+    {
         return None;
     }
-    match app.mode {
-        ViewMode::Gallery => {
-            let index = app.gallery.selected_index()?;
-            if app.is_folder(index) {
-                return None;
-            }
-            let path = app.images.get(index)?;
-            Some(RestTarget { path, repeat: true })
-        }
-        ViewMode::Fullscreen if app.fullscreen_on_live() => {
-            if app.video_prestart.played.as_deref()
-                == app.images.get(app.current).map(PathBuf::as_path)
-            {
-                return None;
-            }
-            let path = app.live_motion(app.current)?;
-            Some(RestTarget {
-                path,
-                repeat: false,
-            })
-        }
-        _ => None,
+    let index = app.gallery.selected_index()?;
+    if app.is_folder(index) {
+        return None;
     }
+    app.live_motion(index)
+        .or_else(|| app.images.get(index).map(PathBuf::as_path))
 }
 
-/// Follow the rest. After `PRESTART_DELAY` on a video or a Live Photo still, and while the app
-/// has no work, the player starts.
+/// Follow the rest. After `PRESTART_DELAY` on a file that plays, and while the app has no work,
+/// the player starts.
 pub(crate) fn tick_prestart(app: &mut App, state: &LoopState, now: Instant) {
-    forget_played(app);
     let target = rest_target(app);
-    if app.video_prestart.rest.as_ref().map(Rest::target) != target {
-        let rest = target.map(|target| Rest {
-            path: target.path.to_path_buf(),
-            repeat: target.repeat,
+    if app
+        .video_prestart
+        .rest
+        .as_ref()
+        .map(|rest| rest.path.as_path())
+        != target
+    {
+        let rest = target.map(|path| Rest {
+            path: path.to_path_buf(),
             since: now,
         });
         app.video_prestart = VideoPrestart {
             rest,
-            played: app.video_prestart.played.take(),
             ..VideoPrestart::default()
         };
         return;
@@ -187,8 +144,8 @@ pub(crate) fn tick_prestart(app: &mut App, state: &LoopState, now: Instant) {
     {
         return;
     }
-    let (path, repeat) = (rest.path.clone(), rest.repeat);
-    if !plays_in_terminal(app, state, repeat) {
+    let path = rest.path.clone();
+    if !plays_in_terminal(app, state) {
         app.video_prestart.tried = Some(limit);
         return;
     }
@@ -196,30 +153,18 @@ pub(crate) fn tick_prestart(app: &mut App, state: &LoopState, now: Instant) {
         return;
     };
     app.video_prestart.tried = Some(limit);
-    if ready && let Some(player) = start_player(app, state, &path, repeat, limit) {
+    if ready && let Some(player) = start_player(app, state, &path, limit) {
         app.video_prestart.player = Some((player, now));
     }
 }
 
-/// A step to another file, and the grid, end the mark of a played motion.
-fn forget_played(app: &mut App) {
-    let current = (app.mode != ViewMode::Gallery)
-        .then(|| app.images.get(app.current))
-        .flatten();
-    if app.video_prestart.played.as_ref() != current {
-        app.video_prestart.played = None;
-    }
-}
-
-/// A motion is a `.mov` of the pair. A grid cell plays only as a video or an animation, and
-/// only the terminal player starts ahead.
-fn plays_in_terminal(app: &App, state: &LoopState, repeat: bool) -> bool {
-    let plays = !repeat
-        || app
-            .gallery
-            .selected_index()
-            .is_some_and(|index| app.opens_in_player(index));
-    plays && terminal_player_program(app, state).is_ok()
+/// A grid cell plays only as a video, an animation or a Live Photo, and only the terminal
+/// player starts ahead.
+fn plays_in_terminal(app: &App, state: &LoopState) -> bool {
+    app.gallery
+        .selected_index()
+        .is_some_and(|index| app.opens_in_player(index))
+        && terminal_player_program(app, state).is_ok()
 }
 
 /// `Some(true)` when the probe cache holds `path`, `None` while a thread probes it. The UI
@@ -247,13 +192,7 @@ fn probe_ready(app: &mut App, state: &LoopState, path: &Path) -> Option<bool> {
 }
 
 /// A failed start leaves the file to Enter. Enter shows the error.
-fn start_player(
-    app: &App,
-    state: &LoopState,
-    path: &Path,
-    repeat: bool,
-    limit: (u32, u32),
-) -> Option<Player> {
+fn start_player(app: &App, state: &LoopState, path: &Path, limit: (u32, u32)) -> Option<Player> {
     let program = terminal_player_program(app, state).ok()?;
     Player::open(
         Rc::clone(&state.video.decoder),
@@ -261,22 +200,21 @@ fn start_player(
         path,
         limit,
         &cube_dirs(&app.disk_cache_dir).paths(),
-        repeat,
+        true,
     )
     .ok()
 }
 
-/// The prestarted player for `path` at `limit` that plays as `repeat` asks, with its clock from
-/// `now`. `None` for another file, another way to play or a new window size.
+/// The prestarted loop for `path` at `limit`, with its clock from `now`. `None` for another
+/// file or a new window size.
 pub(crate) fn take_prestart(
     app: &mut App,
     path: &Path,
-    repeat: bool,
     limit: (u32, u32),
     now: Instant,
 ) -> Option<Player> {
     let prestart = &mut app.video_prestart;
-    if prestart.rest.as_ref().map(Rest::target) != Some(RestTarget { path, repeat }) {
+    if prestart.rest.as_ref().map(|rest| rest.path.as_path()) != Some(path) {
         return None;
     }
     let (mut player, _) = prestart.player.take()?;

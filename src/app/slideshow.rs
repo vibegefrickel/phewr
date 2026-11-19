@@ -1,7 +1,5 @@
 //! The slideshow: start, pause, the interval, the clock and the autostart from the CLI.
 
-#[cfg(feature = "video")]
-use super::VideoReturn;
 use super::{App, ViewMode};
 use std::time::{Duration, Instant};
 
@@ -52,10 +50,10 @@ impl App {
         }
         let interval = self.slideshow_interval;
         self.slideshow = Some(Slideshow::new(interval, false, Instant::now() + interval));
-        // A slideshow lives in the fullscreen view, even when it starts on a video.
+        // The first slide shows the still of a Live Photo before its motion.
         #[cfg(feature = "video")]
-        if self.mode == ViewMode::Video {
-            self.video_return = VideoReturn::Fullscreen;
+        if self.mode == ViewMode::Video && self.slideshow_shows_still(self.current) {
+            self.jump_to(self.current);
         }
         self.needs_render = true;
     }
@@ -82,13 +80,16 @@ impl App {
     }
 
     pub(crate) fn slideshow_toggle_pause(&mut self) {
-        if let Some(show) = self.slideshow.as_mut() {
-            show.paused = !show.paused;
-            if !show.paused {
-                show.next_at = Instant::now() + show.interval;
-            }
-            self.needs_render = true;
+        let Some(show) = self.slideshow.as_mut() else {
+            return;
+        };
+        show.paused = !show.paused;
+        if !show.paused {
+            show.next_at = Instant::now() + show.interval;
         }
+        self.needs_render = true;
+        #[cfg(feature = "video")]
+        self.replay_after_toggle();
     }
 
     /// The new interval is the default for the next slideshow of this session.
@@ -154,14 +155,7 @@ impl App {
     #[cfg(feature = "video")]
     fn slideshow_starts_motion(&mut self) -> bool {
         let current = self.current;
-        if self.mode != ViewMode::Fullscreen || !self.is_live(current) {
-            return false;
-        }
-        if self
-            .slideshow
-            .as_ref()
-            .is_none_or(|show| show.motion_for == Some(current))
-        {
+        if self.mode != ViewMode::Fullscreen || !self.slideshow_motion_waits() {
             return false;
         }
         // The decode of the still is under way. A failed decode starts the motion anyway.
@@ -172,8 +166,26 @@ impl App {
         if let Some(show) = self.slideshow.as_mut() {
             show.motion_for = Some(current);
         }
-        self.enter_motion_at(current);
+        self.enter_video(current);
         true
+    }
+
+    /// True on a Live Photo still whose motion this slide did not start yet. A failed open
+    /// leaves the still on the screen, and its motion does not start again.
+    #[cfg(feature = "video")]
+    pub(super) fn slideshow_motion_waits(&self) -> bool {
+        self.is_live(self.current)
+            && self
+                .slideshow
+                .as_ref()
+                .is_some_and(|show| show.motion_for != Some(self.current))
+    }
+
+    /// True when a step onto the file `index` shows its still: a running slideshow shows the
+    /// still of a Live Photo, then plays its motion one time. Each other view plays the motion.
+    #[cfg(feature = "video")]
+    pub(super) fn slideshow_shows_still(&self, index: usize) -> bool {
+        self.slideshow_advancing() && self.is_live(index)
     }
 
     /// Push the next check 100 ms out, while a decode or a video holds the slide.
@@ -404,11 +416,10 @@ mod tests {
     #[cfg(feature = "video")]
     #[test]
     fn live_photo_starts_motion_in_running_slideshow() {
-        use crate::test_support::live::{LIVE_ID, fullscreen_on_still};
+        use crate::test_support::live::{LIVE_ID, slideshow_on_still};
         let dir = tempfile::tempdir().unwrap();
-        let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
+        let mut app = slideshow_on_still(dir.path(), LIVE_ID);
         let still = app.current;
-        app.start_slideshow();
         app.loaded = Some(RgbaImage::new(1, 1).into());
 
         app.slideshow_tick();
@@ -426,10 +437,9 @@ mod tests {
     #[cfg(feature = "video")]
     #[test]
     fn live_photo_waits_for_its_still() {
-        use crate::test_support::live::{LIVE_ID, fullscreen_on_still};
+        use crate::test_support::live::{LIVE_ID, slideshow_on_still};
         let dir = tempfile::tempdir().unwrap();
-        let mut app = fullscreen_on_still(dir.path(), LIVE_ID);
-        app.start_slideshow();
+        let mut app = slideshow_on_still(dir.path(), LIVE_ID);
         app.loaded = None;
 
         app.slideshow_tick();

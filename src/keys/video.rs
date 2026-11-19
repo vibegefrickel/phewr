@@ -7,7 +7,8 @@ use crate::video_handoff::focus_gallery_on_current;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::io;
 
-/// The player has no pause and no seek: `p` opens the video in the mpv window.
+/// The player has no pause and no seek: `p` opens the video in the mpv window. The player keeps
+/// its last frame on the screen while the window plays.
 ///
 /// `q` and Esc stop a running slideshow and go back. A step keeps the slideshow and gives the
 /// new file the full interval, as in the fullscreen view.
@@ -17,7 +18,7 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
         KeyCode::Left | KeyCode::Char('h' | 'j') => step(app, Step::Previous)?,
         KeyCode::Right | KeyCode::Char('k' | 'l') => step(app, Step::Next)?,
         KeyCode::Char('q') | KeyCode::Esc => leave_player(app)?,
-        KeyCode::Char('p') if !app.watches_video_window() => open_window(app)?,
+        KeyCode::Char('p') if !app.watches_video_window() => app.request_video_window_from_player(),
         KeyCode::Char('?') => {
             app.graphics_delete_all()?;
             app.help_visible = true;
@@ -31,27 +32,12 @@ pub(crate) fn handle_video_key(app: &mut App, key: KeyEvent) -> io::Result<bool>
     Ok(false)
 }
 
-/// A running slideshow stops. The motion of a Live Photo goes back to its still.
+/// A running slideshow stops, and the grid shows. The fullscreen view shows no file that plays.
 pub(super) fn leave_player(app: &mut App) -> io::Result<()> {
     app.graphics_delete_all()?;
     app.stop_slideshow();
-    if app.plays_motion() {
-        app.return_from_video();
-    } else {
-        // The player has no controls. The fullscreen view shows no video.
-        app.exit_video();
-    }
+    app.exit_video();
     focus_gallery_on_current(app);
-    Ok(())
-}
-
-/// The player keeps its last frame on the screen while the window plays. The motion of a Live
-/// Photo returns to its still, so its frame goes.
-fn open_window(app: &mut App) -> io::Result<()> {
-    if app.plays_motion() {
-        app.graphics_delete_all()?;
-    }
-    app.request_video_window_from_player();
     Ok(())
 }
 
@@ -206,7 +192,6 @@ mod tests {
 
         assert_eq!(app.mode, ViewMode::Video);
         assert!(app.slideshow_running());
-        assert_eq!(app.video_return, crate::app::VideoReturn::Fullscreen);
     }
 
     #[test]

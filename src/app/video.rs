@@ -6,15 +6,6 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "video")]
 use std::sync::mpsc;
 
-/// The view that opened a video. It picks the view behind a closed player. The player view
-/// itself always plays again in the terminal player after mpv, whatever opened it.
-#[cfg(feature = "video")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VideoReturn {
-    Gallery,
-    Fullscreen,
-}
-
 /// An mpv window that phewr follows: its file and the receiver of its exit code.
 #[cfg(feature = "video")]
 pub(super) struct VideoWindow {
@@ -33,36 +24,22 @@ pub(crate) struct WindowExit {
 }
 
 impl App {
+    /// Open the player view of the file `index`: a video, an animation or the motion of a Live
+    /// Photo. `current` stays on a Live still, and the shown still goes to the prefetch cache.
     #[cfg(feature = "video")]
     pub(crate) fn enter_video(&mut self, index: usize) {
-        self.video_return = if self.mode == ViewMode::Fullscreen {
-            VideoReturn::Fullscreen
-        } else {
-            VideoReturn::Gallery
-        };
+        if self.mode == ViewMode::Fullscreen && index == self.current {
+            self.park_shown_image();
+        }
         self.current = index;
         self.mode = ViewMode::Video;
         self.error = None;
         self.needs_render = true;
         self.loaded = None;
         self.video = None;
-        self.motion = None;
+        self.motion = self.live_motion(index).map(Path::to_path_buf);
         self.video_window = None;
         self.clear_before_video = true;
-    }
-
-    /// Play the motion of the Live Photo still `index` one time. `current` stays on the still,
-    /// and the shown still goes to the prefetch cache: the way back needs no decode.
-    #[cfg(feature = "video")]
-    pub(crate) fn enter_motion_at(&mut self, index: usize) {
-        let Some(motion) = self.live_motion(index).map(Path::to_path_buf) else {
-            return;
-        };
-        if self.mode == ViewMode::Fullscreen && index == self.current {
-            self.park_shown_image();
-        }
-        self.enter_video(index);
-        self.motion = Some(motion);
     }
 
     /// True while the player plays the motion of a Live Photo.
@@ -80,20 +57,6 @@ impl App {
             .unwrap_or_else(|| self.current_path())
     }
 
-    /// True on a Live Photo still in the fullscreen view: Enter plays its motion.
-    #[cfg(feature = "video")]
-    pub(crate) fn fullscreen_on_live(&self) -> bool {
-        self.mode == ViewMode::Fullscreen && self.is_live(self.current)
-    }
-
-    /// True when the gallery cursor is on a Live Photo still, for `p` in the gallery.
-    #[cfg(feature = "video")]
-    pub(crate) fn selected_is_live(&self) -> bool {
-        self.gallery
-            .selected_index()
-            .is_some_and(|index| self.is_live(index))
-    }
-
     /// Ask the run loop to open the current video in the mpv window.
     #[cfg(feature = "video")]
     pub(crate) fn request_video_window(&mut self) {
@@ -102,8 +65,7 @@ impl App {
         self.window_keeps_player = false;
     }
 
-    /// Ask for the mpv window from the player view, which waits for the window. The player view
-    /// stays for each `video_return`, except for the motion of a Live Photo.
+    /// Ask for the mpv window from the player view, which waits for the window.
     #[cfg(feature = "video")]
     pub(crate) fn request_video_window_from_player(&mut self) {
         self.request_video_window();
@@ -130,36 +92,42 @@ impl App {
         self.needs_render = true;
     }
 
-    /// Leave the video. The motion of a Live Photo and an animation from the fullscreen view go
-    /// back to their still. A video goes to the grid: the fullscreen view shows no video.
+    /// A failed open of the terminal player. The fullscreen view shows the error of a video, and
+    /// the still of an animation or of a Live Photo. Enter does not retry the open.
     #[cfg(feature = "video")]
-    pub(crate) fn return_from_video(&mut self) {
-        if self.video_return == VideoReturn::Gallery || self.is_video(self.current) {
-            self.exit_video();
-            return;
-        }
+    pub(crate) fn leave_failed_player(&mut self, error: Option<String>) {
         self.video = None;
         self.motion = None;
         self.mode = ViewMode::Fullscreen;
-        self.loaded = None;
-        self.fullscreen_decode = None;
-        self.reset_zoom_and_source();
+        self.error = error;
         self.needs_render = true;
     }
 
-    /// The view behind the mpv window of the current video. With `keep_player`, the player view
-    /// keeps its last frame for each `video_return`, and its player plays again after the
-    /// window. The motion of a Live Photo still returns to its still.
-    /// Else [`App::return_from_video`] picks the grid or the still.
+    /// The view behind the mpv window of the current file. With `keep_player`, the player view
+    /// keeps its last frame, and its player plays again after the window. A running slideshow
+    /// shows the still of a Live Photo. Each other file shows the grid.
     #[cfg(feature = "video")]
     pub(crate) fn leave_for_window(&mut self, keep_player: bool) {
-        if keep_player && !self.plays_motion() {
+        if keep_player {
             // The decoder stops: the window is the only playback.
             self.video = None;
             self.needs_render = true;
-        } else {
-            self.return_from_video();
+        } else if !self.slideshow_shows_still(self.current) || !self.show_still() {
+            self.exit_video();
         }
+    }
+
+    /// Show the still of an animation or of a Live Photo in the fullscreen view. `false` for a
+    /// video, which has no still.
+    #[cfg(feature = "video")]
+    pub(crate) fn show_still(&mut self) -> bool {
+        if self.is_video(self.current) {
+            return false;
+        }
+        self.leave_failed_player(None);
+        self.fullscreen_decode = None;
+        self.reset_zoom_and_source();
+        true
     }
 
     /// True while a slideshow video holds the slide. A slideshow window holds the grid or the
@@ -175,10 +143,6 @@ impl App {
                 // At the end of the list, the slideshow stops and the player loops the clip.
                 self.video = None;
                 self.slideshow_step();
-                // A stopped slideshow leaves the motion of a Live Photo for its still.
-                if self.plays_motion() {
-                    self.return_from_video();
-                }
             }
             return true;
         }
@@ -262,9 +226,6 @@ impl App {
     }
 
     /// Step to the neighbor after `l` or `h` in mpv. `false` at the end of the list.
-    ///
-    /// A video keeps the view that the first video returns to: a run of videos from the gallery
-    /// ends in the gallery.
     #[cfg(feature = "video")]
     pub(crate) fn step_from_video(&mut self, step: crate::mpv::Step) -> bool {
         let target = match step {
@@ -279,13 +240,43 @@ impl App {
         let Some(target) = target else {
             return false;
         };
-        let return_to = self.video_return;
         self.jump_to(target);
-        if self.mode == ViewMode::Video {
-            self.video_return = return_to;
-        }
         self.slideshow_touch();
         true
+    }
+
+    /// A clip that a running slideshow played one time loops after a pause or a stop, like each
+    /// clip outside a slideshow. A failed decode keeps its error on the screen.
+    #[cfg(feature = "video")]
+    pub(crate) fn replay_finished(&mut self) {
+        if self.mode == ViewMode::Video
+            && !self.slideshow_advancing()
+            && self
+                .video
+                .as_ref()
+                .is_some_and(|player| player.finished() && player.error.is_none())
+        {
+            self.video = None;
+        }
+    }
+
+    /// A pause loops the clip of the player view, also the motion of a Live still that waits for
+    /// it. A resume lets a run of the slideshow play on. A loop has no end, so a resume plays its
+    /// clip one time from the start, and then the slideshow moves on.
+    #[cfg(feature = "video")]
+    pub(super) fn replay_after_toggle(&mut self) {
+        if self.slideshow_advancing() {
+            if self.mode == ViewMode::Video
+                && self
+                    .video
+                    .as_ref()
+                    .is_some_and(crate::player::Player::loops)
+            {
+                self.video = None;
+            }
+        } else if self.mode == ViewMode::Fullscreen && self.slideshow_motion_waits() {
+            self.enter_video(self.current);
+        }
     }
 
     /// A quit by the user returns to the slideshow, paused. The grid has no slideshow.
@@ -351,18 +342,14 @@ impl App {
             .is_some_and(|path| crate::player::is_animated(path))
     }
 
+    /// True for each file that plays: a video, an animated image and a Live Photo still. Every
+    /// view opens it in the terminal player.
     #[cfg(feature = "video")]
     pub(crate) fn opens_in_player(&self, index: usize) -> bool {
-        self.is_video(index) || self.reads_as_animated(index)
+        self.is_video(index) || self.is_live(index) || self.reads_as_animated(index)
     }
 
-    /// True on the still frame of an animated image: Enter plays it, `p` opens the mpv window.
-    #[cfg(feature = "video")]
-    pub(crate) fn fullscreen_on_animation(&self) -> bool {
-        self.mode == ViewMode::Fullscreen && self.reads_as_animated(self.current)
-    }
-
-    /// True when the gallery cursor is on a video or an animated image, for `p` in the gallery.
+    /// True when the gallery cursor is on a file that plays, for `p` in the gallery.
     #[cfg(feature = "video")]
     pub(crate) fn selected_is_video(&self) -> bool {
         self.gallery
@@ -382,7 +369,7 @@ impl App {
 #[cfg(test)]
 #[cfg(feature = "video")]
 mod tests {
-    use crate::app::{VideoReturn, ViewMode};
+    use crate::app::ViewMode;
     use crate::test_support::{app_with, overdue};
 
     #[test]
@@ -390,8 +377,7 @@ mod tests {
         let mut app = app_with(&["clip.mp4", "b.png"]);
         app.enter_fullscreen_selected();
         assert_eq!(app.mode, ViewMode::Video);
-        assert_eq!(app.video_return, VideoReturn::Gallery);
-        app.return_from_video();
+        app.leave_for_window(false);
         assert_eq!(app.mode, ViewMode::Gallery);
     }
 
@@ -418,14 +404,13 @@ mod tests {
             };
             assert_eq!(app.mode, mode, "{key:?}");
         }
-        assert_eq!(app.video_return, VideoReturn::Fullscreen);
         press(&mut app, KeyCode::Char('l'));
         assert_eq!(app.mode, ViewMode::Fullscreen, "a step onto a photo");
         app.prev();
         assert_eq!(app.mode, ViewMode::Video);
 
         // The way back from a video never lands the fullscreen view on it.
-        app.return_from_video();
+        app.leave_for_window(false);
         assert_eq!(app.mode, ViewMode::Gallery);
         assert!(!app.fullscreen_on_video());
     }
@@ -436,7 +421,7 @@ mod tests {
         app.scan_error = Some("denied".to_owned());
         app.enter_fullscreen_at(0);
         app.next();
-        app.return_from_video();
+        app.exit_video();
         assert_eq!(app.scan_error.as_deref(), Some("denied"));
         app.enter_fullscreen_at(0);
         assert_eq!(app.scan_error.as_deref(), Some("denied"));
@@ -458,16 +443,16 @@ mod tests {
         char_key(&mut app, 'p');
         assert_eq!(app.mode, ViewMode::Video);
         assert_eq!(app.current, 1);
-        assert_eq!(app.video_return, VideoReturn::Gallery);
         assert!(app.take_video_window_request());
+        assert!(!app.take_window_keeps_player(), "the grid stays the grid");
 
-        app.return_from_video();
+        app.exit_video();
         app.enter_fullscreen_at(0);
         app.next();
         char_key(&mut app, 'p');
         assert_eq!(app.mode, ViewMode::Video, "the player view waits");
-        assert_eq!(app.video_return, VideoReturn::Fullscreen);
         assert!(app.take_video_window_request());
+        assert!(app.take_window_keeps_player());
     }
 
     #[test]
@@ -496,13 +481,14 @@ mod tests {
             ViewMode::Video,
             "a step plays the animation at once"
         );
-        assert_eq!(app.video_return, VideoReturn::Fullscreen);
+        app.prev();
+        assert_eq!(app.mode, ViewMode::Fullscreen, "the still GIF is a photo");
+        press(&mut app, KeyCode::End);
+        assert_eq!(app.mode, ViewMode::Video, "End plays the animation");
 
         // A failed open lands on the still first frame. The image decode reads it.
-        app.mode = ViewMode::Fullscreen;
-        app.error = Some("ffmpeg did not start".to_owned());
+        app.leave_failed_player(None);
         assert!(!app.fullscreen_on_video());
-        assert!(app.fullscreen_on_animation());
         app.load_if_needed();
         assert_eq!(
             app.fullscreen_decode.as_ref().map(|decode| decode.index),
@@ -510,18 +496,17 @@ mod tests {
         );
 
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.mode, ViewMode::Video, "Enter plays it again");
-        app.mode = ViewMode::Fullscreen;
+        assert_eq!(app.mode, ViewMode::Fullscreen, "Enter does not retry");
         char_key(&mut app, 'p');
         assert_eq!(app.mode, ViewMode::Video);
         assert!(app.take_video_window_request(), "p opens the mpv window");
 
-        app.exit_video();
+        char_key(&mut app, 'q');
+        assert_eq!(app.mode, ViewMode::Gallery, "q goes to the grid");
         app.gallery.cursor = 1;
         assert!(app.selected_is_video());
         app.enter_fullscreen_selected();
-        assert_eq!(app.mode, ViewMode::Video);
-        assert_eq!(app.video_return, VideoReturn::Gallery);
+        assert_eq!(app.mode, ViewMode::Video, "Enter in the grid plays it");
     }
 
     #[test]
@@ -548,7 +533,6 @@ mod tests {
         app.maybe_autostart_slideshow();
         assert_eq!(app.mode, ViewMode::Video);
         assert!(app.slideshow_running());
-        assert_eq!(app.video_return, VideoReturn::Fullscreen);
 
         // A paused slideshow does not wait for the end of the clip.
         app.slideshow_toggle_pause();

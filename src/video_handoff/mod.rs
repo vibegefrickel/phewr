@@ -44,11 +44,10 @@ impl VideoState {
 /// Start the player for the current video, when the view waits for one.
 ///
 /// The terminal player needs the temp file medium, ffmpeg and ffprobe. Without them, the
-/// video goes to the mpv window with a note. A rest of the gallery cursor on a video, and a
-/// rest of the fullscreen view on a Live Photo still, start the player ahead of Enter, see
-/// [`prestart`].
+/// video goes to the mpv window with a note. A rest of the gallery cursor on a file that plays
+/// starts the player ahead of Enter, see [`prestart`].
 pub(crate) fn play_videos(app: &mut App, state: &mut LoopState, runner: &mut impl mpv::Runner) {
-    finish_motion(app, state);
+    app.replay_finished();
     start_video_view(app, state, runner);
     prestart::tick_prestart(app, state, Instant::now());
 }
@@ -57,10 +56,6 @@ fn start_video_view(app: &mut App, state: &mut LoopState, runner: &mut impl mpv:
     // The player view waits for the mpv window of its video with the last frame.
     if app.mode != ViewMode::Video || app.video.is_some() || app.watches_video_window() {
         return;
-    }
-    if app.plays_motion() {
-        app.video_prestart
-            .mark_played(app.current_path().to_path_buf());
     }
     let mismatch = identifier_note(app);
     if app.take_video_window_request() {
@@ -99,26 +94,6 @@ fn identifier_note(app: &App) -> Option<String> {
     })
 }
 
-/// Go back to the still after the motion of a Live Photo. A failed decode leaves its note.
-fn finish_motion(app: &mut App, state: &mut LoopState) {
-    if app.mode != ViewMode::Video || !app.plays_motion() {
-        return;
-    }
-    let Some(player) = app.video.as_ref() else {
-        return;
-    };
-    if !player.finished() {
-        return;
-    }
-    if let Some(error) = player.error.clone() {
-        state.status = Some(error);
-    }
-    // A running slideshow moves on from the finished motion, see `slideshow_video_holds`.
-    if !app.slideshow_advancing() {
-        app.return_from_video();
-    }
-}
-
 enum Blocker {
     /// The configuration asks for the window. No note.
     Configured,
@@ -142,19 +117,18 @@ fn terminal_player_program<'a>(app: &App, state: &'a LoopState) -> Result<&'a Pa
     Ok(program)
 }
 
-/// Open the current video in the terminal player, or take its prestarted player. A failed
-/// open shows its error in the fullscreen view, where Enter does not retry it. The motion of a
-/// Live Photo plays one time, and a failed open goes back to the still with a note.
+/// Open the current video in the terminal player, or take its prestarted player. Outside a
+/// running slideshow, the clip loops. A failed open shows its error in the fullscreen view
+/// ([`App::leave_failed_player`]).
 fn open_terminal_player(app: &mut App, state: &mut LoopState, program: &Path) {
     let path = app.video_path().to_path_buf();
-    let repeat = !app.slideshow_advancing() && !app.plays_motion();
+    let repeat = !app.slideshow_advancing();
     let limit = frame_limit(app.fullscreen_box, app.cell_px);
-    // A grid cell prestarts a loop, a Live Photo still a motion that plays once. A slideshow
-    // run plays once and takes no prestart.
-    let prestarted = if app.slideshow_advancing() {
-        None
+    // A grid cell prestarts a loop. A slideshow run plays once and takes no prestart.
+    let prestarted = if repeat {
+        prestart::take_prestart(app, &path, limit, Instant::now())
     } else {
-        prestart::take_prestart(app, &path, repeat, limit, Instant::now())
+        None
     };
     // A new run ends the prestarted ffmpeg first: two waiting ffmpeg runs of a 4K HLG clip hold
     // about 900 MB.
@@ -180,13 +154,12 @@ fn open_terminal_player(app: &mut App, state: &mut LoopState, program: &Path) {
             }
             app.video = Some(player);
         }
-        Err(error) if app.plays_motion() => {
-            state.status = Some(error.to_string());
-            app.return_from_video();
-        }
+        // The decode of a still clears `app.error`, so the note keeps the error of an animation
+        // and of a Live Photo motion.
+        Err(error) if app.is_video(app.current) => app.leave_failed_player(Some(error.to_string())),
         Err(error) => {
-            app.error = Some(error.to_string());
-            app.mode = ViewMode::Fullscreen;
+            state.status = Some(error.to_string());
+            app.leave_failed_player(None);
         }
     }
 }
@@ -254,12 +227,16 @@ fn leave_for_window(app: &mut App, keep_player: bool) {
     focus_gallery_on_current(app);
 }
 
-/// The window did not open: the player view plays on, and the grid stops the slideshow. A Live
-/// Photo motion that cannot play leaves the slideshow on its still.
+/// The window did not open: the player view plays on. An animation and a Live Photo show their
+/// still, and a running slideshow shows it for its interval. A video goes to the grid, and the
+/// grid stops the slideshow.
 fn leave_without_window(app: &mut App, keep_player: bool) {
-    let motion = app.plays_motion();
+    if !keep_player && app.show_still() {
+        focus_gallery_on_current(app);
+        return;
+    }
     leave_for_window(app, keep_player);
-    if app.mode != ViewMode::Video && !motion {
+    if app.mode == ViewMode::Gallery {
         app.stop_slideshow();
     }
 }

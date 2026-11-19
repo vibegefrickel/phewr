@@ -45,16 +45,38 @@ pub(crate) fn scanned_app(dir: &Path, config: &Config) -> App {
     app
 }
 
-/// A scanned folder with the pair `IMG_0001` between two photos, in the fullscreen view of the
-/// still.
-pub(crate) fn fullscreen_on_still(dir: &Path, motion_id: &str) -> App {
+/// A scanned folder with the pair `IMG_0001` between two photos, in the grid with the cursor
+/// on the still.
+pub(crate) fn grid_on_still(dir: &Path, motion_id: &str) -> App {
     image::RgbaImage::new(8, 8).save(dir.join("a.png")).unwrap();
     image::RgbaImage::new(8, 8).save(dir.join("z.png")).unwrap();
     write_live_pair(dir, "IMG_0001", Some(LIVE_ID), Some(motion_id));
     let mut app = scanned_app(dir, &Config::default());
     app.fullscreen_box = Rect::new(0, 0, 100, 40);
-    app.enter_fullscreen_at(index_of(&app, "IMG_0001.JPG"));
+    select(&mut app, "IMG_0001.JPG");
+    app
+}
+
+/// Put the gallery cursor on the file `name`.
+pub(crate) fn select(app: &mut App, name: &str) {
+    let index = index_of(app, name);
+    app.gallery.cursor = app
+        .gallery
+        .filtered_indices
+        .iter()
+        .position(|&candidate| candidate == index)
+        .unwrap();
+}
+
+/// A running slideshow that stepped from `a.png` onto the still of the pair `IMG_0001`. The
+/// still shows first, the decode of the still runs.
+pub(crate) fn slideshow_on_still(dir: &Path, motion_id: &str) -> App {
+    let mut app = grid_on_still(dir, motion_id);
+    app.enter_fullscreen_at(index_of(&app, "a.png"));
+    app.start_slideshow();
+    app.next();
     assert_eq!(app.mode, crate::app::ViewMode::Fullscreen);
+    assert_eq!(app.current, index_of(&app, "IMG_0001.JPG"));
     app
 }
 

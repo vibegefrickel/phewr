@@ -374,6 +374,11 @@ impl Player {
         !self.playing()
     }
 
+    /// True when the clip starts again without an end, outside a running slideshow.
+    pub(crate) fn loops(&self) -> bool {
+        self.repeat == Repeat::Always
+    }
+
     fn fail(&mut self, note: String) {
         self.stream = None;
         self.error = Some(note);

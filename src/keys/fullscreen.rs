@@ -22,18 +22,13 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.graphics_delete_all()?;
             app.toggle_info();
         }
-        KeyCode::Enter => {
-            play_in_place(app)?;
-        }
+        // The fullscreen view shows a file that plays after a failed open of its player, and on
+        // the still of a Live Photo before a running slideshow plays its motion. The player view
+        // waits for the window and plays the file again after it.
         #[cfg(feature = "video")]
-        KeyCode::Char('p') if app.fullscreen_on_live() => {
-            app.enter_motion_at(app.current);
-            app.request_video_window();
-        }
-        #[cfg(feature = "video")]
-        KeyCode::Char('p') if app.fullscreen_on_animation() => {
+        KeyCode::Char('p') if app.opens_in_player(app.current) => {
             app.enter_video(app.current);
-            app.request_video_window();
+            app.request_video_window_from_player();
         }
         KeyCode::Char('s') => app.toggle_slideshow(),
         KeyCode::Char(' ') => app.slideshow_toggle_pause(),
@@ -56,54 +51,6 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
         _ => {}
     }
     Ok(false)
-}
-
-/// Enter and a click on the middle of the picture: play the animation or the motion of a Live
-/// Photo. `false` when the file has nothing to play.
-pub(super) fn play_in_place(app: &mut App) -> io::Result<bool> {
-    if on_live(app) {
-        // The still stays on the screen until the first frame of the motion replaces it.
-        app.stop_slideshow();
-        enter_motion(app);
-        return Ok(true);
-    }
-    if !on_animation(app) {
-        return Ok(false);
-    }
-    app.graphics_delete_all()?;
-    app.stop_slideshow();
-    app.enter_fullscreen_at(app.current);
-    Ok(true)
-}
-
-/// A motion plays only with the `video` feature, and without it the scan lists no `.mov`.
-#[cfg(feature = "video")]
-fn on_live(app: &App) -> bool {
-    app.fullscreen_on_live()
-}
-
-#[cfg(not(feature = "video"))]
-fn on_live(_app: &App) -> bool {
-    false
-}
-
-#[cfg(feature = "video")]
-fn enter_motion(app: &mut App) {
-    app.enter_motion_at(app.current);
-}
-
-#[cfg(not(feature = "video"))]
-fn enter_motion(_app: &mut App) {}
-
-/// An animation plays only with the `video` feature.
-#[cfg(feature = "video")]
-fn on_animation(app: &App) -> bool {
-    app.fullscreen_on_animation()
-}
-
-#[cfg(not(feature = "video"))]
-fn on_animation(_app: &App) -> bool {
-    false
 }
 
 #[cfg(test)]
