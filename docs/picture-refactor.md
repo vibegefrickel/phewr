@@ -1,6 +1,6 @@
 # The shared picture pipeline
 
-The picture module is `tuilibr::pictures`. The plan and the rules live in `../tuilibr/docs/plan.md` and `../tuilibr/docs/pictures.md`. Change the module in tuilibr, not in phewr.
+The picture module is `tuilibr::pictures`. The plan and the rules live in `../tuilibr/docs/plan.md` and `../tuilibr/docs/pictures.md`. Both paths need the clone of tuilibr next to phewr, like the build. Change the module in tuilibr, not in phewr.
 
 ## History
 
