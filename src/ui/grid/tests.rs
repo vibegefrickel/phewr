@@ -68,7 +68,13 @@ fn selected_cell_gets_thick_border() {
         (0, 0),
         "the edge gaps hold the border"
     );
-    assert_border(&buffer, border, THICK, Color::Blue, Modifier::BOLD);
+    assert_border(
+        &buffer,
+        border,
+        THICK,
+        tuilibr::frame::accent(),
+        Modifier::BOLD,
+    );
     assert_eq!(screen.matches('\u{250f}').count(), 1, "one thick border");
     assert_eq!(
         screen.matches('\u{250c}').count(),
@@ -112,7 +118,13 @@ fn marked_cell_gets_yellow_border() {
     let cursor = app.gallery.border_rect(0);
     let neighbor = app.gallery.border_rect(1);
     assert_eq!(neighbor.x, cursor.right() - 1, "one shared gap column");
-    assert_border(&buffer, cursor, THICK, Color::Blue, Modifier::BOLD);
+    assert_border(
+        &buffer,
+        cursor,
+        THICK,
+        tuilibr::frame::accent(),
+        Modifier::BOLD,
+    );
     assert_symbol(
         &buffer,
         (neighbor.right() - 1, neighbor.y),
@@ -131,7 +143,13 @@ fn marked_cell_gets_yellow_border() {
     // On a marked cell under the cursor, the cursor border wins.
     app.selection.insert(app.images[0].clone());
     let buffer = render_buffer(&mut app, None, 100, 30);
-    assert_border(&buffer, cursor, THICK, Color::Blue, Modifier::BOLD);
+    assert_border(
+        &buffer,
+        cursor,
+        THICK,
+        tuilibr::frame::accent(),
+        Modifier::BOLD,
+    );
 }
 
 #[test]
@@ -149,12 +167,18 @@ fn borders_reach_edges() {
     let border = app.gallery.border_rect(last);
     assert_eq!(border.right(), grid.right(), "the right edge gap");
     assert_eq!(border.bottom(), grid.bottom(), "the bottom edge gap");
-    assert_border(&buffer, border, THICK, Color::Blue, Modifier::BOLD);
+    assert_border(
+        &buffer,
+        border,
+        THICK,
+        tuilibr::frame::accent(),
+        Modifier::BOLD,
+    );
     let cell = app.gallery.thumb_rect(last);
     assert_eq!(cell.bottom(), border.bottom() - 1, "the bottom gap row");
     assert_fill(
         &buffer[(cell.x + 1, cell.bottom())],
-        Color::Blue,
+        tuilibr::frame::accent(),
         Color::Reset,
         Modifier::BOLD,
     );
@@ -264,7 +288,10 @@ fn folder_cell_shows_icon_and_name() {
     app.gallery.cursor = 1;
     let buffer = render_buffer(&mut app, None, 100, 30);
     let name = cell_of(&buffer, "summer");
-    assert_eq!((name.fg, name.modifier), (Color::Blue, Modifier::BOLD));
+    assert_eq!(
+        (name.fg, name.modifier),
+        (tuilibr::frame::accent(), Modifier::BOLD)
+    );
 }
 
 #[cfg(feature = "video")]
@@ -328,28 +355,28 @@ fn cut_cell_stays_open_at_edge() {
         &buffer,
         (left, top),
         "\u{250f}",
-        Color::Blue,
+        tuilibr::frame::accent(),
         Modifier::BOLD,
     );
     assert_symbol(
         &buffer,
         (left, bottom),
         "\u{2517}",
-        Color::Blue,
+        tuilibr::frame::accent(),
         Modifier::BOLD,
     );
     assert_symbol(
         &buffer,
         (edge, top),
         "\u{2501}",
-        Color::Blue,
+        tuilibr::frame::accent(),
         Modifier::BOLD,
     );
     assert_symbol(
         &buffer,
         (edge, bottom),
         "\u{2501}",
-        Color::Blue,
+        tuilibr::frame::accent(),
         Modifier::BOLD,
     );
     assert_symbol(
@@ -504,7 +531,13 @@ fn narrow_grid_cuts_first_cell() {
         app.gallery.border_rect(1).x >= grid.right(),
         "the second cell starts outside"
     );
-    assert_symbol(&buffer, (0, 0), "\u{250f}", Color::Blue, Modifier::BOLD);
+    assert_symbol(
+        &buffer,
+        (0, 0),
+        "\u{250f}",
+        tuilibr::frame::accent(),
+        Modifier::BOLD,
+    );
     let top_row = &screen_rows(&buffer)[0];
     assert!(
         !top_row.contains('\u{2513}'),

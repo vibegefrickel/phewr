@@ -41,6 +41,7 @@ fn text(part: impl Into<String>, style: Style) -> BarText {
     BarText {
         parts: vec![part.into()],
         style,
+        keep_end: false,
     }
 }
 
@@ -88,6 +89,7 @@ pub(super) fn fullscreen_bar(app: &App, status: Option<&str>) -> BarParts {
     let mut middle = vec![BarText {
         parts,
         style: STYLES.text,
+        keep_end: false,
     }];
     middle.extend(status.map(|note| text(note, STYLES.text)));
     BarParts { middle, right }
@@ -197,6 +199,7 @@ pub(super) fn video_bar(app: &App, status: Option<&str>) -> BarParts {
     let mut middle = vec![BarText {
         parts,
         style: STYLES.text,
+        keep_end: false,
     }];
     middle.extend(status.map(|note| text(note, STYLES.text)));
     BarParts { middle, right }

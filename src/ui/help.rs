@@ -2,7 +2,6 @@
 //! box and the columns come from the tuilibr frame.
 
 use ratatui::Frame;
-use std::sync::{Mutex, PoisonError};
 use tuilibr::frame::{HelpView, Section, draw_help};
 use tuilibr::pictures::kitty::{
     Loops, Transfer,
@@ -17,7 +16,7 @@ const KEY_WIDTH: u16 = 20;
 const TEXT_WIDTH: u16 = 26;
 
 /// The left column: the gallery and its search line.
-const GALLERY_COLUMN: &[Section] = &[
+const GALLERY_COLUMN: &[Section<'static>] = &[
     (
         "Gallery",
         &[
@@ -51,7 +50,7 @@ const GALLERY_COLUMN: &[Section] = &[
 
 /// The right column without the Kitty section: the fullscreen view with the video player, and
 /// the mouse. The player has no sound, so the `p` row names the mpv window "with sound".
-const FULLSCREEN_SECTIONS: [Section; 2] = [
+const FULLSCREEN_SECTIONS: [Section<'static>; 2] = [
     (
         "Fullscreen / video player",
         &[
@@ -79,8 +78,9 @@ const FULLSCREEN_SECTIONS: [Section; 2] = [
 /// The help popup: two columns on a wide screen, else one column when it fits the height. The
 /// last section names the Kitty medium and the loop path.
 pub(super) fn draw_help_popup(frame: &mut Frame<'_>, transfer: Transfer, loops: Option<Loops>) {
+    let kitty = kitty_rows(transfer, loops);
     let mut right = FULLSCREEN_SECTIONS.to_vec();
-    right.push(("Kitty graphics", kitty_rows(transfer, loops)));
+    right.push(("Kitty graphics", &kitty));
     let view = HelpView {
         title: "phewr keys",
         columns: [GALLERY_COLUMN, &right],
@@ -91,29 +91,12 @@ pub(super) fn draw_help_popup(frame: &mut Frame<'_>, transfer: Transfer, loops: 
     draw_help(frame, area, &view);
 }
 
-/// The rows of one section, borrowed for the whole run.
-type Rows = &'static [(&'static str, &'static str)];
-
-/// The Kitty rows of each pair of a medium and a loop path that a run showed.
-type KittyRows = Vec<((Transfer, Option<Loops>), Rows)>;
-
-/// The rows of the Kitty section. A `Section` borrows its rows for the whole run, so each pair of
-/// a medium and a loop path gets its rows one time. The start probe sets both, so a run holds one
-/// pair, and all pairs together are 9 rows of two.
-// TODO: when tuilibr gives `Section` a lifetime (`&'a [(&'a str, &'a str)]`), build the rows on
-// the stack in `draw_help_popup` and delete `kitty_rows`, `KittyRows` and the leak.
-fn kitty_rows(transfer: Transfer, loops: Option<Loops>) -> Rows {
-    static KNOWN: Mutex<KittyRows> = Mutex::new(Vec::new());
-    let mut known = KNOWN.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((_, rows)) = known.iter().find(|(key, _)| *key == (transfer, loops)) {
-        return rows;
-    }
-    let rows: Rows = Box::leak(Box::new([
+/// The rows of the Kitty section: the medium and the loop path.
+fn kitty_rows(transfer: Transfer, loops: Option<Loops>) -> [(&'static str, &'static str); 2] {
+    [
         ("Transfer", describe(transfer)),
         ("Grid loops", describe_loops(loops)),
-    ]));
-    known.push(((transfer, loops), rows));
-    rows
+    ]
 }
 
 #[cfg(test)]
@@ -129,23 +112,23 @@ mod tests {
     use unicode_width::UnicodeWidthStr as _;
 
     /// Every Kitty section that a run can show.
-    fn kitty_sections() -> Vec<Section> {
+    fn kitty_rows_all() -> Vec<[(&'static str, &'static str); 2]> {
         let transfers = [Transfer::Direct, Transfer::Png, Transfer::TempFile];
         let loops = [None, Some(Loops::Animation), Some(Loops::Ticks)];
         transfers
             .iter()
-            .flat_map(|transfer| {
-                loops
-                    .iter()
-                    .map(|loops| ("Kitty graphics", kitty_rows(*transfer, *loops)))
-            })
+            .flat_map(|transfer| loops.iter().map(|loops| kitty_rows(*transfer, *loops)))
             .collect()
     }
 
     /// The widths are fixed, so the frame cuts a longer key or description without a sign.
     #[test]
     fn every_entry_fits_its_column() {
-        let kitty = kitty_sections();
+        let rows = kitty_rows_all();
+        let kitty: Vec<Section<'_>> = rows
+            .iter()
+            .map(|rows| ("Kitty graphics", rows.as_slice()))
+            .collect();
         let sections = GALLERY_COLUMN
             .iter()
             .chain(&FULLSCREEN_SECTIONS)
@@ -173,10 +156,6 @@ mod tests {
         assert_eq!(
             rows,
             [("Transfer", "temp file (t=t)"), ("Grid loops", "off")]
-        );
-        assert!(
-            std::ptr::eq(rows, kitty_rows(Transfer::TempFile, None)),
-            "one pair gets its rows one time"
         );
     }
 

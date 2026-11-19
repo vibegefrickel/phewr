@@ -9,7 +9,7 @@ pub(crate) struct Styles {
     pub text: Style,
     pub title: Style,
     pub border: Style,
-    /// The thick border and the folder name of the cell under the cursor.
+    /// The thick border and the folder name of the cell under the cursor, in the frame accent.
     pub cursor_cell: Style,
     /// The plain border of a marked file, and the selection count.
     pub marked: Style,
@@ -32,7 +32,9 @@ pub(crate) const STYLES: Styles = Styles {
     text: Style::new().fg(Color::Reset),
     title: Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
     border: Style::new().fg(Color::DarkGray),
-    cursor_cell: Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD),
+    cursor_cell: Style::new()
+        .fg(tuilibr::frame::accent())
+        .add_modifier(Modifier::BOLD),
     marked: Style::new().fg(Color::Yellow),
     error: Style::new().fg(Color::Red),
     dim: Style::new().fg(Color::DarkGray),
