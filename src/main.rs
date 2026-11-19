@@ -16,24 +16,6 @@ mod keys;
 mod kitty_output;
 #[cfg(feature = "video")]
 mod mpv;
-// The shared picture module holds no lint level of its own: each project sets it here. Outside
-// the tests, phewr leaves these items of the module without a caller:
-// - always the box copies and the corners (`shape::copies`, `shape::corners`) and
-//   `thumbnail_dir_below`,
-// - without `video`, `Screen::forget_placements` and `protocol::clear_placements_to`,
-// - with a `kitty-*` feature on (`just lint`), the engine parts that the feature gates.
-// The tests call them, and clippy with `--all-targets` still finds a module item without any
-// caller.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "phewr calls no box copy, no corner, no thumbnail_dir_below and no \
-                  ScreenImage::into_dynamic of the shared module, no placement clear without \
-                  video, and no part of a kitty-* feature"
-    )
-)]
-mod pictures;
 #[cfg(feature = "video")]
 mod player;
 mod prefetch;
@@ -60,17 +42,22 @@ use crossterm::{
     terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
 use image_list::SharedImageList;
-use pictures::kitty::query::{
-    LateAnswers, StartAnswers, query_cell_pixel_size, query_cell_size_and_probe,
-    window_cell_pixel_size,
-};
-use pictures::kitty::{KittyBackend, Loops};
 use run_loop::{LoopState, run};
 use scanner::canonicalize_or_self;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use terminal::TerminalSession;
+use tuilibr::pictures::kitty::query::{
+    LateAnswers, StartAnswers, query_cell_pixel_size, query_cell_size_and_probe,
+    window_cell_pixel_size,
+};
+use tuilibr::pictures::kitty::{KittyBackend, Loops};
 use yazi::{reveal_in_yazi, run_briefly, select_in_yazi};
+// Only the tests and the benches name these crates. The binary decodes through tuilibr.
+#[cfg(all(not(test), feature = "heic"))]
+use libheif_rs as _;
+#[cfg(all(not(test), feature = "turbo"))]
+use turbojpeg as _;
 
 /// Skips the probe of the Kitty transfer: `direct`, `png` or `file`.
 const TRANSFER_OVERRIDE: &str = "PHEWR_KITTY_TRANSFER";
@@ -96,7 +83,7 @@ fn release_terminal_to(
     mouse: bool,
     disable_raw: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
-    let mut first_error = pictures::kitty::protocol::delete_all_to(out)
+    let mut first_error = tuilibr::pictures::kitty::protocol::delete_all_to(out)
         .and_then(|()| out.flush())
         .err();
     if mouse
@@ -224,7 +211,7 @@ fn probe_terminal(
     let mut asked_cell_size = false;
     let mut late_answers = LateAnswers::default();
     let mut foreground = None;
-    let graphics = pictures::kitty::protocol::detect_backend(
+    let graphics = tuilibr::pictures::kitty::protocol::detect_backend(
         transfer_override,
         loops,
         ssh,
@@ -271,6 +258,7 @@ fn prepare_app(
 }
 
 fn main() -> io::Result<()> {
+    tuilibr::pictures::names::set_app_name(env!("CARGO_PKG_NAME"));
     let cli = Cli::parse();
     // The thumbnails and the player start ffmpeg and ffprobe from PATH.
     #[cfg(feature = "video")]
@@ -283,7 +271,7 @@ fn main() -> io::Result<()> {
 
     let config_paths = config::Paths::from_env();
     let mut config = config::load(&config_paths);
-    pictures::decode::color::set_target(config.colorspace);
+    tuilibr::pictures::decode::color::set_target(config.colorspace);
     apply_cli_overrides(&mut config, cli.interval, cli.info);
     let mut state = LoopState::new(&config);
 
@@ -297,15 +285,15 @@ fn main() -> io::Result<()> {
     install_panic_hook(config.mouse);
     let mut session = TerminalSession::enter(config.mouse)?;
 
-    let loops = pictures::kitty::protocol::chosen_loops(
+    let loops = tuilibr::pictures::kitty::protocol::chosen_loops(
         std::env::var(LOOPS_OVERRIDE).ok().as_deref(),
         config.loops,
-        pictures::kitty::protocol::is_herdr(),
+        tuilibr::pictures::kitty::protocol::is_herdr(),
     );
     let probe = probe_terminal(
         std::env::var(TRANSFER_OVERRIDE).ok().as_deref(),
         loops,
-        pictures::kitty::protocol::is_ssh(),
+        tuilibr::pictures::kitty::protocol::is_ssh(),
         query_cell_size_and_probe,
         query_cell_pixel_size,
     );
@@ -364,9 +352,9 @@ mod tests {
         release_terminal_to, self_check_on,
     };
     use crate::config::Config;
-    use crate::pictures::kitty::query::{LateAnswers, StartAnswers};
-    use crate::pictures::kitty::{KittyBackend, Loops, Transfer};
     use std::path::PathBuf;
+    use tuilibr::pictures::kitty::query::{LateAnswers, StartAnswers};
+    use tuilibr::pictures::kitty::{KittyBackend, Loops, Transfer};
 
     #[test]
     fn release_deletes_pictures_first() {

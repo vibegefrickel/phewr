@@ -1,8 +1,8 @@
 //! The ways to send an opaque RGBA animation frame.
 
-use crate::pictures::kitty::protocol::{self, Keys, write_pixels};
-use crate::pictures::kitty::{Pixels, Transfer};
 use image::RgbaImage;
+use tuilibr::pictures::kitty::protocol::{self, Keys, write_pixels};
+use tuilibr::pictures::kitty::{Pixels, Transfer};
 
 /// The cost of the three ways to send an opaque RGBA animation frame through the temp file medium.
 #[test]

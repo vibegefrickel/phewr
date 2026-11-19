@@ -6,7 +6,6 @@ mod window;
 use crate::app::{App, ViewMode};
 use crate::config::{Config, VideoPlayer};
 use crate::mpv;
-use crate::pictures::kitty::Transfer;
 use crate::player::{Decoder, Player, SystemDecoder, frame_limit};
 use crate::run_loop::LoopState;
 use crate::video::cube_dirs;
@@ -15,6 +14,7 @@ pub(crate) use prestart::{VideoPrestart, prestart_timeout};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
+use tuilibr::pictures::kitty::Transfer;
 pub(crate) use window::poll_mpv_window;
 
 const MPV_MISSING_NOTE: &str = "mpv not found on PATH";

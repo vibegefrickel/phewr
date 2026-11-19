@@ -4,7 +4,6 @@
 //! phewr links no `FFmpeg` library. It starts the programs when PATH has them. Without them, a
 //! video cell keeps its play icon, and a video opens in the mpv window.
 
-use crate::pictures::decode::color::{self, ColorTarget};
 use crate::player::{
     Decoder, SystemDecoder, VideoInfo, cube_for, first_frame_args, frame_box, with_fallback,
 };
@@ -16,13 +15,14 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
+use tuilibr::pictures::decode::color::{self, ColorTarget};
 
 /// The longest wait for a thumbnail's first frame and for each grid loop frame. A 4K HLG clip
 /// takes about 240 ms. A file that hangs ffmpeg must not hold a thumbnail slot for longer.
 pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn is_video(path: &Path) -> bool {
-    crate::pictures::decode::extensions::has_extension(path, crate::scanner::VIDEO_EXTENSIONS)
+    tuilibr::pictures::decode::extensions::has_extension(path, crate::scanner::VIDEO_EXTENSIONS)
 }
 
 /// `None` when PATH has no such program.
@@ -138,7 +138,7 @@ pub(crate) fn convert_first_frame(
             image,
             &info.primaries.source_color(),
             target,
-            crate::pictures::decode::hdr::Peak::DEFAULT,
+            tuilibr::pictures::decode::hdr::Peak::DEFAULT,
         )
     }
 }

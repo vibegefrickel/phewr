@@ -6,14 +6,14 @@
 use super::grid::write_grid_to;
 use crate::app::{App, ViewMode};
 use crate::icons::{self, Icon};
-use crate::pictures::kitty::Pixels;
-use crate::pictures::kitty::screen::Update;
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::io::{self, Write};
 use std::time::Instant;
+use tuilibr::pictures::kitty::Pixels;
+use tuilibr::pictures::kitty::screen::Update;
 
 /// The image ids of each icon. The first grid rows get the spare rows, so one grid can need two
 /// sizes of an icon, and a zoom brings two more.

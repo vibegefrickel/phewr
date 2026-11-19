@@ -3,14 +3,14 @@
 use crate::app::cell_shape::SHAPE_SAMPLE;
 use crate::app::thumbnails::warm_disk_cache;
 use crate::gallery::GalleryState;
-use crate::pictures::resize::padding::thumb_target_px;
-use crate::pictures::shape;
 use crate::scanner;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
+use tuilibr::pictures::resize::padding::thumb_target_px;
+use tuilibr::pictures::shape;
 
 /// The wait of a paused prefetch between two looks at its flags. An unpark ends it early.
 const PAUSE_POLL: Duration = Duration::from_millis(50);

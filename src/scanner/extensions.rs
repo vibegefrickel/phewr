@@ -1,14 +1,14 @@
 //! The supported extensions of the scanner. The extensions of the decoders and the extension
-//! test live in `crate::pictures::decode::extensions`.
+//! test live in `tuilibr::pictures::decode::extensions`.
 
-#[cfg(feature = "jxl")]
-use crate::pictures::decode::extensions::JXL_EXTENSIONS;
-#[cfg(feature = "heic")]
-use crate::pictures::decode::extensions::LIBHEIF_EXTENSIONS;
-#[cfg(all(feature = "sips", target_os = "macos"))]
-use crate::pictures::decode::extensions::SIPS_EXTENSIONS;
-use crate::pictures::decode::extensions::{IMAGE_EXTENSIONS, has_extension};
 use std::path::Path;
+#[cfg(feature = "jxl")]
+use tuilibr::pictures::decode::extensions::JXL_EXTENSIONS;
+#[cfg(feature = "heic")]
+use tuilibr::pictures::decode::extensions::LIBHEIF_EXTENSIONS;
+#[cfg(all(feature = "sips", target_os = "macos"))]
+use tuilibr::pictures::decode::extensions::SIPS_EXTENSIONS;
+use tuilibr::pictures::decode::extensions::{IMAGE_EXTENSIONS, has_extension};
 
 #[cfg(feature = "video")]
 pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];

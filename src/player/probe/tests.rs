@@ -2,7 +2,6 @@ use super::{
     Chroma, ProbeCache, Rate, Samples, frame_peak_args, output_within, packet_limit, probe,
     probe_args,
 };
-use crate::pictures::decode::hdr::Peak;
 use crate::player::tone_map::{Hdr, Primaries};
 use crate::test_support::fixture;
 use crate::test_support::video::real_ffprobe;
@@ -12,6 +11,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
+use tuilibr::pictures::decode::hdr::Peak;
 
 #[test]
 fn only_animation_reads_packets() {
@@ -350,7 +350,7 @@ fn real_videos_report_size_and_rate() {
         return;
     };
     for variable in ["PHEWR_TEST_HDR_VIDEO", "PHEWR_TEST_SDR_VIDEO"] {
-        let Some(path) = crate::pictures::decode::real_test_file(variable) else {
+        let Some(path) = tuilibr::pictures::decode::real_test_file(variable) else {
             continue;
         };
         let info = probe(&ffprobe, &path).unwrap();

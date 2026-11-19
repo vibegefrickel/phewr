@@ -176,7 +176,7 @@ pub(crate) fn icon_size(thumb_box: (u16, u16), cell_px: (u32, u32)) -> Option<(u
 /// The icon box in `thumb`, centered. `None` when `icon_size` gives none.
 pub(crate) fn icon_rect(thumb: Rect, cell_px: (u32, u32)) -> Option<Rect> {
     let (cols, rows) = icon_size((thumb.width, thumb.height), cell_px)?;
-    Some(crate::pictures::kitty::placement::centered(
+    Some(tuilibr::pictures::kitty::placement::centered(
         thumb, cols, rows,
     ))
 }

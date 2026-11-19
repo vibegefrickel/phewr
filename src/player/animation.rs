@@ -6,10 +6,10 @@
 //! thumbnail job runs the check off the UI thread and stores the answer in `App::animated`.
 
 use super::tone_map::Primaries;
-use crate::pictures::decode::color::SourceColor;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek};
 use std::path::Path;
+use tuilibr::pictures::decode::color::SourceColor;
 
 const ANIMATION_EXTENSIONS: &[&str] = &["gif", "webp", "png", "apng", "avif"];
 
@@ -18,7 +18,7 @@ const MAX_CHUNK: u64 = 1 << 31;
 
 /// The player decodes such a file in software at a constant rate.
 pub(crate) fn has_animation_extension(path: &Path) -> bool {
-    crate::pictures::decode::extensions::has_extension(path, ANIMATION_EXTENSIONS)
+    tuilibr::pictures::decode::extensions::has_extension(path, ANIMATION_EXTENSIONS)
 }
 
 /// The ICC profile or cICP primaries of a WebP or PNG file. ffprobe does not report them.
@@ -35,7 +35,7 @@ pub(crate) fn embedded_primaries(path: &Path) -> Option<Primaries> {
     }
     // A PNG chunk wins over the ICC profile, as in the decode of a still image.
     let chunks = (format == ImageFormat::Png)
-        .then(|| crate::pictures::decode::color::png_color(path))
+        .then(|| tuilibr::pictures::decode::color::png_color(path))
         .flatten();
     let source = match chunks {
         Some(source) => source,
@@ -208,7 +208,7 @@ fn skip_sub_blocks<R: Read + Seek>(reader: &mut BufReader<R>) -> io::Result<()> 
 mod tests {
     use super::{embedded_primaries, has_animation_extension, is_animated, read_is_animated};
     use crate::player::tone_map::Primaries;
-    use crate::test_support::fixture;
+    use crate::test_support::{fixture, module_fixture};
     use std::io::{BufReader, Cursor};
     use std::path::Path;
 
@@ -218,14 +218,14 @@ mod tests {
             assert!(is_animated(&fixture(name)), "{name}");
         }
         for name in ["still.gif", "still.webp", "still.png", "still.avif"] {
-            assert!(!is_animated(&fixture(name)), "{name}");
+            assert!(!is_animated(&module_fixture(name)), "{name}");
         }
     }
 
     #[test]
     fn apng_first_frame_decodes_as_png() {
-        use crate::pictures::decode::{EmbeddedThumbnail, Route};
-        use crate::pictures::resize::load_and_resize_px;
+        use tuilibr::pictures::decode::{EmbeddedThumbnail, Route};
+        use tuilibr::pictures::resize::load_and_resize_px;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("loop.apng");
         std::fs::copy(fixture("anim.png"), &path).unwrap();
@@ -310,24 +310,24 @@ mod tests {
     #[test]
     fn reads_embedded_profile() {
         assert_eq!(
-            embedded_primaries(&fixture("color/p3-icc.png")),
+            embedded_primaries(&module_fixture("color/p3-icc.png")),
             Some(Primaries::DisplayP3)
         );
         assert_eq!(
-            embedded_primaries(&fixture("color/p3-icc.webp")),
+            embedded_primaries(&module_fixture("color/p3-icc.webp")),
             Some(Primaries::DisplayP3)
         );
         assert_eq!(
-            embedded_primaries(&fixture("color/p3-cicp.png")),
+            embedded_primaries(&module_fixture("color/p3-cicp.png")),
             Some(Primaries::DisplayP3)
         );
         assert_eq!(
-            embedded_primaries(&fixture("color/srgb.png")),
+            embedded_primaries(&module_fixture("color/srgb.png")),
             None,
             "no profile"
         );
         assert_eq!(
-            embedded_primaries(&fixture("color/adobe-rgb-icc.jpg")),
+            embedded_primaries(&module_fixture("color/adobe-rgb-icc.jpg")),
             None,
             "a JPEG never plays"
         );

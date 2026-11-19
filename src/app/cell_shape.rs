@@ -1,12 +1,12 @@
 //! The cell shape of the grid, from the headers of the first files of a scan.
 
 use super::{App, ViewMode};
-use crate::pictures::shape;
-use crate::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
+use tuilibr::pictures::shape;
+use tuilibr::pictures::shape::DEFAULT_IMAGE_ASPECT;
 
 /// The files whose headers decide the cell shape: the first screen, or the first files of a
 /// large folder.

@@ -225,7 +225,7 @@ fn a_waiting_icon_comes_back_as_its_cell() {
     let mut app = icon_app(3);
     // Two thumbnails of 2 MB fill the pass, and the icon of cell 2 waits.
     for index in 0..2 {
-        let picture = crate::pictures::jobs::thumbnail_cache::GridPicture {
+        let picture = tuilibr::pictures::jobs::thumbnail_cache::GridPicture {
             image: image::RgbaImage::new(1024, 512),
             cells: (20, 6),
         };

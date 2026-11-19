@@ -6,14 +6,14 @@ use super::{
 };
 use crate::app::ViewMode;
 use crate::config::Config;
-use crate::pictures::kitty::answers::ANSWER_WAIT;
-use crate::pictures::kitty::query::LateAnswers;
-use crate::pictures::kitty::screen::Screen;
-use crate::pictures::test_support::key_events;
 use crate::test_support::{app, app_with, app_with_files, gallery_app, test_dir, wait_until};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use std::time::{Duration, Instant};
+use tuilibr::pictures::kitty::answers::ANSWER_WAIT;
+use tuilibr::pictures::kitty::query::LateAnswers;
+use tuilibr::pictures::kitty::screen::Screen;
+use tuilibr::pictures::test_support::key_events;
 
 #[test]
 fn leftover_emits_need_no_wait() {
@@ -262,7 +262,7 @@ fn help_popup_holds_player() {
     assert!(app.needs_render, "the frame comes after the help");
     super::render_images(&mut app, &mut pending).unwrap();
     let out = app.graphics_out.take_bytes();
-    for path in crate::pictures::kitty::protocol::temp_file_paths(&out) {
+    for path in tuilibr::pictures::kitty::protocol::temp_file_paths(&out) {
         std::fs::remove_file(path).unwrap();
     }
     assert!(crate::test_support::text(&out).contains("a=T,"));
@@ -277,7 +277,7 @@ fn help_popup_holds_late_thumbnails() {
     app.gallery.zoom_rows = 4;
     app.gallery.update_grid(Rect::new(0, 0, 106, 29));
     let image = image::RgbaImage::from_pixel(160, 96, image::Rgba([9, 9, 9, 255]));
-    let picture = crate::pictures::resize::padding::pad_for_grid(image, (160, 96), (8, 16), true);
+    let picture = tuilibr::pictures::resize::padding::pad_for_grid(image, (160, 96), (8, 16), true);
     app.thumb_cache.insert(0, picture);
     assert!(!crate::test_support::char_key(&mut app, '?'));
     assert!(app.help_visible);
@@ -296,7 +296,7 @@ fn help_popup_holds_late_thumbnails() {
     assert!(!app.help_visible);
     assert!(super::render_images(&mut app, &mut pending).unwrap());
     let out = app.graphics_out.take_bytes();
-    for path in crate::pictures::kitty::protocol::temp_file_paths(&out) {
+    for path in tuilibr::pictures::kitty::protocol::temp_file_paths(&out) {
         std::fs::remove_file(path).unwrap();
     }
     assert!(

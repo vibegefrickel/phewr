@@ -1,5 +1,5 @@
 //! The folder and the loop files of the disk cache. The thumbnail part of the disk cache lives in
-//! `crate::pictures::jobs::disk_cache`.
+//! `tuilibr::pictures::jobs::disk_cache`.
 
 mod loop_file;
 

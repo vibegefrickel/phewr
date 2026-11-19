@@ -96,7 +96,6 @@ mod tests {
     use super::{
         Decoder, Pipeline, SystemDecoder, args, cube_for, first_frame_args, with_fallback,
     };
-    use crate::pictures::decode::color::{self, ColorTarget, SourceColor};
     use crate::player::probe::VideoInfo;
     use crate::player::tone_map::Primaries;
     use std::ffi::OsString;
@@ -104,6 +103,7 @@ mod tests {
     use std::path::Path;
     use std::sync::mpsc;
     use std::time::Duration;
+    use tuilibr::pictures::decode::color::{self, ColorTarget, SourceColor};
 
     /// A cancel (`Interrupted`) or a timeout (`TimedOut`) of the software run marks nothing.
     #[test]
@@ -167,7 +167,7 @@ mod tests {
             image,
             &SourceColor::Srgb,
             ColorTarget::DisplayP3,
-            crate::pictures::decode::hdr::Peak::DEFAULT,
+            tuilibr::pictures::decode::hdr::Peak::DEFAULT,
         );
         converted
             .as_raw()

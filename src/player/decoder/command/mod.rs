@@ -1,12 +1,12 @@
 //! The ffmpeg command line of the player, the first-frame thumbnail and the grid loops.
 
 use super::Pipeline;
-use crate::pictures::decode::color::ColorTarget;
 use crate::player::probe::{Chroma, Rate, Samples, VideoInfo};
 use crate::player::tone_map::{Cube, cube_file};
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use tuilibr::pictures::decode::color::ColorTarget;
 
 /// The raw pixel format of the frames, and its bytes per pixel.
 ///

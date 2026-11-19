@@ -1,12 +1,12 @@
 //! File and EXIF metadata for the info panel.
 
-use crate::pictures::decode;
-#[cfg(feature = "jxl")]
-use crate::pictures::decode::Route;
 use exif::{In, Tag};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use tuilibr::pictures::decode;
+#[cfg(feature = "jxl")]
+use tuilibr::pictures::decode::Route;
 
 /// An empty label marks a section heading.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -448,7 +448,7 @@ mod tests {
     #[cfg(any(feature = "turbo", all(feature = "sips", target_os = "macos")))]
     #[test]
     fn orientation_accepts_one_to_eight() {
-        use crate::pictures::decode::raster::orientation_from_bytes;
+        use tuilibr::pictures::decode::raster::orientation_from_bytes;
         let jpeg = |orientation: Option<u16>| {
             let mut bytes = Vec::new();
             let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut bytes);
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     #[ignore = "needs PHEWR_TEST_HEIC, a real photo"]
     fn decodes_heic_from_env() {
-        use crate::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
+        use tuilibr::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
 
         let Some(path) = decode::real_test_file("PHEWR_TEST_HEIC") else {
             return;
@@ -556,8 +556,8 @@ mod tests {
     #[test]
     #[ignore = "needs PHEWR_TEST_JXL, a real JPEG XL file"]
     fn decodes_jxl_from_env() {
-        use crate::pictures::decode::jxl::dimensions;
-        use crate::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
+        use tuilibr::pictures::decode::jxl::dimensions;
+        use tuilibr::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
 
         let Some(path) = decode::real_test_file("PHEWR_TEST_JXL") else {
             return;
@@ -570,14 +570,17 @@ mod tests {
         eprintln!("TIMING full decode {:?}", start.elapsed());
         for (name, box_px) in [("grid", (480, 270)), ("fullscreen", (2880, 1800))] {
             let start = std::time::Instant::now();
-            crate::pictures::resize::load_and_resize_px(path, box_px, EmbeddedThumbnail::Deny)
+            tuilibr::pictures::resize::load_and_resize_px(path, box_px, EmbeddedThumbnail::Deny)
                 .expect("box decode");
             eprintln!("TIMING {name} box {box_px:?} {:?}", start.elapsed());
         }
         assert_eq!(dimensions(path), Some((full.width(), full.height())));
-        let thumb =
-            crate::pictures::resize::load_and_resize_px(path, (200, 200), EmbeddedThumbnail::Allow)
-                .expect("grid decode");
+        let thumb = tuilibr::pictures::resize::load_and_resize_px(
+            path,
+            (200, 200),
+            EmbeddedThumbnail::Allow,
+        )
+        .expect("grid decode");
         assert!(thumb.width() <= 200 && thumb.height() <= 200);
         let info = load(path);
         assert!(

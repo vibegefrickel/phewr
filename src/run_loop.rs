@@ -11,8 +11,6 @@ use crate::kitty_output::{
 };
 #[cfg(feature = "video")]
 use crate::mpv;
-use crate::pictures::kitty::answers::AnswerKeys;
-use crate::pictures::kitty::query::query_cell_pixel_size;
 use crate::terminal::{disable_mouse, enable_mouse};
 use crate::ui;
 #[cfg(feature = "video")]
@@ -21,6 +19,8 @@ use crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::prelude::*;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
+use tuilibr::pictures::kitty::answers::AnswerKeys;
+use tuilibr::pictures::kitty::query::query_cell_pixel_size;
 
 /// The wait while a background result is on its way.
 const BUSY_POLL: Duration = Duration::from_millis(10);

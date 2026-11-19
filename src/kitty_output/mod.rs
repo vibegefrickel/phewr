@@ -5,13 +5,13 @@ mod grid_icons;
 mod loops;
 
 use crate::app::App;
-use crate::pictures::kitty;
-use crate::pictures::kitty::placement::{filled_placement, native_placement, within_payload_cap};
 use crossterm::{cursor, queue};
 pub(crate) use grid::{emit_new_thumbnails, render_gallery_images};
 pub(crate) use grid_icons::{GridIcons, IconCell, sync_grid_icons};
 pub(crate) use loops::play_grid_loops;
 use std::io::{self, Write};
+use tuilibr::pictures::kitty;
+use tuilibr::pictures::kitty::placement::{filled_placement, native_placement, within_payload_cap};
 
 pub(crate) fn render_fullscreen_image(app: &mut App) -> io::Result<()> {
     app.with_graphics_out(render_fullscreen_image_to)

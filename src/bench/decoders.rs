@@ -1,12 +1,12 @@
 //! The resize filters and the color conversion.
 
 use super::{millis, report, test_dir};
-use crate::pictures::decode::color;
-use crate::pictures::decode::color::ColorTarget;
-use crate::pictures::decode::hdr::Peak;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+use tuilibr::pictures::decode::color;
+use tuilibr::pictures::decode::color::ColorTarget;
+use tuilibr::pictures::decode::hdr::Peak;
 
 /// The resize filters on a 24 MP frame.
 #[test]
@@ -61,8 +61,8 @@ fn resize_filters_24_mp() {
 #[test]
 #[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn color_conversion() {
-    use crate::pictures::decode::{EmbeddedThumbnail, decode_image};
-    use crate::pictures::resize::fit_rgba_within;
+    use tuilibr::pictures::decode::{EmbeddedThumbnail, decode_image};
+    use tuilibr::pictures::resize::fit_rgba_within;
     let Some(dir) = test_dir() else { return };
     let median = |work: &dyn Fn() -> Duration| {
         let mut times: Vec<Duration> = (0..5).map(|_| work()).collect();
@@ -138,8 +138,8 @@ fn color_conversion() {
 #[test]
 #[ignore = "needs PHEWR_TEST_JXL, a real JPEG XL file"]
 fn jpeg_xl() {
-    use crate::pictures::decode::jxl;
-    let Some(path) = crate::pictures::decode::real_test_file("PHEWR_TEST_JXL") else {
+    use tuilibr::pictures::decode::jxl;
+    let Some(path) = tuilibr::pictures::decode::real_test_file("PHEWR_TEST_JXL") else {
         return;
     };
     let mut decode: Vec<Duration> = (0..7)

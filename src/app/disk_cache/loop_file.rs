@@ -1,12 +1,12 @@
 //! The loop files of the disk cache: the frames of one grid loop with their times.
 
 use crate::app::grid_loops::LoopFrames;
-use crate::pictures::jobs::disk_cache::{
-    CACHE_FORMAT, LOOP_EXTENSION, cache_file_path, no_cache_key, write_cache_file,
-};
 use std::io;
 use std::path::Path;
 use std::time::Duration;
+use tuilibr::pictures::jobs::disk_cache::{
+    CACHE_FORMAT, LOOP_EXTENSION, cache_file_path, no_cache_key, write_cache_file,
+};
 
 /// Change it when the loop output changes.
 const LOOP_CACHE_VERSION: &str = "phewr-loop-v1";
@@ -108,11 +108,11 @@ fn take_u32(rest: &mut &[u8]) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{LoopFrames, decode_loop_file, try_load_loop, try_save_loop};
-    use crate::pictures::jobs::disk_cache::get_cache_file_path;
     use crate::test_support::test_dir;
     use image::RgbaImage;
     use std::fs;
     use std::time::Duration;
+    use tuilibr::pictures::jobs::disk_cache::get_cache_file_path;
 
     #[test]
     fn fewer_than_two_frames_miss() {

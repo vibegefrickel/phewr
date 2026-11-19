@@ -6,8 +6,6 @@ use super::{
 };
 use crate::app::App;
 use crate::image_list::SharedImageList;
-use crate::pictures::kitty::KittyBackend;
-use crate::pictures::kitty::Transfer;
 use crate::run_loop::next_timeout;
 use crate::run_loop::poll_background;
 use crate::run_loop::render_images;
@@ -16,6 +14,8 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tuilibr::pictures::kitty::KittyBackend;
+use tuilibr::pictures::kitty::Transfer;
 
 /// The folders of the loop bench, beside `PHEWR_TEST_DIR`.
 const LOOP_FOLDERS: [&str; 2] = ["07-video", "06-animation"];
@@ -67,12 +67,12 @@ fn loop_app(files: &[PathBuf], cache: &Path) -> App {
 /// The backend of a terminal like Ghostty 1.4: a fake terminal answers `OK` to both probes.
 pub(super) fn animation_backend() -> KittyBackend {
     let backend =
-        crate::pictures::kitty::protocol::detect_backend(None, None, false, |sequence, _| {
+        tuilibr::pictures::kitty::protocol::detect_backend(None, None, false, |sequence, _| {
             remove_temp_files(sequence);
             Some(b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\".to_vec())
         });
     assert_eq!(backend.transfer(), Transfer::TempFile);
-    assert_eq!(backend.loops(), crate::pictures::kitty::Loops::Animation);
+    assert_eq!(backend.loops(), tuilibr::pictures::kitty::Loops::Animation);
     backend
 }
 

@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn info_panel_separates_sections() {
         let mut app = app_with(&["orientation-6.png"]);
-        app.images = vec![crate::test_support::fixture("png/orientation-6.png")];
+        app.images = vec![crate::test_support::module_fixture("png/orientation-6.png")];
         app.info_visible = true;
         let screen = render(&mut app, None, 120, 30);
         assert_shows(&screen, "File");

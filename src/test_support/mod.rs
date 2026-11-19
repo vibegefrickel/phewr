@@ -7,8 +7,11 @@ pub(crate) mod live;
 #[cfg(feature = "video")]
 pub(crate) mod video;
 
-pub(crate) use crate::pictures::test_support::*;
 pub(crate) use input::*;
+// The glob brings the `fixture` of tuilibr too, and the local `fixture` below shadows it. The
+// module fixtures (`color/`, `png/`, `still.*`) are in tuilibr: `module_fixture` finds them.
+pub(crate) use tuilibr::pictures::test_support::fixture as module_fixture;
+pub(crate) use tuilibr::pictures::test_support::*;
 
 use crate::app::App;
 use crate::config::Config;
@@ -20,6 +23,14 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+/// A checked-in file of phewr below `tests/fixtures`: the animations and `video/`.
+#[cfg(feature = "video")]
+pub(crate) fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
 
 /// A temp directory with the subdirectory `synthetic-images`. Both paths are canonical.
 pub(crate) fn synthetic_tree() -> (TempDir, PathBuf, PathBuf) {

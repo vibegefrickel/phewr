@@ -3,15 +3,15 @@
 use crate::app::App;
 use crate::image_list::SharedImageList;
 use crate::kitty_output::render_fullscreen_image_to;
-use crate::pictures::decode::color::{self, ColorTarget};
-use crate::pictures::decode::screen::ScreenImage;
-use crate::pictures::decode::{EmbeddedThumbnail, decode_image};
-use crate::pictures::kitty::{KittyBackend, Transfer, protocol};
-use crate::pictures::resize::{rgb_resize_is_fastest, scaled_down_size};
 use image::{DynamicImage, RgbaImage};
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use tuilibr::pictures::decode::color::{self, ColorTarget};
+use tuilibr::pictures::decode::screen::ScreenImage;
+use tuilibr::pictures::decode::{EmbeddedThumbnail, decode_image};
+use tuilibr::pictures::kitty::{KittyBackend, Transfer, protocol};
+use tuilibr::pictures::resize::{rgb_resize_is_fastest, scaled_down_size};
 
 /// The fullscreen box in pixels, as `fullscreen_rect` and `CELL_PX` of `bench/mod.rs` give it.
 const BOX_PX: (u32, u32) = (3392, 2052);
@@ -81,7 +81,7 @@ fn measure_fit(name: &str, full: &RgbaImage, color: &color::SourceColor) {
                 time(|| {
                     before_input
                         .crop_resized((0, 0, size.0, size.1), dst)
-                        .convert(color, target, crate::pictures::decode::hdr::Peak::DEFAULT)
+                        .convert(color, target, tuilibr::pictures::decode::hdr::Peak::DEFAULT)
                 })
             },
             || {
@@ -90,7 +90,7 @@ fn measure_fit(name: &str, full: &RgbaImage, color: &color::SourceColor) {
                     input.fit_within(BOX_PX.0, BOX_PX.1).convert(
                         color,
                         target,
-                        crate::pictures::decode::hdr::Peak::DEFAULT,
+                        tuilibr::pictures::decode::hdr::Peak::DEFAULT,
                     )
                 })
             },

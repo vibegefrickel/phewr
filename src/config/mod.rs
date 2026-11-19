@@ -3,11 +3,11 @@
 //! phewr ignores unknown keys. An old file with the removed keys `theme` and `theme_catalog`
 //! still loads.
 
-use crate::pictures::decode::color::ColorTarget;
-use crate::pictures::kitty::Loops;
 use serde::Deserialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use tuilibr::pictures::decode::color::ColorTarget;
+use tuilibr::pictures::kitty::Loops;
 
 mod state;
 

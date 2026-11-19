@@ -1,12 +1,12 @@
 //! The terminal session: raw mode, the alternate screen and the mouse modes.
 
-use crate::pictures::kitty;
 use crossterm::{
     cursor, execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::prelude::*;
 use std::io::{self, Write, stdout};
+use tuilibr::pictures::kitty;
 
 pub(crate) struct TerminalSession {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,

@@ -2,8 +2,8 @@
 //! waits.
 
 use crate::info;
-use crate::pictures::decode;
 use std::path::Path;
+use tuilibr::pictures::decode;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct FileMeta {
@@ -71,7 +71,7 @@ pub(crate) fn read(path: &Path) -> FileMeta {
         meta.date = modified;
         return meta;
     }
-    meta.size = crate::pictures::shape::shown_size(path).or_else(|| decode::dimensions(path));
+    meta.size = tuilibr::pictures::shape::shown_size(path).or_else(|| decode::dimensions(path));
     meta.date = info::date_taken(path).or(modified);
     meta
 }
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     #[ignore = "needs PHEWR_TEST_HEIC, a real photo"]
     fn real_heic_has_size_and_date() {
-        let Some(path) = crate::pictures::decode::real_test_file("PHEWR_TEST_HEIC") else {
+        let Some(path) = tuilibr::pictures::decode::real_test_file("PHEWR_TEST_HEIC") else {
             return;
         };
         let meta = read(&path);
@@ -311,7 +311,7 @@ mod tests {
     #[cfg(feature = "video")]
     #[ignore = "needs PHEWR_TEST_LIVE_DIR and ffprobe"]
     fn real_motion_length_rounds_to_2_8() {
-        let Some(dir) = crate::pictures::decode::real_test_file("PHEWR_TEST_LIVE_DIR") else {
+        let Some(dir) = tuilibr::pictures::decode::real_test_file("PHEWR_TEST_LIVE_DIR") else {
             return;
         };
         crate::video::find_session_tools();

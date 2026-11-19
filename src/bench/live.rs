@@ -13,12 +13,12 @@ use super::{
 };
 use crate::app::App;
 use crate::image_list::SharedImageList;
-use crate::pictures::kitty::{KittyBackend, Transfer};
 use crate::run_loop::next_timeout;
 use crate::scanner;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
+use tuilibr::pictures::kitty::{KittyBackend, Transfer};
 
 /// The scans of each folder and mode in one run. The report holds their median.
 const SCAN_RUNS: usize = 11;

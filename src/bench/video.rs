@@ -6,9 +6,6 @@ use super::{
 };
 use crate::app::App;
 use crate::image_list::SharedImageList;
-use crate::pictures::decode::color;
-use crate::pictures::kitty::KittyBackend;
-use crate::pictures::kitty::Transfer;
 use crate::run_loop::next_timeout;
 use crate::run_loop::poll_background;
 use crate::scanner;
@@ -18,6 +15,9 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tuilibr::pictures::decode::color;
+use tuilibr::pictures::kitty::KittyBackend;
+use tuilibr::pictures::kitty::Transfer;
 
 /// The real ffmpeg and a decoder with the real ffprobe, or `None` with a note.
 fn video_programs(label: &str) -> Option<(PathBuf, crate::player::SystemDecoder)> {
@@ -109,9 +109,9 @@ fn player_decode_rate() {
 #[test]
 #[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn player_realtime() {
-    use crate::pictures::kitty::{KittyBackend, Transfer};
     use crate::player::Player;
     use std::rc::Rc;
+    use tuilibr::pictures::kitty::{KittyBackend, Transfer};
 
     const PLAY: Duration = Duration::from_secs(5);
 
@@ -507,7 +507,8 @@ fn probe_and_first_frame() {
         .filter(|path| is_video(path))
         .collect();
     files.sort();
-    let target = crate::pictures::resize::padding::thumb_target_px(Rect::new(0, 0, 40, 9), CELL_PX);
+    let target =
+        tuilibr::pictures::resize::padding::thumb_target_px(Rect::new(0, 0, 40, 9), CELL_PX);
     let cache = tempfile::tempdir().unwrap();
     let cube_dirs = [cache.path()];
     let wait = Duration::from_secs(10);

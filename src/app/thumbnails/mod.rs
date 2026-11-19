@@ -15,17 +15,17 @@ use self::decode::{
     sharp_thumbnail,
 };
 use super::App;
-use crate::pictures::jobs::disk_cache::{FileStamp, LazyEntry};
-use crate::pictures::jobs::pool::{ThumbPhase, spawn_job};
-use crate::pictures::jobs::queue::{JobSlots, ThumbJob};
-use crate::pictures::jobs::thumbnail_cache::{CacheLimits, GridPicture, ParkKey};
-use crate::pictures::resize::padding::{pad_for_grid, thumb_target_px};
 #[cfg(test)]
 use ratatui::layout::Rect;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use tuilibr::pictures::jobs::disk_cache::{FileStamp, LazyEntry};
+use tuilibr::pictures::jobs::pool::{ThumbPhase, spawn_job};
+use tuilibr::pictures::jobs::queue::{JobSlots, ThumbJob};
+use tuilibr::pictures::jobs::thumbnail_cache::{CacheLimits, GridPicture, ParkKey};
+use tuilibr::pictures::resize::padding::{pad_for_grid, thumb_target_px};
 
 /// With 4 jobs, each with its share of the cores, the first thumbnail comes after one decode.
 const MAX_THUMB_JOBS: usize = 4;
@@ -445,7 +445,7 @@ mod folder_switch_tests {
         )
         .unwrap();
         fs::copy(
-            crate::test_support::fixture("still.gif"),
+            crate::test_support::module_fixture("still.gif"),
             other.join("still.gif"),
         )
         .unwrap();

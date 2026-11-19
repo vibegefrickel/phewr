@@ -12,13 +12,13 @@ mod tests;
 pub(crate) use self::cell::CellLoop;
 use self::cell::TICKS_PER_SECOND;
 use super::{App, ViewMode};
-use crate::pictures::jobs::thumbnail_cache::GridPicture;
-use crate::pictures::kitty::Loops;
 use image::RgbaImage;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
+use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
+use tuilibr::pictures::kitty::Loops;
 
 /// The decoded frames of one loop, before the padding. The disk cache keeps them.
 #[derive(Debug, Clone, PartialEq)]

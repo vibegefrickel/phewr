@@ -7,13 +7,13 @@
 
 mod math;
 
-use crate::pictures::decode::color::{ColorTarget, SourceColor};
-use crate::pictures::decode::hdr::Peak;
 use math::{conversion, convert_sdr, rgb_to_xyz, tone_map};
 use moxcms::ColorProfile;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tuilibr::pictures::decode::color::{ColorTarget, SourceColor};
+use tuilibr::pictures::decode::hdr::Peak;
 
 /// Two threads never write the same temp file.
 static PARTIAL_COUNTER: AtomicUsize = AtomicUsize::new(0);

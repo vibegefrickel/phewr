@@ -7,7 +7,6 @@
 //! The frames take the first-frame chain at half the grid picture size.
 
 use crate::app::grid_loops::LoopFrames;
-use crate::pictures::decode::color;
 use crate::player::{
     Decoder, LoopSampling, Pipeline, VideoInfo, frame_box, loop_args, with_fallback,
 };
@@ -21,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
+use tuilibr::pictures::decode::color;
 
 const VIDEO_LOOP_FRAMES: usize = 12;
 

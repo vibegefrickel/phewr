@@ -1,12 +1,12 @@
 //! Zoom and pan in the fullscreen view, with the full-resolution source behind them.
 
 use super::App;
-use crate::pictures::decode::{
-    Decoded, EmbeddedThumbnail, ScreenImage, decode_image, spawn_foreground,
-};
-use crate::pictures::kitty::placement::box_px;
 use std::io;
 use std::sync::mpsc;
+use tuilibr::pictures::decode::{
+    Decoded, EmbeddedThumbnail, ScreenImage, decode_image, spawn_foreground,
+};
+use tuilibr::pictures::kitty::placement::box_px;
 
 const ZOOM_STEP: f64 = 1.25;
 /// Relative to the fitted image.
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn rgb_source_gives_rgb_crop() {
-        use crate::pictures::decode::ScreenImage;
+        use tuilibr::pictures::decode::ScreenImage;
         let mut app = app();
         app.cell_px = (1, 1);
         app.image_rect = Rect::new(0, 0, 10, 10);

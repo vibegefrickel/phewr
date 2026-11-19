@@ -5,10 +5,6 @@ use crate::app::App;
 use crate::app::ViewMode;
 use crate::image_list::SharedImageList;
 use crate::kitty_output::render_gallery_images;
-use crate::pictures::kitty::Transfer;
-use crate::pictures::kitty::protocol;
-use crate::pictures::kitty::{KittyBackend, Loops};
-use crate::pictures::resize::padding::{pad_for_grid, pad_loop_frame};
 use crate::test_support::kitty::Animation;
 use crate::test_support::kitty::FakeTerminal;
 use crate::test_support::text;
@@ -18,6 +14,10 @@ use image::{Rgba, RgbaImage};
 use ratatui::layout::Rect;
 use std::path::PathBuf;
 use std::time::Duration;
+use tuilibr::pictures::kitty::Transfer;
+use tuilibr::pictures::kitty::protocol;
+use tuilibr::pictures::kitty::{KittyBackend, Loops};
+use tuilibr::pictures::resize::padding::{pad_for_grid, pad_loop_frame};
 
 const BOX_PX: (u32, u32) = (160, 96);
 
@@ -324,7 +324,7 @@ fn animation_over_budget_keeps_still() {
     let mut app = animation_app(3);
     let mut terminal = FakeTerminal::new();
     app.screen =
-        crate::pictures::kitty::screen::Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
+        tuilibr::pictures::kitty::screen::Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
     place_stills(&mut app, &mut terminal);
     add_loop(&mut app, 0, 3);
 
@@ -453,7 +453,7 @@ fn loop_over_budget_keeps_still() {
     let mut app = clip_app(3);
     let mut terminal = FakeTerminal::new();
     app.screen =
-        crate::pictures::kitty::screen::Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
+        tuilibr::pictures::kitty::screen::Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
     place_stills(&mut app, &mut terminal);
     add_loop(&mut app, 0, 3);
 

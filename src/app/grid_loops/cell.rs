@@ -1,7 +1,7 @@
 //! The loop of one cell on the shared clock of the grid.
 
-use crate::pictures::jobs::thumbnail_cache::GridPicture;
 use std::time::Duration;
+use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
 
 /// The highest rate of an animation loop (`grid_loop::MAX_ANIMATION_FPS`). A tick is the
 /// shortest time that a frame shows: a screen of loops wakes the run loop at most 12 times per
@@ -136,9 +136,9 @@ fn tick_ends(delays: &[Duration]) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{CellLoop, START_ALIGN, tick_ends};
-    use crate::pictures::jobs::thumbnail_cache::GridPicture;
     use image::RgbaImage;
     use std::time::Duration;
+    use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
 
     fn picture() -> GridPicture {
         RgbaImage::new(2, 2).into()

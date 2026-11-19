@@ -72,15 +72,15 @@ fn formats() {
     let bench = scanned_app(&dir);
     let app = &bench.app;
     let target =
-        crate::pictures::resize::padding::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
+        tuilibr::pictures::resize::padding::thumb_target_px(app.gallery.thumb_box(), app.cell_px);
     let thumbnails: Vec<image::RgbaImage> = app
         .gallery
         .visible_items()
         .filter_map(|(_, index)| {
-            crate::pictures::resize::load_and_resize_px(
+            tuilibr::pictures::resize::load_and_resize_px(
                 &app.images[index],
                 target,
-                crate::pictures::decode::EmbeddedThumbnail::Allow,
+                tuilibr::pictures::decode::EmbeddedThumbnail::Allow,
             )
             .ok()
         })

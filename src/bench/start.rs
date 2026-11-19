@@ -3,7 +3,6 @@
 use super::{CELL_PX, COLS, LIMIT, ROWS, count_transmissions, millis, report, test_dir};
 use crate::app::App;
 use crate::image_list::SharedImageList;
-use crate::pictures::kitty::KittyBackend;
 use crate::run_loop::next_timeout;
 use crate::run_loop::poll_background;
 use crate::run_loop::render_images;
@@ -12,6 +11,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tuilibr::pictures::kitty::KittyBackend;
 
 fn median_process_time(program: &Path, args: &[&str]) -> Duration {
     let mut times: Vec<Duration> = (0..10)
@@ -86,7 +86,7 @@ fn start_once(dir: &Path, cache_dir: &Path) -> StartTimes {
     scanner::spawn(vec![dir.to_path_buf()], list.clone());
 
     let step = Instant::now();
-    let transfer = crate::pictures::kitty::protocol::detect_transfer(None, false, |_| None);
+    let transfer = tuilibr::pictures::kitty::protocol::detect_transfer(None, false, |_| None);
     times.probe = step.elapsed();
 
     let step = Instant::now();

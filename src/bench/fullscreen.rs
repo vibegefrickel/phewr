@@ -10,10 +10,10 @@ use super::{
     scanned_app, test_dir,
 };
 use crate::kitty_output::render_fullscreen_image_to;
-use crate::pictures::kitty::KittyBackend;
-use crate::pictures::kitty::Transfer;
 use std::time::Duration;
 use std::time::Instant;
+use tuilibr::pictures::kitty::KittyBackend;
+use tuilibr::pictures::kitty::Transfer;
 
 const STEPS: usize = 10;
 

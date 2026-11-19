@@ -2,18 +2,18 @@
 //! flag.
 
 use super::AnimationFlag;
-use crate::pictures::decode::EmbeddedThumbnail;
-#[cfg(all(feature = "sips", target_os = "macos"))]
-use crate::pictures::decode::embedded_jpeg;
-#[cfg(feature = "heic")]
-use crate::pictures::decode::libheif::{decode_heif_preview, decodes_with_libheif};
-use crate::pictures::jobs::disk_cache::{CacheEntry, LazyEntry};
-use crate::pictures::resize::load_and_resize_px;
 #[cfg(feature = "video")]
 use crate::player::{animation::has_animation_extension, is_animated};
 use image::RgbaImage;
 use std::io;
 use std::path::Path;
+use tuilibr::pictures::decode::EmbeddedThumbnail;
+#[cfg(all(feature = "sips", target_os = "macos"))]
+use tuilibr::pictures::decode::embedded_jpeg;
+#[cfg(feature = "heic")]
+use tuilibr::pictures::decode::libheif::{decode_heif_preview, decodes_with_libheif};
+use tuilibr::pictures::jobs::disk_cache::{CacheEntry, LazyEntry};
+use tuilibr::pictures::resize::load_and_resize_px;
 
 /// The animation flag of an animation format, `None` for the other formats.
 ///
@@ -54,8 +54,8 @@ fn is_animated(_path: &Path) -> bool {
 }
 
 #[cfg(all(test, feature = "video"))]
-static HEADER_READS: crate::pictures::jobs::disk_cache::PathCounter =
-    crate::pictures::jobs::disk_cache::PathCounter::new();
+static HEADER_READS: tuilibr::pictures::jobs::disk_cache::PathCounter =
+    tuilibr::pictures::jobs::disk_cache::PathCounter::new();
 
 /// True for a video or an animated image: its still gets the play stamp.
 #[cfg(feature = "video")]
@@ -317,11 +317,11 @@ mod embedded_jpeg_tests {
 mod read_count_tests {
     use super::warm_disk_cache;
     use crate::app::App;
-    use crate::pictures::jobs::disk_cache::KEY_COMPUTATIONS;
     use crate::test_support::{app_with_files, test_dir, wait_until};
     use ratatui::layout::Rect;
     use std::path::PathBuf;
     use tempfile::TempDir;
+    use tuilibr::pictures::jobs::disk_cache::KEY_COMPUTATIONS;
 
     /// 3x2 cells of 8x16 px: a box of 24x32 px.
     const RECT: Rect = Rect::new(0, 0, 3, 2);
@@ -417,7 +417,7 @@ mod read_count_tests {
     fn cold_avif_reads_header_once() {
         let dir = test_dir();
         let path = dir.path().join("still.avif");
-        std::fs::copy(crate::test_support::fixture("still.avif"), &path).unwrap();
+        std::fs::copy(crate::test_support::module_fixture("still.avif"), &path).unwrap();
         let mut app = crate::test_support::app();
         app.images = vec![path.clone()];
         app.filenames = vec!["still.avif".to_owned()];

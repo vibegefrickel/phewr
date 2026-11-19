@@ -296,7 +296,7 @@ fn opaque_unhinted_decode_is_rgb() {
         wait_until_idle(&mut prefetcher);
         let image = prefetcher.take_resized(0, rect, (4, 4)).unwrap();
         assert!(
-            matches!(image, crate::pictures::decode::ScreenImage::Rgb(_)),
+            matches!(image, tuilibr::pictures::decode::ScreenImage::Rgb(_)),
             "{rect:?}"
         );
     }

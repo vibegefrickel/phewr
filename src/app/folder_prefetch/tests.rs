@@ -4,9 +4,6 @@ use super::worker::{Control, first_screen, prefetch};
 use super::{FOLDER_PREFETCH_DELAY, Running, START_POLL};
 use crate::app::{App, ViewMode};
 use crate::config;
-use crate::pictures::jobs::disk_cache::get_cache_file_path;
-use crate::pictures::jobs::queue::ThumbJob;
-use crate::pictures::resize::padding::thumb_target_px;
 use crate::test_support::{app, wait_until};
 use image::RgbaImage;
 use ratatui::layout::Rect;
@@ -17,6 +14,9 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tuilibr::pictures::jobs::disk_cache::get_cache_file_path;
+use tuilibr::pictures::jobs::queue::ThumbJob;
+use tuilibr::pictures::resize::padding::thumb_target_px;
 
 /// A root with the subfolders `a` (5 landscape files) and `b` (40 portrait files), and an app
 /// on a terminal of 120 by 40 cells. The root lists `..`, `a` and `b`, and the cursor rests on

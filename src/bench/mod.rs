@@ -5,7 +5,6 @@
 
 use crate::app::{App, ViewMode};
 use crate::image_list::SharedImageList;
-use crate::pictures::decode::color::{self, ColorTarget};
 use crate::run_loop::{next_timeout, poll_background, render_images};
 use crate::scanner;
 use ratatui::layout::Rect;
@@ -13,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tuilibr::pictures::decode::color::{self, ColorTarget};
 
 /// A Retina terminal in Ghostty: 212 columns by 58 rows, cells of 16 by 36 pixels.
 const COLS: u16 = 212;
@@ -79,7 +79,7 @@ fn median(times: &mut [Duration]) -> Duration {
 
 /// Delete the temp files that `out` names, as the terminal does. Returns their bytes.
 fn remove_temp_files(out: &[u8]) -> u64 {
-    crate::pictures::kitty::protocol::temp_file_paths(out)
+    tuilibr::pictures::kitty::protocol::temp_file_paths(out)
         .iter()
         .map(|path| {
             let bytes = std::fs::metadata(path).map_or(0, |metadata| metadata.len());

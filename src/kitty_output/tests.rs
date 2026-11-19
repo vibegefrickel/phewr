@@ -2,12 +2,12 @@
 use super::render_fullscreen_image_to;
 use crate::app::App;
 use crate::image_list::SharedImageList;
-use crate::pictures::jobs::thumbnail_cache::GridPicture;
-use crate::pictures::resize::padding::pad_for_grid;
 use crate::test_support::text;
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
+use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
+use tuilibr::pictures::resize::padding::pad_for_grid;
 
 pub(super) const TRANSMIT: &str = "\x1b_Ga=T,";
 
@@ -154,8 +154,8 @@ fn six_k_image(transparent: bool) -> RgbaImage {
 
 #[test]
 fn payload_over_cap_shrinks() {
-    use crate::pictures::kitty::{KittyBackend, MAX_PAYLOAD_BYTES, Transfer, protocol};
     use crate::test_support::kitty::FakeTerminal;
+    use tuilibr::pictures::kitty::{KittyBackend, MAX_PAYLOAD_BYTES, Transfer, protocol};
 
     let mut app = App::new((8, 16), SharedImageList::new());
     app.graphics = KittyBackend::new(Transfer::TempFile);
@@ -211,7 +211,7 @@ fn wire_size(text: &str) -> (u32, u32) {
 
 #[test]
 fn opaque_6k_image_needs_no_resize() {
-    use crate::pictures::decode::ScreenImage;
+    use tuilibr::pictures::decode::ScreenImage;
 
     let rgb = image::RgbImage::from_pixel(6016, 3384, image::Rgb([9, 9, 9]));
     assert!(matches!(
@@ -305,7 +305,7 @@ fn slideshow_frame_below_badge() {
     super::render_video_frame_to(&app, &mut during, false).unwrap();
 
     for bytes in [&before, &during] {
-        for path in crate::pictures::kitty::protocol::temp_file_paths(bytes) {
+        for path in tuilibr::pictures::kitty::protocol::temp_file_paths(bytes) {
             std::fs::remove_file(path).unwrap();
         }
     }
@@ -329,7 +329,7 @@ fn first_frame_removes_old_pictures() {
     let second = app.graphics_out.take_bytes();
 
     for bytes in [&first, &second] {
-        for path in crate::pictures::kitty::protocol::temp_file_paths(bytes) {
+        for path in tuilibr::pictures::kitty::protocol::temp_file_paths(bytes) {
             std::fs::remove_file(path).unwrap();
         }
     }
@@ -358,7 +358,7 @@ fn video_frame_uses_temp_file() {
 
     super::render_video_frame_to(&app, &mut out, false).unwrap();
 
-    for path in crate::pictures::kitty::protocol::temp_file_paths(&out) {
+    for path in tuilibr::pictures::kitty::protocol::temp_file_paths(&out) {
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 64 * 48 * 3);
         std::fs::remove_file(path).unwrap();
     }
@@ -377,7 +377,7 @@ fn video_frame_uses_temp_file() {
 #[cfg(feature = "video")]
 #[test]
 fn video_frame_transient_with_animations() {
-    use crate::pictures::kitty::Loops;
+    use tuilibr::pictures::kitty::Loops;
 
     for (loops, hinted) in [(Loops::Ticks, false), (Loops::Animation, true)] {
         let mut app = playing_app();
@@ -386,7 +386,7 @@ fn video_frame_transient_with_animations() {
 
         super::render_video_frame_to(&app, &mut out, false).unwrap();
 
-        for path in crate::pictures::kitty::protocol::temp_file_paths(&out) {
+        for path in tuilibr::pictures::kitty::protocol::temp_file_paths(&out) {
             std::fs::remove_file(path).unwrap();
         }
         let text = text(&out);
@@ -445,16 +445,23 @@ mod jpeg {
     use super::render_fullscreen_image_to;
     use crate::app::App;
     use crate::image_list::SharedImageList;
-    use crate::pictures::decode::color;
-    use crate::pictures::decode::hdr::Peak;
-    use crate::pictures::decode::screen::tests::rgba_fullscreen;
-    use crate::pictures::decode::screen::{ScreenImage, load_for_screen};
-    use crate::pictures::decode::{EmbeddedThumbnail, decode_image};
-    use crate::pictures::kitty::{KittyBackend, Pixels, Transfer};
     use crate::test_support::test_dir;
-    use image::{DynamicImage, Rgb, RgbImage};
+    use image::{DynamicImage, Rgb, RgbImage, RgbaImage};
     use ratatui::layout::Rect;
     use std::path::{Path, PathBuf};
+    use tuilibr::pictures::decode::color::{self, ColorTarget};
+    use tuilibr::pictures::decode::hdr::Peak;
+    use tuilibr::pictures::decode::screen::{ScreenImage, load_for_screen};
+    use tuilibr::pictures::decode::{Decoded, EmbeddedThumbnail, decode_image};
+    use tuilibr::pictures::kitty::{KittyBackend, Pixels, Transfer};
+    use tuilibr::pictures::resize::fit_rgba_within;
+
+    /// The fullscreen image of the RGBA reference path. A copy of the test helper
+    /// `tuilibr::pictures::decode::screen::tests::rgba_fullscreen`, which only tuilibr sees.
+    fn rgba_fullscreen(decoded: Decoded, (w, h): (u32, u32), target: ColorTarget) -> RgbaImage {
+        let fitted = fit_rgba_within(decoded.image.into_rgba8(), w, h);
+        color::convert(fitted, &decoded.color, target, Peak::DEFAULT)
+    }
 
     fn gradient_jpeg(dir: &Path) -> PathBuf {
         let path = dir.join("gradient.jpg");

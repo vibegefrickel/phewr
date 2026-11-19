@@ -7,13 +7,13 @@ pub(crate) mod mouse;
 pub(crate) mod video;
 
 use crate::app::{App, ViewMode};
-use crate::pictures::kitty::query::LateAnswers;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use fullscreen::handle_fullscreen_key;
 use gallery::{handle_gallery_key, handle_search_key};
 use mouse::handle_mouse;
 use std::io;
 use std::time::Instant;
+use tuilibr::pictures::kitty::query::LateAnswers;
 #[cfg(feature = "video")]
 use video::handle_video_key;
 

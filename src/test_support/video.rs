@@ -4,7 +4,6 @@ use crate::app::{App, ViewMode};
 use crate::config::VideoPlayer;
 use crate::image_list::SharedImageList;
 use crate::mpv;
-use crate::pictures::kitty::{KittyBackend, Transfer};
 use crate::player::{Decoder, FrameStream, VideoInfo};
 use crate::run_loop::LoopState;
 use crate::video_handoff::VideoState;
@@ -14,6 +13,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
+use tuilibr::pictures::kitty::{KittyBackend, Transfer};
 
 pub(crate) type Log = Rc<RefCell<Vec<String>>>;
 
@@ -324,7 +324,7 @@ pub(crate) fn state_with_decoder(
     LoopState {
         status: None,
         late_answers: crate::keys::LateAnswerFilter::default(),
-        answers: crate::pictures::kitty::answers::AnswerKeys::default(),
+        answers: tuilibr::pictures::kitty::answers::AnswerKeys::default(),
         cell_size_from_terminal: false,
         mouse: true,
         mouse_captured: true,

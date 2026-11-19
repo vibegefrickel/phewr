@@ -1,5 +1,5 @@
 //! The grid geometry and the cursor. The in-memory thumbnail cache lives in
-//! `crate::pictures::jobs::thumbnail_cache`.
+//! `tuilibr::pictures::jobs::thumbnail_cache`.
 //!
 //! A line of n cells takes n + 1 gaps of `GAP` cells, one between two neighbors and one at each
 //! edge. `update_grid` gives the remainder to the first columns and rows, and the grid reaches
@@ -10,9 +10,9 @@
 //! drawn last. A border that the grid edge cuts stays open at that edge.
 use crate::config::{MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
 use crate::icons;
-use crate::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use ratatui::layout::Rect;
 use std::ops::Range;
+use tuilibr::pictures::shape::DEFAULT_IMAGE_ASPECT;
 
 /// The gap in terminal cells between two cells and at the grid edges. The borders sit in it.
 pub(crate) const GAP: u16 = 1;

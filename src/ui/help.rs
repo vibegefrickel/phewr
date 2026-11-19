@@ -1,13 +1,13 @@
 //! The help popup: the keys of the gallery and of the fullscreen view, and the Kitty medium. The
 //! box and the columns come from the tuilibr frame.
 
-use crate::pictures::kitty::{
-    Loops, Transfer,
-    protocol::{describe, describe_loops},
-};
 use ratatui::Frame;
 use std::sync::{Mutex, PoisonError};
 use tuilibr::frame::{HelpView, Section, draw_help};
+use tuilibr::pictures::kitty::{
+    Loops, Transfer,
+    protocol::{describe, describe_loops},
+};
 
 /// The cells of the key column: the longest key, `Enter, double-click`, and one space.
 const KEY_WIDTH: u16 = 20;
@@ -119,13 +119,13 @@ fn kitty_rows(transfer: Transfer, loops: Option<Loops>) -> Rows {
 #[cfg(test)]
 mod tests {
     use super::{FULLSCREEN_SECTIONS, GALLERY_COLUMN, KEY_WIDTH, TEXT_WIDTH, kitty_rows};
-    use crate::pictures::kitty::{Loops, Transfer};
     use crate::ui::tests::{
         app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows,
         assert_terminal_background, cell_of, render, render_buffer, screen_rows,
     };
     use ratatui::style::{Color, Modifier};
     use tuilibr::frame::{Section, column_rows};
+    use tuilibr::pictures::kitty::{Loops, Transfer};
     use unicode_width::UnicodeWidthStr as _;
 
     /// Every Kitty section that a run can show.

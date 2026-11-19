@@ -1,10 +1,9 @@
 //! Tests of the cubes: the tone map, the SDR conversion and the cube files.
 
 use super::*;
-use crate::pictures::decode::color;
-use crate::pictures::decode::hdr::ToneMap;
-use crate::pictures::decode::hdr::tests::{TARGETS, cicp, exact};
 use image::RgbaImage;
+use tuilibr::pictures::decode::color;
+use tuilibr::pictures::decode::hdr::{TARGETS, ToneMap, cicp, exact};
 
 #[test]
 fn failed_rename_leaves_no_partial() {
@@ -432,14 +431,15 @@ fn map_matches_player_cube() {
     }
 }
 
-/// Write the player's HDR cubes into `PHEWR_HDR_CUBE_DIR` for `tests/fixtures/hdr/make.sh`: `pq`
-/// and `hlg`, and `pq<nits>` for each PQ bucket.
+/// Write the player's HDR cubes into `PHEWR_HDR_CUBE_DIR` for `tests/fixtures/hdr/make.sh` of
+/// tuilibr (`../tuilibr`): `pq` and `hlg`, and `pq<nits>` for each PQ bucket. That script must
+/// run this test in a phewr checkout.
 #[cfg(feature = "video")]
 #[test]
-#[ignore = "writes the cubes for tests/fixtures/hdr/make.sh"]
+#[ignore = "writes the cubes for tests/fixtures/hdr/make.sh of tuilibr"]
 fn write_the_player_hdr_cubes() {
     use crate::player::tone_map::{Cube, CubeSource};
-    let Some(dir) = crate::pictures::decode::real_test_file("PHEWR_HDR_CUBE_DIR") else {
+    let Some(dir) = tuilibr::pictures::decode::real_test_file("PHEWR_HDR_CUBE_DIR") else {
         return;
     };
     let buckets = Peak::BUCKETS.map(|peak| (CubeSource::Pq(peak), format!("pq{}", peak.nits())));

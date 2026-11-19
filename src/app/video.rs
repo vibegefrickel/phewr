@@ -457,9 +457,9 @@ mod tests {
 
     #[test]
     fn animated_image_opens_in_player() {
-        use crate::test_support::{char_key, fixture, press};
+        use crate::test_support::{char_key, fixture, module_fixture, press};
         use crossterm::event::KeyCode;
-        let still = fixture("still.gif");
+        let still = module_fixture("still.gif");
         let anim = fixture("anim.webp");
         let mut app = app_with(&[still.to_str().unwrap(), anim.to_str().unwrap()]);
         assert!(!app.opens_in_player(0));

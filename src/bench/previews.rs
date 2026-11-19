@@ -8,8 +8,8 @@ use std::time::Instant;
 #[test]
 #[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn raw_and_psd() {
-    use crate::pictures::decode::embedded_jpeg;
     use crate::test_support::{write_cr3_with_preview, write_tiff_raw_with_preview};
+    use tuilibr::pictures::decode::embedded_jpeg;
 
     let Some(dir) = test_dir() else {
         report("skipped: PHEWR_TEST_DIR is not set");
@@ -37,7 +37,7 @@ fn raw_and_psd() {
         report("embedded: no RAW or PSD file in the folder, synthetic files only");
     }
     let grid_box =
-        crate::pictures::resize::padding::thumb_target_px(bench.app.gallery.thumb_box(), CELL_PX);
+        tuilibr::pictures::resize::padding::thumb_target_px(bench.app.gallery.thumb_box(), CELL_PX);
     let fullscreen_box = (u32::from(COLS) * CELL_PX.0, u32::from(ROWS - 1) * CELL_PX.1);
     for path in &files {
         measure_file(path, grid_box, fullscreen_box);
@@ -53,8 +53,8 @@ fn raw_files() {
 
 /// The previews of one file: the embedded JPEG against the sips decode.
 fn measure_file(path: &Path, grid_box: (u32, u32), fullscreen_box: (u32, u32)) {
-    use crate::pictures::decode::embedded_jpeg;
-    use crate::pictures::decode::sips;
+    use tuilibr::pictures::decode::embedded_jpeg;
+    use tuilibr::pictures::decode::sips;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let start = Instant::now();
     let Some(jpeg) = embedded_jpeg::find(path) else {
@@ -96,7 +96,7 @@ fn measure_file(path: &Path, grid_box: (u32, u32), fullscreen_box: (u32, u32)) {
 
 /// The real RAW files of `PHEWR_TEST_RAW_DIR`: each route, and the size that a decode returns.
 fn raw_dir_files() {
-    use crate::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
+    use tuilibr::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
 
     let Some(dir) = std::env::var_os("PHEWR_TEST_RAW_DIR").map(PathBuf::from) else {
         report("raw files: PHEWR_TEST_RAW_DIR is not set");
@@ -118,7 +118,7 @@ fn raw_dir_files() {
     files.sort();
     let bench = scanned_app(&dir);
     let grid_box =
-        crate::pictures::resize::padding::thumb_target_px(bench.app.gallery.thumb_box(), CELL_PX);
+        tuilibr::pictures::resize::padding::thumb_target_px(bench.app.gallery.thumb_box(), CELL_PX);
     let fullscreen_box = (u32::from(COLS) * CELL_PX.0, u32::from(ROWS - 1) * CELL_PX.1);
     for path in &files {
         measure_file(path, grid_box, fullscreen_box);
@@ -130,7 +130,7 @@ fn raw_dir_files() {
         };
         report(&format!(
             "raw {name}: stored {:?}, grid decode {:?}, fullscreen decode {:?}, full decode {:?}",
-            crate::pictures::decode::sips::dimensions(path),
+            tuilibr::pictures::decode::sips::dimensions(path),
             size(Some(grid_box), EmbeddedThumbnail::Allow),
             size(Some(fullscreen_box), EmbeddedThumbnail::Deny),
             size(None, EmbeddedThumbnail::Deny),

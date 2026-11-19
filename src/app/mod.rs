@@ -27,10 +27,6 @@ pub(crate) use crate::image_list::EntryKind;
 use crate::image_list::SharedImageList;
 use crate::info::ImageInfo;
 use crate::kitty_output::GridIcons;
-use crate::pictures::decode::ScreenImage;
-use crate::pictures::jobs::thumbnail_cache::ThumbnailCache;
-use crate::pictures::kitty::screen::Screen;
-use crate::pictures::kitty::{GraphicsOutput, KittyBackend};
 use crate::prefetch::Prefetcher;
 use crate::scanner::LivePhotos;
 use lru::LruCache;
@@ -41,6 +37,10 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
+use tuilibr::pictures::decode::ScreenImage;
+use tuilibr::pictures::jobs::thumbnail_cache::ThumbnailCache;
+use tuilibr::pictures::kitty::screen::Screen;
+use tuilibr::pictures::kitty::{GraphicsOutput, KittyBackend};
 #[cfg(feature = "video")]
 use video::VideoWindow;
 
@@ -212,7 +212,7 @@ impl App {
             usize::from(config::MIN_VISIBLE_ROWS),
             usize::from(config::MAX_VISIBLE_ROWS),
         );
-        gallery.set_cell_shape(crate::pictures::shape::DEFAULT_IMAGE_ASPECT, cell_px);
+        gallery.set_cell_shape(tuilibr::pictures::shape::DEFAULT_IMAGE_ASPECT, cell_px);
         Self {
             images: Vec::new(),
             filenames: Vec::new(),

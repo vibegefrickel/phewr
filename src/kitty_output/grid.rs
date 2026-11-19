@@ -1,17 +1,17 @@
 //! The grid pictures: one frame of the visible cells per pass (the thumbnails, the previews, the
-//! loop frames and the icons), written by the frame engine of `pictures::kitty::screen`.
+//! loop frames and the icons), written by the frame engine of `tuilibr::pictures::kitty::screen`.
 
 use super::loops::{place_loop_frame, send_grid_loops_to};
 use crate::app::App;
 use crate::gallery::GalleryState;
-use crate::pictures::jobs::queue::{Priority, ThumbJob};
-use crate::pictures::kitty::Pixels;
-use crate::pictures::kitty::placement::centered;
-use crate::pictures::kitty::screen::{Placements, Update};
 use ratatui::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::time::Instant;
+use tuilibr::pictures::jobs::queue::{Priority, ThumbJob};
+use tuilibr::pictures::kitty::Pixels;
+use tuilibr::pictures::kitty::placement::centered;
+use tuilibr::pictures::kitty::screen::{Placements, Update};
 
 /// The result of one grid pass.
 pub(crate) struct GridPass {

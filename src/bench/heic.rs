@@ -11,8 +11,8 @@ use std::time::Instant;
 #[test]
 #[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn decode_phases() {
-    use crate::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
     use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
+    use tuilibr::pictures::decode::{EmbeddedThumbnail, decode_image_with_hint};
 
     let Some(dir) = test_dir() else {
         report("skipped: PHEWR_TEST_DIR is not set");
@@ -99,7 +99,7 @@ fn decode_phases() {
     let streamed_read = start.elapsed();
     drop(streamed);
     let start = Instant::now();
-    let items = crate::pictures::decode::heif_boxes::HeifItems::read(path);
+    let items = tuilibr::pictures::decode::heif_boxes::HeifItems::read(path);
     let boxes = start.elapsed();
     let mut ids = vec![0; primary.number_of_thumbnails()];
     primary.thumbnail_ids(&mut ids);
@@ -126,7 +126,7 @@ fn decode_phases() {
         None => report("heic phases: preview steps: no embedded thumbnail"),
     }
     let start = Instant::now();
-    match crate::pictures::decode::libheif::decode_heif_preview(path, cell_px) {
+    match tuilibr::pictures::decode::libheif::decode_heif_preview(path, cell_px) {
         Ok(preview) => report(&format!(
             "heic phases: embedded preview {}x{} in {}",
             preview.width(),

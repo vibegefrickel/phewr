@@ -19,7 +19,7 @@ use tempfile::TempDir;
 #[test]
 #[ignore = "reads the folder PHEWR_TEST_DIR"]
 fn shape_from_headers() {
-    use crate::pictures::shape::{aspect_of, folder_aspect};
+    use tuilibr::pictures::shape::{aspect_of, folder_aspect};
 
     let Some(dir) = test_dir() else {
         report("skipped: PHEWR_TEST_DIR is not set");

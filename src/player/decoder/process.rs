@@ -58,7 +58,7 @@ impl Decoder for SystemDecoder {
                 .and_then(|program| crate::player::probe::probe_cached(&program, &video).ok());
             if let Some(info) = &info {
                 let dirs: Vec<&Path> = cube_dirs.iter().map(PathBuf::as_path).collect();
-                super::cube_for(info, crate::pictures::decode::color::target(), &dirs);
+                super::cube_for(info, tuilibr::pictures::decode::color::target(), &dirs);
             }
             #[expect(
                 clippy::let_underscore_must_use,

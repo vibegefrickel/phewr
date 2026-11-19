@@ -6,17 +6,17 @@ use crate::image_list::SharedImageList;
 use crate::kitty_output::tests::{
     BEGIN_SYNC, BOX_PX, DELETE_ALL, END_SYNC, TRANSMIT, grid_app, sharp_thumbnail, thumbnail_app,
 };
-use crate::pictures::jobs::thumbnail_cache::GridPicture;
-use crate::pictures::kitty::answers::AnswerReader;
-use crate::pictures::kitty::screen::Screen;
-use crate::pictures::resize::padding::pad_for_grid;
-use crate::pictures::resize::padding::thumb_target_px;
 use crate::test_support::char_key;
 use crate::test_support::kitty::FakeTerminal;
 use crate::test_support::text;
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
+use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
+use tuilibr::pictures::kitty::answers::AnswerReader;
+use tuilibr::pictures::kitty::screen::Screen;
+use tuilibr::pictures::resize::padding::pad_for_grid;
+use tuilibr::pictures::resize::padding::thumb_target_px;
 
 const PLACE: &str = "\x1b_Ga=p,";
 
@@ -758,7 +758,7 @@ fn emit_and_place(app: &mut App) -> (String, String) {
 #[cfg(feature = "heic")]
 fn moved_to(app: &App, cells: (u16, u16)) -> String {
     let rect =
-        crate::pictures::kitty::placement::centered(app.gallery.thumb_rect(0), cells.0, cells.1);
+        tuilibr::pictures::kitty::placement::centered(app.gallery.thumb_rect(0), cells.0, cells.1);
     format!("\x1b[{};{}H", rect.y + 1, rect.x + 1)
 }
 

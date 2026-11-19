@@ -175,8 +175,8 @@ fn grid_work_holds_start() {
 fn loop_job_holds_start() {
     use crate::config::Config;
     use crate::image_list::SharedImageList;
-    use crate::pictures::resize::padding::pad_for_grid;
     use crate::test_support::wait_until;
+    use tuilibr::pictures::resize::padding::pad_for_grid;
 
     let decoder = fake_decoder(clip_info());
     let state = state_with(VideoPlayer::Terminal, Rc::clone(&decoder));

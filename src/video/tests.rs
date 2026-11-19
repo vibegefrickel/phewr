@@ -4,7 +4,6 @@ use super::{
     Tools, convert_first_frame, decode_first_frame, decoder_of, first_frame_cube, first_frame_of,
     is_video, session_first_frame,
 };
-use crate::pictures::decode::color::ColorTarget;
 use crate::player::tone_map::Hdr;
 use crate::player::tone_map::Primaries;
 use crate::player::{Decoder, Pipeline, Samples, SystemDecoder};
@@ -16,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
+use tuilibr::pictures::decode::color::ColorTarget;
 
 /// A fake run that never ends waits this long.
 const WAIT: Duration = Duration::from_secs(10);
@@ -493,7 +493,7 @@ fn real_clip_first_frame() {
     let (Some(ffmpeg), Some(ffprobe)) = (real_ffmpeg(), real_ffprobe()) else {
         return;
     };
-    let Some(clip) = crate::pictures::decode::real_test_file("PHEWR_TEST_SDR_VIDEO") else {
+    let Some(clip) = tuilibr::pictures::decode::real_test_file("PHEWR_TEST_SDR_VIDEO") else {
         return;
     };
     let tools = Tools {

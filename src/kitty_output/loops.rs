@@ -4,12 +4,12 @@
 
 use super::grid::{GridPass, grid_placement, visible_image_ids, write_grid_to};
 use crate::app::App;
-use crate::pictures::kitty;
-use crate::pictures::kitty::EMIT_PASS_BYTES;
-use crate::pictures::kitty::protocol;
-use crate::pictures::kitty::screen::{Placements, Update};
 use std::io::{self, Write};
 use std::time::Instant;
+use tuilibr::pictures::kitty;
+use tuilibr::pictures::kitty::EMIT_PASS_BYTES;
+use tuilibr::pictures::kitty::protocol;
+use tuilibr::pictures::kitty::screen::{Placements, Update};
 
 /// Put the loop frame of `img_idx` at `tick` into `frame` when the terminal stores every frame
 /// of the loop, and keep the other frames. Returns `None` when the cell shows its still, else

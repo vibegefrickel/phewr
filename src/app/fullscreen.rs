@@ -1,13 +1,13 @@
 //! The fullscreen view: enter and leave, the steps through the list and the decode.
 
 use super::{App, ViewMode};
-use crate::pictures::decode::screen::load_for_screen;
-use crate::pictures::decode::{ScreenImage, spawn_foreground};
-use crate::pictures::kitty::capped_box;
-use crate::pictures::kitty::placement::box_px;
 use ratatui::layout::Rect;
 use std::io;
 use std::sync::mpsc;
+use tuilibr::pictures::decode::screen::load_for_screen;
+use tuilibr::pictures::decode::{ScreenImage, spawn_foreground};
+use tuilibr::pictures::kitty::capped_box;
+use tuilibr::pictures::kitty::placement::box_px;
 
 /// The running fullscreen decode: the image, its decode box and the result receiver.
 pub(super) struct FullscreenDecode {
