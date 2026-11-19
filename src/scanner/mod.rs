@@ -266,8 +266,7 @@ pub(crate) fn name_key(path: &Path) -> (String, PathBuf) {
 
 fn lowercase_name(path: &Path) -> String {
     path.file_name()
-        .map(|name| name.to_string_lossy().to_lowercase())
-        .unwrap_or_default()
+        .map_or_default(|name| name.to_string_lossy().to_lowercase())
 }
 
 /// True when `paths` follow `name_key`. It copies no path, and the end of the scan skips the

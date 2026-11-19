@@ -8,6 +8,7 @@ allow-panic-in-tests = true
 # Private binary: no exported API to keep stable.
 avoid-breaking-exported-api = false
 # Small functions with one-line docs (AGENTS.md). `too_many_lines` is the size limit.
-# `cognitive_complexity` is off, because clippy itself calls its score unreliable.
+# `cognitive_complexity` warns above the threshold below, like in tuilibr.
 too-many-arguments-threshold = 7
 too-many-lines-threshold = 150
+cognitive-complexity-threshold = 25

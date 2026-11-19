@@ -62,8 +62,7 @@ impl SharedImageList {
         for path in paths {
             let name = path
                 .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
+                .map_or_default(|n| n.to_string_lossy().into_owned());
             inner.paths.push(path);
             inner.filenames.push(name);
         }

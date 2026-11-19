@@ -14,26 +14,18 @@ use tuilibr::pictures::decode::extensions::{IMAGE_EXTENSIONS, has_extension};
 pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v"];
 
 pub(crate) fn is_supported(path: &Path) -> bool {
-    if has_extension(path, IMAGE_EXTENSIONS) {
-        return true;
-    }
-    #[cfg(feature = "jxl")]
-    if has_extension(path, JXL_EXTENSIONS) {
-        return true;
-    }
-    #[cfg(all(feature = "sips", target_os = "macos"))]
-    if has_extension(path, SIPS_EXTENSIONS) {
-        return true;
-    }
-    #[cfg(feature = "heic")]
-    if has_extension(path, LIBHEIF_EXTENSIONS) {
-        return true;
-    }
-    #[cfg(feature = "video")]
-    if has_extension(path, VIDEO_EXTENSIONS) {
-        return true;
-    }
-    false
+    let lists: &[&[&str]] = &[
+        IMAGE_EXTENSIONS,
+        #[cfg(feature = "jxl")]
+        JXL_EXTENSIONS,
+        #[cfg(all(feature = "sips", target_os = "macos"))]
+        SIPS_EXTENSIONS,
+        #[cfg(feature = "heic")]
+        LIBHEIF_EXTENSIONS,
+        #[cfg(feature = "video")]
+        VIDEO_EXTENSIONS,
+    ];
+    lists.iter().any(|list| has_extension(path, list))
 }
 
 #[cfg(test)]

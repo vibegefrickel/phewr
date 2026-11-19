@@ -100,6 +100,12 @@ fn zoom_changes_and_clamps_rows() {
         "40 rows: 6 rows of 5 are the last level with the large icon"
     );
     assert!(!gallery.thumb_zoom_out());
+}
+
+#[test]
+fn zoom_follows_the_terminal_height() {
+    let mut gallery = GalleryState::with_zoom_rows(50, 4);
+    gallery.update_grid(Rect::new(0, 0, 100, 40));
 
     // A tall terminal stops at 12 rows.
     gallery.update_grid(Rect::new(0, 0, 400, 200));

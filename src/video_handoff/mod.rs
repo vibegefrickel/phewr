@@ -185,9 +185,7 @@ fn open_window(
     } else {
         mpv::Playback::Loop
     };
-    let prefix = reason
-        .map(|reason| format!("{reason}: "))
-        .unwrap_or_default();
+    let prefix = reason.map_or_default(|reason| format!("{reason}: "));
     let Some(program) = state.video.mpv.as_deref() else {
         leave_without_window(app, keep_player);
         state.status = Some(format!("{prefix}{MPV_MISSING_NOTE}"));

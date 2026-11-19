@@ -164,7 +164,7 @@ impl FakeTerminal {
             Some("p") => {
                 let id = number("i").unwrap_or(0);
                 if number("q") == Some(1) && !self.stores(id) {
-                    let placement = number("p").map(|p| format!(",p={p}")).unwrap_or_default();
+                    let placement = number("p").map_or_default(|p| format!(",p={p}"));
                     self.answers.extend_from_slice(
                         format!("\x1b_Gi={id}{placement};ENOENT: image not found\x1b\\").as_bytes(),
                     );

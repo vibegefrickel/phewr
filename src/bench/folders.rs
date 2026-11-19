@@ -41,8 +41,7 @@ fn shape_from_headers() {
         let extension = path
             .extension()
             .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
+            .map_or_default(str::to_ascii_lowercase);
         if seen.contains(&extension) {
             continue;
         }

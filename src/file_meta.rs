@@ -57,8 +57,7 @@ pub(crate) fn read(path: &Path) -> FileMeta {
         .and_then(|time| format_local(time, "%Y-%m-%d %H:%M"));
     let format = path
         .extension()
-        .map(|ext| ext.to_string_lossy().to_ascii_uppercase())
-        .unwrap_or_default();
+        .map_or_default(|ext| ext.to_string_lossy().to_ascii_uppercase());
     let mut meta = FileMeta {
         size: None,
         bytes: metadata.map(|m| m.len()),

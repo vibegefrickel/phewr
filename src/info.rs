@@ -21,8 +21,7 @@ pub(crate) fn load(path: &Path) -> ImageInfo {
     rows.push((
         "Name".to_owned(),
         path.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+            .map_or_default(|n| n.to_string_lossy().into_owned()),
     ));
     if let Some(parent) = path.parent() {
         let folder = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
@@ -200,8 +199,7 @@ fn gps_decimal(exif: &exif::Exif, tag: Tag, ref_tag: Tag, negative_ref: char) ->
     let mut decimal = degrees + minutes / 60.0 + seconds / 3600.0;
     let reference = exif
         .get_field(ref_tag, In::PRIMARY)
-        .map(|f| f.display_value().to_string())
-        .unwrap_or_default();
+        .map_or_default(|f| f.display_value().to_string());
     if reference.starts_with(negative_ref) {
         decimal = -decimal;
     }

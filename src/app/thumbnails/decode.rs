@@ -145,17 +145,17 @@ fn decode_thumbnail(cache_dir: &Path, path: &Path, target: (u32, u32)) -> io::Re
 
 /// True for the libheif formats, camera RAW and PSD.
 pub(super) fn has_embedded_preview(path: &Path) -> bool {
-    #[cfg(feature = "heic")]
-    if decodes_with_libheif(path) {
-        return true;
-    }
-    #[cfg(all(feature = "sips", target_os = "macos"))]
-    if embedded_jpeg::may_have_embedded_jpeg(path) {
-        return true;
-    }
     #[cfg(not(any(feature = "heic", all(feature = "sips", target_os = "macos"))))]
     let _ = path;
-    false
+    #[cfg(feature = "heic")]
+    let heif = decodes_with_libheif(path);
+    #[cfg(not(feature = "heic"))]
+    let heif = false;
+    #[cfg(all(feature = "sips", target_os = "macos"))]
+    let jpeg = embedded_jpeg::may_have_embedded_jpeg(path);
+    #[cfg(not(all(feature = "sips", target_os = "macos")))]
+    let jpeg = false;
+    heif || jpeg
 }
 
 /// The embedded preview of a cell, and whether it is sharp.

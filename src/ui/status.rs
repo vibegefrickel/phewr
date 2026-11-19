@@ -63,8 +63,7 @@ fn facts(app: &App, status: Option<&str>) -> Vec<String> {
 fn file_name(app: &App) -> String {
     app.current_path()
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .map_or_default(|n| n.to_string_lossy().into_owned())
 }
 
 /// An error, or the name, the position, the zoom and the note. A slideshow has no status row.
@@ -135,7 +134,7 @@ fn slideshow_badge(app: &App, status: Option<&str>) -> Option<Line<'static>> {
         )));
     }
     let glyph = if show.paused { "\u{23f8}" } else { "\u{25b6}" };
-    let note = status.map(|note| format!(" {note} ")).unwrap_or_default();
+    let note = status.map_or_default(|note| format!(" {note} "));
     Some(Line::from(Span::styled(
         format!("{note} {glyph} {:.1}s ", show.interval.as_secs_f64()),
         STYLES.badge,
