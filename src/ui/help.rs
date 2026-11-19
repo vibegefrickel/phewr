@@ -28,7 +28,8 @@ const GALLERY_COLUMN: &[Section<'static>] = &[
             ("0", "Reset thumbnail size"),
             ("Wheel", "Scroll the grid"),
             ("PgDn/PgUp, ^f/^b", "Page down / up"),
-            ("Tab / right click", "Toggle info panel"),
+            ("Tab / right click", "Toggle info pane"),
+            ("B", "Minimal / maximal layout"),
             ("s", "Slideshow from cursor"),
             #[cfg(feature = "video")]
             ("p", "Open in the mpv window"),
@@ -60,7 +61,8 @@ const FULLSCREEN_SECTIONS: [Section<'static>; 2] = [
             ("+ / -, wheel", "Zoom in / out (image)"),
             ("0", "Reset zoom to fit (image)"),
             ("h/j/k/l, drag", "Pan when zoomed (image)"),
-            ("Tab / right click", "Toggle info panel (image)"),
+            ("Tab / right click", "Toggle info pane (image)"),
+            ("B", "Minimal / maximal (image)"),
             ("s", "Slideshow on / off (image)"),
             #[cfg(feature = "video")]
             ("p", "Open in mpv, with sound"),
@@ -170,6 +172,7 @@ mod tests {
             |key: &str, text: &str| format!("{key:<width$}{text}", width = usize::from(KEY_WIDTH));
         assert_shows(&screen, &key("h/j/k/l, click", "Move in the grid"));
         assert_shows(&screen, &key("Backspace", "Parent folder"));
+        assert_shows(&screen, &key("B", "Minimal / maximal layout"));
         assert_shows(&screen, &key("Shift+drag", "Select terminal text"));
         assert_shows(&screen, &key("Transfer", "direct (t=d)"));
         assert_shows(&screen, &key("Grid loops", "ticks (a=p)"));

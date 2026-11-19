@@ -1,14 +1,49 @@
-//! The info panel: its toggle, the file that it shows and the cached EXIF data.
+//! The info pane: its toggle, the toggle of the pane layout, the file that it shows and the
+//! cached EXIF data.
 
 use super::{App, ViewMode};
 use crate::info::{self, ImageInfo};
+use std::io;
 use std::path::{Path, PathBuf};
 
 impl App {
-    pub(crate) fn toggle_info(&mut self) {
+    /// Tab and the right click: show or hide the info pane. A slideshow shows no panes, so the
+    /// toggle does nothing there.
+    pub(crate) fn toggle_info(&mut self) -> io::Result<()> {
+        if self.slideshow_fills_screen() {
+            return Ok(());
+        }
         self.info_visible = !self.info_visible;
-        // The panel changes the image area and the grid area. Every picture needs a new placement.
-        self.needs_render = true;
+        self.change_panes()
+    }
+
+    /// `B`: the other pane layout for this session. The config file keeps its own value. A
+    /// slideshow shows no panes, so the toggle does nothing there.
+    pub(crate) fn toggle_layout(&mut self) -> io::Result<()> {
+        if self.slideshow_fills_screen() {
+            return Ok(());
+        }
+        self.pane_layout = self.pane_layout.toggled();
+        self.change_panes()
+    }
+
+    /// A running or paused slideshow outside the grid: the picture takes the whole screen,
+    /// without the panes and without the status row.
+    pub(crate) fn slideshow_fills_screen(&self) -> bool {
+        self.slideshow_running() && self.mode != ViewMode::Gallery
+    }
+
+    /// A pane change moves the main pane. Kitty draws the pictures above the new frame lines, so
+    /// they go first. The grid takes new thumbnail sizes, so it is dirty. The fullscreen picture
+    /// keeps its decode and its prefetched neighbors: `load_if_needed` fits it to the new rect.
+    fn change_panes(&mut self) -> io::Result<()> {
+        self.graphics_delete_all()?;
+        if self.mode == ViewMode::Gallery {
+            self.mark_dirty();
+        } else {
+            self.needs_render = true;
+        }
+        Ok(())
     }
 
     /// The fullscreen file, or the gallery cursor.
@@ -55,7 +90,8 @@ impl App {
 mod tests {
 
     use crate::app::ViewMode;
-    use crate::test_support::{app_with_files, test_dir};
+    use crate::test_support::{app_with_files, fullscreen_app, gallery_app, test_dir, text};
+    use tuilibr::frame::Layout;
 
     use std::fs;
 
@@ -63,9 +99,10 @@ mod tests {
     fn view_file_follows_view() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png", "b.png"]);
-        app.toggle_info();
+        app.toggle_info().unwrap();
         assert!(app.info_visible);
-        app.toggle_info();
+        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+        app.toggle_info().unwrap();
         assert!(!app.info_visible);
 
         app.gallery.cursor = 1;
@@ -79,5 +116,57 @@ mod tests {
         fs::remove_file(&path).unwrap();
         // The cache answers: the removed file still has its first rows.
         assert_eq!(app.info_for(&path).rows, first.rows);
+    }
+
+    /// `B` switches the frame for the session: the pictures go, and the grid draws again.
+    #[test]
+    fn toggle_layout_deletes_the_pictures() {
+        let dir = test_dir();
+        let mut app = app_with_files(dir.path(), &["a.png"]);
+        assert_eq!(app.pane_layout, Layout::Maximal);
+        app.needs_render = false;
+        app.toggle_layout().unwrap();
+        assert_eq!(app.pane_layout, Layout::Minimal);
+        assert!(app.needs_render);
+        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+        app.toggle_layout().unwrap();
+        assert_eq!(app.pane_layout, Layout::Maximal);
+    }
+
+    /// The fullscreen view keeps its decode after a pane change: the draw fits it to the new
+    /// rect. The grid takes new thumbnail sizes, so it is dirty.
+    #[test]
+    fn fullscreen_pane_change_keeps_the_decode() {
+        let mut app = fullscreen_app(3, 1);
+        app.loaded = Some(image::RgbaImage::new(4, 4).into());
+        app.graphics_storage_dirty = false;
+        app.needs_render = false;
+        app.toggle_info().unwrap();
+        assert!(app.info_visible);
+        assert!(app.loaded.is_some());
+        assert!(!app.graphics_storage_dirty);
+        assert!(app.needs_render);
+        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+
+        let mut app = gallery_app(3);
+        app.graphics_storage_dirty = false;
+        app.toggle_layout().unwrap();
+        assert!(app.graphics_storage_dirty);
+    }
+
+    /// A slideshow shows no panes: Tab, `B` and the right click change nothing and delete no
+    /// picture.
+    #[test]
+    fn slideshow_ignores_pane_toggles() {
+        let mut app = fullscreen_app(3, 1);
+        app.start_slideshow();
+        app.loaded = Some(image::RgbaImage::new(4, 4).into());
+        app.graphics_out.take_bytes();
+        app.toggle_info().unwrap();
+        app.toggle_layout().unwrap();
+        assert!(!app.info_visible);
+        assert_eq!(app.pane_layout, Layout::Maximal);
+        assert!(app.loaded.is_some());
+        assert!(app.graphics_out.take_bytes().is_empty());
     }
 }

@@ -56,7 +56,7 @@ pub(crate) struct LoopState {
 impl LoopState {
     pub(crate) fn new(config: &Config) -> Self {
         Self {
-            status: None,
+            status: config.layout_note.clone(),
             answers: LateAnswerFilter::default(),
             cell_size_from_terminal: false,
             mouse: config.mouse,
@@ -209,8 +209,7 @@ fn draw_ui(frame: &mut Frame<'_>, app: &mut App, state: &LoopState) {
 }
 
 fn fullscreen_box(area: Rect, app: &App) -> Rect {
-    let (main, _info) = ui::split_info(area, app);
-    ui::content_area(main, app)
+    ui::panes(area, app).main
 }
 
 /// Take the results of the background work.

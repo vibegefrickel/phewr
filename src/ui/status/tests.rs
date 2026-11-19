@@ -18,7 +18,11 @@ fn gallery_shows_position_without_hints() {
     assert_hides(&screen, "b.jpg");
     assert_hides(&screen, "Gallery");
     assert_hides(&screen, "Search");
-    assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 29), "no frame");
+    assert_eq!(
+        app.gallery.grid_rect,
+        Rect::new(1, 1, 98, 27),
+        "inside the main box"
+    );
 }
 
 #[test]
@@ -208,14 +212,15 @@ fn fullscreen_shows_name_and_position() {
     );
     assert_eq!(
         app.image_rect,
-        Rect::new(0, 0, 100, 29),
-        "no frame, 1 status row"
+        Rect::new(1, 1, 98, 27),
+        "inside the main box, 1 status row"
     );
     assert_eq!(
         screen.matches(" b.jpg ").count(),
-        1,
-        "the name only in the status row"
+        2,
+        "the name in the box title and in the status row"
     );
+    assert_shows(&screen, "\u{256d}\u{2500} b.jpg \u{2500}");
 }
 
 #[test]
@@ -258,7 +263,7 @@ fn fullscreen_uses_ansi_roles() {
     app.mode = ViewMode::Fullscreen;
     let buffer = render_buffer(&mut app, None, 100, 30);
     assert_terminal_background(&buffer);
-    assert_symbol(&buffer, (0, 0), " ", Color::Reset, Modifier::empty());
+    assert_symbol(&buffer, (1, 1), " ", Color::Reset, Modifier::empty());
     assert_symbol(
         &buffer,
         (1, 29),
@@ -286,8 +291,8 @@ fn video_row_shows_time_and_note() {
     assert_hides(&screen, "Space: pause");
     assert_eq!(
         app.image_rect,
-        Rect::new(0, 0, 100, 29),
-        "no frame, 1 status row"
+        Rect::new(1, 1, 98, 27),
+        "inside the main box, 1 status row"
     );
 
     let screen = render(&mut app, Some("mpv not found"), 100, 30);

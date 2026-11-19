@@ -18,10 +18,8 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.graphics_delete_all()?;
             app.enter_gallery();
         }
-        KeyCode::Tab => {
-            app.graphics_delete_all()?;
-            app.toggle_info();
-        }
+        KeyCode::Tab => app.toggle_info()?,
+        KeyCode::Char('B') => app.toggle_layout()?,
         // The fullscreen view shows a file that plays after a failed open of its player, and on
         // the still of a Live Photo before a running slideshow plays its motion. The player view
         // waits for the window and plays the file again after it.
@@ -58,6 +56,7 @@ mod tests {
     use crate::app::{App, ViewMode};
     use crate::test_support::{char_key, fullscreen_app, press, text};
     use crossterm::event::KeyCode;
+    use tuilibr::frame::Layout;
 
     #[test]
     fn hj_step_back_and_kl_forward() {
@@ -181,6 +180,10 @@ mod tests {
 
         press(&mut app, KeyCode::Tab);
         assert_ne!(app.info_visible, info);
+        char_key(&mut app, 'B');
+        assert_eq!(app.pane_layout, Layout::Minimal);
+        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+        assert_eq!(app.mode, ViewMode::Fullscreen, "B keeps the view");
         char_key(&mut app, '?');
         assert!(app.help_visible);
         char_key(&mut app, 'x');

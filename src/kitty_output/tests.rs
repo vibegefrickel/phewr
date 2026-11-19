@@ -4,8 +4,9 @@ use crate::app::App;
 use crate::image_list::SharedImageList;
 use crate::test_support::text;
 use image::RgbaImage;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
+use tuilibr::frame::Layout;
 use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
 use tuilibr::pictures::resize::padding::pad_for_grid;
 
@@ -86,6 +87,48 @@ fn fullscreen_centers_image() {
     assert!(!text.contains(",X="), "no pixel offset: {text}");
     assert!(!text.contains(",Y="), "no pixel offset: {text}");
     assert_eq!(app.screen.stored_count(), 0);
+}
+
+/// The cells of every cursor move `ESC [ row ; column H` in `text`, from 0.
+pub(super) fn cursor_moves(text: &str) -> Vec<Position> {
+    text.split("\x1b[")
+        .skip(1)
+        .filter_map(|part| {
+            let (row, rest) = part.split_once(';')?;
+            let (column, _) = rest.split_once('H')?;
+            let row: u16 = row.parse().ok()?;
+            let column: u16 = column.parse().ok()?;
+            Some(Position::new(column - 1, row - 1))
+        })
+        .collect()
+}
+
+/// The picture goes into the main pane: right of the info pane, inside the main box.
+#[test]
+fn fullscreen_image_follows_the_main_pane() {
+    for (layout, info) in [
+        (Layout::Maximal, false),
+        (Layout::Maximal, true),
+        (Layout::Minimal, true),
+    ] {
+        let mut app = crate::test_support::fullscreen_app(3, 0);
+        app.cell_px = (8, 16);
+        app.pane_layout = layout;
+        app.info_visible = info;
+        crate::test_support::draw_frame(&mut app, 120, 30);
+        let panes = crate::ui::panes(app.layout.screen, &app);
+        assert_eq!(app.image_rect, panes.main);
+        app.loaded = Some(RgbaImage::new(64, 64).into());
+        let mut out = Vec::new();
+        render_fullscreen_image_to(&mut app, &mut out).unwrap();
+        let moves = cursor_moves(&text(&out));
+        assert_eq!(moves.len(), 1, "{layout:?}, info {info}");
+        assert!(panes.main.contains(moves[0]), "{layout:?}, info {info}");
+        assert!(
+            panes.info.is_none_or(|info| moves[0].x >= info.right()),
+            "{layout:?}"
+        );
+    }
 }
 
 /// A slideshow scales the image to the fill of its box with one side, so it never stretches.

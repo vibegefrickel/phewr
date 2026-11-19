@@ -6,6 +6,7 @@
 use serde::Deserialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use tuilibr::frame::Layout;
 use tuilibr::pictures::decode::color::ColorTarget;
 use tuilibr::pictures::kitty::Loops;
 
@@ -48,6 +49,10 @@ pub(crate) struct Config {
     pub(crate) loops: Option<Loops>,
     /// The color space of the terminal pixels.
     pub(crate) colorspace: ColorTarget,
+    /// `[gallery] layout`: the frame of the info pane and the main pane.
+    pub(crate) layout: Layout,
+    /// The start note for a `[gallery] layout` value that phewr does not know.
+    pub(crate) layout_note: Option<String>,
 }
 
 /// The value of `[video] player`.
@@ -86,6 +91,8 @@ impl Default for Config {
             live_photos: true,
             loops: None,
             colorspace: ColorTarget::default(),
+            layout: Layout::default(),
+            layout_note: None,
         }
     }
 }
@@ -111,6 +118,8 @@ struct GallerySection {
     animate: Option<bool>,
     live_photos: Option<bool>,
     loops: Option<String>,
+    /// A string, not a `Layout`: a bad value must not fail the parse of the whole file.
+    layout: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -200,6 +209,14 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
     // `auto` and an unknown value keep the probe.
     if let Some(loops) = file.gallery.loops.as_deref() {
         config.loops = Loops::parse(loops);
+    }
+    if let Some(layout) = file.gallery.layout.as_deref() {
+        match layout.parse::<Layout>() {
+            Ok(layout) => config.layout = layout,
+            Err(error) => {
+                config.layout_note = Some(format!("unknown layout {:?}, maximal", error.0));
+            }
+        }
     }
     if let Some(show) = file.info.show_on_start {
         config.info_panel = show;
@@ -383,6 +400,39 @@ mod tests {
             let config = load_at(&config_path, &state_path);
             assert_eq!(config.loops, expected, "loops = {value:?}");
             assert!(!config.animate, "loops = {value:?} keeps the other keys");
+        }
+    }
+
+    /// An unknown layout keeps the maximal frame and the other keys, and leaves a start note.
+    #[test]
+    fn reads_gallery_layout() {
+        let root = test_root();
+        let config_path = root.path().join("config.toml");
+        let state_path = root.path().join("state.toml");
+        let config = load_at(&config_path, &state_path);
+        assert_eq!(
+            (config.layout, config.layout_note),
+            (Layout::Maximal, None),
+            "maximal by default"
+        );
+        for (value, expected, note) in [
+            ("minimal", Layout::Minimal, None),
+            (" Maximal ", Layout::Maximal, None),
+            (
+                "boxed",
+                Layout::Maximal,
+                Some("unknown layout \"boxed\", maximal"),
+            ),
+        ] {
+            std::fs::write(
+                &config_path,
+                format!("[gallery]\nlayout = \"{value}\"\nanimate = false\n"),
+            )
+            .unwrap();
+            let config = load_at(&config_path, &state_path);
+            assert_eq!(config.layout, expected, "layout = {value:?}");
+            assert_eq!(config.layout_note.as_deref(), note, "layout = {value:?}");
+            assert!(!config.animate, "layout = {value:?} keeps the other keys");
         }
     }
 

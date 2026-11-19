@@ -10,18 +10,32 @@ use grid::draw_thumbnail_cells;
 use help::draw_help_popup;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 #[cfg(feature = "video")]
 use status::video_bar;
 use status::{
     draw_slideshow_badge, draw_slideshow_mode, draw_status_row, fullscreen_bar, gallery_bar,
 };
-
-/// The preferred info panel width, with its border.
-const INFO_PANEL_WIDTH: u16 = 42;
+use std::path::PathBuf;
+use tuilibr::frame;
 
 const STATUS_ROWS: u16 = 1;
+
+/// The title of the info pane in the maximal layout.
+const INFO_TITLE: &str = "Info";
+
+/// The areas of one draw. In the maximal layout, the panes are the areas inside the boxes, so the
+/// text, the pictures and the click areas stay inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Panes {
+    /// The info pane, the list pane of the frame. `None` while hidden and in a slideshow.
+    pub(crate) info: Option<Rect>,
+    /// The grid, the picture or the video frame.
+    pub(crate) main: Rect,
+    /// The status row under both panes. A slideshow has none.
+    pub(crate) status: Rect,
+}
 
 /// Draw the whole frame. `status` is a note of the run loop in place of the file facts.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
@@ -29,43 +43,110 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) {
     app.layout.screen = area;
     // Only the grid asks for icons.
     app.grid_icons.wanted.clear();
-    let (main, info) = split_info(area, app);
+    let panes = panes(area, app);
+    draw_pane_lines(frame.buffer_mut(), app, area);
     match app.mode {
-        ViewMode::Gallery => draw_gallery(frame, app, main, status),
-        ViewMode::Fullscreen => draw_fullscreen(frame, app, main, status),
+        ViewMode::Gallery => draw_gallery(frame, app, panes, status),
+        ViewMode::Fullscreen => draw_fullscreen(frame, app, panes, status),
         #[cfg(feature = "video")]
-        ViewMode::Video => draw_video(frame, app, main, status),
+        ViewMode::Video => draw_video(frame, app, panes, status),
     }
-    if let Some(info) = info {
+    if let Some(info) = panes.info {
         draw_info_panel(frame, app, info);
     }
+    // The main pane has the focus. The info pane holds no picture, so the cells dim all of it.
+    frame::dim_pane(frame.buffer_mut(), panes.info);
     if app.help_visible {
         let loops = app.grid_loops.enabled.then(|| app.graphics.loops());
         draw_help_popup(frame, app.graphics.transfer(), loops);
     }
 }
 
-/// The right column for the open info panel. A very narrow terminal keeps the full width.
-pub(crate) fn split_info(area: Rect, app: &App) -> (Rect, Option<Rect>) {
-    if !app.info_visible {
-        return (area, None);
+/// The info pane and the main pane above the status row, in the minimal or the maximal layout of
+/// the frame. Below `NARROW_BELOW` columns, the info pane sits above the main pane. A slideshow
+/// gives the whole screen to the picture.
+pub(crate) fn panes(area: Rect, app: &App) -> Panes {
+    let (middle, status) = middle_and_status(area, app);
+    if app.slideshow_fills_screen() {
+        return Panes {
+            info: None,
+            main: middle,
+            status,
+        };
     }
-    let width = INFO_PANEL_WIDTH.min(area.width / 3);
-    if width < 20 {
-        return (area, None);
+    let shown = app.info_visible;
+    let (info, main) = match app.pane_layout {
+        frame::Layout::Minimal => {
+            let (info, _, main) = frame::split(middle, shown);
+            (info, main)
+        }
+        frame::Layout::Maximal => {
+            let (info, main) = frame::split_boxed(middle, shown);
+            (frame::pane_inner(info), frame::pane_inner(main))
+        }
+    };
+    Panes {
+        info: shown.then_some(info),
+        main,
+        status,
     }
-    let chunks = Layout::horizontal([Constraint::Min(1), Constraint::Length(width)]).split(area);
-    (chunks[0], Some(chunks[1]))
 }
 
-fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(STYLES.border)
-        .title(Line::from(Span::styled(" Info ", STYLES.title)));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+/// The divider of the minimal layout, or the two boxes of the maximal layout. The main pane has
+/// the focus, so its box takes the accent.
+fn draw_pane_lines(buffer: &mut Buffer, app: &App, area: Rect) {
+    if app.slideshow_fills_screen() {
+        return;
+    }
+    let (middle, _) = middle_and_status(area, app);
+    let shown = app.info_visible;
+    if app.pane_layout == frame::Layout::Minimal {
+        let (_, split, _) = frame::split(middle, shown);
+        frame::divider(buffer, split);
+        return;
+    }
+    let (info, main) = frame::split_boxed(middle, shown);
+    frame::pane_box(buffer, main, &main_title(app), true);
+    if shown {
+        frame::pane_box(buffer, info, INFO_TITLE, false);
+    }
+}
 
+/// The title of the main box: the folder name in the grid, the file name in the other views. A
+/// file list has no folder.
+fn main_title(app: &App) -> String {
+    let path = if app.mode == ViewMode::Gallery {
+        app.current_dir.as_deref().filter(|_| !app.file_list)
+    } else {
+        app.images.get(app.current).map(PathBuf::as_path)
+    };
+    path.map_or_else(
+        || "Files".to_owned(),
+        |path| {
+            path.file_name().map_or_else(
+                || path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            )
+        },
+    )
+}
+
+/// The rows of both panes, and the status row under them.
+fn middle_and_status(area: Rect, app: &App) -> (Rect, Rect) {
+    let rows = status_rows(app);
+    let middle = Rect {
+        height: area.height.saturating_sub(rows),
+        ..area
+    };
+    let status = Rect {
+        y: area.y + middle.height,
+        height: area.height.min(rows),
+        ..area
+    };
+    (middle, status)
+}
+
+fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, inner: Rect) {
     let Some(path) = app.view_file() else {
         frame.render_widget(
             Paragraph::new(Span::styled("no image selected", STYLES.dim)),
@@ -99,65 +180,40 @@ fn draw_info_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
-    let status_area = status_area(area, app);
-    let inner = content_area(area, app);
-    draw_status_row(frame, app, status_area, fullscreen_bar(app, status));
-    if status_rows(app) == 0 {
-        draw_slideshow_mode(frame, app, inner);
-        draw_slideshow_badge(frame, app, inner, status);
+fn draw_fullscreen(frame: &mut Frame<'_>, app: &mut App, panes: Panes, status: Option<&str>) {
+    draw_status_row(frame, app, panes.status, fullscreen_bar(app, status));
+    if app.slideshow_fills_screen() {
+        draw_slideshow_mode(frame, app, panes.main);
+        draw_slideshow_badge(frame, app, panes.main, status);
     }
-
-    app.image_rect = inner;
+    app.image_rect = panes.main;
 }
 
 #[cfg(feature = "video")]
-fn draw_video(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
-    let status_area = status_area(area, app);
-    draw_status_row(frame, app, status_area, video_bar(app, status));
-    let inner = content_area(area, app);
-    if status_rows(app) == 0 {
-        draw_slideshow_mode(frame, app, inner);
-        draw_slideshow_badge(frame, app, inner, status);
+fn draw_video(frame: &mut Frame<'_>, app: &mut App, panes: Panes, status: Option<&str>) {
+    draw_status_row(frame, app, panes.status, video_bar(app, status));
+    if app.slideshow_fills_screen() {
+        draw_slideshow_mode(frame, app, panes.main);
+        draw_slideshow_badge(frame, app, panes.main, status);
     }
-    app.image_rect = inner;
+    app.image_rect = panes.main;
 }
 
-fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, area: Rect, status: Option<&str>) {
-    let grid_rect = content_area(area, app);
-    app.gallery.update_grid(grid_rect);
+fn draw_gallery(frame: &mut Frame<'_>, app: &mut App, panes: Panes, status: Option<&str>) {
+    app.gallery.update_grid(panes.main);
     let filtered_count = app.gallery.filtered_indices.len();
-    let status_area = status_area(area, app);
     let parts = gallery_bar(app, filtered_count, status);
-    draw_status_row(frame, app, status_area, parts);
+    draw_status_row(frame, app, panes.status, parts);
     let mut wanted = std::mem::take(&mut app.grid_icons.wanted);
-    draw_thumbnail_cells(frame, app, grid_rect, &mut wanted);
+    draw_thumbnail_cells(frame, app, panes.main, &mut wanted);
     app.grid_icons.wanted = wanted;
 }
 
-/// A slideshow shows the picture on the whole screen, without the status row. A badge on top of
-/// the picture shows its state.
 fn status_rows(app: &App) -> u16 {
-    if app.slideshow_running() && app.mode != ViewMode::Gallery {
+    if app.slideshow_fills_screen() {
         0
     } else {
         STATUS_ROWS
-    }
-}
-
-/// The rows above the status row.
-pub(crate) fn content_area(area: Rect, app: &App) -> Rect {
-    Rect {
-        height: area.height.saturating_sub(status_rows(app)),
-        ..area
-    }
-}
-
-pub(crate) fn status_area(area: Rect, app: &App) -> Rect {
-    Rect {
-        y: area.y + content_area(area, app).height,
-        height: area.height.min(status_rows(app)),
-        ..area
     }
 }
 
@@ -169,8 +225,10 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::{Buffer, Cell};
+    use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier};
     use std::path::PathBuf;
+    use tuilibr::frame::Layout;
 
     /// An app with `names` below `/photos`, as after a finished scan.
     pub(super) fn app_with(names: &[&str]) -> App {
@@ -185,20 +243,25 @@ mod tests {
         app
     }
 
-    /// A slideshow gives the whole screen to the picture, and its end brings the status row back.
+    /// A slideshow gives the whole screen to the picture, without the panes, and its end brings
+    /// the main box and the status row back.
     #[test]
     fn slideshow_hides_status_row() {
         let mut app = crate::test_support::fullscreen_app(3, 0);
-        render_buffer(&mut app, None, 40, 12);
-        assert_eq!(app.image_rect.height, 11);
+        app.info_visible = true;
+        render_buffer(&mut app, None, 80, 12);
+        assert_eq!(app.image_rect, Rect::new(37, 1, 42, 9));
 
         app.start_slideshow();
-        render_buffer(&mut app, Some("a note"), 40, 12);
-        assert_eq!(app.image_rect, ratatui::layout::Rect::new(0, 0, 40, 12));
+        let screen = render(&mut app, Some("a note"), 80, 12);
+        assert_eq!(app.image_rect, Rect::new(0, 0, 80, 12));
+        assert_hides(&screen, "Info");
+        assert_hides(&screen, "\u{256d}");
 
         app.stop_slideshow();
-        render_buffer(&mut app, None, 40, 12);
-        assert_eq!(app.image_rect.height, 11);
+        app.info_visible = false;
+        render_buffer(&mut app, None, 80, 12);
+        assert_eq!(app.image_rect, Rect::new(1, 1, 78, 9));
     }
 
     /// The badge sits at the bottom right of a slideshow: the state, a note or an error.
@@ -338,23 +401,29 @@ mod tests {
         );
     }
 
+    /// The info pane is the dim left pane in its box, the grid has the focus.
     #[test]
     fn info_panel_lists_file_rows() {
         let mut app = app_with(&["a.jpg"]);
         app.info_visible = true;
         let screen = render(&mut app, None, 120, 30);
-        assert_shows(&screen, " Info ");
+        assert_shows(&screen, "\u{256d}\u{2500} Info ");
         assert_hides(&screen, "i: close");
         assert_shows(&screen, "File");
         assert_shows(&screen, "Name    a.jpg");
         assert_shows(&screen, "Format  JPG");
+        let rows = screen_rows(&render_buffer(&mut app, None, 120, 30));
+        assert!(rows[0].starts_with("\u{256d}\u{2500} Info "), "{rows:?}");
+        assert!(rows[1].starts_with("\u{2502}File"), "{rows:?}");
 
         let buffer = render_buffer(&mut app, None, 120, 30);
         assert_terminal_background(&buffer);
-        assert_default_fg(cell_of(&buffer, "Info "), Modifier::BOLD);
-        assert_default_fg(cell_of(&buffer, "File"), Modifier::BOLD);
-        assert_ansi(cell_of(&buffer, "Name "), Color::DarkGray);
-        assert_default_fg(cell_of(&buffer, "a.jpg"), Modifier::empty());
+        assert_ansi(cell_of(&buffer, "Info "), Color::DarkGray);
+        let dim = Modifier::DIM;
+        assert_default_fg(cell_of(&buffer, "File "), Modifier::BOLD | dim);
+        let name = cell_of(&buffer, "Name ");
+        assert_eq!((name.fg, name.modifier), (Color::DarkGray, dim));
+        assert_default_fg(cell_of(&buffer, "a.jpg"), dim);
     }
 
     #[test]
@@ -365,12 +434,64 @@ mod tests {
         assert_shows(&screen, "no image selected");
     }
 
+    /// Below 60 columns, the info pane sits above the grid, a third of the height.
     #[test]
-    fn info_panel_closed_when_narrow() {
+    fn info_panel_above_when_narrow() {
         let mut app = app_with(&["a.jpg"]);
         app.info_visible = true;
-        let screen = render(&mut app, None, 50, 30);
-        assert_hides(&screen, " Info ");
+        let rows = screen_rows(&render_buffer(&mut app, None, 50, 30));
+        assert!(rows[0].starts_with("\u{256d}\u{2500} Info "), "{rows:?}");
+        assert!(rows[9].starts_with("\u{256d}\u{2500} Files "), "{rows:?}");
+        assert_eq!(app.gallery.grid_rect, Rect::new(1, 10, 48, 18));
+    }
+
+    /// The maximal layout boxes both panes, the main box in the accent with the folder name. The
+    /// minimal layout has one divider and no titles. Hidden, the info pane leaves the whole area to
+    /// the main pane.
+    #[test]
+    fn both_layouts_with_and_without_info() {
+        let mut app = app_with(&["a.jpg"]);
+        app.current_dir = Some(PathBuf::from("/photos/summer"));
+        let screen = render(&mut app, None, 100, 20);
+        assert!(screen.starts_with("\u{256d}\u{2500} summer "), "{screen}");
+        assert_hides(&screen, "Info");
+        assert_eq!(app.gallery.grid_rect, Rect::new(1, 1, 98, 17));
+        let buffer = render_buffer(&mut app, None, 100, 20);
+        assert_eq!(cell_of(&buffer, "summer").fg, tuilibr::frame::accent());
+
+        app.info_visible = true;
+        let screen = render(&mut app, None, 100, 20);
+        assert!(screen.starts_with("\u{256d}\u{2500} Info "), "{screen}");
+        assert_shows(&screen, "\u{256d}\u{2500} summer ");
+        assert_eq!(app.gallery.grid_rect, Rect::new(37, 1, 62, 17));
+
+        app.pane_layout = Layout::Minimal;
+        let rows = screen_rows(&render_buffer(&mut app, None, 100, 20));
+        assert_eq!(rows[0].chars().nth(36), Some('\u{2502}'), "{rows:?}");
+        assert_eq!(rows[18].chars().nth(36), Some('\u{2502}'), "{rows:?}");
+        assert!(rows[0].starts_with("File "), "no title: {rows:?}");
+        assert_hides(&rows.join("\n"), "\u{256d}");
+        assert_eq!(app.gallery.grid_rect, Rect::new(37, 0, 63, 19));
+
+        app.info_visible = false;
+        let screen = render(&mut app, None, 100, 20);
+        assert_hides(&screen, "\u{2502}");
+        assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 19));
+    }
+
+    /// The fullscreen box carries the file name, and the picture goes inside it.
+    #[test]
+    fn fullscreen_box_names_the_file() {
+        let mut app = crate::test_support::fullscreen_app(3, 1);
+        app.info_visible = true;
+        let screen = render(&mut app, None, 100, 20);
+        let name = app.images[1]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_shows(&screen, &format!("\u{256d}\u{2500} {name} "));
+        assert_eq!(app.image_rect, Rect::new(37, 1, 62, 17));
     }
 
     #[test]

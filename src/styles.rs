@@ -8,14 +8,13 @@ pub(crate) struct Styles {
     /// The explicit `Reset` keeps the text in a title or a bottom line out of the border color.
     pub text: Style,
     pub title: Style,
-    pub border: Style,
     /// The thick border and the folder name of the cell under the cursor, in the frame accent.
     pub cursor_cell: Style,
     /// The plain border of a marked file, and the selection count.
     pub marked: Style,
     /// Errors.
     pub error: Style,
-    /// Counts, notes and the info panel labels.
+    /// Counts, notes and the info pane labels.
     pub dim: Style,
     /// The slideshow badge on top of the picture. The background hides the picture below it.
     pub badge: Style,
@@ -31,7 +30,6 @@ pub(crate) struct Styles {
 pub(crate) const STYLES: Styles = Styles {
     text: Style::new().fg(Color::Reset),
     title: Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
-    border: Style::new().fg(Color::DarkGray),
     cursor_cell: Style::new()
         .fg(tuilibr::frame::accent())
         .add_modifier(Modifier::BOLD),

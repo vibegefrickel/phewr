@@ -237,7 +237,7 @@ fn right_click_on_a_gap_closes_info_panel_without_moving_cursor() {
 fn status_row_click_toggles_help() {
     let mut app = gallery_app(9);
     draw_frame(&mut app, 120, 24);
-    let status = ui::status_area(app.layout.screen, &app);
+    let status = ui::panes(app.layout.screen, &app).status;
 
     click(&mut app, (status.x + 3, status.y));
     assert!(app.help_visible);
@@ -250,17 +250,47 @@ fn status_row_click_toggles_help() {
     assert!(app.needs_render);
 }
 
+/// A click in the info pane does nothing, and a click in the main pane keeps its meaning in the
+/// new rect of the pane.
 #[test]
-fn info_panel_click_closes_it() {
+fn info_pane_click_does_nothing() {
     let mut app = gallery_app(9);
     app.info_visible = true;
     draw_frame(&mut app, 120, 24);
-    let (_, info) = ui::split_info(app.layout.screen, &app);
-    let info = info.unwrap();
+    let panes = ui::panes(app.layout.screen, &app);
+    let info = panes.info.unwrap();
+    assert!(
+        info.right() < panes.main.x,
+        "the info pane sits left of the grid"
+    );
+    app.graphics_out.take_bytes();
 
     click(&mut app, (info.x + 2, info.y + 2));
-    assert!(!app.info_visible);
-    assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+    assert!(app.info_visible);
+    assert_eq!(app.gallery.cursor, 0);
+    assert!(app.graphics_out.take_bytes().is_empty());
+
+    let cell = crate::test_support::cell_center(&app, 1);
+    assert!(panes.main.contains(cell.into()));
+    click(&mut app, cell);
+    assert_eq!(
+        app.gallery.cursor, 1,
+        "the grid moved right of the info pane"
+    );
+}
+
+/// The narrow screen puts the info pane above the grid, and a click there does nothing.
+#[test]
+fn narrow_info_pane_sits_above_the_grid() {
+    let mut app = gallery_app(9);
+    app.info_visible = true;
+    draw_frame(&mut app, 50, 30);
+    let panes = ui::panes(app.layout.screen, &app);
+    let info = panes.info.unwrap();
+    assert!(info.bottom() < panes.main.y, "{panes:?}");
+    click(&mut app, (info.x + 2, info.y + 1));
+    assert!(app.info_visible);
+    assert_eq!(app.gallery.cursor, 0);
 }
 
 #[test]
@@ -326,7 +356,7 @@ fn player_leaves_on_right_click_only() {
 
     let mut app = video_app();
     draw_frame(&mut app, 120, 24);
-    let content = ui::content_area(app.layout.screen, &app);
+    let content = ui::panes(app.layout.screen, &app).main;
     let mut info = clip_info();
     info.duration = 60.0;
     let decoder = fake_decoder(info);
@@ -363,7 +393,7 @@ fn player_status_row_click_opens_help() {
 
     let mut app = video_app();
     draw_frame(&mut app, 120, 24);
-    let status = ui::status_area(app.layout.screen, &app);
+    let status = ui::panes(app.layout.screen, &app).status;
     click(&mut app, (3, status.y));
     assert_eq!(app.mode, ViewMode::Video);
     assert!(app.help_visible);

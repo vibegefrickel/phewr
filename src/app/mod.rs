@@ -37,6 +37,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
+use tuilibr::frame::Layout;
 use tuilibr::pictures::decode::ScreenImage;
 use tuilibr::pictures::jobs::thumbnail_cache::ThumbnailCache;
 use tuilibr::pictures::kitty::screen::Screen;
@@ -72,6 +73,8 @@ pub(crate) struct App {
     pub(crate) graphics_out: GraphicsOutput,
 
     pub(crate) info_visible: bool,
+    /// The frame of the info pane and the main pane. `B` switches it for the session.
+    pub(crate) pane_layout: Layout,
     info_cache: LruCache<PathBuf, ImageInfo>,
 
     /// Tests point it into a temp directory.
@@ -222,6 +225,7 @@ impl App {
             graphics: KittyBackend::default(),
             graphics_out: GraphicsOutput::Stdout,
             info_visible: config.info_panel,
+            pane_layout: config.layout,
             info_cache: LruCache::new(INFO_CACHE_CAPACITY),
             state_file,
             state_writer: config::StateWriter::default(),

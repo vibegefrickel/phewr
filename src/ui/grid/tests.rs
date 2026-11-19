@@ -12,6 +12,7 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::Line;
+use tuilibr::frame::Layout;
 
 /// Fail when `border` is not a line border of `symbols` (top left, top right, bottom left,
 /// bottom right, horizontal, vertical) in `fg` with `modifier`.
@@ -65,8 +66,8 @@ fn selected_cell_gets_thick_border() {
     let border = app.gallery.border_rect(0);
     assert_eq!(
         (border.x, border.y),
-        (0, 0),
-        "the edge gaps hold the border"
+        (1, 1),
+        "the edge gaps inside the main box hold the border"
     );
     assert_border(
         &buffer,
@@ -76,11 +77,7 @@ fn selected_cell_gets_thick_border() {
         Modifier::BOLD,
     );
     assert_eq!(screen.matches('\u{250f}').count(), 1, "one thick border");
-    assert_eq!(
-        screen.matches('\u{250c}').count(),
-        0,
-        "no frame, no plain border"
-    );
+    assert_eq!(screen.matches('\u{250c}').count(), 0, "no plain border");
 
     // The thumbnail area stays empty for Kitty, and the other cells get no border.
     let cell = app.gallery.thumb_rect(0);
@@ -327,6 +324,8 @@ fn help_popup_hides_icons() {
 #[test]
 fn small_cell_gets_symbol() {
     let mut app = app_with(&["a.jpg", "clip.mp4"]);
+    // The minimal layout without the info pane gives the grid all rows above the status row.
+    app.pane_layout = Layout::Minimal;
     let buffer = render_buffer(&mut app, None, 100, 5);
     assert_eq!(icon_rect(app.gallery.thumb_rect(0), app.cell_px), None);
     assert_symbol(
@@ -520,6 +519,7 @@ fn check_head(text: &str) {
 fn narrow_grid_cuts_first_cell() {
     // 6 columns: the cell width clamps to 5, so the first border needs 7 columns.
     let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
+    app.pane_layout = Layout::Minimal;
     let buffer = render_buffer(&mut app, None, 6, 12);
     let grid = app.gallery.grid_rect;
     assert_eq!(app.gallery.grid_cols, 2);

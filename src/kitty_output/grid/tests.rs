@@ -4,7 +4,8 @@ use super::{place_gallery_images_to, render_gallery_images};
 use crate::app::App;
 use crate::image_list::SharedImageList;
 use crate::kitty_output::tests::{
-    BEGIN_SYNC, BOX_PX, DELETE_ALL, END_SYNC, TRANSMIT, grid_app, sharp_thumbnail, thumbnail_app,
+    BEGIN_SYNC, BOX_PX, DELETE_ALL, END_SYNC, TRANSMIT, cursor_moves, grid_app, sharp_thumbnail,
+    thumbnail_app,
 };
 use crate::test_support::char_key;
 use crate::test_support::kitty::FakeTerminal;
@@ -12,6 +13,7 @@ use crate::test_support::text;
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
+use tuilibr::frame::Layout;
 use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
 use tuilibr::pictures::kitty::answers::AnswerReader;
 use tuilibr::pictures::kitty::screen::Screen;
@@ -39,6 +41,32 @@ fn delete_all_takes_stale_loop_ids() {
 
     assert!(app.grid_loops.stale_ids.is_empty());
     assert!(!text(&out).contains("d=I,i=900"));
+}
+
+/// The thumbnails sit in the cells of the main pane: right of the info pane, inside the main box.
+#[test]
+fn placements_follow_the_main_pane() {
+    for (layout, info) in [
+        (Layout::Maximal, false),
+        (Layout::Maximal, true),
+        (Layout::Minimal, true),
+    ] {
+        let mut app = thumbnail_app(3);
+        app.pane_layout = layout;
+        app.info_visible = info;
+        crate::test_support::draw_frame(&mut app, 120, 30);
+        let panes = crate::ui::panes(app.layout.screen, &app);
+        assert_eq!(app.gallery.grid_rect, panes.main);
+        app.graphics_storage_dirty = true;
+        let mut out = Vec::new();
+        place_visible(&mut app, &mut out);
+        let moves = cursor_moves(&text(&out));
+        assert_eq!(moves.len(), 3, "{layout:?}, info {info}");
+        for (index, at) in moves.into_iter().enumerate() {
+            assert!(app.gallery.thumb_rect(index).contains(at), "{layout:?}");
+            assert!(panes.main.contains(at), "{layout:?}, info {info}");
+        }
+    }
 }
 
 #[test]

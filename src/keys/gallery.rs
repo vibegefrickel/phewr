@@ -68,10 +68,8 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             app.enter_fullscreen_selected();
             app.request_video_window();
         }
-        KeyCode::Tab => {
-            app.graphics_delete_all()?;
-            app.toggle_info();
-        }
+        KeyCode::Tab => app.toggle_info()?,
+        KeyCode::Char('B') => app.toggle_layout()?,
         // A zoom marks the grid dirty, and the next grid write deletes the old pictures.
         KeyCode::Char('+' | '=') => {
             app.thumb_zoom_in();
@@ -125,9 +123,12 @@ fn move_cursor(app: &mut App, code: KeyCode, ctrl: bool) -> bool {
 mod tests {
     use crate::app::ViewMode;
 
-    use crate::test_support::{char_key, folder_app, gallery_app, press, press_with, wait_until};
+    use crate::test_support::{
+        char_key, folder_app, gallery_app, press, press_with, text, wait_until,
+    };
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::fs;
+    use tuilibr::frame::Layout;
 
     #[test]
     fn enter_and_backspace_walk_folders() {
@@ -302,6 +303,12 @@ mod tests {
 
         press(&mut app, KeyCode::Tab);
         assert_ne!(app.info_visible, info);
+        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+        char_key(&mut app, 'B');
+        assert_eq!(app.pane_layout, Layout::Minimal);
+        assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+        char_key(&mut app, 'B');
+        assert_eq!(app.pane_layout, Layout::Maximal);
         char_key(&mut app, '?');
         assert!(app.help_visible);
         char_key(&mut app, 'i');

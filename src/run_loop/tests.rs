@@ -569,22 +569,39 @@ fn window_closed_without_mpv() {
     assert!(!window_open(&app()));
 }
 
+/// The fullscreen box is the main pane: inside its box in the maximal layout, right of the
+/// divider in the minimal layout.
 #[test]
 fn draw_records_fullscreen_box() {
     use ratatui::{Terminal, backend::TestBackend};
+    use tuilibr::frame::Layout;
 
     let mut app = gallery_app(3);
     let state = LoopState::new(&Config::default());
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    terminal
-        .draw(|frame| draw_ui(frame, &mut app, &state))
-        .unwrap();
-    assert_eq!(app.fullscreen_box, Rect::new(0, 0, 80, 23));
-    app.info_visible = true;
-    terminal
-        .draw(|frame| draw_ui(frame, &mut app, &state))
-        .unwrap();
-    assert_eq!(app.fullscreen_box, Rect::new(0, 0, 54, 23));
+    let mut boxes = Vec::new();
+    for (layout, info) in [
+        (Layout::Maximal, false),
+        (Layout::Maximal, true),
+        (Layout::Minimal, false),
+        (Layout::Minimal, true),
+    ] {
+        app.pane_layout = layout;
+        app.info_visible = info;
+        terminal
+            .draw(|frame| draw_ui(frame, &mut app, &state))
+            .unwrap();
+        boxes.push(app.fullscreen_box);
+    }
+    assert_eq!(
+        boxes,
+        [
+            Rect::new(1, 1, 78, 21),
+            Rect::new(37, 1, 42, 21),
+            Rect::new(0, 0, 80, 23),
+            Rect::new(37, 0, 43, 23),
+        ]
+    );
 }
 
 #[test]
@@ -607,4 +624,26 @@ fn pending_emits_go_out_without_render() {
         pending.is_empty(),
         "a cell without a thumbnail writes nothing"
     );
+}
+
+/// An unknown `[gallery] layout` value leaves a note in the status row at the start.
+#[test]
+fn unknown_layout_note_shows_at_start() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let note = "unknown layout \"boxed\", maximal";
+    let config = Config {
+        layout_note: Some(note.to_owned()),
+        ..Config::default()
+    };
+    let state = LoopState::new(&config);
+    assert_eq!(state.status.as_deref(), Some(note));
+    let mut app = gallery_app(3);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal
+        .draw(|frame| draw_ui(frame, &mut app, &state))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let status_row: String = (0..100).map(|x| buffer[(x, 23)].symbol()).collect();
+    assert!(status_row.contains(note), "{status_row}");
 }

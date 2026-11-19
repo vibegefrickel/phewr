@@ -34,36 +34,20 @@ fn is_press(kind: MouseEventKind) -> bool {
 }
 
 /// The areas of the last draw.
-struct Regions {
-    content: Rect,
-    status: Rect,
-    info: Option<Rect>,
+fn regions(app: &App) -> ui::Panes {
+    ui::panes(app.layout.screen, app)
 }
 
-fn regions(app: &App) -> Regions {
-    let (main, info) = ui::split_info(app.layout.screen, app);
-    Regions {
-        content: ui::content_area(main, app),
-        status: ui::status_area(main, app),
-        info,
-    }
-}
-
-/// A left click on the status row opens the help, on the info panel it closes the panel.
-/// Returns `true` for such a click.
-fn shared_click(app: &mut App, regions: &Regions, at: Position) -> io::Result<bool> {
+/// A left click on the status row opens the help, and a left click on the info pane does
+/// nothing. Returns `true` for such a click.
+fn shared_click(app: &mut App, regions: &ui::Panes, at: Position) -> io::Result<bool> {
     if regions.status.contains(at) {
         app.graphics_delete_all()?;
         app.help_visible = true;
         app.needs_render = true;
         return Ok(true);
     }
-    if regions.info.is_some_and(|info| info.contains(at)) {
-        app.graphics_delete_all()?;
-        app.toggle_info();
-        return Ok(true);
-    }
-    Ok(false)
+    Ok(regions.info.is_some_and(|info| info.contains(at)))
 }
 
 fn gallery_mouse(app: &mut App, mouse: MouseEvent, at: Position, now: Instant) -> io::Result<bool> {
@@ -118,16 +102,14 @@ fn gallery_click(app: &mut App, at: Position, now: Instant) -> io::Result<()> {
     Ok(())
 }
 
-/// A right click on a cell opens the info panel. If the panel is open, a right click anywhere in
+/// A right click on a cell opens the info pane. If the pane is open, a right click anywhere in
 /// the gallery closes it without moving the cursor. If the panel is closed, a right click on a gap
 /// does nothing.
 fn gallery_right_click(app: &mut App, at: Position) -> io::Result<()> {
     if !app.info_visible && select_cell(app, at).is_none() {
         return Ok(());
     }
-    app.graphics_delete_all()?;
-    app.toggle_info();
-    Ok(())
+    app.toggle_info()
 }
 
 /// Put the cursor on the cell under `at`. A click ends the search typing and keeps the filter.
@@ -157,14 +139,11 @@ fn fullscreen_mouse(app: &mut App, mouse: MouseEvent, at: Position) -> io::Resul
             let Some(drag) = app.mouse.drag.take() else {
                 return Ok(false);
             };
-            if !drag.moved && app.zoom <= 1.0 && regions.content.contains(at) {
-                edge_step(app, regions.content, at);
+            if !drag.moved && app.zoom <= 1.0 && regions.main.contains(at) {
+                edge_step(app, regions.main, at);
             }
         }
-        MouseEventKind::Down(MouseButton::Right) => {
-            app.graphics_delete_all()?;
-            app.toggle_info();
-        }
+        MouseEventKind::Down(MouseButton::Right) => app.toggle_info()?,
         MouseEventKind::ScrollUp => app.zoom_in(),
         MouseEventKind::ScrollDown => app.zoom_out(),
         _ => {}
