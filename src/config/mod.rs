@@ -91,7 +91,8 @@ impl Default for Config {
             live_photos: true,
             loops: None,
             colorspace: ColorTarget::default(),
-            layout: Layout::default(),
+            // phewr starts without boxes (maintainer, 2026-11-19): the grid fills the screen.
+            layout: Layout::Minimal,
             layout_note: None,
         }
     }
@@ -214,7 +215,7 @@ pub(crate) fn load_at(config_path: &Path, state_path: &Path) -> Config {
         match layout.parse::<Layout>() {
             Ok(layout) => config.layout = layout,
             Err(error) => {
-                config.layout_note = Some(format!("unknown layout {:?}, maximal", error.0));
+                config.layout_note = Some(format!("unknown layout {:?}, minimal", error.0));
             }
         }
     }
@@ -403,7 +404,7 @@ mod tests {
         }
     }
 
-    /// An unknown layout keeps the maximal frame and the other keys, and leaves a start note.
+    /// An unknown layout keeps the minimal frame and the other keys, and leaves a start note.
     #[test]
     fn reads_gallery_layout() {
         let root = test_root();
@@ -412,16 +413,16 @@ mod tests {
         let config = load_at(&config_path, &state_path);
         assert_eq!(
             (config.layout, config.layout_note),
-            (Layout::Maximal, None),
-            "maximal by default"
+            (Layout::Minimal, None),
+            "minimal by default"
         );
         for (value, expected, note) in [
             ("minimal", Layout::Minimal, None),
             (" Maximal ", Layout::Maximal, None),
             (
                 "boxed",
-                Layout::Maximal,
-                Some("unknown layout \"boxed\", maximal"),
+                Layout::Minimal,
+                Some("unknown layout \"boxed\", minimal"),
             ),
         ] {
             std::fs::write(

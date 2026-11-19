@@ -181,7 +181,7 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         assert_ne!(app.info_visible, info);
         char_key(&mut app, 'B');
-        assert_eq!(app.pane_layout, Layout::Minimal);
+        assert_eq!(app.pane_layout, Layout::Maximal);
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
         assert_eq!(app.mode, ViewMode::Fullscreen, "B keeps the view");
         char_key(&mut app, '?');

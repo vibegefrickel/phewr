@@ -19,7 +19,6 @@ use status::video_bar;
 use status::{
     draw_slideshow_badge, draw_slideshow_mode, draw_status_row, fullscreen_bar, gallery_bar,
 };
-use std::path::PathBuf;
 use tuilibr::frame;
 
 const STATUS_ROWS: u16 = 1;
@@ -74,9 +73,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, status: Option<&str>) -
     cursor
 }
 
-/// The info pane and the main pane above the status row and the omnibox, in the minimal or the maximal layout of
-/// the frame. Below `NARROW_BELOW` columns, the info pane sits above the main pane. A slideshow
-/// gives the whole screen to the picture.
+/// The info pane and the main pane above the status row and the omnibox, in the minimal or the
+/// maximal layout of the frame. Only an open info pane gets the boxes of the maximal layout, so
+/// the grid alone fills the area without a border. Below `NARROW_BELOW` columns, the info pane
+/// sits above the main pane. A slideshow gives the whole screen to the picture.
 pub(crate) fn panes(area: Rect, app: &App) -> Panes {
     let Rows {
         middle,
@@ -92,15 +92,12 @@ pub(crate) fn panes(area: Rect, app: &App) -> Panes {
         };
     }
     let shown = app.info_visible;
-    let (info, main) = match app.pane_layout {
-        frame::Layout::Minimal => {
-            let (info, _, main) = frame::split(middle, shown);
-            (info, main)
-        }
-        frame::Layout::Maximal => {
-            let (info, main) = frame::split_boxed(middle, shown);
-            (frame::pane_inner(info), frame::pane_inner(main))
-        }
+    let (info, main) = if boxed(app) {
+        let (info, main) = frame::split_boxed(middle, shown);
+        (frame::pane_inner(info), frame::pane_inner(main))
+    } else {
+        let (info, _, main) = frame::split(middle, shown);
+        (info, main)
     };
     Panes {
         info: shown.then_some(info),
@@ -110,43 +107,39 @@ pub(crate) fn panes(area: Rect, app: &App) -> Panes {
     }
 }
 
-/// The divider of the minimal layout, or the two boxes of the maximal layout. The main pane has
-/// the focus, so its box takes the accent.
+/// The boxes of the maximal layout need an open info pane: without it, no border frames the
+/// grid or the picture (maintainer, 2026-11-19).
+pub(crate) fn boxed(app: &App) -> bool {
+    app.info_visible && app.pane_layout == frame::Layout::Maximal
+}
+
+/// The divider of the minimal layout, or the two boxes of the maximal layout, only with the info
+/// pane open. The main pane has the focus, so its box takes the accent.
 fn draw_pane_lines(buffer: &mut Buffer, app: &App, area: Rect) {
-    if app.slideshow_fills_screen() {
+    if app.slideshow_fills_screen() || !app.info_visible {
         return;
     }
     let middle = rows(area, app).middle;
-    let shown = app.info_visible;
-    if app.pane_layout == frame::Layout::Minimal {
-        let (_, split, _) = frame::split(middle, shown);
+    if !boxed(app) {
+        let (_, split, _) = frame::split(middle, true);
         frame::divider(buffer, split);
         return;
     }
-    let (info, main) = frame::split_boxed(middle, shown);
-    frame::pane_box(buffer, main, &main_title(app), true);
-    if shown {
-        frame::pane_box(buffer, info, INFO_TITLE, false);
-    }
+    let (info, main) = frame::split_boxed(middle, true);
+    frame::pane_box(buffer, main, &main_title(app, main.width), true);
+    frame::pane_box(buffer, info, INFO_TITLE, false);
 }
 
-/// The title of the main box: the folder name in the grid, the file name in the other views. A
-/// file list has no folder.
-fn main_title(app: &App) -> String {
-    let path = if app.mode == ViewMode::Gallery {
-        app.current_dir.as_deref().filter(|_| !app.file_list)
-    } else {
-        app.images.get(app.current).map(PathBuf::as_path)
+/// The title of the main box: the folder path with the home folder as `~`, cut from its start to
+/// the box width. The status row leaves the path out while the box shows it. A file list has no
+/// folder.
+fn main_title(app: &App, width: u16) -> String {
+    let Some(dir) = app.current_dir.as_deref().filter(|_| !app.file_list) else {
+        return "Files".to_owned();
     };
-    path.map_or_else(
-        || "Files".to_owned(),
-        |path| {
-            path.file_name().map_or_else(
-                || path.display().to_string(),
-                |name| name.to_string_lossy().into_owned(),
-            )
-        },
-    )
+    let path = status::display_path(dir, app.home_dir.as_deref());
+    // The box takes two corners, `─ ` before the title and one space after it.
+    status::shorten_path(&path, usize::from(width).saturating_sub(5)).unwrap_or(path)
 }
 
 /// The rows of one draw from the top: both panes, the status row and the omnibox.
@@ -282,6 +275,7 @@ mod tests {
     #[test]
     fn slideshow_hides_status_row() {
         let mut app = crate::test_support::fullscreen_app(3, 0);
+        app.pane_layout = Layout::Maximal;
         app.info_visible = true;
         render_buffer(&mut app, None, 80, 12);
         assert_eq!(app.image_rect, Rect::new(37, 1, 42, 8));
@@ -295,7 +289,11 @@ mod tests {
         app.stop_slideshow();
         app.info_visible = false;
         render_buffer(&mut app, None, 80, 12);
-        assert_eq!(app.image_rect, Rect::new(1, 1, 78, 8));
+        assert_eq!(
+            app.image_rect,
+            Rect::new(0, 0, 80, 10),
+            "no box without the info pane"
+        );
     }
 
     /// The panes end above the bar, the bar sits above the omnibox, and the picture and the grid
@@ -495,6 +493,7 @@ mod tests {
     #[test]
     fn info_panel_lists_file_rows() {
         let mut app = app_with(&["a.jpg"]);
+        app.pane_layout = Layout::Maximal;
         app.info_visible = true;
         let screen = render(&mut app, None, 120, 30);
         assert_shows(&screen, "\u{256d}\u{2500} Info ");
@@ -528,6 +527,7 @@ mod tests {
     #[test]
     fn info_panel_above_when_narrow() {
         let mut app = app_with(&["a.jpg"]);
+        app.pane_layout = Layout::Maximal;
         app.info_visible = true;
         let rows = screen_rows(&render_buffer(&mut app, None, 50, 30));
         assert!(rows[0].starts_with("\u{256d}\u{2500} Info "), "{rows:?}");
@@ -535,32 +535,39 @@ mod tests {
         assert_eq!(app.gallery.grid_rect, Rect::new(1, 10, 48, 17));
     }
 
-    /// The maximal layout boxes both panes, the main box in the accent with the folder name. The
-    /// minimal layout has one divider and no titles. Hidden, the info pane leaves the whole area to
-    /// the main pane.
+    /// Without the info pane, no box and no divider frame the grid, also in the maximal layout,
+    /// and the status row shows the path. With it, the maximal layout boxes both panes: the main
+    /// box takes the accent and the folder path as its title, and the status row leaves the path
+    /// out. The minimal layout has one divider, no titles, and the path in the status row.
     #[test]
     fn both_layouts_with_and_without_info() {
         let mut app = app_with(&["a.jpg"]);
-        app.current_dir = Some(PathBuf::from("/photos/summer"));
+        app.home_dir = Some(PathBuf::from("/home/me"));
+        app.current_dir = Some(PathBuf::from("/home/me/photos/summer"));
+        app.pane_layout = Layout::Maximal;
         let screen = render(&mut app, None, 100, 20);
-        assert!(screen.starts_with("\u{256d}\u{2500} summer "), "{screen}");
+        assert_hides(&screen, "\u{256d}");
         assert_hides(&screen, "Info");
-        assert_eq!(app.gallery.grid_rect, Rect::new(1, 1, 98, 16));
-        let buffer = render_buffer(&mut app, None, 100, 20);
-        assert_eq!(cell_of(&buffer, "summer").fg, tuilibr::frame::accent());
+        assert_shows(status_row(&screen), "~/photos/summer");
+        assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 18));
 
         app.info_visible = true;
         let screen = render(&mut app, None, 100, 20);
         assert!(screen.starts_with("\u{256d}\u{2500} Info "), "{screen}");
-        assert_shows(&screen, "\u{256d}\u{2500} summer ");
+        assert_shows(&screen, "\u{256d}\u{2500} ~/photos/summer ");
+        assert_hides(status_row(&screen), "summer");
         assert_eq!(app.gallery.grid_rect, Rect::new(37, 1, 62, 16));
+        let buffer = render_buffer(&mut app, None, 100, 20);
+        assert_eq!(cell_of(&buffer, "~/photos").fg, tuilibr::frame::accent());
 
         app.pane_layout = Layout::Minimal;
-        let rows = screen_rows(&render_buffer(&mut app, None, 100, 20));
+        let buffer = render_buffer(&mut app, None, 100, 20);
+        let rows = screen_rows(&buffer);
         assert_eq!(rows[0].chars().nth(36), Some('\u{2502}'), "{rows:?}");
         assert_eq!(rows[17].chars().nth(36), Some('\u{2502}'), "{rows:?}");
         assert!(rows[0].starts_with("File "), "no title: {rows:?}");
         assert_hides(&rows.join("\n"), "\u{256d}");
+        assert_shows(&rows[18], "~/photos/summer");
         assert_eq!(app.gallery.grid_rect, Rect::new(37, 0, 63, 18));
 
         app.info_visible = false;
@@ -569,19 +576,22 @@ mod tests {
         assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 18));
     }
 
-    /// The fullscreen box carries the file name, and the picture goes inside it.
+    /// The fullscreen box carries the folder path too, cut from its start to the box width, and
+    /// the picture goes inside it.
     #[test]
-    fn fullscreen_box_names_the_file() {
+    fn fullscreen_box_names_the_folder() {
         let mut app = crate::test_support::fullscreen_app(3, 1);
+        app.pane_layout = Layout::Maximal;
         app.info_visible = true;
-        let screen = render(&mut app, None, 100, 20);
-        let name = app.images[1]
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        assert_shows(&screen, &format!("\u{256d}\u{2500} {name} "));
-        assert_eq!(app.image_rect, Rect::new(37, 1, 62, 16));
+        app.home_dir = Some(PathBuf::from("/home/me"));
+        app.current_dir = Some(PathBuf::from(
+            "/home/me/pictures/a/long/way/down/to/the/summer/of/2026",
+        ));
+        let screen = render(&mut app, None, 80, 20);
+        let title = screen.lines().next().unwrap_or_default();
+        assert!(title.contains("\u{256d}\u{2500} \u{2026}/"), "{title}");
+        assert!(title.contains("/summer/of/2026 "), "{title}");
+        assert_eq!(app.image_rect, Rect::new(37, 1, 42, 16));
     }
 
     #[test]

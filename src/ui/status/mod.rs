@@ -214,6 +214,10 @@ fn folder_span(
     middle: &[BarText],
     width: u16,
 ) -> Option<Span<'static>> {
+    // The title of the main box shows the path while the boxes show.
+    if super::boxed(app) {
+        return None;
+    }
     let dir = app.current_dir.as_deref().filter(|_| !app.file_list)?;
     let name = if width < NARROW_BELOW {
         &mode.short_name
@@ -279,7 +283,7 @@ pub(super) fn draw_slideshow_mode(frame: &mut Frame<'_>, app: &App, area: Rect) 
 }
 
 /// `path` with the home folder as `~`. A path outside the home folder stays as it is.
-fn display_path(path: &Path, home: Option<&Path>) -> String {
+pub(super) fn display_path(path: &Path, home: Option<&Path>) -> String {
     let relative = home
         .filter(|home| home.parent().is_some())
         .and_then(|home| path.strip_prefix(home).ok());
@@ -292,7 +296,7 @@ fn display_path(path: &Path, home: Option<&Path>) -> String {
 
 /// `text` when it fits in `budget` columns, else its tail behind `…/`. The last folder stays
 /// whole. `None` when not even that fits.
-fn shorten_path(text: &str, budget: usize) -> Option<String> {
+pub(super) fn shorten_path(text: &str, budget: usize) -> Option<String> {
     if text.width() <= budget {
         return Some(text.to_owned());
     }

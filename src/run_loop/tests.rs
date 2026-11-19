@@ -569,8 +569,8 @@ fn window_closed_without_mpv() {
     assert!(!window_open(&app()));
 }
 
-/// The fullscreen box is the main pane: inside its box in the maximal layout, right of the
-/// divider in the minimal layout.
+/// The fullscreen box is the main pane: the whole area without the info pane, inside its box in
+/// the maximal layout with it, right of the divider in the minimal layout.
 #[test]
 fn draw_records_fullscreen_box() {
     use ratatui::{Terminal, backend::TestBackend};
@@ -598,7 +598,7 @@ fn draw_records_fullscreen_box() {
     assert_eq!(
         boxes,
         [
-            Rect::new(1, 1, 78, 20),
+            Rect::new(0, 0, 80, 22),
             Rect::new(37, 1, 42, 20),
             Rect::new(0, 0, 80, 22),
             Rect::new(37, 0, 43, 22),

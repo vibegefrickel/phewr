@@ -62,7 +62,10 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   above the omnibox, so its right column keeps its padding on a screen of 30 rows.
 - **Panes (2026-11-19):** the info pane is the left pane of the tuilibr frame, the grid or the
   picture the main pane, and the status row spans both. The maintainer decided that every app with
-  a split view has the minimal and the maximal layout, default maximal (`[gallery] layout`, `B`).
+  a split view has the minimal and the maximal layout (`[gallery] layout`, `B`). For phewr, the
+  maintainer changed this on the same day: the default is minimal, and the boxes of maximal
+  show only with the info pane, so no border frames the grid alone. The title of the main box
+  is then the folder path, and the status row leaves the path out.
   Before, the info panel was a right column of 42 cells under no status row. A pane change
   (`App::change_panes`) deletes the pictures. Only the grid calls `mark_dirty`: in the fullscreen
   view a reset dropped the decode, and a 24 MP HEIC stayed empty until a cold decode (pre-review of

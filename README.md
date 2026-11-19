@@ -143,7 +143,7 @@ return {
 | `+` `-` `0` | Larger / smaller / default thumbnails (each step changes the columns) |
 | `Tab` | Show or hide the info pane |
 | `/` | Search in the row under the bar. `Enter` applies, `Esc` clears. The cursor keys, `Home`, `End`, `Alt`+arrows (words), `Ctrl`+`W`, `Ctrl`+`U` and `Ctrl`+`K` edit the query. |
-| `B` | Toggle the layout: maximal (boxes) or minimal (one divider) |
+| `B` | Toggle the layout while the info pane shows: minimal (one divider) or maximal (boxes, the folder path as the title) |
 | `Space` | Mark or unmark (the marks go to yazi on quit) |
 | `a` `A` | Mark all / clear the marks |
 | `q` | Quit |
@@ -229,7 +229,7 @@ mouse = true          # false leaves the mouse to the terminal
 animate = true        # play short loops of videos, animations and Live Photos in the grid
 live_photos = true    # hide the .mov of a Live Photo, Enter plays it
 loops = "auto"        # "auto", "animation" (Kitty animation, Ghostty 1.4.0 or later) or "ticks"
-layout = "maximal"    # "maximal" (each pane in a box) or "minimal" (one divider), B toggles it
+layout = "minimal"    # "minimal" (one divider) or "maximal" (each pane in a box), only with the info pane, B toggles it
 visible_rows = 4      # most thumbnail rows in the grid, 2 to 12 (the grid picks a zoom level)
 
 [slideshow]

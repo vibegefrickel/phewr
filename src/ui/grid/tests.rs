@@ -66,8 +66,8 @@ fn selected_cell_gets_thick_border() {
     let border = app.gallery.border_rect(0);
     assert_eq!(
         (border.x, border.y),
-        (1, 1),
-        "the edge gaps inside the main box hold the border"
+        (0, 0),
+        "without the info pane, the grid has no box, and its edge gaps hold the border"
     );
     assert_border(
         &buffer,

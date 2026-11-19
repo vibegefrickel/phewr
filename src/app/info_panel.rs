@@ -18,12 +18,16 @@ impl App {
     }
 
     /// `B`: the other pane layout for this session. The config file keeps its own value. A
-    /// slideshow shows no panes, so the toggle does nothing there.
+    /// slideshow shows no panes, so the toggle does nothing there. Without the info pane, both
+    /// layouts draw the same screen, so the pictures stay.
     pub(crate) fn toggle_layout(&mut self) -> io::Result<()> {
         if self.slideshow_fills_screen() {
             return Ok(());
         }
         self.pane_layout = self.pane_layout.toggled();
+        if !self.info_visible {
+            return Ok(());
+        }
         self.change_panes()
     }
 
@@ -118,19 +122,24 @@ mod tests {
         assert_eq!(app.info_for(&path).rows, first.rows);
     }
 
-    /// `B` switches the frame for the session: the pictures go, and the grid draws again.
+    /// `B` switches the frame for the session: with the info pane, the pictures go, and the grid
+    /// draws again. Without it, the screen stays the same, and so do the pictures.
     #[test]
     fn toggle_layout_deletes_the_pictures() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png"]);
-        assert_eq!(app.pane_layout, Layout::Maximal);
+        assert_eq!(app.pane_layout, Layout::Minimal);
         app.needs_render = false;
+        app.toggle_layout().unwrap();
+        assert_eq!(app.pane_layout, Layout::Maximal);
+        assert!(!app.needs_render);
+        assert!(app.graphics_out.take_bytes().is_empty());
+
+        app.info_visible = true;
         app.toggle_layout().unwrap();
         assert_eq!(app.pane_layout, Layout::Minimal);
         assert!(app.needs_render);
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
-        app.toggle_layout().unwrap();
-        assert_eq!(app.pane_layout, Layout::Maximal);
     }
 
     /// The fullscreen view keeps its decode after a pane change: the draw fits it to the new
@@ -149,6 +158,7 @@ mod tests {
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
 
         let mut app = gallery_app(3);
+        app.info_visible = true;
         app.graphics_storage_dirty = false;
         app.toggle_layout().unwrap();
         assert!(app.graphics_storage_dirty);
@@ -165,7 +175,7 @@ mod tests {
         app.toggle_info().unwrap();
         app.toggle_layout().unwrap();
         assert!(!app.info_visible);
-        assert_eq!(app.pane_layout, Layout::Maximal);
+        assert_eq!(app.pane_layout, Layout::Minimal);
         assert!(app.loaded.is_some());
         assert!(app.graphics_out.take_bytes().is_empty());
     }

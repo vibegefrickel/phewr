@@ -20,8 +20,8 @@ fn gallery_shows_position_without_hints() {
     assert_hides(&screen, "Search");
     assert_eq!(
         app.gallery.grid_rect,
-        Rect::new(1, 1, 98, 26),
-        "inside the main box"
+        Rect::new(0, 0, 100, 28),
+        "the whole area without a box"
     );
 }
 
@@ -219,15 +219,15 @@ fn fullscreen_shows_name_and_position() {
     );
     assert_eq!(
         app.image_rect,
-        Rect::new(1, 1, 98, 26),
-        "inside the main box, above the status row and the omnibox"
+        Rect::new(0, 0, 100, 28),
+        "the whole area above the status row and the omnibox, without a box"
     );
     assert_eq!(
         screen.matches(" b.jpg ").count(),
-        2,
-        "the name in the box title and in the status row"
+        1,
+        "the name in the status row, no box title"
     );
-    assert_shows(&screen, "\u{256d}\u{2500} b.jpg \u{2500}");
+    assert_hides(&screen, "\u{256d}");
 }
 
 #[test]
@@ -298,8 +298,8 @@ fn video_row_shows_time_and_note() {
     assert_hides(&screen, "Space: pause");
     assert_eq!(
         app.image_rect,
-        Rect::new(1, 1, 98, 26),
-        "inside the main box, above the status row and the omnibox"
+        Rect::new(0, 0, 100, 28),
+        "the whole area above the status row and the omnibox, without a box"
     );
 
     let screen = render(&mut app, Some("mpv not found"), 100, 30);

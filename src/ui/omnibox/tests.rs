@@ -111,7 +111,7 @@ fn empty_omnibox_keeps_its_row() {
     assert_eq!(omnibox_row(&note).trim(), "a note");
     assert_eq!(
         app.image_rect,
-        Rect::new(1, 1, 78, 8),
+        Rect::new(0, 0, 80, 10),
         "a note moves no picture"
     );
 }

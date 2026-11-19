@@ -257,13 +257,16 @@ decisions. Read the long form before you change the code that an item names.
   "Animated images"). A running slideshow holds it for at least the interval
   (`Player::play_at_least`).
 - **Panes:** the info pane is the left pane of the tuilibr frame and the grid or the picture the
-  main pane (2026-11-19). Maximal (the default, `[gallery] layout`) puts each pane in a box
-  (`frame::split_boxed`, `pane_box`), minimal draws one divider (`frame::split`, `divider`), and
-  `B` toggles the layout for the session. The info pane is dim (`frame::dim_pane`), the main pane
-  keeps the focus. Below `NARROW_BELOW` (60 columns) the info pane sits above the main pane. A pane
+  main pane (2026-11-19). Minimal (the default, `[gallery] layout`) draws one divider
+  (`frame::split`, `divider`), maximal puts each pane in a box (`frame::split_boxed`,
+  `pane_box`), and `B` toggles the layout for the session. Without the info pane (Tab, the right
+  click, `[info] show_on_start`), no box and no divider frame the grid or the picture, also in
+  maximal (`ui::boxed`). The title of the main box is the folder path with `~`, cut from its
+  start, and the status row leaves the path out while the box shows it. The info pane is dim
+  (`frame::dim_pane`), the main pane keeps the focus. Below `NARROW_BELOW` (60 columns) the info pane sits above the main pane. A pane
   change (`App::change_panes`) deletes the pictures, and only the grid marks itself dirty; the
   fullscreen view keeps its decode and fits it to the new `image_rect`. An unknown layout value
-  keeps maximal with a start note (`Config::layout_note`).
+  keeps minimal with a start note (`Config::layout_note`).
 - **Slideshow view:** a running or paused slideshow has no panes and no status row
   (`App::slideshow_fills_screen`, `ui::status_rows`), and Tab, `B` and the right click do nothing
   there. So `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal
@@ -345,7 +348,8 @@ decisions. Read the long form before you change the code that an item names.
   the `left` span, the name and the position, the zoom, the player time and the selection count
   as `middle` texts, the facts of the selected file (`file_meta.rs`)
   and the entry counts as the `right` groups, no time and no icons. The middle sits in the
-  center of the free room. A narrow row shortens the path from its start with `…/`. A file list
+  center of the free room. A narrow row shortens the path from its start with `…/`. While the
+  main box shows the path as its title, the row leaves it out. A file list
   (several file arguments, `App::file_list`) shows no path. The row shows no key hints. A thread
   reads them, so a cursor move never waits. Only a row too narrow for both hides the facts: the
   search line, the note and the error are in the omnibox. A slideshow has no status row: a box SLIDESHOW
