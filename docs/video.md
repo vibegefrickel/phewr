@@ -221,8 +221,9 @@ rules. This page holds the reasons and the numbers.
 - `App::opens_in_player` reads the header of the one file after a key press.
 - `App::is_video` drives the loading icon and the skips after a failed open (`App::fullscreen_on_video`).
 - ffmpeg gets no `-hwaccel` for an animation. See "Frame path".
-- `q` and Esc from a playing animation go to the grid. The still of an animation shows after a
-  failed open, and while and after an mpv window that the still opened with `p`.
+- `q` and Esc from a playing animation go to the grid. An animation plays like a video in every
+  view (2026-11-19): Enter in the grid and each fullscreen step open the player with the loop. The
+  still of an animation shows only when no player can play at all, with a note.
 - In a running slideshow, the terminal player holds an animation for at least the slideshow
   interval (`Player::play_at_least`). The mpv window has no such hold.
 - The rest of the facts are under "Probe".

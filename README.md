@@ -162,7 +162,6 @@ pixels, file size, format and date. For a video, it shows the length, the frame 
 | `Space` | Pause / resume the slideshow |
 | `[` `]` | Shorter / longer slideshow interval (0.5 s steps) |
 | `Tab` | Show or hide the info panel |
-| `Enter`, click in the middle | Play the animation or the motion of a Live Photo |
 | `p` | Play the video in an mpv window, with sound |
 | `q` | Back to the gallery. In a slideshow, `q` stops it too. |
 | `Esc` | Stop the slideshow, or go back to the gallery |
@@ -264,8 +263,9 @@ sends a lost picture again. `PHEWR_KITTY_SELF_CHECK=0` turns off the self check 
   page.
 - **Animated images:** GIF, WebP, APNG and AVIF sequences. Animated WebP needs FFmpeg 9 or later.
 - **Live Photos:** phewr pairs an iPhone still with its `.mov`. The grid marks the still with
-  the play triangle like a video cell and loops the motion. `Enter` plays it once, and a running
-  slideshow plays it once after the still.
+  the play triangle like a video cell and loops the motion. `Enter` and every step in the
+  fullscreen view play the motion in a loop like a video, and a running slideshow plays it once
+  after the still.
 - **Video** (feature `video`): MP4, MOV, MKV, AVI, WebM and M4V.
 
 phewr shows photos upright (EXIF orientation). It converts the colors of each image into the

@@ -296,7 +296,12 @@ Choice B, provisional until open question 2 has an answer. These facts support i
   from the probe cache, else a second thread runs one ffprobe. A failed probe gets no retry.
 - A rest of 200 ms in the fullscreen view starts the motion ahead of Enter (`b82f164`). The first
   frame comes about 0.1 ms after Enter instead of about 123 ms.
-- Not built: choice D, the motion in the slideshow, and a key of its own for the roll.
+- Not built: choice D and a key of its own for the roll. Built later: the motion in a running
+  slideshow (`3c82ce3`, 2026-11-19).
+- Since 2026-11-19 a Live Photo plays like a video in every view (the rule of the maintainer):
+  Enter in the grid and each fullscreen step open the terminal player with the motion in a loop,
+  `q` goes to the grid, a paused slideshow loops the motion. The design above (the still in the
+  fullscreen view, Enter plays one time, the way back to the still) is history.
 
 ## Open questions
 

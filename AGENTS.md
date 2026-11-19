@@ -231,12 +231,20 @@ decisions. Read the long form before you change the code that an item names.
 - **Video player default:** `[video] player` defaults to `terminal`, and `builtin` maps to
   `terminal`. Without the temp file medium or without ffmpeg, a video opens in the mpv window
   with a note.
-- **Videos in the fullscreen view:** a video never shows in `ViewMode::Fullscreen`. Each step
-  onto a video opens the terminal player. Only a failed open of the player leaves the fullscreen
-  view on the video with its error (`App::fullscreen_on_video`). `load_if_needed`, `zoom_in` and
-  `slideshow_tick` skip that case. `q`, `Esc` and the back click in the player go to the grid.
+- **Every playable file plays like a video** (the rule of the maintainer, 2026-11-19): a video,
+  an animated image and a Live Photo loop in the grid, play silently in the terminal player from
+  Enter in the grid and from each fullscreen step (`App::opens_in_player`, `App::enter_video`),
+  play at least one time in a running slideshow, open mpv with `p` from any view, and come back
+  to the previous view after mpv. None of them shows in `ViewMode::Fullscreen`, except the still
+  of a Live Photo in a running slideshow before its motion, and the still of an animation or a
+  Live Photo when no player can play at all (no ffmpeg and no mpv) with a note. A failed open of
+  a video leaves the fullscreen view on it with its error (`App::fullscreen_on_video`).
+  `load_if_needed`, `zoom_in` and `slideshow_tick` skip that case. `q`, `Esc` and the back click
+  in the player go to the grid.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
-  video (`docs/video.md`, "Animated images").
+  video in every view, with no still and no Enter in the fullscreen view (`docs/video.md`,
+  "Animated images"). A running slideshow holds it for at least the interval
+  (`Player::play_at_least`).
 - **Slideshow view:** a running or paused slideshow has no status row (`ui::status_rows`), so
   `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal
   scales it to the fill of the box with `r=` or `c=` alone (`filled_placement` in
@@ -248,12 +256,14 @@ decisions. Read the long form before you change the code that an item names.
   slideshow, the clip loops. The mpv window of a slideshow reads the `end-file` reason through
   `--input-ipc-server` (`mpv::exit_with_reason`). The end of the file moves the slideshow on.
   Each other exit (`quit`, `stop`, `h`, `l`) pauses the slideshow in the player view, and the
-  paused slideshow loops the clip. Without the terminal player, the grid shows while the window
+  paused slideshow loops the clip (also a clip that the slideshow played one time,
+  `App::replay_after_toggle`). A resume lets a one-time run play on, and a loop plays one time
+  from its start and moves on. Without the terminal player, the grid shows while the window
   plays, and a quit stops the slideshow.
 - **mpv steps and window:** `l` and `h` in mpv exit with 10 and 11, and phewr steps from the file
   that mpv played. A neighbor video opens in a new mpv window. The window returns to the view
-  that opened it: the grid stays the grid, and the still of an animation or of a Live Photo stays
-  its still. `p` in the player view keeps that view for every view that opened the player, also
+  that opened it: the grid stays the grid, and a running slideshow keeps the still of a Live
+  Photo behind the window. `p` in the player view keeps that view for every view that opened the player, also
   the grid (`request_video_window_from_player`): the last frame stays while the window plays, the
   decoder stops, and after the exit the player plays the file again. phewr polls each mpv window every 100 ms until it exits. The window gets
   `--fs --native-fs=no` and `--hwdec=auto-safe`. `--input-commands` needs mpv 0.38 or later.
@@ -273,11 +283,12 @@ decisions. Read the long form before you change the code that an item names.
   runs no ffprobe for a prestart. A cursor move, an overlay, the mpv window and a wait of 10 s
   (`PRESTART_LIFETIME`) drop the player.
 - **Live Photos:** the folder scan hides the motion `.mov` of each Live still
-  (`[gallery] live_photos`). The still loops its motion in the grid, and Enter plays it one time.
+  (`[gallery] live_photos`). The still loops its motion in the grid. Enter in the grid and each
+  fullscreen step open the terminal player with the motion in a loop, `q` goes to the grid
+  (`App::enter_video` sets the motion, `App::video_path` plays it, `current` stays on the still).
   A running slideshow shows the still, plays the motion one time and moves on without the
-  interval. A paused slideshow shows the still only. Without ffmpeg and mpv, the still shows for
-  the interval. A HEIC wins the motion over a JPEG twin. A left click on
-  the middle of the fullscreen picture plays like Enter. At the start of the motion, phewr reads
+  interval. A paused slideshow loops the motion. Without ffmpeg and mpv, the still shows with a
+  note. A HEIC wins the motion over a JPEG twin. At the start of the motion, phewr reads
   both content identifiers on the UI thread. If they differ, the motion plays with a note.
   A Live still carries the play triangle like a video cell, and no text. `[gallery] animate =
   false` gives no loop, and the triangle stays. The design is in

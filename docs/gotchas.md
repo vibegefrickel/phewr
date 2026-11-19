@@ -24,20 +24,31 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   `terminal`. Without the temp file medium (SSH, a probe that picked `direct` or `png`) or
   without ffmpeg, a video opens in the mpv window with a note. mpv's own Kitty output is gone:
   it played a 4K HLG clip at 2.4 fps in Ghostty and cannot scale a small frame.
-- **Videos in the fullscreen view:** a video never shows in `ViewMode::Fullscreen`. Each step
-  onto a video (`h` `j` `k` `l`, the arrows, Home, End, the slideshow step, the return from the
-  mpv window) opens the terminal player with `video_return = Fullscreen`, and a step from the
-  player onto a photo returns to the fullscreen view. Until 2026-11-18, a video in
+- **Every playable file plays like a video** (the rule of the maintainer, 2026-11-19: "mp4, gif,
+  live-foto, webm, av1-video, anything like that: in the grid: low-fps loops. in fullscreen:
+  plays (silently), in slideshow: plays at least once. p always starts mpv from any view and
+  cmd+q in mpv always lands back on previous view"). A video, an animated image and a Live Photo
+  never show in `ViewMode::Fullscreen`. Each step onto one (`h` `j` `k` `l`, the arrows, Home,
+  End, the slideshow step) and Enter in the grid open the terminal player with a loop
+  (`App::opens_in_player`, `App::enter_video`, `jump_to` calls `enter_video`), and a step from
+  the player onto a photo returns to the fullscreen view. `VideoReturn` and `return_from_video`
+  are gone (2026-11-19): `q` always goes to the grid, and the window rules use `keep_player` and
+  the slideshow. Two exceptions show a still in the fullscreen view: the still of a Live Photo in
+  a running slideshow before its motion, and the still of an animation or a Live Photo when no
+  player can play at all (no ffmpeg and no mpv, or a failed mpv start) with a note. With mpv
+  alone, a step opens the mpv window with the grid behind it, like a video. Until 2026-11-18, a video in
   `ViewMode::Fullscreen` was a placeholder with the hint "video: Enter plays, p opens the mpv
   window". The maintainer saw it after Cmd+Q in the mpv window of a slideshow and dropped it.
   Only a failed open of the player (a probe error, an ffmpeg start error) leaves the fullscreen
   view on the video with its error (`App::fullscreen_on_video`). `load_if_needed`, `zoom_in` and
   `slideshow_tick` skip that case, because the image decode cannot read a video. `q`, `Esc` and
   the back click in the player always go to the grid (`leave_player` calls `App::exit_video`),
-  because the player has no controls. After the mpv window, `App::video_return` selects the
-  view.
+  because the player has no controls.
 - **Animated images:** an animated GIF, WebP, APNG or AVIS plays in the terminal player like a
-  video, and its still carries a play triangle until its loop starts. The probe, the routes and
+  video in every view (2026-11-19: before, the fullscreen view showed its still, and Enter or a
+  middle click played it), and its grid still carries a play triangle until its loop starts. A
+  failed open puts the error into the status note, not into `app.error`, because the still decode
+  cleared `app.error` at once. The probe, the routes and
   the stamp are in `docs/video.md` ("Animated images" and "Probe").
 - **Slideshow view (2026-11-09):** a running or paused slideshow has no status row
   (`ui::status_rows` gives 0 outside the grid), so `image_rect` covers the whole screen. A badge
@@ -124,10 +135,13 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   loops its motion like a video cell (`App::loop_source`) and carries the play stamp like a video
   cell, also with `[gallery] animate = false`, which gives no loop (maintainer, 2026-11-18). Until
   2026-11-18, the still carried `◎ Live` in the gap above its cell, and `animate = false` gave no
-  stamp. The maintainer wants no text in the grid: the triangle is enough. Enter or a left click on the middle of the fullscreen picture plays the motion
-  one time (`App::enter_motion_at`, `App::video_path`), and `current` stays on the still. The
-  same click plays an animation, like Enter. The end of the motion, `q`,
-  `Esc` and a right click go back to the still. `p` opens the motion in the mpv window. At the
+  stamp. The maintainer wants no text in the grid: the triangle is enough. Enter in the grid and
+  each fullscreen step open the terminal player with the motion in a loop (2026-11-19, before:
+  Enter or a middle click on the still played the motion one time and came back to the still,
+  `enter_motion_at` and `finish_motion` are gone). `App::enter_video` sets the motion,
+  `App::video_path` plays it, and `current` stays on the still, so a step from the motion steps
+  from the still. `q`, `Esc` and a right click go to the grid. `p` opens the motion in the mpv
+  window and comes back to the player. At the
   start of the motion, phewr reads both content identifiers on the UI thread (a `moov` above
   1 MB counts as no Live Photo). If they differ, the motion plays with a note. A running slideshow
   shows the still, plays the motion one time and moves on without the interval
@@ -180,8 +194,9 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   Photo still, the same rest opens the player of its motion as a run that plays once, and Enter
   or the click on the middle takes it. The UI thread runs no ffprobe for a prestart: without an
   entry in the probe cache, a thread probes the file and writes its cube
-  (`Decoder::prepare_on_thread`), and the start waits for it. After a motion played, its still
-  starts no second player until a step to another file. A cursor move, a step to another file, a
+  (`Decoder::prepare_on_thread`), and the start waits for it. Only the grid rest prestarts
+  (2026-11-19), always as a loop, and a Live cell prestarts its motion; the fullscreen rest on a
+  Live still is gone with the still. A cursor move, a step to another file, a
   new frame box, an overlay, a slideshow, the mpv window and a wait of 10 s
   (`PRESTART_LIFETIME`) drop the player. The timings and the reasons are in `docs/video.md`
   ("Start ahead of Enter").
