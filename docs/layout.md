@@ -87,10 +87,12 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
 - `tuilibr::pictures`: the shared picture module (decoders, resize, shape, jobs, the Kitty layer,
   the test builders). It lives in tuilibr since 2026-11-19. `tuilibr/docs/pictures.md` holds its module tree. This page lists only the files of phewr.
 - `ui/`: the ratatui drawing of each view, the help popup and the info pane. `mod.rs` holds
-  `draw`, `panes` (`Panes { info, main, status }`, the one source of the areas for the draw, the
+  `draw`, `panes` (`Panes { info, main, status, omnibox }`, the one source of the areas for the draw, the
   mouse and the run loop: `frame::split_boxed` and `pane_box` in the maximal layout, `frame::split`
   and `divider` in the minimal one, `dim_pane` on the info pane), `content_area`, `status_area`, the
-  info pane, the fullscreen and the video view. `App::pane_layout` holds the layout of the session,
+  info pane, the fullscreen and the video view. `omnibox/` fills the `OmniboxView` of the frame (the
+  search line with the `TextField` of `GalleryState::search_query`, the error, the note). The run
+  loop draws in `draw_pass` (the draw, `render_images`, the second draw, the cursor reset). `App::pane_layout` holds the layout of the session,
   `Config::layout` and `Config::layout_note` the config value and its start note. `status/` fills the `BarView` of each view for `tuilibr::frame::draw_bar`
   (`draw_status_row`, `BarParts`, `gallery_bar`, `fullscreen_bar`, `video_bar`, `folder_span`,
   `shorten_path`, `display_path`, `is_empty_folder`).

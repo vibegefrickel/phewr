@@ -52,6 +52,12 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   failed open puts the error into the status note, not into `app.error`, because the still decode
   cleared `app.error` at once. The probe, the routes and
   the stamp are in `docs/video.md` ("Animated images" and "Probe").
+- **Omnibox (2026-11-19):** the row under the bar shows the search line, else the error, else the
+  note, else nothing, and stays one row high when it is empty, because a row that comes and goes
+  moves the panes and writes every picture again. A Kitty placement moves the terminal cursor
+  (CUP before `C=1`), so `run_loop::draw_pass` puts the cursor back on the search field after the
+  Kitty writes, and a test with one shared byte stream covers it. The help box takes the rows
+  above the omnibox, so its right column keeps its padding on a screen of 30 rows.
 - **Panes (2026-11-19):** the info pane is the left pane of the tuilibr frame, the grid or the
   picture the main pane, and the status row spans both. The maintainer decided that every app with
   a split view has the minimal and the maximal layout, default maximal (`[gallery] layout`, `B`).

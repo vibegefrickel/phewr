@@ -323,19 +323,26 @@ decisions. Read the long form before you change the code that an item names.
   become the selection of the yazi that started phewr, through the plugin `phewr-select`. Each
   `ya` call gets at most 1 s (`YA_TIMEOUT`). Tests pass a closure and never start `ya`. `--cwd-file` writes
   `App::gallery_dir` without a newline.
-- **Status notes:** the note lives in `LoopState`, not in `App`. The next key press or mouse
-  button press clears it. A scan read error lives in `App::scan_error`.
+- **Status notes and the omnibox:** the note lives in `LoopState`, not in `App`. The next key press
+  or mouse button press clears it. A scan read error lives in `App::scan_error`. The omnibox of the
+  tuilibr frame is one row under the bar (`ui/omnibox/`, `Panes::omnibox`, 2026-11-19) and shows one
+  thing at a time: the search line while it takes keys (`Typed`, the query is a `TextField` with
+  the readline keys of `edit_for_key`), else an error in red (`Tone::Alert`), else the note in gray
+  (`Tone::Note`), else an empty row (a hidden row would move the panes and write every picture
+  again). A slideshow has no omnibox, and a click on it does nothing. A Kitty placement moves the
+  terminal cursor: `run_loop::draw_pass` puts it back on the search field after the Kitty writes,
+  and a Kitty write after that point breaks the search cursor.
 - **Status row:** the row spans both panes and is the bar of `tuilibr::frame::draw_bar` (phase 4a of the tuilibr
   plan, 2026-11-19). `ui/status/mod.rs` fills a `BarView` per view: the mode block (NORMAL,
   FULLSCREEN, SEARCH, HELP, one letter below `NARROW_BELOW`) as `ModeView`, the folder path with
   the home folder as `~` (`App::home_dir`, set in `main`, never read from `HOME` in a test) as
-  the `left` span, the name and the position, the zoom, the player time, the search line, the
-  selection count and the note as `middle` texts, the facts of the selected file (`file_meta.rs`)
+  the `left` span, the name and the position, the zoom, the player time and the selection count
+  as `middle` texts, the facts of the selected file (`file_meta.rs`)
   and the entry counts as the `right` groups, no time and no icons. The middle sits in the
   center of the free room. A narrow row shortens the path from its start with `…/`. A file list
   (several file arguments, `App::file_list`) shows no path. The row shows no key hints. A thread
-  reads them, so a cursor move never waits. A status note, a question, an error, the search line
-  and a row too narrow for both hide the facts. A slideshow has no status row: a box SLIDESHOW
+  reads them, so a cursor move never waits. Only a row too narrow for both hides the facts: the
+  search line, the note and the error are in the omnibox. A slideshow has no status row: a box SLIDESHOW
   in the badge style sits at the bottom left of the picture.
 
 ### Run loop and threads
