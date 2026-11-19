@@ -197,15 +197,15 @@ Each decoder reports the color of its pixels.
 
 ### Player cubes
 
-- The terminal player converts with a `lut3d` cube (`player/tone_map/mod.rs`).
+- The terminal player converts with a `lut3d` cube (`tuilibr::pictures::motion::tone_map`).
 - An SDR video or animation gets a 17-point cube from its `color_primaries` into the target.
   `Primaries::of_name` knows these primaries: BT.709, SMPTE 170M, BT.470 BG, Display P3, DCI-P3
   (with a Bradford adaptation) and BT.2020.
 - An untagged stream and GIF count as BT.709 with the sRGB curve.
 - ffprobe reports no profile for WebP and APNG. The probe reads their ICC profile or cICP chunk
-  (`animation::embedded_primaries`).
+  (`motion::animation::embedded_primaries`).
 - A profile with the colorants of sRGB, Display P3 or BT.2020 maps to its primaries
-  (`player::tone_map::icc_known_space`). Any other profile counts as BT.709.
+  (`motion::tone_map::icc_known_space`). Any other profile counts as BT.709.
 - A source in the target space gets no cube.
 - The SDR cube runs in 8 bit (`rgb24`, `rgba`). Its values hold half a level, because `lut3d`
   truncates to 8 bit. A real ffmpeg test fails if `lut3d` starts to round.

@@ -1,7 +1,7 @@
 # Benchmarks
 
 The benches live in `src/bench/`, one file per group. A bench path is `bench::<file>::<name>`.
-The benches use the picture code through `crate::pictures`.
+The benches use the picture code through `tuilibr::pictures`, and the loop benches through `tuilibr::pictures::motion`.
 `just bench [DIR] [FILTER]` runs them on `~/Pictures/phewr-test/01-mixed-big` by default. The
 filter `bench::` finds all 26 benches. `just bench-live` runs only the group `bench::live`.
 

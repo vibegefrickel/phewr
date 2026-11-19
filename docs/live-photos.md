@@ -126,10 +126,10 @@ read after a reboot.
 | kamadak-exif and the Apple IFD | yes | no | 0.03 ms to 0.05 ms | 0.35 ms | in phewr today |
 | box reader for `moov/meta` | no | yes | 0.02 ms to 0.04 ms | 0.35 ms | none |
 | ffprobe format tag, own process | no | yes | 31 ms | 31 ms | ffprobe on PATH |
-| ffprobe format tag, in the probe of `player/probe/` | no | yes | 0 ms extra | 0 ms extra | ffprobe on PATH |
+| ffprobe format tag, in the probe of `tuilibr::pictures::motion::probe` | no | yes | 0 ms extra | 0 ms extra | ffprobe on PATH |
 | exiftool | yes | yes | 22 ms | 22 ms | Perl, not an option |
 
-- The probe of `player/probe/` runs one ffprobe of about 31 ms per video. 20 runs with and
+- The probe of `tuilibr::pictures::motion::probe` runs one ffprobe of about 31 ms per video. 20 runs with and
   without the extra entry `format_tags=com.apple.quicktime.content.identifier` took 0.62 s
   each. The entry costs no measurable time.
 - The meta thread (`app/meta.rs`) reads the EXIF of the still under the cursor for the date

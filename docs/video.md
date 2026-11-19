@@ -4,11 +4,17 @@ This page holds the design facts of the terminal player, the probe, the color cu
 ahead of Enter, the animated images, the grid loop frames and the mpv window. AGENTS.md holds the
 rules. This page holds the reasons and the numbers.
 
+Since 2026-11-19 (tuilibr phase 4d), `tuilibr::pictures::motion` holds the probe and the ffmpeg
+runs. It holds the color cubes and the animation check. It holds the first frame and the loop
+frames. phewr keeps the terminal player (`player/`), the prestart, the mpv window and the Live
+pairing. phewr also keeps the grid jobs and the budget. The module map is in `tuilibr/docs/pictures.md`, "The motion module". The facts below name
+the module of each part.
+
 ## Terminal player
 
 ### Frame path
 
-- ffmpeg runs as a subprocess (`player/decoder/`, behind the `Decoder` trait).
+- ffmpeg runs as a subprocess (`tuilibr::pictures::motion::decoder`, behind the `Decoder` trait).
 - ffmpeg decodes on the media engine of the Mac (`-hwaccel videotoolbox`).
 - ffmpeg scales and turns the frame on the GPU with `scale_vt` and `transpose_vt`.
 - For 180 degrees, the graph adds `hflip,vflip`. The option `-noautorotate` is on.
@@ -29,8 +35,7 @@ rules. This page holds the reasons and the numbers.
 - ffmpeg writes raw frames into a pipe. A thread reads the pipe one frame at a time, so the run
   loop never waits for ffmpeg.
 - ffmpeg writes `-pix_fmt rgb24` for a video and `rgba` for an animation.
-- `pixel_format` in `player/decoder/command/mod.rs` is the one source for the frame layout
-  (`player::Frame`).
+- `pixel_format` in `motion::decoder::command` is the one source for the frame layout.
 - If a GPU run gives no frame, the decoder runs again in software (`Pipeline::Software`).
 - An animated image decodes in software only, because the AV1 decoder of an AVIS file stops with
   an error when `-hwaccel videotoolbox` is on.
@@ -53,7 +58,7 @@ rules. This page holds the reasons and the numbers.
   cap to the variable output rate only.
 - Reason: ffmpeg writes raw frames at `r_frame_rate`. The player once paced them at
   `avg_frame_rate`. A screen recording at 25 and 7.7 played 3.2 times too slow.
-- The code is `pacing_fps` and `variable_fps` in `player/probe/parse/mod.rs`.
+- The code is `pacing_fps` and `variable_fps` in `motion::probe::parse`.
 - `VideoInfo.rate` is `Rate::Constant`, `Rate::Variable` or `Rate::Animation`.
 - An animation decodes at a constant rate (`-fps_mode cfr -r`) at the rate of the probe. A frame
   with a long delay goes out more than once, so the pacing stays exact.
@@ -67,7 +72,7 @@ rules. This page holds the reasons and the numbers.
 - The write uses `c=` and `r=` for the cell box and no `X=` and `Y=`.
 - The first frame of a new video removes all other placements in the same synchronized update
   (`App::clear_before_video`). The photo of the view before does not show around the frame.
-- The frame box is the window in pixels, capped at 1920x1080 (`MAX_FRAME` in `player/layout.rs`).
+- The frame box is the window in pixels, capped at 1920x1080 (`MAX_FRAME` in `motion::frame_box`).
 - A resize moves the cell box. The frame size stays until the next ffmpeg start.
 
 ### Payload cap
@@ -96,7 +101,8 @@ rules. This page holds the reasons and the numbers.
 
 - The rule is in AGENTS.md. A 6 s clip with a slow terminal (3 intervals per write) played for
   18 s with the old moving clock. It plays for at most 6.6 s now. A test holds this.
-- `FRAME_QUEUE`, `MAX_LAG` (300 ms) and `RESTART_LEAD` (0.3 s) are in `player/`.
+- `MAX_LAG` (300 ms) and `RESTART_LEAD` (0.3 s) are in `player/mod.rs`. `FRAME_QUEUE` is in
+  `tuilibr::pictures::motion::decoder`.
 
 ### Decoder details
 
@@ -107,6 +113,8 @@ rules. This page holds the reasons and the numbers.
 - `cube_format`: the 8-bit SDR cube is the cheapest step. It adds about 1 ms per 1920x1080 frame.
 
 ## Probe
+
+The code of this section is in `tuilibr::pictures::motion::probe`. See `tuilibr/docs/pictures.md`.
 
 - The probe is one `ffprobe -of json` process. `Player::open` after a cold thumbnail starts no
   ffprobe, because the probe cache has the `VideoInfo`.
@@ -119,12 +127,12 @@ rules. This page holds the reasons and the numbers.
 - An AVIS file holds two video streams. The probe maps the stream with the most frames.
 - The probe reads at most 34 packets for an `.avif` file, because `-read_intervals` counts the
   packets of all video streams.
-- The code is in `player/probe/mod.rs` and `player/probe/parse/mod.rs`.
+- The code is in `motion::probe` (`mod.rs` and `parse/`).
 
 ### The software mark
 
 - When the GPU run of a file gives no frame and the software run gives one, the decoder calls
-  `Decoder::remember_software`. `probe::remember_software` clears `hardware` in the probe cache
+  `Decoder::remember_software`. `motion::probe::remember_software` clears `hardware` in the probe cache
   entry of the file, so `Pipeline::first` starts in software at the next probe.
 - The callers are `with_fallback` (the first frame and the grid loops) and `Player::poll_at`.
   `with_fallback` takes the decoder and the path. One loop job keeps the result in
@@ -140,7 +148,10 @@ rules. This page holds the reasons and the numbers.
 
 ## Color cubes
 
-- `CUBE_VERSION` is 3. Version 3 added the target space to the cube names.
+The code of this section is in `tuilibr::pictures::motion::tone_map`. `CUBE_VERSION` lives there.
+See `tuilibr/docs/pictures.md`.
+
+- `CUBE_VERSION` is 4. Version 3 added the target space to the cube names.
 - The SDR cube has 17 points (`SDR_LUT_SIZE`). The HDR cube has 33 points (`HDR_LUT_SIZE`).
 - The SDR cube runs in 8 bit. At 1080p, it costs 1.4 ms to 2 ms per frame. See
   [Images and colors](images-and-colors.md#color-conversion) for its values and its sources.
@@ -152,7 +163,7 @@ rules. This page holds the reasons and the numbers.
 - A PQ cube name holds its peak bucket (`tonemap-pq<nits>-<target>-v4.cube`). The frame probe
   runs only for a PQ stream without stream metadata, and the probe cache keeps the result. Before
   `af61a4b`, the stream probe did not ask for `max_luminance` and `max_content`, so every PQ
-  stream paid the frame probe. The fixtures in `tests/fixtures/video/` test both paths.
+  stream paid the frame probe. The `video/` fixtures of tuilibr test both paths.
 - Probe cost on a quiet machine: the stream probe takes 15.9 ms, the frame probe 17.7 ms (1080p
   HEVC) to 20.3 ms (1080p AV1). At a load of 2.2, the stream probe took about 30 ms, and the 4K
   frame probe 47.9 ms (HEVC with SEI), 52.8 ms (HEVC without metadata) and 40.3 ms (AV1). A PQ
@@ -226,15 +237,17 @@ rules. This page holds the reasons and the numbers.
   still of an animation shows only when no player can play at all, with a note.
 - In a running slideshow, the terminal player holds an animation for at least the slideshow
   interval (`Player::play_at_least`). The mpv window has no such hold.
-- The rest of the facts are under "Probe".
+- The rest of the facts are under "Probe". The header check of the animation formats is
+  `tuilibr::pictures::motion::animation`.
 - ffprobe reports no profile for WebP and APNG. The probe reads their ICC profile or cICP chunk
-  (`animation::embedded_primaries`). See
+  (`motion::animation::embedded_primaries`). See
   [Images and colors](images-and-colors.md#color-conversion).
 
 ## Grid loop frames
 
-- The code is `grid_loop.rs`. It makes the frames of the grid loops with ffmpeg. The state and the
-  jobs are in [App state](app-state.md#grid-loops).
+- The code is `tuilibr::pictures::motion::loop_frames` (`LoopFrames`, `decode_loop`, `loop_of`).
+  It makes the frames of the grid loops with ffmpeg. phewr calls it through `session_loop` in
+  `video/`. The state and the jobs are in [App state](app-state.md#grid-loops).
 - A video loop shows 12 frames spread over the whole clip. Each frame shows for 333 ms
   (`VIDEO_FRAME_INTERVAL`). The loop takes 4 s.
 - One ffmpeg run decodes only the keyframes (`-skip_frame nokey`). It takes 0.11 s to 0.26 s for
@@ -249,7 +262,7 @@ rules. This page holds the reasons and the numbers.
   (`MIN_ANIMATION_FPS`).
 - Above the caps, ffmpeg drops frames evenly.
 - The frames get the rotation, the scale and the colors of the first-frame thumbnail
-  (`video::decode_first_frame`). They have half the width and the height of the grid picture.
+  (`motion::first_frame`, called through `session_first_frame` in `video/`). They have half the width and the height of the grid picture.
 - The terminal scales the frames to the cells of the still. So 12 frames take 3 times the bytes of
   the still, and a screen of loops fits the storage budget of the terminal.
 

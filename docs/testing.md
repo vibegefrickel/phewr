@@ -4,8 +4,10 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module.
 - Tests that need a real file are `#[ignore = "..."]` and read `PHEWR_TEST_RAW`,
-  `PHEWR_TEST_ORF`, `PHEWR_TEST_HDR_VIDEO` or `PHEWR_TEST_SDR_VIDEO`. The real-file tests of the
-  decoders (JPEG, HEIC, AVIF, JXL, PSD) are in tuilibr and read `TUILIBR_TEST_*`.
+  `PHEWR_TEST_ORF` or `PHEWR_TEST_LIVE_DIR`. The real-file tests of the decoders (JPEG, HEIC, AVIF,
+  JXL, PSD) and of the moved video code are in tuilibr and read `TUILIBR_TEST_*`. The video tests
+  read `TUILIBR_TEST_SDR_VIDEO` and `TUILIBR_TEST_HDR_VIDEO`. The Live tests and the Live benches stay in
+  phewr.
   `real_flipped_copy_shows_upright` copies `PHEWR_TEST_RAW`
   (a RAF or ARW) into a temp dir and writes the orientations 2, 3 and 4 with exiftool.
   `PHEWR_TEST_LIVE_DIR` is the folder of real Live Photo files
@@ -20,38 +22,28 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   and a movie with the identifier in `moov/meta`.
   `real_orf_preview_turns_like_develop` copies `PHEWR_TEST_ORF`, writes the IFD0 orientation 1
   and 6 with exiftool, and compares the preview with the sips develop.
-  `PHEWR_TEST_SDR_VIDEO` also feeds the first
-  frame test `video::tests::real_clip_first_frame`. The bench `previews::raw_files` reads every
+  `TUILIBR_TEST_SDR_VIDEO` also feeds the first
+  frame test of `tuilibr::pictures::motion::first_frame`. The bench `previews::raw_files` reads every
   RAW file of `PHEWR_TEST_RAW_DIR`.
 - The picture module is `tuilibr::pictures`. Its tests, its fixtures and their `make.sh` files are
   in tuilibr (`tuilibr/docs/pictures.md`). The module tests read `TUILIBR_TEST_*`. The tests of
   phewr read `PHEWR_TEST_*`.
 - The dev dependency on tuilibr has the feature `test-support`. `test_support` of phewr re-exports
-  `tuilibr::pictures::test_support`. `test_support::fixture(name)` finds the fixtures of phewr
-  (`tests/fixtures/anim.*` and `video/`). `test_support::module_fixture(name)` finds the fixtures
-  of tuilibr (`color/`, `png/`, `jxl/`, `hdr/` and `still.*`).
+  `tuilibr::pictures::test_support`. phewr has no fixture folder, and `test_support::fixture(name)` is gone.
+  `test_support::module_fixture(name)` finds every fixture in tuilibr (`anim.*`, `video/`,
+  `color/`, `png/`, `jxl/`, `hdr/` and `still.*`).
 - `just test-lean` runs every test with the lean set (`--no-default-features --features
   video,sips`), without `heic`, `jxl` and `turbo`. `just check` runs it.
 - `cargo nextest run --profile ci` runs every test without fail-fast and writes the junit report
-  to `target/nextest/ci/junit.xml` (`.config/nextest.toml`). `just audit` checks the `make.sh`
-  scripts of the fixtures with shellcheck and shfmt.
+  to `target/nextest/ci/junit.xml` (`.config/nextest.toml`). `just audit` checks the shell scripts
+  that exist with shellcheck and shfmt. phewr has no shell script now.
 - The folders `color/`, `png/`, `jxl/` and `hdr/` and the 4 stills `still.avif`, `still.gif`,
   `still.png` and `still.webp` are in tuilibr. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures
   with the sRGB target.
-- `tests/fixtures/` holds 8 small animated files (GIF, WebP, APNG, AVIF), and
-  `test_support::fixture(name)` finds them. The root `make.sh` rebuilds them from FFmpeg
-  `testsrc` with magick, avifenc, ffmpeg and img2webp, and its optional argument selects the
-  output folder. The AVIF options `-q 30 -s 6` reproduce the committed pixels. The real ffmpeg
-  test skips WebP without FFmpeg 9 (`webp_anim` decoder).
-  `tests/fixtures/video/` holds two HDR10 clips (64x64, 3 frames, 10-bit HEVC, PQ) and `make.sh`:
-  `hdr10-container.mp4` carries `mdcv` (1000 nits) and `clli` (MaxCLL 4000 nits) in its sample
-  entry, and `hdr10-sei.mp4` carries MaxCLL 2000 nits only in the SEI.
-  `player::probe::tests::real_hdr10_peak_sources` probes both with the real ffprobe, also with
-  the stream probe alone. `pq12-hevc.mp4` (12-bit HEVC, PQ) and `hlg12-prores.mov` (12-bit
-  ProRes 4444, HLG) show the two routes of a stream above 10 bits:
-  `player::decoder::tests::real_12_bit_clips_decode` decodes the HEVC clip in software and the
-  ProRes clip on the GPU. `real_layouts_download_on_gpu` encodes 4:2:2, 4:4:4 and alpha clips
-  in a temp folder and runs each download format through the GPU chain, also turned.
+- The fixtures `anim.*` (4 small animated files: GIF, WebP, APNG, AVIF) and `video/` (the HDR10, 12-bit and layout
+  clips) and their `make.sh` files are in the fixture folder of tuilibr. Their tests
+  (`real_hdr10_peak_sources`, `real_12_bit_clips_decode`, `real_layouts_download_on_gpu`) run in
+  tuilibr. See `tuilibr/docs/pictures.md`, "The motion module".
   `cargo nextest run --no-default-features` passes too.
   `just test-real` skips the benches (`--skip bench::`), because they set the global color target
   of the process.

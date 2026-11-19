@@ -87,9 +87,10 @@ the queues and `Priority`, and `tuilibr::pictures::jobs::pool` holds the pool of
   prune.
 - The module has no default folder. `app/disk_cache/mod.rs` holds `default_disk_cache_dir`, the
   folder of phewr (`~/Library/Caches/phewr`). The prune refuses a folder that holds a subfolder.
-- The loop files are in `app/disk_cache/loop_file.rs`. The file is `<hash>.loop`. It holds QOI
-  frames with their times.
-- The key version of a loop file is `phewr-loop-v1` (`LOOP_CACHE_VERSION`). Change the version
+- The loop file code is in `tuilibr::pictures::motion::loop_file`. phewr has no loop file code in
+  `app/disk_cache/`. The file is `<hash>.loop`. It holds QOI frames with their times.
+- The magic of a loop file is `PHEWRLP1`. The key version is `<app>-loop-v1`, and `app_name()`
+  gives `phewr-loop-v1`. The loop cache stays warm after the switch. Change the version in tuilibr
   when the loop output changes.
 - The prune removes the loop files before the stills. It removes each kind oldest first.
 
@@ -108,7 +109,10 @@ the queues and `Priority`, and `tuilibr::pictures::jobs::pool` holds the pool of
 
 ## Grid loops
 
-The code is in `app/grid_loops/`. The frame making is in [Video](video.md#grid-loop-frames).
+The code is in `app/grid_loops/`. It holds the jobs and the budget (`GridLoops`). It has no
+`cell.rs`. The frame making, the loop clock (`motion::clock::LoopClock`) and the id allocator
+(`motion::loop_ids::LoopIds`) are in `tuilibr::pictures::motion`. See [Video](video.md#grid-loop-frames).
+`LOOP_ID_BASE` stays in `app/grid_loops/`.
 
 ### Loop contents
 
@@ -141,10 +145,11 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
   - Each frame goes out once with `a=t` and an id from 2^31.
   - A tick sends `a=d,d=i` for the old frame and `a=p` for the new one (`play_grid_loops`). This
     costs about 75 bytes per cell, in one synchronized update.
-  - All loops share one clock of 12 ticks per second (`TICKS_PER_SECOND`).
+  - All loops share one clock of 12 ticks per second (`TICKS_PER_SECOND` in tuilibr).
   - Each loop starts at a multiple of 4 ticks (`START_ALIGN`). So the frames of all cells change
     in the same pass of the run loop.
-  - The files are `cell.rs` (`CellLoop`, `tick_ends`) and `mod.rs`.
+  - `CellLoop` and `TICKS_PER_SECOND` are in `tuilibr::pictures::motion::clock`. `mod.rs` of
+    `app/grid_loops/` holds the rest.
 
 ### Jobs
 

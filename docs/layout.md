@@ -36,7 +36,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   re-exports the writes of the grid. `grid/` holds the grid pass (`write_grid_to`, `GridPass`,
   `grid_frame`) and the thumbnail writes (`emit_new_thumbnails_to`, `render_gallery_images`,
   `place_gallery_images_to`, `grid_placement`, `visible_image_ids`). `loops/` holds the grid
-  loops (`play_grid_loops`, `send_grid_loops_to`, `place_loop_frame`, `transmit_animation_to`).
+  order and the budget of the loops (`play_grid_loops`, `send_grid_loops_to`, `place_loop_frame`).
+  The write of the frames of one loop is in `tuilibr::pictures::kitty::loops`.
   `grid_icons/` holds the SVG icons of the cells as Kitty images (`GridIcons`, `IconCell`,
   `sync_grid_icons`).
 - `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
@@ -45,24 +46,17 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   rest of the gallery cursor or of the fullscreen view on a Live still (`VideoPrestart` in `App::video_prestart`, `tick_prestart`, `take_prestart`,
   `prestart_timeout`). `window.rs` holds `poll_mpv_window`. `tests.rs` holds the start tests, and
   `tests/live.rs` the tests of the Live Photo motion.
-- `player/` (feature `video`): the terminal player. `mod.rs` holds `Player` with its `Run` and
+- `player/` (feature `video`): only the terminal player. `mod.rs` holds `Player` with its `Run` and
   `Repeat`, the pacing, `catch_up` (the restart ahead of the clock) and `end_of_run` (the repeat,
-  the software fallback, the failure). `tests.rs` holds the player tests. `decoder/` holds the
-  ffmpeg run: `mod.rs` the `Decoder` trait and the fallback order (`Pipeline::first`,
-  `Pipeline::next`, `with_fallback`: an animation decodes in software only, also its first frame
-  and its loops), `command/` the command line (one `build` with `Extras` and `Output`), and
-  `process.rs` `SystemDecoder`, `FrameStream`, the frame pool and the reap. `probe/` holds
-  `VideoInfo` (with `Samples` and `hardware`), the ffprobe run, the probe cache (`probe_peek` reads it without ffprobe) and `output_within`. `probe/parse/` holds the JSON
-  and the pacing rates. `layout.rs` holds the frame box and the cell box. `tone_map/` holds the
-  color cubes (the HDR tone mapping, the SDR primaries conversion and the cube files), and
-  `tone_map/math.rs` holds the matrices, the curves and the tone map. `animation.rs` holds the
-  header check for animated GIF, WebP, APNG and AVIS.
-- `grid_loop.rs` (feature `video`): the frames of the grid loops: the ffmpeg runs and the frame
-  choice (12 keyframes, the constant-rate run for a short clip, the 12 seeks for a long one, the
-  caps of an animation).
-- `app/grid_loops/`: the loops of the grid. `mod.rs` holds `GridLoops`, `LoopFrames` and the loop
-  state of `App`. `cell.rs` holds `CellLoop` and the loop clock (`TICKS_PER_SECOND`,
-  `START_ALIGN`, `tick_ends`). `jobs.rs` holds the jobs, their cancel flags and `ResultGuard`.
+  the software fallback, the failure). `tests.rs` holds the player tests.
+- `tuilibr::pictures::motion` holds the probe, the ffmpeg runs and the HDR cubes. It holds the
+  animation check and the frame box. It holds the first frame and the loop frames. It holds the
+  loop file, the loop clock and the loop ids. `tuilibr/docs/pictures.md`, "The motion module",
+  holds the tree.
+  phewr has no file for the loop frames now.
+- `app/grid_loops/`: the loops of the grid. `mod.rs` holds `GridLoops`, `LOOP_ID_BASE` and the loop
+  state of `App`. The loop clock (`CellLoop`, `LoopClock`, `TICKS_PER_SECOND`) is in
+  `tuilibr::pictures::motion::clock`. `jobs.rs` holds the jobs, their cancel flags and `ResultGuard`.
   `loop_source` gives the file of a loop: the motion of a Live Photo still, else the file itself.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
@@ -82,8 +76,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   cache read slots, the misses and the generation, and `ThumbImage`. `mod.rs` also holds the job
   bounds `MAX_THUMB_JOBS`, `MAX_PREVIEW_JOBS` and `MAX_CACHE_READS`, and `THUMB_CACHE_LIMITS`.
   `decode.rs` holds the work of one job (`warm_disk_cache`, the embedded preview, the animation
-  flag)), `disk_cache/` (`default_disk_cache_dir` in `mod.rs`, the cache folder of phewr, and the
-  loop files in `loop_file.rs`). `grid_loops/` is listed above.
+  flag)), `disk_cache/` (`default_disk_cache_dir` in `mod.rs`, the cache folder of phewr). The loop file
+  code is in `tuilibr::pictures::motion::loop_file`. `grid_loops/` is listed above.
 - `tuilibr::pictures`: the shared picture module (decoders, resize, shape, jobs, the Kitty layer,
   the test builders). It lives in tuilibr since 2026-11-19. `tuilibr/docs/pictures.md` holds its module tree. This page lists only the files of phewr.
 - `ui/`: the ratatui drawing of each view, the help popup and the info pane. `mod.rs` holds
@@ -143,9 +137,11 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   holds the state file: the zoom table, the writer thread (`StateWriter`, `StateChange`) and the
   save through a temp file and a rename. `save_visible_rows` and `clear_folder_zoom` are
   test-only.
-- `video/` (feature `video`, `mod.rs` and `tests.rs`): `Tools`, the session lookup of ffmpeg and ffprobe, `cube_dirs` (the
-  places of the cube files) and `session_decoder` (ffmpeg with a decoder that has ffprobe), the
-  first-frame thumbnails and the video extensions.
+- `video/` (feature `video`, `mod.rs` with its tests): `Tools` with `Option` fields (phewr keeps
+  its own type, because `file_meta` runs ffprobe without ffmpeg, and `motion::Tools` has `PathBuf`
+  fields), the session lookup of ffmpeg and ffprobe (`find_session_tools`, `session_tools`),
+  `session_first_frame` and `session_loop`. The first frame, the loop frames and the video
+  extensions are in `tuilibr::pictures::motion`.
 - `mpv.rs` (feature `video`): the window arguments for mpv, the exit notes, the step exit codes
   and the `Runner` trait for the process start.
 - `test_support/` (test only): the helpers that the tests of more than one module share.

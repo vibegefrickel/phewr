@@ -26,11 +26,12 @@ dependency `../tuilibr`, `deny.toml` allows the wildcard path), rayon, lru, serd
 (without default features, for the grid icons). tuilibr holds the screen frame and the picture
 module `tuilibr::pictures`. The image decoders and jxl-oxide, jxl-render (both with exact pins),
 libheif, turbojpeg, fast_image_resize and moxcms (for the stills) come in through tuilibr. phewr
-keeps `libheif-rs` and `turbojpeg` for its tests and benches, `moxcms` for the player cubes and
-`fast_image_resize` as a dev dependency. The features `turbo` (libjpeg-turbo) and `heic`
+keeps `libheif-rs` and `turbojpeg` for its tests and benches and `fast_image_resize` as a dev
+dependency. phewr keeps no `moxcms`: the player cubes live in `tuilibr::pictures::motion`. The features `turbo` (libjpeg-turbo) and `heic`
 (libheif) link native Homebrew libraries, and `jxl` turns on the JPEG XL decoder. All three
 forward to tuilibr. The feature `video` links no library: it starts `ffmpeg`, `ffprobe` and `mpv`
-from PATH when they exist, and reads ffprobe's JSON with serde_json. The feature `sips` runs the
+from PATH when they exist. tuilibr reads ffprobe's JSON, and phewr uses `serde_json` for the mpv
+IPC events. The feature `sips` runs the
 macOS tool `/usr/bin/sips` and forwards to tuilibr. All five features are on by default. The
 build needs the clone of tuilibr at `../tuilibr`. A herdr worktree needs the symlink
 `~/.herdr/worktrees/phewr/tuilibr`. A path dependency builds the working tree of tuilibr. If the
@@ -75,8 +76,8 @@ The repository pins the toolchain, the formatter and the lints:
   `missing_debug_implementations` find nothing, and there is no doctest step.
 - `just audit` (part of `check` since 2026-11-19, one text in all five repositories): `taplo fmt
   --check` with `.taplo.toml`, `just --fmt --check --unstable`, `typos` with `_typos.toml`, `cargo
-  shear`, `shellcheck` and `shfmt` on every tracked `*.sh`, and `cargo insta test` only in a
-  repository that uses insta (phewr does not). The tools come from the Brewfile of the dotfiles
+  shear`, `shellcheck` and `shfmt` on the tracked `*.sh` files that exist (phewr has none now),
+  and `cargo insta test` only in a repository that uses insta (phewr does not). The tools come from the Brewfile of the dotfiles
   (`scripts/Brewfile`). A missing tool fails with "command not found".
 - `clippy.toml`: the thresholds.
 - `deny.toml`: licenses, advisories, duplicate versions, git sources.
@@ -142,10 +143,9 @@ its `make.sh`, and the real-file tests by name.
   `just test-real` runs these tests. A test without its variable skips with a note.
   `just test-real` skips the benches (`--skip bench::`), because they set the global color target
   of the process.
-- The fixtures of phewr live in `tests/fixtures/` (`anim.*` and `video/`). The root `make.sh` and
-  the `make.sh` of `video/` rebuild them. `test_support::fixture(name)` finds a file. The folders
-  `color/`, `png/`, `jxl/` and `hdr/` and the stills `still.*` are in tuilibr.
-  `test_support::module_fixture(name)` finds them. The module tests read `TUILIBR_TEST_*`.
+- phewr has no fixture folder. Every fixture lives in tuilibr: `anim.*`, `video/`,
+  `color/`, `png/`, `jxl/`, `hdr/` and the stills `still.*`. `test_support::module_fixture(name)`
+  finds them. The module tests run in tuilibr and read `TUILIBR_TEST_*`.
 - A real ffmpeg playback test uses a virtual clock that jumps to each due frame. Its wall-time
   twin is `#[ignore]`.
 - The `sips` tests run `/usr/bin/sips`. The synthetic libheif tests encode with the aom and x265
@@ -189,14 +189,15 @@ short form:
   and `mouse/`.
 - `kitty_output/`: the Kitty writes of phewr per frame. Each `render_*` has a `*_to` twin that
   writes to any `Write`. `mod.rs` holds the fullscreen image and the video frame, `grid/` the
-  thumbnails, `loops/` the grid loops, `grid_icons/` the SVG icons. The generic part is in
-  `tuilibr::pictures::kitty`.
+  thumbnails, `loops/` the grid order and the budget of the loops, `grid_icons/` the SVG icons.
+  The generic part is in `tuilibr::pictures::kitty`. The write of one loop frame is in
+  `tuilibr::pictures::kitty::loops`.
 - `pictures`: the shared picture module is `tuilibr::pictures`. See `tuilibr/docs/pictures.md` for
   its module tree. phewr holds no copy.
 - `app/`: `App`, the whole view state, one file per topic: fullscreen, zoom, marks, folders,
   scan, slideshow, meta, mouse, the thumbnail jobs and their bounds (`thumbnails/`), the cache
-  folder and the loop files of the disk cache (`disk_cache/`), the folder prefetch
-  (`folder_prefetch/`) and the grid loops (`grid_loops/`).
+  folder of the disk cache (`disk_cache/`, no loop file), the folder prefetch
+  (`folder_prefetch/`) and the grid loops (`grid_loops/`, the jobs and the budget, no `cell.rs`).
 - `ui/`: the ratatui drawing: `mod.rs` (the views, the info pane and `panes`, the one source of the
   areas: `Panes { info, main, status }`), `status/` (the parts of
   the `BarView` for `tuilibr::frame::draw_bar`), `grid/`, `help.rs` (the `HelpView` sections
@@ -211,9 +212,14 @@ short form:
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config/`: `config.toml` and the state file with its writer thread.
 - `yazi.rs`: the reveal in yazi and the PATH lookup `find_on_path`.
-- Feature `video`: `video/` (the tool lookup, the first-frame thumbnails), `player/` (the
-  terminal player, the decoder, the probe, the tone map cubes), `video_handoff/` (the player
-  start, the prestart, the mpv window), `grid_loop.rs` (the loop frames) and `mpv.rs`.
+- Feature `video`: `video/` (the session lookup, `session_first_frame` and `session_loop`),
+  `player/` (only the terminal player), `video_handoff/` (the player start, the prestart, the mpv
+  window) and `mpv.rs`. `tuilibr::pictures::motion` holds the probe and the ffmpeg runs. It holds
+  the HDR cubes and the animation check. It holds the first frame and the loop frames. It holds
+  the loop file, the loop clock and the loop ids. See `tuilibr/docs/pictures.md`, "The motion
+  module". phewr keeps its own
+  tools type with `Option` fields, because `file_meta` runs ffprobe without ffmpeg. The write of
+  one loop frame is in `tuilibr::pictures::kitty::loops`.
 - `test_support/` (the re-export of `tuilibr::pictures::test_support`, `module_fixture` and the app
   builders) and `bench/`: test only. `docs/benchmarks.md` holds what each bench measures.
 
@@ -282,8 +288,8 @@ decisions. Read the long form before you change the code that an item names.
   decoder stops, and after the exit the player plays the file again. phewr polls each mpv window every 100 ms until it exits. The window gets
   `--fs --native-fs=no` and `--hwdec=auto-safe`. `--input-commands` needs mpv 0.38 or later.
   mpv's own Kitty output is gone: it played a 4K HLG clip at 2.4 fps in Ghostty.
-- **HDR in the terminal:** for HLG and PQ, `player::tone_map` writes a 3D cube into the cache
-  directory. `CUBE_VERSION` is the one version for all cube names: change it when the cube output
+- **HDR in the terminal:** for HLG and PQ, `tuilibr::pictures::motion::tone_map` writes a 3D cube
+  into the cache directory. `CUBE_VERSION` lives in tuilibr and is the one version for all cube names: change it when the cube output
   changes. HDR keeps 33 points. A PQ video or still maps with its HDR10 peak, rounded up to the
   buckets 500, 1000, 2000, 4000 or 10000 nits (`tuilibr::pictures::decode::hdr::hdr10_peak`). The stills
   in `tuilibr::pictures::decode::hdr` copy the math of the player cubes, and a test compares both copies.
@@ -390,11 +396,14 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   grid trims the oldest unshown images above `TERMINAL_IMAGE_BUDGET` (128 MB,
   `tuilibr::pictures::kitty::terminal_images`).
 - **Image ids:** the thumbnails count up from 1. The icons start at `ICON_ID_BASE`, the loops at
-  `LOOP_ID_BASE` (`1 << 31`), and the video frame is `u32::MAX - 1`. The probes use 31 and 32.
+  `LOOP_ID_BASE` (`1 << 31`, it stays in `app/grid_loops/`), and the video frame is `u32::MAX - 1`. The
+  allocator is `motion::loop_ids::LoopIds`. The probes use 31 and 32.
 - **Grid loops:** every visible video, animated and Live cell loops after its still, as a Kitty
   animation or through ticks (`Loops`). herdr gets the ticks without the animation probe:
   herdr 0.9.5 answers the probe itself but plays no Kitty animation (maintainer, 2026-11-03).
   `PHEWR_KITTY_LOOPS` and `[gallery] loops` win. `[gallery] animate = false` turns the loops off.
+  The loop clock is `motion::clock::LoopClock`. The loop cache stays warm: the magic is
+  `PHEWRLP1` and the version is `<app>-loop-v1` through `app_name()`.
 - **Cell icons:** a cell without a thumbnail shows a Lucide icon as a Kitty image in the terminal
   foreground (OSC 10). Without an OSC 10 answer, the icons are octant text. The design is in
   `docs/grid-and-kitty.md` ("Grid icons").

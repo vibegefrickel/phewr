@@ -113,12 +113,12 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   run loop polls every 100 ms (`WINDOW_POLL`) while a window plays. A step in phewr away from
   the file of the window forgets the window. The window gets `--fs --native-fs=no` and
   `--hwdec=auto-safe`. `--fs` overrides `fs=no` of a user `mpv.conf`.
-- **HDR in the terminal:** `player::probe` reads the transfer curve. For HLG and PQ,
-  `player::tone_map::cube_file` writes a 3D cube into the thumbnail cache directory, or into
+- **HDR in the terminal:** `motion::probe` reads the transfer curve. For HLG and PQ,
+  `tuilibr::pictures::motion::tone_map::cube_file` writes a 3D cube into the thumbnail cache directory, or into
   `$TMPDIR/phewr` if the cache path holds filter graph syntax. `Cube::for_video` picks the cube, and
   the decoder calls it through `cube_for(info, target, dirs)`. The names are
   `tonemap-hlg-{p3,srgb}-v4.cube`, `tonemap-pq<nits>-{p3,srgb}-v4.cube` and, for SDR,
-  `color-<primaries>-<target>-v4.cube`. `CUBE_VERSION` is the one version for all cube names: change
+  `color-<primaries>-<target>-v4.cube`. `CUBE_VERSION` lives in tuilibr and is the one version for all cube names: change
   it when the cube output changes. The tone mapping writes the target primaries. ffmpeg parses a
   cube at each start: 33 points take about 42 ms, 17 points about 16 ms. A 17-point HDR cube
   saves about 20 ms per start but moves colors by up to 39 levels (mean error 0.84 to 1.09 levels
@@ -190,7 +190,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   image: it never opens the fullscreen view or a slideshow by itself (only `--slideshow` does).
 - **Video programs:** phewr links no FFmpeg library. `main` looks up `ffmpeg` and `ffprobe` one
   time, and the tests never do, so `session_first_frame` gives `NotFound` in a test. The probe
-  (`player/probe/`) is one `ffprobe -of json` process of about 32 ms with a 2 s timeout
+  (`tuilibr::pictures::motion::probe`) is one `ffprobe -of json` process of about 32 ms with a 2 s timeout
   (`output_within`). A probe cache keys each `VideoInfo` by path, mtime and length, so
   `Player::open` after a cold thumbnail starts no ffprobe. A second caller for the same path
   waits for the running ffprobe and starts none. An animation reads 17 packets, an
