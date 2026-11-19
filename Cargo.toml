@@ -149,7 +149,19 @@ clap = { version = "4.6", features = ["derive"] }
 crossterm = "0.29"
 directories = "6"
 # Only the decoders for the formats that the scanner lists. AVIF goes through libheif.
-image = { version = "0.25.10", default-features = false, features = ["bmp", "exr", "gif", "hdr", "ico", "jpeg", "png", "qoi", "tga", "tiff", "webp"] }
+image = { version = "0.25.10", default-features = false, features = [
+  "bmp",
+  "exr",
+  "gif",
+  "hdr",
+  "ico",
+  "jpeg",
+  "png",
+  "qoi",
+  "tga",
+  "tiff",
+  "webp",
+] }
 jiff = "1"
 kamadak-exif = "0.6"
 # The tests and the benches name the types of libheif. The decode goes through tuilibr.
@@ -173,7 +185,10 @@ toml = "1"
 tuilibr = { path = "../tuilibr" }
 # The benches call libjpeg-turbo directly. The decode goes through tuilibr. Without the default
 # feature `cmake`, turbojpeg-sys finds the Homebrew libjpeg-turbo through pkgconf.
-turbojpeg = { version = "1.5", default-features = false, features = ["pkg-config", "require-simd"], optional = true }
+turbojpeg = { version = "1.5", default-features = false, features = [
+  "pkg-config",
+  "require-simd",
+], optional = true }
 unicode-width = "0.2"
 
 [dev-dependencies]

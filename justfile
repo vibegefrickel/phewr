@@ -100,13 +100,12 @@ outdated:
     if [ "$found" = 0 ]; then echo "all root dependencies are current"; fi
 
 # The full gate.
-check: fmt-check lint test test-lean doc deny
+check: fmt-check lint test test-lean doc deny audit
 
 # The checks outside cargo: the TOML format, the justfile format, the shell scripts of the fixtures,
 # the spelling, the unused dev-dependencies. A missing tool fails the recipe with its brew line.
 # Install the tools once:
 # `brew install taplo shellcheck shfmt typos-cli cargo-shear cargo-insta`.
-# The recipe joins `check` when it is clean in every repository.
 audit:
     #!/usr/bin/env zsh
     set -euo pipefail
