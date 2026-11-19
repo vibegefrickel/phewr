@@ -153,7 +153,9 @@ its `make.sh`, and the real-file tests by name.
 - A test never sets `HOME` or `XDG_*`. Use the functions that take a path: `config::load_at`,
   `Paths::from_vars`, `config::save_visible_rows(path, ..)`.
 - A test waits for background work in a loop with a limit (for example 2 s in 10 ms steps), and
-  never depends on the clock within a frame interval.
+  never depends on the clock within a frame interval. A test never depends on the timing of a
+  job: a test that counts running jobs holds the decode closed with a gate (`gate_decodes` in
+  `src/prefetch/tests.rs`), because the pre-commit hook runs the tests at every commit.
 - Tests never start a real ffmpeg, ffprobe or mpv outside the ignored real-file tests. Video
   tests use `FakeDecoder` and `FakeRunner` (`test_support/video.rs`).
 
