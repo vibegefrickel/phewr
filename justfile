@@ -6,6 +6,9 @@ export PATH := "/opt/homebrew/opt/rustup/bin:" + env("PATH")
 
 prefix := env("PREFIX", env("HOME") + "/.local")
 
+# The build profile of the test runs: empty here, `--release` in an app that tests in release.
+test_profile := ""
+
 # Everything a commit must pass: formatting, lints, tests, docs, dependency policy.
 default: check
 
@@ -102,25 +105,18 @@ outdated:
 # The full gate.
 check: fmt-check lint test test-lean doc deny audit
 
-# The checks outside cargo: the TOML format, the justfile format, the shell scripts of the fixtures,
-# the spelling, the unused dev-dependencies. A missing tool fails the recipe with its brew line.
-# Install the tools once:
-# `brew install taplo shellcheck shfmt typos-cli cargo-shear cargo-insta`.
+# The checks outside cargo, one text in every repository: the TOML format, the justfile format,
+# the spelling, the unused dev-dependencies, the shell scripts when the repository has some, and
+# every test with the orphan snapshots when the repository uses insta. The tools come from the
+# Brewfile of the dotfiles: taplo, typos-cli, cargo-shear, shellcheck, shfmt, cargo-insta. Part of
+# `check`, in place of `test` when the repository uses insta, so the suite runs once.
 audit:
-    #!/usr/bin/env zsh
-    set -euo pipefail
-    need() { command -v "$1" >/dev/null || { echo "audit: $1 is not installed, brew install $2"; exit 1; }; }
-    need taplo taplo
     taplo fmt --check
     just --fmt --check --unstable
-    need shellcheck shellcheck
-    shellcheck -S warning tests/fixtures/make.sh tests/fixtures/*/make.sh
-    need shfmt shfmt
-    shfmt -d -i 2 tests/fixtures/make.sh tests/fixtures/*/make.sh
-    need typos typos-cli
     typos
-    need cargo-shear cargo-shear
     cargo shear
+    scripts=$(git ls-files '*.sh'); if [ -n "$scripts" ]; then shellcheck -S warning ${=scripts}; shfmt -d -i 2 ${=scripts}; fi
+    if grep -q '^insta' Cargo.toml; then CARGO_BUILD_WARNINGS=deny cargo insta test {{ test_profile }} --test-runner nextest --all-targets --unreferenced=reject; fi
 
 # Release build with the default features (turbo, heic, video).
 build:
