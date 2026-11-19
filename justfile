@@ -81,9 +81,20 @@ doc:
 deny:
     cargo deny check
 
-# The direct dependencies with a newer version (cargo-outdated from Homebrew).
+# The lock updates that are left, and each direct dependency with a newer version (cargo-outdated fails on the path dependency).
 outdated:
-    cargo outdated --root-deps-only
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo update --dry-run --verbose 2>&1 | grep -E 'Unchanged|Locking'
+    found=0
+    while read -r name version; do
+        latest=$(cargo info "$name@${version#v}" 2>/dev/null | sed -n 's/^version:.*(latest \(.*\))/\1/p')
+        if [ -n "$latest" ]; then
+            echo "$name: locked ${version#v}, latest $latest"
+            found=1
+        fi
+    done < <(cargo tree --depth 1 -e normal,build,dev --prefix none | tail -n +2 | grep -v -E '^(tuilibr|phewr) ' | grep -v '(\*)' | awk '{print $1, $2}' | sort -u)
+    if [ "$found" = 0 ]; then echo "all root dependencies are current"; fi
 
 # The full gate.
 check: fmt-check lint test test-lean doc deny

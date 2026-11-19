@@ -2,6 +2,7 @@
 name = "phewr"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.99"
 
 # Not on crates.io: users clone the repository and build phewr with `just install`.
 publish = false
