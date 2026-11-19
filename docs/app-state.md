@@ -131,7 +131,7 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
   - `a=a,r=1,z=` sets the gap of the root frame. `a=a,s=3,v=1` loops forever.
   - `a=p` places the animation over the still. `d=i` removes the placement of the still. All
     this happens in one synchronized update (`transmit_animation_to` in
-    `kitty_output/loops.rs`).
+    `kitty_output/loops/mod.rs`).
   - phewr sends nothing per tick. `loop_frames_due` and `grid_loop_timeout` skip an animation.
   - A hidden or replaced cell sends one `d=I`.
   - A grid redraw places the running animation again by its id.

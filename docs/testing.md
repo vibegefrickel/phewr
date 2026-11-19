@@ -32,6 +32,9 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   of tuilibr (`color/`, `png/`, `jxl/`, `hdr/` and `still.*`).
 - `just test-lean` runs every test with the lean set (`--no-default-features --features
   video,sips`), without `heic`, `jxl` and `turbo`. `just check` runs it.
+- `cargo nextest run --profile ci` runs every test without fail-fast and writes the junit report
+  to `target/nextest/ci/junit.xml` (`.config/nextest.toml`). `just audit` checks the `make.sh`
+  scripts of the fixtures with shellcheck and shfmt.
 - The folders `color/`, `png/`, `jxl/` and `hdr/` and the 4 stills `still.avif`, `still.gif`,
   `still.png` and `still.webp` are in tuilibr. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures
   with the sRGB target.

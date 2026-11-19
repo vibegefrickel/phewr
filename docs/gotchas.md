@@ -54,7 +54,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   the stamp are in `docs/video.md` ("Animated images" and "Probe").
 - **Slideshow view (2026-11-09):** a running or paused slideshow has no status row
   (`ui::status_rows` gives 0 outside the grid), so `image_rect` covers the whole screen. A badge
-  at the bottom right of `image_rect` (`draw_slideshow_badge` in `ui/status.rs`) shows the play
+  at the bottom right of `image_rect` (`draw_slideshow_badge` in `ui/status/mod.rs`) shows the play
   or pause glyph and the interval, with the status note in front. An error replaces the badge
   text on a red background. The badge is always on (maintainer, 2026-11-09). Kitty draws a
   picture above the text, so the still and the video frame of a slideshow go out with
@@ -164,7 +164,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   gets the first file index, and the thumbnail jobs, the marks, the cell shape and
   the info panel skip folders. A folder cell has no thumbnail and no Kitty image. An empty
   folder (no file, and no folder besides `..`) shows a note in the status row (`is_empty_folder`
-  in `ui/status.rs`). There is no directory picker. A start with several paths lists no
+  in `ui/status/mod.rs`). There is no directory picker. A start with several paths lists no
   folders. A symlink to a folder stays out, and so do hidden folders and hidden files (`.x.jpg`,
   the AppleDouble `._x.jpg`). One folder argument is one `read_dir`
   (`scanner::read_folder`): the files come out sorted by `name_key`, so the first batch is in the
@@ -220,7 +220,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   `Session::restore`, without a newline, like `yazi --cwd-file`. A shell function reads
   it and does the `cd` (README, "Change the shell directory on exit"). A failed run writes
   nothing, and a failed write is the exit error of phewr.
-- **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop.rs`. `App` holds
+- **Status notes:** `ui::draw` takes a `status` note from `LoopState` in `run_loop/mod.rs`. `App` holds
   no status note. The note shows in the status row at the bottom. The next key press or mouse
   button press clears it (`clears_status`), a key release or repeat does not. The exit of an mpv
   window replaces the window note ("plays in an mpv window") with the exit note, and a clean exit
@@ -229,7 +229,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   survives the first decode, and a key press or a folder
   switch clears it.
 - **Status row:** since phase 4a of the tuilibr plan (2026-11-19), the row is the bar of
-  `tuilibr::frame::draw_bar`. `ui/status.rs` fills one `BarView` per view (`gallery_bar`,
+  `tuilibr::frame::draw_bar`. `ui/status/mod.rs` fills one `BarView` per view (`gallery_bar`,
   `fullscreen_bar`, `video_bar`, the shared `BarParts`): the mode as `ModeView`, the folder path
   as the `left` span, the name and the position, the zoom, the player time, the search line, the
   selection count and the note or the error as `middle` texts (the first text gets the room
@@ -267,7 +267,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   A grid loop job gives the 10 ms poll too. From 2026-10-30 to 2026-11-09 it did not, and its
   frames waited for the 250 ms wait: the first loop of a cold Live grid then came about 150 ms
   later (`bench::live::grid_animation`, 1168 ms against 1016 ms). A 50 ms poll gave only half of
-  the gain. Otherwise it waits 250 ms (`next_timeout` in `run_loop.rs`).
+  the gain. Otherwise it waits 250 ms (`next_timeout` in `run_loop/mod.rs`).
 - **Decodes share the cores.** `LibheifSlot` shares the tile threads, at most 4 thumbnail and 2
   prefetch decodes run at once, and a cache read never waits behind a cold decode. The queues,
   the slots, the cache key and the header read are in `docs/app-state.md` ("Thumbnail jobs").
@@ -410,7 +410,7 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   play there (maintainer, 2026-11-03). `PHEWR_KITTY_LOOPS` and `[gallery] loops` win over herdr.
 - **Cell icons:** a grid cell without a thumbnail shows a large dim Lucide icon: `image` for a
   picture, `play` for a video, `folder` for a folder and `folder-up` for `..`, without a name
-  (`icons.rs`, `draw_cell_icon` in `ui/grid.rs`). The icon box is about 30 % of the cell height
+  (`icons.rs`, `draw_cell_icon` in `ui/grid/mod.rs`). The icon box is about 30 % of the cell height
   and square in pixels (`App::cell_px`). A cell that cannot hold 2 rows, or an icon that the grid
   edge cuts, gets the one-cell symbol (`Icon::symbol`). The help popup hides the icons, as it
   hides the pictures. A HEIC preview counts as a thumbnail. The design is in

@@ -7,7 +7,7 @@ AGENTS.md holds the rules and the layout of the files.
 
 ## Grid gaps and borders
 
-The code is in `gallery/mod.rs` and `ui/grid.rs`.
+The code is in `gallery/mod.rs` and `ui/grid/mod.rs`.
 
 - The cells of the grid have 1-cell gaps (`GAP`).
 - A line of n cells takes n + 1 gaps: one between two neighbors and one at each edge.
@@ -82,7 +82,7 @@ The code is in `gallery/mod.rs` and `ui/grid.rs`.
 The generic Kitty output is in `tuilibr::pictures::kitty`: the writer, the pixels, `EMIT_PASS_BYTES`, the
 temp file medium and the storage budget. `tuilibr::pictures::kitty::placement` holds `box_px`,
 `centered`, `native_placement` and `filled_placement`. `tuilibr::pictures::kitty::query` holds the start
-probe and the cell size. The grid writes stay in `kitty_output/grid.rs`. The grid icons and the
+probe and the cell size. The grid writes stay in `kitty_output/grid/mod.rs`. The grid icons and the
 loops stay in `kitty_output/`.
 
 ### The frame engine
@@ -110,7 +110,7 @@ the picture plan). It holds `Placements`, `Screen`, `Update`, `Placing` and `Lay
   interface is always available in tuilibr.
 
 - `Loops`, `transmit_frame_to` and `animate_to` stay in `tuilibr::pictures::kitty`, because the usage hint
-  `N=1` depends on the probe result. The loop logic of phewr stays in `kitty_output/loops.rs`.
+  `N=1` depends on the probe result. The loop logic of phewr stays in `kitty_output/loops/mod.rs`.
   It writes the frames into the update of the pass and calls `Screen::record`.
 - A lost frame of a visible loop gives the still and a new transfer of the loop. Nothing calls
   `Screen::lost` today, and the trim keeps every frame of a visible loop. So
@@ -242,7 +242,7 @@ the picture plan). It holds `Placements`, `Screen`, `Update`, `Placing` and `Lay
 
 ## Run loop waits
 
-The code is `next_timeout` in `run_loop.rs`. The rules are in `gotchas.md` ("The run loop
+The code is `next_timeout` in `run_loop/mod.rs`. The rules are in `gotchas.md` ("The run loop
 polls"). This is the order of the decisions:
 
 1. In the gallery, the wait is zero while emits are pending or `App::loops_to_send` is true.

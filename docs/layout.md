@@ -19,7 +19,7 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   late answer filter are `tuilibr::terminal` since 2026-11-19 (`Session`, `Modes`,
   `enable_mouse`, `disable_mouse`, `release_terminal_to`, `install_panic_hook`, `start::query`,
   `answers::LateAnswerFilter`). phewr has no `terminal.rs`.
-- `run_loop.rs`: `LoopState` (the status note, `answers` (the `LateAnswerFilter` of tuilibr),
+- `run_loop/mod.rs`: `LoopState` (the status note, `answers` (the `LateAnswerFilter` of tuilibr),
   `cell_size_from_terminal` and, with the `video` feature, the `VideoState`), `run`, the
   background polls, `render_images` and `next_timeout`. The status note lives here, not in `App`.
   `handle_input` takes one input event: the filter returns `Filtered { answers, events }`, each
@@ -29,15 +29,15 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
 - `keys/`: the key handlers. `mod.rs` holds `handle_event` and `handle_key`, the thin
   `match` that routes the overlays and the view modes. One file per view: `fullscreen.rs`,
   `gallery.rs` (with the search line), `video.rs` (feature `video`).
-  `mouse.rs` holds the mouse handler per view.
+  `mouse/` holds the mouse handler per view.
 - `kitty_output/`: the Kitty writes of phewr per frame (the generic part is `tuilibr::pictures::kitty`). Each `render_*` has a `*_to` twin that writes to
   any `Write`, so that the tests read the escape sequences. `App::with_graphics_out` runs a write
   against the graphics output. `mod.rs` holds the fullscreen image and the video frame and
-  re-exports the writes of the grid. `grid.rs` holds the grid pass (`write_grid_to`, `GridPass`,
+  re-exports the writes of the grid. `grid/` holds the grid pass (`write_grid_to`, `GridPass`,
   `grid_frame`) and the thumbnail writes (`emit_new_thumbnails_to`, `render_gallery_images`,
-  `place_gallery_images_to`, `grid_placement`, `visible_image_ids`). `loops.rs` holds the grid
+  `place_gallery_images_to`, `grid_placement`, `visible_image_ids`). `loops/` holds the grid
   loops (`play_grid_loops`, `send_grid_loops_to`, `place_loop_frame`, `transmit_animation_to`).
-  `grid_icons.rs` holds the SVG icons of the cells as Kitty images (`GridIcons`, `IconCell`,
+  `grid_icons/` holds the SVG icons of the cells as Kitty images (`GridIcons`, `IconCell`,
   `sync_grid_icons`).
 - `video_handoff/` (feature `video`): the start of the terminal player and of the mpv window,
   and the way back. `mod.rs` holds `VideoState` and `play_videos`. The ffprobe path lives in the
@@ -71,11 +71,11 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `slideshow.rs`, `scan.rs` (the scanner results, the sort and the filter), `cell_shape.rs`,
   `fullscreen.rs` (enter, leave, the steps and the decode, `FullscreenDecode`, the image as a
   `ScreenImage`), `zoom.rs` (zoom,
-  pan and the full-resolution source in `ZoomState`), `marks.rs` (the marks of the grid, the tests in `marks/tests.rs`), `directory.rs`
+  pan and the full-resolution source in `ZoomState`), `marks/` (the marks of the grid, the tests in `marks/tests.rs`), `directory.rs`
   (the directory switch), `folder_prefetch/` (the decode of the first screen of the folder under
   the cursor into the disk cache: the state and the rest of the cursor in `mod.rs`, the thread
   and the first screen in `worker.rs`), `mouse.rs` (the mouse state and the screen layout of the last draw),
-  `meta.rs` (the facts of the file under the cursor, read on a thread), `folders.rs` (the folder
+  `meta.rs` (the facts of the file under the cursor, read on a thread), `folders/` (the folder
   entries of the grid, `is_parent_entry`, `Enter` into a folder, `go_to_parent`, the tests in
   `folders/tests.rs`), `video.rs` (the terminal player state, the return after a video, the mpv
   window watch), `thumbnails/` (`ThumbnailJobs` in `mod.rs`: the channel, the sharp, preview and
@@ -88,10 +88,10 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   the test builders). It lives in tuilibr since 2026-11-19. `tuilibr/docs/pictures.md` holds its module tree. This page lists only the files of phewr.
 - `ui/`: the ratatui drawing of each view, the help popup and the info panel. `mod.rs` holds
   `draw`, `split_info`, `content_area`, `status_area`, the info panel, the fullscreen and the video
-  view. `status.rs` fills the `BarView` of each view for `tuilibr::frame::draw_bar`
+  view. `status/` fills the `BarView` of each view for `tuilibr::frame::draw_bar`
   (`draw_status_row`, `BarParts`, `gallery_bar`, `fullscreen_bar`, `video_bar`, `folder_span`,
   `shorten_path`, `display_path`, `is_empty_folder`).
-  `grid.rs` holds the grid cells: the borders, the folder names (`folder_name_text`, the column width
+  `grid/` holds the grid cells: the borders, the folder names (`folder_name_text`, the column width
   through `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` fills the `HelpView` for
   `tuilibr::frame::draw_help` (`GALLERY_COLUMN`, `FULLSCREEN_SECTIONS`, `kitty_rows`,
   `draw_help_popup`): the sections Gallery, Search, Fullscreen / video player, Mouse and Kitty

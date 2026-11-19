@@ -39,7 +39,8 @@ tree of tuilibr has a warning or an error, the `just check` of phewr fails.
 ## Build, test, run
 
 ```sh
-just                 # = just check: fmt --check, clippy -D warnings (3 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny
+just                 # = just check: fmt --check, clippy (3 feature sets), check per feature, nextest, test-lean, rustdoc, cargo deny
+just audit           # taplo, just --fmt, shellcheck, shfmt, typos, cargo-shear (outside check)
 just fix             # clippy --fix + cargo fmt
 just test [FILTER]   # cargo nextest (falls back to cargo test)
 just test-lean [FILTER]  # the tests without heic, jxl and turbo (the lean set: video,sips)
@@ -67,8 +68,15 @@ The repository pins the toolchain, the formatter and the lints:
 - `rust-toolchain.toml`: stable, with rustfmt, clippy, rust-analyzer, rust-src and llvm-tools.
   Edition 2024.
 - `rustfmt.toml`: 2024 style, stable options only.
-- `Cargo.toml`, the `[lints]` tables: clippy `pedantic` plus restriction lints. In
-  `just check`, every warning is an error.
+- `Cargo.toml`, the `[lints]` tables: clippy `pedantic` plus restriction lints, the lint union of
+  tuilibr (2026-11-19). `[lints.cargo] unused_dependencies = "deny"` finds an unused dependency.
+  In `just check`, every warning is an error through `CARGO_BUILD_WARNINGS=deny` in the recipes
+  (no `-D warnings` flag, so the build cache stays). phewr is a binary crate: `missing_docs` and
+  `missing_debug_implementations` find nothing, and there is no doctest step.
+- `just audit` (outside `check` until every repo is clean): `taplo fmt --check` with
+  `.taplo.toml`, `just --fmt --check --unstable`, `shellcheck` and `shfmt` on the `make.sh`
+  scripts, `typos` with `_typos.toml`, `cargo shear`. The tools: `brew install taplo shellcheck
+  shfmt typos-cli cargo-shear cargo-insta`. A missing tool fails the recipe with its brew line.
 - `clippy.toml`: the thresholds.
 - `deny.toml`: licenses, advisories, duplicate versions, git sources.
 - `rust-analyzer.toml`: clippy as the checker of the editor, its own target directory.
@@ -126,7 +134,9 @@ Files at run time:
 its `make.sh`, and the real-file tests by name.
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module. A long test module
-  moves into a `tests.rs` file of the module directory.
+  moves into a `tests.rs` file of the module directory. A module with a directory lives in
+  `name/mod.rs`, never in `name.rs` next to `name/` (`clippy::self_named_module_files`), and a
+  `tests` module with a directory lives in `tests/mod.rs`.
 - A test that needs a real file is `#[ignore = "..."]` and reads a `PHEWR_TEST_*` variable (for example `PHEWR_TEST_RAW`).
   `just test-real` runs these tests. A test without its variable skips with a note.
   `just test-real` skips the benches (`--skip bench::`), because they set the global color target
@@ -172,13 +182,13 @@ short form:
 - The terminal session with the mouse modes, the start query and the late answer filter come
   from `tuilibr::terminal` (`Session`, `Modes`, `release_terminal_to`, `install_panic_hook`,
   `start::query`, `answers::LateAnswerFilter`) since tuilibr phase 4 step 1 (2026-11-19).
-- `run_loop.rs`: `LoopState` (the status note, the `VideoState`), `run`, the background polls,
+- `run_loop/mod.rs`: `LoopState` (the status note, the `VideoState`), `run`, the background polls,
   `render_images` and `next_timeout`.
 - `keys/`: the key handlers. `mod.rs` routes the overlays and the view modes. One file per view,
-  and `mouse.rs`.
+  and `mouse/`.
 - `kitty_output/`: the Kitty writes of phewr per frame. Each `render_*` has a `*_to` twin that
-  writes to any `Write`. `mod.rs` holds the fullscreen image and the video frame, `grid.rs` the
-  thumbnails, `loops.rs` the grid loops, `grid_icons.rs` the SVG icons. The generic part is in
+  writes to any `Write`. `mod.rs` holds the fullscreen image and the video frame, `grid/` the
+  thumbnails, `loops/` the grid loops, `grid_icons/` the SVG icons. The generic part is in
   `tuilibr::pictures::kitty`.
 - `pictures`: the shared picture module is `tuilibr::pictures`. See `tuilibr/docs/pictures.md` for
   its module tree. phewr holds no copy.
@@ -186,8 +196,8 @@ short form:
   scan, slideshow, meta, mouse, the thumbnail jobs and their bounds (`thumbnails/`), the cache
   folder and the loop files of the disk cache (`disk_cache/`), the folder prefetch
   (`folder_prefetch/`) and the grid loops (`grid_loops/`).
-- `ui/`: the ratatui drawing: `mod.rs` (the views and the info panel), `status.rs` (the parts of
-  the `BarView` for `tuilibr::frame::draw_bar`), `grid.rs`, `help.rs` (the `HelpView` sections
+- `ui/`: the ratatui drawing: `mod.rs` (the views and the info panel), `status/` (the parts of
+  the `BarView` for `tuilibr::frame::draw_bar`), `grid/`, `help.rs` (the `HelpView` sections
   for `tuilibr::frame::draw_help`).
 - `gallery/`: the grid geometry and the cursor.
 - `scanner/`: the background scan, the video extensions and the Live Photo pairing (`live/`).
@@ -305,7 +315,7 @@ decisions. Read the long form before you change the code that an item names.
 - **Status notes:** the note lives in `LoopState`, not in `App`. The next key press or mouse
   button press clears it. A scan read error lives in `App::scan_error`.
 - **Status row:** the row is the bar of `tuilibr::frame::draw_bar` (phase 4a of the tuilibr
-  plan, 2026-11-19). `ui/status.rs` fills a `BarView` per view: the mode block (NORMAL,
+  plan, 2026-11-19). `ui/status/mod.rs` fills a `BarView` per view: the mode block (NORMAL,
   FULLSCREEN, SEARCH, HELP, one letter below `NARROW_BELOW`) as `ModeView`, the folder path with
   the home folder as `~` (`App::home_dir`, set in `main`, never read from `HOME` in a test) as
   the `left` span, the name and the position, the zoom, the player time, the search line, the
@@ -429,7 +439,7 @@ Most code of this section lives in `tuilibr::pictures`, and a change of it goes 
 - **`image` decoders:** the `image` crate has only the decoders that
   `tuilibr::pictures::decode::extensions` lists. If you add a format to these lists, add the `image`
   feature too.
-- **Embedded HEIC thumbnails** (phewr code: `sharp_job_waits` in `app/thumbnails/mod.rs`, the emit in `kitty_output/grid.rs`): a cold HEIC cell shows its embedded thumbnail first, then the
+- **Embedded HEIC thumbnails** (phewr code: `sharp_job_waits` in `app/thumbnails/mod.rs`, the emit in `kitty_output/grid/mod.rs`): a cold HEIC cell shows its embedded thumbnail first, then the
   sharp decode. The thumbnail must have the same `irot` and `imir` as the primary image. A
   preview never goes into the disk cache. The sharp jobs of libheif files wait until every
   preview is out (`sharp_job_waits`). The sharp image gets a new Kitty id, and the emit deletes
