@@ -56,7 +56,7 @@ pub(crate) struct LoopState {
 impl LoopState {
     pub(crate) fn new(config: &Config) -> Self {
         Self {
-            status: config.layout_note.clone(),
+            status: config.start_note.clone(),
             answers: LateAnswerFilter::default(),
             cell_size_from_terminal: false,
             mouse: config.mouse,

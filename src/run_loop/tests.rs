@@ -628,14 +628,14 @@ fn pending_emits_go_out_without_render() {
     );
 }
 
-/// An unknown `[gallery] layout` value leaves a note in the status row at the start.
+/// A bad config value leaves a note in the status row at the start.
 #[test]
-fn unknown_layout_note_shows_at_start() {
+fn config_note_shows_at_start() {
     use ratatui::{Terminal, backend::TestBackend};
 
-    let note = "unknown layout \"boxed\", maximal";
+    let note = "config.toml: mouse is not a bool, defaults for these";
     let config = Config {
-        layout_note: Some(note.to_owned()),
+        start_note: Some(note.to_owned()),
         ..Config::default()
     };
     let state = LoopState::new(&config);
