@@ -1,5 +1,7 @@
-//! The tests of the grid loops: the frames on the ticks and the Kitty animations.
-use super::super::grid::place_gallery_images_to;
+//! The tests of the grid loops: the frames on the ticks and the Kitty animations. Only the
+//! video feature decodes a loop, so without it a clip cell holds no loop.
+#![cfg(feature = "video")]
+use super::super::grid::{place_gallery_images_to, write_grid_to};
 use super::{play_grid_loops, play_grid_loops_to};
 use crate::app::App;
 use crate::app::ViewMode;
@@ -13,9 +15,12 @@ use crossterm::event::KeyCode;
 use image::{Rgba, RgbaImage};
 use ratatui::layout::Rect;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tuilibr::pictures::kitty::EMIT_PASS_BYTES;
 use tuilibr::pictures::kitty::Transfer;
+use tuilibr::pictures::kitty::loops::player::LoopOutcome;
 use tuilibr::pictures::kitty::protocol;
+use tuilibr::pictures::kitty::screen::{Screen, Update};
 use tuilibr::pictures::kitty::{KittyBackend, Loops};
 use tuilibr::pictures::resize::padding::{pad_for_grid, pad_loop_frame};
 
@@ -64,9 +69,17 @@ fn add_loop(app: &mut App, index: usize, count: usize) -> Vec<u32> {
         })
         .collect();
     let delays = vec![Duration::from_millis(333); count];
+    let ticket = app.loop_ticket(index);
     let loops = app.graphics.loops();
-    app.grid_loops.insert(index, frames, &delays, loops);
-    app.grid_loops.loops[&index].ids.clone()
+    app.grid_loops
+        .player
+        .ready(ticket.finish(LoopOutcome::Frames(frames, delays)), loops);
+    app.grid_loops.player.ids_of(&index).to_vec()
+}
+
+/// True when the cell `index` holds a loop.
+fn has_loop(app: &App, index: usize) -> bool {
+    !app.grid_loops.player.ids_of(&index).is_empty()
 }
 
 fn place_stills(app: &mut App, terminal: &mut FakeTerminal) {
@@ -278,7 +291,7 @@ fn animation_off_screen_deletes_image() {
     );
     assert!(!app.screen.stores(ids[0]));
     assert!(!terminal.stores(ids[0]));
-    assert!(app.grid_loops.loops.is_empty());
+    assert!(!has_loop(&app, 0));
 }
 
 #[test]
@@ -323,8 +336,7 @@ fn redraw_places_running_animation() {
 fn animation_over_budget_keeps_still() {
     let mut app = animation_app(3);
     let mut terminal = FakeTerminal::new();
-    app.screen =
-        tuilibr::pictures::kitty::screen::Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
+    app.screen = Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
     place_stills(&mut app, &mut terminal);
     add_loop(&mut app, 0, 3);
 
@@ -332,10 +344,7 @@ fn animation_over_budget_keeps_still() {
     assert!(!started);
     assert!(!out.contains("a=t,") && !out.contains("a=f,"), "{out}");
     assert!(!app.loop_plays(0));
-    assert!(
-        app.grid_loops.loops.is_empty(),
-        "the frames leave the memory too"
-    );
+    assert!(!has_loop(&app, 0), "the frames leave the memory too");
     assert!(!app.loops_to_send(), "no pass waits for the cell");
 
     let ids = add_loop(&mut app, 1, 2);
@@ -391,7 +400,7 @@ fn zoom_drops_animations() {
     terminal.feed(play_at(&mut app, 0).0.as_bytes());
 
     char_key(&mut app, '+');
-    assert!(app.grid_loops.loops.is_empty());
+    assert!(!has_loop(&app, 1));
     let mut out = Vec::new();
     place_gallery_images_to(&mut app, &mut out).unwrap();
     terminal.feed(&out);
@@ -407,12 +416,10 @@ fn new_animation_deletes_old_image() {
     let old = add_loop(&mut app, 1, 3);
     terminal.feed(play_at(&mut app, 0).0.as_bytes());
 
+    // The file changed, and the cell decodes its loop again.
+    app.grid_loops.player.forget_where(|&index| index == 1);
     let new = add_loop(&mut app, 1, 2);
     assert_ne!(old, new);
-    assert_eq!(
-        app.grid_loops.stale_ids, old,
-        "one id for the old animation"
-    );
     let mut out = Vec::new();
     place_gallery_images_to(&mut app, &mut out).unwrap();
     terminal.feed(&out);
@@ -443,7 +450,7 @@ fn run_loop_sleeps_until_next_frame() {
     assert_eq!(timeout, Some(frame));
     assert!(crate::run_loop::next_timeout(&app, &[]) <= Duration::from_millis(334));
 
-    app.grid_loops.loops.clear();
+    app.grid_loops.player.clear();
     assert_eq!(
         crate::run_loop::next_timeout(&app, &[]),
         Duration::from_millis(250),
@@ -455,8 +462,7 @@ fn run_loop_sleeps_until_next_frame() {
 fn loop_over_budget_keeps_still() {
     let mut app = clip_app(3);
     let mut terminal = FakeTerminal::new();
-    app.screen =
-        tuilibr::pictures::kitty::screen::Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
+    app.screen = Screen::with_budget(3 * STILL_BYTES + 2 * FRAME_BYTES);
     place_stills(&mut app, &mut terminal);
     add_loop(&mut app, 0, 3);
 
@@ -464,10 +470,7 @@ fn loop_over_budget_keeps_still() {
     assert!(!started);
     assert!(!out.contains("a=t,"), "{out}");
     assert!(!app.loop_plays(0));
-    assert!(
-        app.grid_loops.loops.is_empty(),
-        "the frames leave the memory too"
-    );
+    assert!(!has_loop(&app, 0), "the frames leave the memory too");
     assert!(!app.loops_to_send(), "no pass waits for the cell");
 
     let ids = add_loop(&mut app, 1, 2);
@@ -476,6 +479,113 @@ fn loop_over_budget_keeps_still() {
     assert!(started, "a loop that fits plays");
     assert_eq!(placed(&terminal, &ids), vec![ids[0]]);
     assert!(app.screen.stored_bytes() <= app.screen.budget());
+}
+
+/// The jobs that the player starts now, in grid order. The tickets go, and their cells count
+/// as running.
+fn started_jobs(app: &mut App) -> Vec<usize> {
+    let mut started = Vec::new();
+    app.grid_loops.player.start_jobs(|ticket| {
+        started.push(ticket.key);
+        true
+    });
+    started
+}
+
+/// A cell above the budget keeps its still on the same screen, and tries again when it comes
+/// back on screen.
+#[test]
+fn over_budget_retries_back_on_screen() {
+    let mut app = clip_app(40);
+    let mut terminal = FakeTerminal::new();
+    app.screen = Screen::with_budget(20 * STILL_BYTES + 2 * FRAME_BYTES);
+    place_stills(&mut app, &mut terminal);
+    let loops = app.graphics.loops();
+    for index in 1..20 {
+        let ticket = app.loop_ticket(index);
+        let result = ticket.finish(LoopOutcome::Failed);
+        app.grid_loops.player.ready(result, loops);
+    }
+    add_loop(&mut app, 0, 3);
+    let (out, _) = play_at(&mut app, 0);
+    assert!(!out.contains("a=t,"), "{out}");
+    assert!(!has_loop(&app, 0));
+
+    place_stills(&mut app, &mut terminal);
+    assert!(started_jobs(&mut app).is_empty(), "the same screen");
+
+    app.gallery.scroll_rows(1);
+    place_stills(&mut app, &mut terminal);
+    app.gallery.scroll_rows(-1);
+    place_stills(&mut app, &mut terminal);
+    assert_eq!(started_jobs(&mut app), vec![0], "the cell came back");
+}
+
+/// A loop that lost a frame and no longer fits the budget leaves the terminal with all its
+/// frames.
+#[test]
+fn over_budget_loop_leaves_terminal() {
+    let mut app = clip_app(3);
+    let mut terminal = FakeTerminal::new();
+    app.screen = Screen::with_budget(3 * STILL_BYTES + 4 * FRAME_BYTES);
+    place_stills(&mut app, &mut terminal);
+    let ids = add_loop(&mut app, 1, 3);
+    terminal.feed(play_at(&mut app, 0).0.as_bytes());
+    assert!(ids.iter().all(|&id| app.screen.stores(id)));
+    app.screen.lost(ids[2]);
+    terminal.feed(play_at(&mut app, 2 * FRAME_TICKS).0.as_bytes());
+
+    add_loop(&mut app, 0, 2);
+    let (out, _) = play_at(&mut app, 3 * FRAME_TICKS);
+    terminal.feed(out.as_bytes());
+    assert!(!has_loop(&app, 1));
+    for &id in &ids[..2] {
+        assert!(
+            out.contains(&format!("\x1b_Ga=d,d=I,i={id},")),
+            "{id}: {out}"
+        );
+        assert!(!app.screen.stores(id));
+    }
+}
+
+/// No loop frame goes out while stills of the last pass wait: the stills come first.
+#[test]
+fn loops_wait_for_waiting_stills() {
+    let mut app = clip_app(3);
+    let ids = add_loop(&mut app, 1, 3);
+    let mut out = Vec::new();
+    let mut update = Update::new(&mut out);
+    update.add_pixel_bytes(EMIT_PASS_BYTES);
+    let pass = write_grid_to(&mut app, &mut update, Instant::now(), Vec::new(), false).unwrap();
+    update.finish().unwrap();
+    assert!(!pass.waiting.is_empty(), "the full pass leaves the stills");
+
+    let (stills, started) = play_at(&mut app, 0);
+    assert!(!started);
+    for id in &ids {
+        assert!(!stills.contains(&format!("i={id},")), "{id}: {stills}");
+    }
+    let (_, started) = play_at(&mut app, FRAME_TICKS);
+    assert!(started, "the next pass sends the loop");
+}
+
+/// After a focus gain, the next tick sends the pixels of its frame again.
+#[test]
+fn focus_gain_sends_tick_frame_again() {
+    let mut app = clip_app(3);
+    let mut terminal = FakeTerminal::new();
+    place_stills(&mut app, &mut terminal);
+    let ids = add_loop(&mut app, 1, 3);
+    terminal.feed(play_at(&mut app, 0).0.as_bytes());
+
+    app.screen.focus_gained();
+    let (tick, _) = play_at(&mut app, FRAME_TICKS);
+    terminal.feed(tick.as_bytes());
+    assert!(
+        tick.contains(&format!("\x1b_Ga=T,q=2,C=1,f=24,s=80,v=48,i={},", ids[1])),
+        "{tick}"
+    );
+    assert_eq!(placed(&terminal, &ids), vec![ids[1]]);
 }
 
 #[test]
@@ -494,7 +604,7 @@ fn loop_off_screen_deletes_frames() {
         assert!(out.contains(&format!("\x1b_Ga=d,d=I,i={id},")), "{id}");
         assert!(!app.screen.stores(*id));
     }
-    assert!(app.grid_loops.loops.is_empty());
+    assert!(!has_loop(&app, 0));
 }
 
 /// The first command of each transmit in `output`, without its payload.
@@ -666,7 +776,7 @@ fn zoom_drops_loops() {
     play_at(&mut app, 0);
 
     char_key(&mut app, '+');
-    assert!(app.grid_loops.loops.is_empty());
+    assert!(!has_loop(&app, 1));
     let mut out = Vec::new();
     place_gallery_images_to(&mut app, &mut out).unwrap();
     assert!(text(&out).contains("\x1b_Ga=d,d=A,"));

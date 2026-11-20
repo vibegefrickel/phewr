@@ -1,131 +1,47 @@
-//! The loops of the video and animated cells of the grid: the jobs, the frames and the clock.
+//! The loops of the video, animated and Live cells of the grid, on the loop player of tuilibr.
 //!
-//! A job decodes the frames of a visible cell after the stills of the screen are out. One of two
-//! paths ([`Loops`]) then plays the loop: one Kitty animation that the terminal plays, or one
-//! image per frame that a tick of the shared clock swaps.
+//! The player keeps the loops, their jobs and their clock (`tuilibr/docs/pictures.md`, "The
+//! loop player"). phewr names the loop cells of each grid frame, runs each job on a thread of its
+//! own and gives the results back to the player.
 
 mod jobs;
 #[cfg(test)]
 mod tests;
 
 use super::{App, ViewMode};
-use std::collections::{BTreeMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
-use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
-use tuilibr::pictures::kitty::Loops;
-use tuilibr::pictures::motion::clock::{CellLoop, LoopClock};
-use tuilibr::pictures::motion::loop_ids::LoopIds;
+use tuilibr::pictures::kitty::loops::player::{LoopLimits, LoopPlayer, LoopResult};
+use tuilibr::pictures::motion::clock::LoopClock;
 
 /// The thumbnails count up from 1 and the video frame is `u32::MAX - 1`.
 const LOOP_ID_BASE: u32 = 1 << 31;
 
-struct LoopResult {
-    generation: u32,
-    index: usize,
-    outcome: LoopOutcome,
-}
-
-enum LoopOutcome {
-    Frames(Vec<GridPicture>, Vec<Duration>),
-    /// No ffmpeg, a broken file, a single frame or a panic. The cell keeps its still.
-    Failed,
-    /// The stills or another view needed the cores. The cell gets a new job later.
-    Cancelled,
-}
-
 pub(crate) struct GridLoops {
     /// `[gallery] animate`.
     pub(crate) enabled: bool,
-    pub(crate) loops: BTreeMap<usize, CellLoop>,
-    running: BTreeMap<usize, Arc<AtomicBool>>,
-    /// The cells without a loop in this generation.
-    failed: HashSet<usize>,
-    /// The cells above the terminal budget, until the visible cells change.
-    over_budget: HashSet<usize>,
-    last_visible: Vec<usize>,
-    generation: u32,
-    tx: mpsc::Sender<LoopResult>,
-    rx: mpsc::Receiver<LoopResult>,
-    ids: LoopIds,
-    /// The ids of the hidden loops. The next grid write deletes them.
-    pub(crate) stale_ids: Vec<u32>,
-    /// The shared clock of the tick path.
+    /// The loops of the cells, keyed by the image index.
+    pub(crate) player: LoopPlayer<usize>,
+    tx: mpsc::Sender<LoopResult<usize>>,
+    rx: mpsc::Receiver<LoopResult<usize>>,
+    /// The clock of the player, so a test can name the time of a tick.
+    #[cfg(all(test, feature = "video"))]
     pub(crate) clock: LoopClock,
 }
 
 impl GridLoops {
     pub(crate) fn new(enabled: bool) -> Self {
         let (tx, rx) = mpsc::channel();
+        let clock = LoopClock::starting_at(Instant::now());
         Self {
             enabled,
-            loops: BTreeMap::new(),
-            running: BTreeMap::new(),
-            failed: HashSet::new(),
-            over_budget: HashSet::new(),
-            last_visible: Vec::new(),
-            generation: 0,
+            player: LoopPlayer::new(LOOP_ID_BASE..u32::MAX - 1, LoopLimits::default())
+                .with_clock(clock),
             tx,
             rx,
-            ids: LoopIds::new(LOOP_ID_BASE..u32::MAX - 1),
-            stale_ids: Vec::new(),
-            clock: LoopClock::starting_at(Instant::now()),
+            #[cfg(all(test, feature = "video"))]
+            clock,
         }
-    }
-
-    /// Forget every placement after the terminal deleted them.
-    pub(crate) fn forget_placements(&mut self) {
-        for cell in self.loops.values_mut() {
-            cell.placed = None;
-        }
-    }
-
-    pub(crate) fn insert(
-        &mut self,
-        index: usize,
-        frames: Vec<GridPicture>,
-        delays: &[Duration],
-        loops: Loops,
-    ) {
-        let animation = loops == Loops::Animation;
-        let count = CellLoop::id_count(animation, frames.len());
-        let first_id = self.allocate_ids(u32::try_from(count).unwrap_or(u32::MAX));
-        let cell = CellLoop::new(frames, delays, first_id, animation);
-        if let Some(old) = self.loops.insert(index, cell) {
-            self.stale_ids.extend(old.ids);
-        }
-    }
-
-    /// The first id of a free run of `count` ids. The run skips the ids of the loops in the map
-    /// and of the loops that wait for their delete, which only matters after the counter wraps.
-    fn allocate_ids(&mut self, count: u32) -> u32 {
-        let (loops, stale_ids) = (&self.loops, &self.stale_ids);
-        self.ids.allocate(count, |run| {
-            loops
-                .values()
-                .any(|cell| cell.ids.iter().any(|id| run.contains(id)))
-                || stale_ids.iter().any(|id| run.contains(id))
-        })
-    }
-
-    /// The terminal budget has no room. The cell keeps its still.
-    pub(crate) fn drop_over_budget(&mut self, index: usize) {
-        self.loops.remove(&index);
-        self.over_budget.insert(index);
-    }
-
-    fn cancel_jobs(&self) {
-        for cancel in self.running.values() {
-            cancel.store(true, Ordering::Relaxed);
-        }
-    }
-}
-
-/// A quit during a loop decode ends the ffmpeg runs within `CANCEL_POLL`.
-impl Drop for GridLoops {
-    fn drop(&mut self) {
-        self.cancel_jobs();
     }
 }
 
@@ -138,46 +54,59 @@ impl App {
             && !self.info_visible
     }
 
-    #[cfg(test)]
-    pub(crate) fn loop_plays(&self, index: usize) -> bool {
-        self.grid_loops_shown()
-            && self
-                .grid_loops
-                .loops
-                .get(&index)
-                .is_some_and(|cell| cell.placed.is_some())
+    /// Name the loop cells of the grid frame at `now` to the player, in grid order. The loops
+    /// and the jobs of the hidden cells go.
+    pub(crate) fn show_grid_loops(&mut self, now: Instant) {
+        let play = self.grid_loops_shown();
+        self.grid_loops.player.begin_frame(now);
+        for (_, index) in self.gallery.visible_items() {
+            if self.can_loop(index) {
+                self.grid_loops.player.show(index, play);
+            }
+        }
+        self.grid_loops.player.drop_hidden();
+    }
+
+    /// True for a video, animated or Live Photo cell with its sharp still.
+    fn can_loop(&self, index: usize) -> bool {
+        self.thumb_cache.is_sharp(&index)
+            && (self.is_video(index) || self.is_animated(index) || self.is_live(index))
     }
 
     #[cfg(test)]
-    pub(crate) fn pretend_loop_job(&mut self, index: usize) {
-        self.grid_loops
-            .running
-            .insert(index, Arc::new(AtomicBool::new(false)));
+    pub(crate) fn loop_plays(&self, index: usize) -> bool {
+        self.grid_loops_shown() && self.grid_loops.player.is_playing(&index)
+    }
+
+    /// The ticket of a job for `index` that runs on no thread. The frame of the player then
+    /// shows only `index`.
+    #[cfg(test)]
+    pub(crate) fn loop_ticket(
+        &mut self,
+        index: usize,
+    ) -> tuilibr::pictures::kitty::loops::player::LoopTicket<usize> {
+        let player = &mut self.grid_loops.player;
+        player.begin_frame(Instant::now());
+        player.show(index, true);
+        let mut ticket = None;
+        player.start_jobs(|new| {
+            ticket = Some(new);
+            true
+        });
+        ticket.expect("the cell has no loop, no job and no failure")
     }
 
     pub(crate) fn grid_loops_pending(&self) -> bool {
-        !self.grid_loops.running.is_empty()
+        self.grid_loops.player.pending()
     }
 
     /// True when a visible loop waits for its frames or for its first placement.
     pub(crate) fn loops_to_send(&self) -> bool {
-        self.grid_loops_shown()
-            && self.gallery.visible_items().any(|(_, index)| {
-                self.grid_loops
-                    .loops
-                    .get(&index)
-                    .is_some_and(|cell| cell.placed.is_none())
-            })
+        self.grid_loops_shown() && self.grid_loops.player.needs_send()
     }
 
     pub(crate) fn loop_frames_due(&self, now: Instant) -> bool {
-        let tick = self.grid_loops.clock.tick_at(now);
-        self.grid_loops_shown()
-            && self
-                .grid_loops
-                .loops
-                .values()
-                .any(|cell| !cell.animation && cell.placed.is_some_and(|id| id != cell.id_at(tick)))
+        self.grid_loops_shown() && self.grid_loops.player.due(now)
     }
 
     /// The time until the next frame of a placed tick loop. A Kitty animation needs no wakeup.
@@ -185,55 +114,12 @@ impl App {
         if !self.grid_loops_shown() {
             return None;
         }
-        let tick = self.grid_loops.clock.tick_at(now);
-        self.grid_loops
-            .loops
-            .values()
-            .filter(|cell| !cell.animation && cell.placed.is_some())
-            .map(|cell| cell.next_change(tick))
-            .min()
-            .map(|next| {
-                self.grid_loops
-                    .clock
-                    .instant_of(next)
-                    .saturating_duration_since(now)
-            })
+        self.grid_loops.player.next_wake(now)
     }
 
-    /// Drop every loop and every job. The caller deletes all images in the terminal.
+    /// Drop every loop and every job. The caller deletes all images in the terminal, and the
+    /// grid write after the wipe drops the stale ids.
     pub(super) fn forget_grid_loops(&mut self) {
-        let loops = &mut self.grid_loops;
-        loops.cancel_jobs();
-        loops.loops.clear();
-        loops.running.clear();
-        loops.failed.clear();
-        loops.over_budget.clear();
-        loops.last_visible.clear();
-        loops.stale_ids.clear();
-        loops.generation += 1;
-    }
-
-    /// Drop the loops of the hidden cells. The cells above the budget try again on a new screen.
-    pub(crate) fn drop_hidden_loops(&mut self) {
-        let loops = &mut self.grid_loops;
-        let shown = self.gallery.visible_items().map(|(_, index)| index);
-        if shown.eq(loops.last_visible.iter().copied()) {
-            return;
-        }
-        loops.last_visible.clear();
-        loops
-            .last_visible
-            .extend(self.gallery.visible_items().map(|(_, index)| index));
-        loops.over_budget.clear();
-        let last_visible = &loops.last_visible;
-        let mut stale = Vec::new();
-        loops.loops.retain(|index, cell| {
-            let keep = last_visible.contains(index);
-            if !keep {
-                stale.extend_from_slice(&cell.ids);
-            }
-            keep
-        });
-        loops.stale_ids.extend(stale);
+        self.grid_loops.player.clear();
     }
 }

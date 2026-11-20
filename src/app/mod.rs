@@ -312,7 +312,7 @@ impl App {
     pub(crate) fn graphics_delete_all_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         self.screen.wipe(out)?;
         self.grid_icons.forget_images();
-        self.grid_loops.forget_placements();
+        self.grid_loops.player.forget_placements();
         Ok(())
     }
 

@@ -71,7 +71,7 @@ fn only_key_press_clears_note() {
 #[test]
 fn loop_job_alone_polls_busy() {
     let mut app = gallery_app(3);
-    app.pretend_loop_job(0);
+    let _job = app.loop_ticket(0);
     assert!(app.has_pending_work(), "the folder prefetch still waits");
     assert_eq!(next_timeout(&app, &[]), BUSY_POLL);
 }

@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use tuilibr::frame::Layout;
 use tuilibr::pictures::jobs::thumbnail_cache::GridPicture;
 use tuilibr::pictures::kitty::answers::AnswerReader;
+use tuilibr::pictures::kitty::loops::player::LoopOutcome;
 use tuilibr::pictures::kitty::screen::Screen;
 use tuilibr::pictures::resize::padding::pad_for_grid;
 use tuilibr::pictures::resize::padding::thumb_target_px;
@@ -33,14 +34,22 @@ fn place_visible(app: &mut App, out: &mut Vec<u8>) {
 #[test]
 fn delete_all_takes_stale_loop_ids() {
     let mut app = thumbnail_app(1);
-    app.graphics_storage_dirty = true;
-    app.grid_loops.stale_ids.push(900);
+    let ticket = app.loop_ticket(0);
+    let frames: Vec<GridPicture> = vec![RgbaImage::new(2, 2).into(); 2];
+    let outcome = LoopOutcome::Frames(frames, vec![std::time::Duration::ZERO; 2]);
+    let loops = app.graphics.loops();
+    app.grid_loops.player.ready(ticket.finish(outcome), loops);
+    let ids = app.grid_loops.player.ids_of(&0).to_vec();
+    assert_eq!(ids.len(), 2);
+    app.mark_dirty();
     let mut out = Vec::new();
 
     place_visible(&mut app, &mut out);
 
-    assert!(app.grid_loops.stale_ids.is_empty());
-    assert!(!text(&out).contains("d=I,i=900"));
+    assert!(app.grid_loops.player.take_stale().is_empty());
+    for id in ids {
+        assert!(!text(&out).contains(&format!("d=I,i={id}")), "{id}");
+    }
 }
 
 /// The thumbnails sit in the cells of the main pane: right of the info pane, inside the main box.

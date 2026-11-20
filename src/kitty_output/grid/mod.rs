@@ -41,8 +41,9 @@ pub(super) fn emit_new_thumbnails_to(
     Ok(pass.waiting)
 }
 
-/// One grid pass into `update`: the loops that start (with `send_loops`), then the frame of the
-/// visible cells. `deleted` names the pictures that the terminal must drop.
+/// One grid pass into `update`: the loop cells of the frame, the loops that start (with
+/// `send_loops`), then the frame of the visible cells. `deleted` names the pictures that the
+/// terminal must drop.
 pub(super) fn write_grid_to<W: Write + ?Sized>(
     app: &mut App,
     update: &mut Update<'_, W>,
@@ -50,13 +51,14 @@ pub(super) fn write_grid_to<W: Write + ?Sized>(
     mut deleted: Vec<u32>,
     send_loops: bool,
 ) -> io::Result<GridPass> {
+    app.show_grid_loops(now);
+    let mut frame = Placements::default();
     if send_loops {
-        send_grid_loops_to(app, update)?;
+        send_grid_loops_to(app, update, &mut frame)?;
     }
     deleted.extend(app.thumb_cache.take_evicted_ids());
-    deleted.append(&mut app.grid_loops.stale_ids);
-    let tick = app.grid_loops.clock.tick_at(now);
-    let (mut frame, stills, icon_cells, started) = grid_frame(app, tick, &mut deleted);
+    deleted.extend(app.grid_loops.player.take_stale());
+    let (stills, icon_cells, started) = grid_frame(app, &mut frame, &mut deleted);
     app.screen.write_frame(
         update,
         app.graphics,
@@ -67,7 +69,10 @@ pub(super) fn write_grid_to<W: Write + ?Sized>(
                 .thumb_cache
                 .peek(&index)
                 .map(|(picture, _)| Pixels::from(&picture.image)),
-            None => app.grid_icons.pixels(id),
+            None => app
+                .grid_icons
+                .pixels(id)
+                .or_else(|| app.grid_loops.player.pixels_of(id)),
         },
     )?;
     // A preview goes when its sharp picture shows, and the engine deletes it.
@@ -87,14 +92,13 @@ pub(super) fn write_grid_to<W: Write + ?Sized>(
 type Cells = HashMap<u32, usize>;
 
 /// The frame of the visible cells in grid order: the loop frame or the thumbnail of each cell,
-/// and the icons. Returns the frame, the cell of each thumbnail id, the first cell of each icon
-/// id and whether a loop started.
+/// and the icons. Returns the cell of each thumbnail id, the first cell of each icon id and
+/// whether a loop started.
 fn grid_frame(
     app: &mut App,
-    tick: u64,
+    frame: &mut Placements,
     deleted: &mut Vec<u32>,
-) -> (Placements, Cells, Cells, bool) {
-    let mut frame = Placements::default();
+) -> (Cells, Cells, bool) {
     let mut stills = HashMap::new();
     let mut icon_cells = HashMap::new();
     let mut started = false;
@@ -113,7 +117,7 @@ fn grid_frame(
             .thumb_cache
             .peek(&img_idx)
             .map(|(picture, id)| (picture.cells, id));
-        if let Some(now_started) = place_loop_frame(app, &mut frame, vis_idx, img_idx, tick) {
+        if let Some(now_started) = place_loop_frame(app, frame, vis_idx, img_idx) {
             started |= now_started;
             // The still stays for the next overlay.
             if let Some((_, id)) = still {
@@ -135,7 +139,7 @@ fn grid_frame(
     for (_, id, area) in icons {
         frame.place(id, area);
     }
-    (frame, stills, icon_cells, started)
+    (stills, icon_cells, started)
 }
 
 /// The cell box of a picture of `cells` in the thumbnail area of `vis_idx`, centered.
@@ -149,18 +153,13 @@ pub(super) fn grid_placement(gallery: &GalleryState, vis_idx: usize, cells: (u16
     centered(gallery.thumb_rect(vis_idx), cols, rows)
 }
 
-/// The ids that the visible cells need: the stills and their loop frames.
-pub(super) fn visible_image_ids(app: &App) -> HashSet<u32> {
-    let mut ids = HashSet::new();
-    for (_, img_idx) in app.gallery.visible_items() {
-        if let Some((_, id)) = app.thumb_cache.peek(&img_idx) {
-            ids.insert(id);
-        }
-        if let Some(cell_loop) = app.grid_loops.loops.get(&img_idx) {
-            ids.extend(cell_loop.ids.iter().copied());
-        }
-    }
-    ids
+/// The bytes of the stills of the visible cells in the terminal, for the budget of the loops.
+pub(super) fn visible_still_bytes(app: &App) -> usize {
+    app.gallery
+        .visible_items()
+        .filter_map(|(_, img_idx)| app.thumb_cache.peek(&img_idx))
+        .map(|(_, id)| app.screen.bytes_of(id))
+        .sum()
 }
 
 pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
@@ -175,7 +174,6 @@ pub(crate) fn render_gallery_images(app: &mut App) -> io::Result<()> {
         app.thumb_cache
             .touch(&app.gallery.filtered_indices[position]);
     }
-    app.drop_hidden_loops();
     if !app.cell_shape_pending() {
         // The cell at the cursor decodes first, then the other cells from the top left. A free
         // slot starts a job at once, so the cursor cell also spawns first.
@@ -210,7 +208,8 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
         app.graphics_delete_all_to(&mut update)?;
         app.graphics_storage_dirty = false;
         app.stale_image_ids.clear();
-        app.grid_loops.stale_ids.clear();
+        // The wipe deleted the frames of the old loops too.
+        app.grid_loops.player.take_stale();
         app.thumb_cache.take_evicted_ids();
     } else {
         // A preview of a cell off the screen goes. A visible one keeps its place until its

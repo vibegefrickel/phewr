@@ -201,6 +201,7 @@ fn loop_job_holds_start() {
     app.scan_complete = true;
     app.gallery.cursor = 1;
     app.fullscreen_box = Rect::new(0, 0, 100, 40);
+    app.show_grid_loops(Instant::now());
     app.poll_grid_loops();
     assert!(app.grid_loops_pending(), "the clip gets its loop job");
 
