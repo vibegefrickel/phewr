@@ -337,11 +337,13 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   neither the probes nor DA1 costs `PROBE_TIMEOUT` (300 ms) one time. `PHEWR_KITTY_LOOPS` or
   `[gallery] loops` skips the animation probe. SSH and `PHEWR_KITTY_TRANSFER` skip only the
   transfer probe.
-- **Mouse:** phewr enables only the mouse modes 1000, 1002 and 1006 (`terminal::enable_mouse`),
+- **Mouse:** phewr enables only the mouse modes 1000, 1002 and 1006 (the `Modes` of `Session`),
   never 1003, so a pointer move without a button does not wake the run loop. Do not use
   crossterm's `EnableMouseCapture`, because it turns on 1003. `[gallery] mouse = false` turns
   the capture off. The run loop releases the mouse while an mpv window plays
-  (`sync_mouse_capture`, through `tuilibr::terminal::{enable_mouse, disable_mouse}`), and
+  (`session.set_mouse(mouse_capture_wanted(..))`, since 2026-11-20 `run` takes the `&mut Session`
+  of `main`; before, `sync_mouse_capture` wrote the modes itself). `set_mouse` writes to stdout,
+  so no test checks the mouse bytes in phewr: a gap of `Session` in tuilibr. And
   `Session::restore` of tuilibr releases it on exit and on a panic. The session, the mouse modes
   and their tests live in `tuilibr::terminal` since 2026-11-19.
   `ui::draw` records `app.layout`, and a mouse handler reads the regions through

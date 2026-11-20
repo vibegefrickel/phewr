@@ -412,13 +412,18 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   `tuilibr::pictures::kitty::terminal_images`).
 - **Image ids:** the thumbnails count up from 1. The icons start at `ICON_ID_BASE`, the loops at
   `LOOP_ID_BASE` (`1 << 31`, it stays in `app/grid_loops/`), and the video frame is `u32::MAX - 1`. The
-  allocator is `motion::loop_ids::LoopIds`. The probes use 31 and 32.
+  loop player of tuilibr allocates the loop ids through `motion::loop_ids::LoopIds`. The probes use 31 and 32.
 - **Grid loops:** every visible video, animated and Live cell loops after its still, as a Kitty
   animation or through ticks (`Loops`). herdr gets the ticks without the animation probe:
   herdr 0.9.5 answers the probe itself but plays no Kitty animation (maintainer, 2026-11-03).
   `PHEWR_KITTY_LOOPS` and `[gallery] loops` win. `[gallery] animate = false` turns the loops off.
-  The loop clock is `motion::clock::LoopClock`. The loop cache stays warm: the magic is
-  `PHEWRLP1` and the version is `<app>-loop-v1` through `app_name()`.
+  The loops run on the loop player of tuilibr (`kitty::loops::player::LoopPlayer`, 2026-11-20).
+  Each grid frame and each poll name the visible video, animated and Live cells with a sharp
+  still (`App::show_grid_loops`). A hidden cell loses its loop and its job at once, a loop above
+  the budget deletes its ids, and an over-budget cell tries again when it comes back on screen.
+  Jobs start only for the cells that are visible at the poll, so a folder switch starts no job on
+  the old cells. The loop clock is `motion::clock::LoopClock`. The loop cache stays warm: the
+  magic is `PHEWRLP1` and the version is `<app>-loop-v1` through `app_name()`.
 - **Cell icons:** a cell without a thumbnail shows a Lucide icon as a Kitty image in the terminal
   foreground (OSC 10). Without an OSC 10 answer, the icons are octant text. The design is in
   `docs/grid-and-kitty.md` ("Grid icons").
@@ -448,7 +453,9 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   regions calls `test_support::draw_frame` first. The click areas come from `ui::panes`, and a
   click in the info pane does nothing. The double-click uses `handle_event_at` with a
   clock, so tests never sleep. `[gallery] mouse = false` turns the capture off. The run loop
-  releases the mouse while an mpv window plays. A horizontal
+  releases the mouse while an mpv window plays, through `Session::set_mouse` of tuilibr: `run`
+  takes the `&mut Session` of `main` (2026-11-20). `set_mouse` writes to stdout, so no test
+  checks the mouse bytes, only `mouse_capture_wanted`. A horizontal
   wheel does nothing in the grid, so a touchpad scroll never zooms by accident (2026-11-17).
 - **Cell shape:** the shape comes from the headers of the first 64 files, once per scan, and
   stays until the next directory switch.

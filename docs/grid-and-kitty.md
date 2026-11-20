@@ -110,8 +110,12 @@ the picture plan). It holds `Placements`, `Screen`, `Update`, `Placing` and `Lay
   interface is always available in tuilibr.
 
 - `Loops`, `transmit_frame_to` and `animate_to` stay in `tuilibr::pictures::kitty`, because the usage hint
-  `N=1` depends on the probe result. The loop logic of phewr stays in `kitty_output/loops/mod.rs`.
-  It writes the frames into the update of the pass and calls `Screen::record`.
+  `N=1` depends on the probe result. Since 2026-11-20 the loop player of tuilibr
+  (`kitty::loops::player::LoopPlayer`) keeps the loops. `kitty_output/loops/mod.rs` holds the
+  wrappers of the pass. In the grid pass, `App::show_grid_loops` comes first. Then `send_frames`
+  gets the bytes of the stills only, `take_stale()` goes into the deletes, and `place` runs for
+  each cell. No loop frame goes out while stills of the last pass wait. The pixel lookup of the
+  flush tries `pixels_of` of the player after the icons.
 - A lost frame of a visible loop gives the still and a new transfer of the loop. Nothing calls
   `Screen::lost` today, and the trim keeps every frame of a visible loop. So
   this path has no trigger yet. `Screen::answer` takes the same path for a lost picture of the
@@ -264,5 +268,6 @@ polls"). This is the order of the decisions:
 | 100 ms | `WINDOW_POLL` | An mpv window plays. |
 | time left | none | The slideshow, the folder prefetch, the next grid loop frame and the prestart. |
 
-- A playing grid loop in the Kitty animation path gives no wait (`grid_loop_timeout` skips it).
+- A playing grid loop in the Kitty animation path gives no wait (`grid_loop_timeout` asks
+  `next_wake` of the player, which skips it).
 - No event wakes the run loop for a background job. This is the reason for the polls.

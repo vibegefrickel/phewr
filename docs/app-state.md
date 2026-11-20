@@ -109,8 +109,11 @@ the queues and `Priority`, and `tuilibr::pictures::jobs::pool` holds the pool of
 
 ## Grid loops
 
-The code is in `app/grid_loops/`. It holds the jobs and the budget (`GridLoops`). It has no
-`cell.rs`. The frame making, the loop clock (`motion::clock::LoopClock`) and the id allocator
+The code is in `app/grid_loops/`. `GridLoops` is the `enabled` flag, the `LoopPlayer` of tuilibr
+(`kitty::loops::player`, since 2026-11-20) and the result channel. The player keeps the loops, the
+jobs, the ids, the budget and the wake. phewr shows the loop cells of each frame
+(`App::show_grid_loops`), starts the jobs on threads (`LoopSpawner`) and gives the results back
+(`poll_grid_loops`). It has no `cell.rs`. The frame making, the loop clock (`motion::clock::LoopClock`) and the id allocator
 (`motion::loop_ids::LoopIds`) are in `tuilibr::pictures::motion`. See [Video](video.md#grid-loop-frames).
 `LOOP_ID_BASE` stays in `app/grid_loops/`.
 
@@ -154,24 +157,30 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
 ### Jobs
 
 - Only visible cells loop.
-- A loop above `TERMINAL_IMAGE_BUDGET` keeps its still until the visible cells change.
-- A cell that leaves the screen deletes its frames with `d=I`.
-- Loop jobs start after all stills of the screen are out. At most 4 run (`MAX_LOOP_JOBS`), each on
-  its own thread.
+- A loop above `TERMINAL_IMAGE_BUDGET` keeps its still, and its stored frames go to the stale
+  list, so the terminal deletes them. The cell tries again when it comes back on screen.
+- A cell that leaves the screen deletes its frames with `d=I`, and its job is cancelled in the
+  same frame.
+- Loop jobs start after all stills of the screen are out, and no loop frame goes out while stills
+  of the last pass wait. At most 4 run (`LoopLimits::default()`), each on its own thread. A job
+  starts only for a cell that is visible at the poll (`start_loop_jobs` calls `show_grid_loops`
+  first). A loop needs 2 frames.
 - Each ffmpeg run takes at most 2 decode threads (`-threads 2 -filter_threads 1`).
 - New stills or another view cancel the running loop runs. The flag ends ffmpeg within 20 ms. The
   cells get new jobs later.
-- A `ResultGuard` sends `Failed` for a job that panics.
-- The help popup, the info panel and the other views stop the loops.
+- `run_caught` of the player sends a failure for a job that panics. A job runs
+  `motion::loop_file::load_or_decode`.
+- The help popup, the info panel and the other views stop the loops (`grid_loops_shown()`), and
+  a cell under them starts no job.
 - `[gallery] animate = false` turns the loops off.
 - In herdr, the loops take the ticks, and the animation probe does not go out (`chosen_loops`
   in `tuilibr::pictures::kitty::protocol::probe`). herdr 0.9.5 answers the probe itself but plays no Kitty
   animation. `PHEWR_KITTY_LOOPS` and `[gallery] loops` win over herdr.
 - With `[gallery] animate = false`, the help popup shows `loops: off`.
-- `App::drop_hidden_loops`: the render of the grid calls it, also after a cursor move without a
-  scroll.
-- `App::loop_plays` and `App::pretend_loop_job` are test-only. The tests of the Kitty output read
-  `loop_plays`. The tests of the run loop use `pretend_loop_job`.
+- `App::show_grid_loops`: `write_grid_to` calls it first on every path, also after a cursor move
+  without a scroll. The pixel lookup of the flush tries `pixels_of` of the player after the
+  icons. phewr turns on no focus reports, so `focus_gained` of the player has no caller yet.
+- `App::loop_ticket` is test-only: it takes a `LoopTicket` from `start_jobs` and starts no thread.
 
 ### Bench and tests
 

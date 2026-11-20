@@ -17,7 +17,7 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   start directory and `write_cwd_file` (the folder of the grid for `--cwd-file`).
 - The terminal session (raw mode, the alternate screen, the mouse modes), the start query and the
   late answer filter are `tuilibr::terminal` since 2026-11-19 (`Session`, `Modes`,
-  `enable_mouse`, `disable_mouse`, `release_terminal_to`, `install_panic_hook`, `start::query`,
+  `set_mouse`, `release_terminal_to`, `install_panic_hook`, `start::query`,
   `answers::LateAnswerFilter`). phewr has no `terminal.rs`.
 - `run_loop/mod.rs`: `LoopState` (the status note, `answers` (the `LateAnswerFilter` of tuilibr),
   `cell_size_from_terminal` and, with the `video` feature, the `VideoState`), `run`, the
@@ -35,7 +35,7 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   against the graphics output. `mod.rs` holds the fullscreen image and the video frame and
   re-exports the writes of the grid. `grid/` holds the grid pass (`write_grid_to`, `GridPass`,
   `grid_frame`) and the thumbnail writes (`emit_new_thumbnails_to`, `render_gallery_images`,
-  `place_gallery_images_to`, `grid_placement`, `visible_image_ids`). `loops/` holds the grid
+  `place_gallery_images_to`, `grid_placement`, `visible_still_bytes`). `loops/` holds the grid
   order and the budget of the loops (`play_grid_loops`, `send_grid_loops_to`, `place_loop_frame`).
   The write of the frames of one loop is in `tuilibr::pictures::kitty::loops`.
   `grid_icons/` holds the SVG icons of the cells as Kitty images (`GridIcons`, `IconCell`,
@@ -56,7 +56,9 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   phewr has no file for the loop frames now.
 - `app/grid_loops/`: the loops of the grid. `mod.rs` holds `GridLoops`, `LOOP_ID_BASE` and the loop
   state of `App`. The loop clock (`CellLoop`, `LoopClock`, `TICKS_PER_SECOND`) is in
-  `tuilibr::pictures::motion::clock`. `jobs.rs` holds the jobs, their cancel flags and `ResultGuard`.
+  `tuilibr::pictures::motion::clock`. `mod.rs` also holds `show_grid_loops` and the poll. `jobs.rs` holds `LoopSpawner`, the thread
+  of each job (`run_caught`, `load_or_decode`) and `start_loop_jobs`. The player of tuilibr keeps
+  the loops, the jobs and the budget.
   `loop_source` gives the file of a loop: the motion of a Live Photo still, else the file itself.
 - `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
@@ -90,8 +92,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   `Config::layout` and `Config::layout_note` the config value and its start note. `status/` fills the `BarView` of each view for `tuilibr::frame::draw_bar`
   (`draw_status_row`, `BarParts`, `gallery_bar`, `fullscreen_bar`, `video_bar`, `folder_span`,
   `shorten_path`, `display_path`, `is_empty_folder`).
-  `grid/` holds the grid cells: the borders, the folder names (`folder_name_text`, the column width
-  through `unicode-width`) and the icons (`draw_cell_icon`). `help.rs` fills the `HelpView` for
+  `grid/` holds the grid cells: the borders, the folder names (`folder_name_text`, the cut through
+  `tuilibr::frame::truncate_width`) and the icons (`draw_cell_icon`). `help.rs` fills the `HelpView` for
   `tuilibr::frame::draw_help` (`GALLERY_COLUMN`, `FULLSCREEN_SECTIONS`, `kitty_rows`,
   `draw_help_popup`): the sections Gallery, Search, Fullscreen / video player, Mouse and Kitty
   graphics (the transfer medium and the loop path), two columns from 102 terminal columns on,
