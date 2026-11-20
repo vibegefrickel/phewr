@@ -89,6 +89,9 @@ Files at run time:
 
 - Config: `~/.config/phewr/config.toml`, or `$XDG_CONFIG_HOME/phewr/config.toml`. The sections
   are `[gallery]`, `[slideshow]`, `[info]`, `[video]` and `[terminal]`.
+  Each key loads on its own (`config::load_at`, 2026-11-20). A wrong type or a rejected value keeps
+  the default of that key, and a syntax error or a file that phewr cannot read keeps every default.
+  One start note (`Config::start_note`) in the omnibox names the problems.
 - State (the remembered zoom levels): `~/.local/state/phewr/state.toml`.
 - Thumbnail cache: `~/Library/Caches/phewr/`, QOI files and the `.loop` files of the grid loops,
   pruned at 512 MB.
@@ -266,7 +269,7 @@ decisions. Read the long form before you change the code that an item names.
   (`frame::dim_pane`), the main pane keeps the focus. Below `NARROW_BELOW` (60 columns) the info pane sits above the main pane. A pane
   change (`App::change_panes`) deletes the pictures, and only the grid marks itself dirty; the
   fullscreen view keeps its decode and fits it to the new `image_rect`. An unknown layout value
-  keeps minimal with a start note (`Config::layout_note`).
+  keeps minimal with a start note (`Config::start_note`).
 - **Slideshow view:** a running or paused slideshow has no panes and no status row
   (`App::slideshow_fills_screen`, `ui::status_rows`), and Tab, `B` and the right click do nothing
   there. So `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal

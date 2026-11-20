@@ -246,6 +246,10 @@ player = "terminal"   # "terminal" (no sound) or "window" (mpv with sound)
 colorspace = "display-p3"   # "display-p3" (Ghostty on macOS) or "srgb"
 ```
 
+A bad value keeps the default of its key, and the other settings stay. A note under the status
+bar names the problem at the start. A syntax error, or a file that phewr cannot read, keeps every
+default with a note.
+
 phewr uses the colors of your terminal theme. It has no color options.
 
 | Path | Content |

@@ -248,6 +248,14 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   scan lives in `App::scan_error`, not in `App::error`. The status row shows it after `error`. It
   survives the first decode, and a key press or a folder
   switch clears it.
+- **Config file (2026-11-20, `bd5c837`):** `config::load_at` parses the file into a `toml::Table`
+  and reads each section and each key on its own. Before, one value of a wrong type dropped every
+  setting to the default without a note (found by the dotfiles session on 2026-11-19). A wrong
+  type, an interval that is not finite or not above 0, and an unknown `loops`, `layout`, `player`
+  or `colorspace` value keep the default of that key. `loops = "auto"` gives no note. A syntax
+  error, or a read error other than `NotFound`, keeps every default. One start note
+  (`Config::start_note`, before `layout_note`) joins all problems in one line, and the run loop
+  shows it in the omnibox. The state file keeps its own rule.
 - **Status row:** since phase 4a of the tuilibr plan (2026-11-19), the row is the bar of
   `tuilibr::frame::draw_bar`. `ui/status/mod.rs` fills one `BarView` per view (`gallery_bar`,
   `fullscreen_bar`, `video_bar`, the shared `BarParts`): the mode as `ModeView`, the folder path
