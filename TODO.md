@@ -3,7 +3,7 @@
 ## Handoff
 
 - Date: 2026-11-20
-- Commit: 00cdb7a
+- Commit: e93b4e3
 - Done: phewr is an app of the crate `~/Projects/dev/tuilibr`: the picture module, the frame (the bar, the help, the accent, the two panes, the omnibox), the terminal session and the motion module come from the crate. Each phase merged with a docs commit, see "Done".
 - Done: the maintainer test run passed steps 10 to 13 and the grid part of step 14, and auto-review workers fixed its findings. The rest of the run is in "Later".
 - Done: the dependency round in all five repositories, the lint union, Rust 1.100, `version = "0.1.0"`, the shared audit text and the fast pre-commit hook.
@@ -11,6 +11,7 @@
 - Done (2026-11-19 and 2026-11-20, committed): the maintainer review of the panes. The boxes show only with the info pane. The default is maximal, like every app, and a test pins that the grid, the fullscreen view and the slideshow get no box. The main box title is then the folder path with `~`, and the status row leaves the path out. The info pane stays dim. `B` without the info pane keeps the pictures.
 - Done (2026-11-20): each config key loads on its own (`bd5c837`, docs 099e75f, 704 tests, 682 lean). A wrong type or a rejected value keeps the default of its key, a syntax error or an unreadable file keeps every default, and one start note names the problems.
 - Done (2026-11-20, committed): the dialog padding of tuilibr (the help needs 104 columns for two columns, its body starts under the title). The README names tuilibr a private sibling crate, with no clone URL. The fixtures of tuilibr are static files: tuilibr removed every `make.sh`, and nothing needs jpeg-xl.
+- Done (2026-11-20): the crate lints of tuilibr in phewr (`e1e8ea2`, docs `e93b4e3`): the cast lints, `missing_const_for_fn`, `or_fun_call`, `too_long_first_doc_paragraph`. 86 hits: 64 fixes, 9 `expect` items with a reason. The helpers are `tuilibr::cells::to_u16` and `numbers.rs`.
 - Open (agent): no active worker and no agent item in "Later". The next batch waits for the maintainer: the test run, or the next tuilibr phase that touches phewr.
 - Open (user): the test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios).
 - Health: `just check` passes on Rust 1.100.0 with 706 tests (684 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
