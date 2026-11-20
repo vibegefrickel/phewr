@@ -1,6 +1,5 @@
 //! The tests of the mouse in each view.
 use crate::app::ViewMode;
-use crate::app::mouse::DOUBLE_CLICK;
 use crate::config::Config;
 use crate::run_loop::LoopState;
 use crate::test_support::{
@@ -11,6 +10,7 @@ use crate::ui;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
 use std::fs;
 use std::time::{Duration, Instant};
+use tuilibr::frame::DOUBLE_CLICK;
 
 const LEFT: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
 const RIGHT: MouseEventKind = MouseEventKind::Down(MouseButton::Right);

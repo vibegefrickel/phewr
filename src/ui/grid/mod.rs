@@ -10,6 +10,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
 };
 use std::borrow::Cow;
+use tuilibr::frame::accent_bold;
 
 /// The rows of a folder name below the folder icon.
 const FOLDER_NAME_ROWS: u16 = 1;
@@ -45,7 +46,7 @@ pub(super) fn draw_thumbnail_cells(
             draw_cell_border(frame, BorderType::Plain, STYLES.marked, border, grid_rect);
         }
         let style = if is_selected {
-            STYLES.cursor_cell
+            accent_bold()
         } else if is_marked {
             STYLES.marked
         } else {
@@ -64,13 +65,7 @@ pub(super) fn draw_thumbnail_cells(
     }
 
     if let Some(border) = selected_border {
-        draw_cell_border(
-            frame,
-            BorderType::Thick,
-            STYLES.cursor_cell,
-            border,
-            grid_rect,
-        );
+        draw_cell_border(frame, BorderType::Thick, accent_bold(), border, grid_rect);
     }
 }
 

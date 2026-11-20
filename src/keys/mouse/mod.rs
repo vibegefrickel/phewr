@@ -56,13 +56,13 @@ fn gallery_mouse(app: &mut App, mouse: MouseEvent, at: Position, now: Instant) -
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             if shared_click(app, &regions, at)? {
-                app.mouse.last_click = None;
+                app.mouse.clicks.reset();
             } else {
                 gallery_click(app, at, now)?;
             }
         }
         MouseEventKind::Down(MouseButton::Right) => {
-            app.mouse.last_click = None;
+            app.mouse.clicks.reset();
             gallery_right_click(app, at)?;
         }
         MouseEventKind::ScrollUp if shift => app.thumb_zoom_in(),
@@ -87,10 +87,10 @@ fn scroll_grid(app: &mut App, rows: isize) {
 /// double-click.
 fn gallery_click(app: &mut App, at: Position, now: Instant) -> io::Result<()> {
     let Some(position) = select_cell(app, at) else {
-        app.mouse.last_click = None;
+        app.mouse.clicks.reset();
         return Ok(());
     };
-    if !app.mouse.double_click(position, now) {
+    if !app.mouse.clicks.click(position, now) {
         return Ok(());
     }
     if app.selected_is_folder() {

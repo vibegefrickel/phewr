@@ -3,6 +3,7 @@
 
 use crate::info;
 use std::path::Path;
+use tuilibr::frame;
 use tuilibr::pictures::decode;
 #[cfg(feature = "video")]
 use tuilibr::pictures::motion::first_frame::is_video;
@@ -167,7 +168,7 @@ impl FileMeta {
             parts.push(video.hdr.unwrap_or("SDR").to_owned());
         }
         if let Some(bytes) = self.bytes {
-            parts.push(info::human_size(bytes));
+            parts.push(frame::byte_size(bytes));
         }
         if !self.format.is_empty() {
             parts.push(self.format.clone());

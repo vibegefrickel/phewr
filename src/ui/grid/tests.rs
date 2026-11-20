@@ -5,7 +5,7 @@ use crate::styles::STYLES;
 use crate::test_support::folder_app;
 use crate::ui::tests::{
     app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows, assert_symbol,
-    assert_terminal_background, cell_of, render, render_buffer, screen_rows, status_parts,
+    assert_terminal_background, cell_of, render, render_buffer, status_parts,
 };
 use image::RgbaImage;
 use ratatui::buffer::{Buffer, Cell};
@@ -13,6 +13,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::Line;
 use tuilibr::frame::Layout;
+use tuilibr::frame::buffer;
 
 /// Fail when `border` is not a line border of `symbols` (top left, top right, bottom left,
 /// bottom right, horizontal, vertical) in `fg` with `modifier`.
@@ -62,7 +63,7 @@ fn file_cells_draw_no_name() {
 fn selected_cell_gets_thick_border() {
     let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);
     let buffer = render_buffer(&mut app, None, 100, 30);
-    let screen = screen_rows(&buffer).join("\n");
+    let screen = buffer::rows(&buffer).join("\n");
     let border = app.gallery.border_rect(0);
     assert_eq!(
         (border.x, border.y),
@@ -204,7 +205,7 @@ fn borders_reach_edges() {
     );
 
     // The status row below the grid stays text.
-    let screen = screen_rows(&buffer).join("\n");
+    let screen = buffer::rows(&buffer).join("\n");
     let position = format!("{last:02}.jpg [{}/40]", last + 1);
     assert_eq!(
         status_parts(&screen)[..3],
@@ -256,7 +257,7 @@ fn folder_cell_shows_icon_and_name() {
     let mut app = folder_app(&["..", "summer"], &["a.jpg"]);
     app.thumb_cache.insert(2, RgbaImage::new(4, 4));
     let buffer = render_buffer(&mut app, None, 100, 30);
-    let screen = screen_rows(&buffer).join("\n");
+    let screen = buffer::rows(&buffer).join("\n");
     assert!(shows_icon(&app, &buffer, 0, Some(Icon::Parent)));
     assert!(shows_icon(&app, &buffer, 1, Some(Icon::Folder)));
     assert!(
@@ -266,7 +267,7 @@ fn folder_cell_shows_icon_and_name() {
     // The names sit inside the cells, in the row below the icon.
     let (x, _) = cell_center(&app, 1);
     let below = icon_area(&app, 1).bottom();
-    let row = &screen_rows(&buffer)[usize::from(below)];
+    let row = &buffer::rows(&buffer)[usize::from(below)];
     assert!(row.contains("summer"), "{screen}");
     assert!(!row.contains(".."), "the two dots stand for `..`: {screen}");
     assert_eq!(
@@ -490,7 +491,7 @@ fn narrow_grid_cuts_first_cell() {
         tuilibr::frame::accent(),
         Modifier::BOLD,
     );
-    let top_row = &screen_rows(&buffer)[0];
+    let top_row = &buffer::rows(&buffer)[0];
     assert!(
         !top_row.contains('\u{2513}'),
         "no right side at the clip edge: {top_row}"
@@ -516,7 +517,7 @@ fn live_cell_draws_no_text_in_its_gap() {
         app.gallery.cursor = cursor;
         let buffer = render_buffer(&mut app, None, 100, 30);
         let border = app.gallery.border_rect(1);
-        let top = &screen_rows(&buffer)[usize::from(border.y)];
+        let top = &buffer::rows(&buffer)[usize::from(border.y)];
         let only_borders = top
             .chars()
             .all(|symbol| symbol == ' ' || ('\u{2500}'..='\u{257f}').contains(&symbol));

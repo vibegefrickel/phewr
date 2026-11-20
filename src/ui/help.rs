@@ -112,10 +112,11 @@ mod tests {
     use super::{FULLSCREEN_SECTIONS, GALLERY_COLUMN, KEY_WIDTH, TEXT_WIDTH, kitty_rows};
     use crate::ui::tests::{
         app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows,
-        assert_terminal_background, cell_of, render, render_buffer, screen_rows,
+        assert_terminal_background, cell_of, render, render_buffer,
     };
     use ratatui::style::{Color, Modifier};
-    use tuilibr::frame::{Section, column_rows, display_width};
+    use tuilibr::frame::buffer;
+    use tuilibr::frame::{Section, column_rows, first_misfit};
     use tuilibr::pictures::kitty::{Loops, Transfer};
 
     /// Every Kitty section that a run can show.
@@ -136,23 +137,16 @@ mod tests {
             .iter()
             .map(|rows| ("Kitty graphics", rows.as_slice()))
             .collect();
-        let sections = GALLERY_COLUMN
+        let all: Vec<Section<'_>> = GALLERY_COLUMN
             .iter()
             .chain(&FULLSCREEN_SECTIONS)
-            .chain(&kitty);
-        for (title, keys) in sections {
-            assert!(
-                display_width(title) <= usize::from(KEY_WIDTH + TEXT_WIDTH),
-                "{title}"
-            );
-            for (key, text) in *keys {
-                assert!(display_width(key) < usize::from(KEY_WIDTH), "{key}");
-                assert!(display_width(text) <= usize::from(TEXT_WIDTH), "{text}");
-            }
-        }
+            .chain(&kitty)
+            .copied()
+            .collect();
+        assert_eq!(first_misfit(&all, KEY_WIDTH, TEXT_WIDTH), None);
+        let right = [FULLSCREEN_SECTIONS.as_slice(), &kitty[..1]].concat();
         // The border and the padding take 2 rows each, and the margin 2. The box sits above the
         // omnibox, so a screen of 30 rows gives it 29. The margin keeps the bar free.
-        let right = [FULLSCREEN_SECTIONS.as_slice(), &kitty[..1]].concat();
         for column in [GALLERY_COLUMN, &right] {
             assert!(column_rows(column) + 6 <= 29, "the box fits 30 rows");
         }
@@ -198,7 +192,7 @@ mod tests {
         #[cfg(feature = "video")]
         assert_shows(&screen, "Open in mpv, with sound");
 
-        let rows = screen_rows(&render_buffer(&mut app, None, 120, 52));
+        let rows = buffer::rows(&render_buffer(&mut app, None, 120, 52));
         let gallery_row = rows.iter().position(|row| row.contains(" Gallery"));
         assert!(gallery_row.is_some());
         assert_eq!(
@@ -223,7 +217,7 @@ mod tests {
     fn narrow_terminal_gets_one_column() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
-        let rows = screen_rows(&render_buffer(&mut app, None, 80, 120));
+        let rows = buffer::rows(&render_buffer(&mut app, None, 80, 120));
         let gallery_row = rows
             .iter()
             .position(|row| row.contains(" Gallery"))
@@ -250,7 +244,7 @@ mod tests {
     fn body_starts_under_the_title() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
-        let rows = screen_rows(&render_buffer(&mut app, None, 120, 60));
+        let rows = buffer::rows(&render_buffer(&mut app, None, 120, 60));
         // The screen column of the first cell of `text`, in characters, not in bytes.
         let column = |text: &str| {
             rows.iter().find_map(|row| {
@@ -273,7 +267,7 @@ mod tests {
     fn low_narrow_terminal_keeps_two_columns() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
-        let rows = screen_rows(&render_buffer(&mut app, None, 80, 30));
+        let rows = buffer::rows(&render_buffer(&mut app, None, 80, 30));
         let gallery = rows.iter().position(|row| row.contains(" Gallery"));
         assert!(gallery.is_some());
         assert_eq!(
@@ -290,7 +284,7 @@ mod tests {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let mut two_columns = |width| {
-            let rows = screen_rows(&render_buffer(&mut app, None, width, 120));
+            let rows = buffer::rows(&render_buffer(&mut app, None, width, 120));
             let gallery = rows.iter().position(|row| row.contains(" Gallery"));
             let fullscreen = rows.iter().position(|row| row.contains(" Fullscreen"));
             assert!(gallery.is_some() && fullscreen.is_some(), "{width} columns");

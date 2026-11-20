@@ -2,12 +2,13 @@
 use crate::app::ViewMode;
 use crate::ui::tests::{
     app_with, assert_ansi, assert_default_fg, assert_hides, assert_shows, assert_symbol,
-    assert_terminal_background, cell_of, omnibox_row, render, render_buffer, screen_rows,
-    status_parts, status_row,
+    assert_terminal_background, cell_of, omnibox_row, render, render_buffer, status_parts,
+    status_row,
 };
 use image::RgbaImage;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
+use tuilibr::frame::buffer;
 
 #[test]
 fn gallery_shows_position_without_hints() {
@@ -108,7 +109,7 @@ fn gallery_row_holds_search_and_scan() {
     app.gallery.search_query = tuilibr::text_field::TextField::from("a");
     app.gallery.filtered_indices = vec![0];
     let buffer = render_buffer(&mut app, None, 100, 30);
-    let screen = screen_rows(&buffer).join("\n");
+    let screen = buffer::rows(&buffer).join("\n");
     assert_eq!(
         status_parts(&screen),
         ["SEARCH", "a.jpg [1/1]", "1 selected", "scanning\u{2026}"],
@@ -131,7 +132,7 @@ fn file_facts_stay_during_note() {
         !app.meta_pending()
     });
     let buffer = render_buffer(&mut app, None, 100, 30);
-    let screen = screen_rows(&buffer).join("\n");
+    let screen = buffer::rows(&buffer).join("\n");
     let row = status_row(&screen);
     assert_eq!(
         status_parts(&screen)[..2],
@@ -583,7 +584,7 @@ fn slideshow_shows_a_box_at_the_bottom_left() {
     app.mode = ViewMode::Fullscreen;
     app.start_slideshow();
     let buffer = render_buffer(&mut app, None, 100, 30);
-    let screen = screen_rows(&buffer).join("\n");
+    let screen = buffer::rows(&buffer).join("\n");
     // A slideshow has no bar and no omnibox: the box sits in the last row.
     let last_row = |screen: &str| screen.lines().last().unwrap_or_default().to_owned();
     assert!(last_row(&screen).starts_with(" SLIDESHOW "), "{screen}");

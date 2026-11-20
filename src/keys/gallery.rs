@@ -23,8 +23,7 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
                 return;
             };
             // The loop draws the text on each pass, so a cursor move needs no picture write.
-            let before = app.gallery.search_query.text().to_owned();
-            if app.gallery.search_query.apply(edit) && app.gallery.search_query.text() != before {
+            if app.gallery.search_query.edit_text(edit) {
                 app.update_filter();
             }
         }

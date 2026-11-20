@@ -14,6 +14,7 @@ use crate::numbers::round_to_u16;
 use ratatui::layout::Rect;
 use std::ops::Range;
 use tuilibr::cells;
+use tuilibr::frame::scroll_to_show;
 use tuilibr::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use tuilibr::text_field::TextField;
 
@@ -412,13 +413,8 @@ impl GalleryState {
     }
 
     pub(crate) const fn ensure_cursor_visible(&mut self) {
-        let row = self.cursor_row();
-        if row < self.scroll_offset {
-            self.scroll_offset = row;
-        }
-        if row >= self.scroll_offset + self.visible_rows {
-            self.scroll_offset = row - self.visible_rows + 1;
-        }
+        self.scroll_offset =
+            scroll_to_show(self.scroll_offset, self.cursor_row(), self.visible_rows);
     }
 
     pub(crate) fn move_cursor_to(&mut self, new: usize) {

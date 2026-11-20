@@ -8,8 +8,6 @@ pub(crate) struct Styles {
     /// The explicit `Reset` keeps the text in a title or a bottom line out of the border color.
     pub text: Style,
     pub title: Style,
-    /// The thick border and the folder name of the cell under the cursor, in the frame accent.
-    pub cursor_cell: Style,
     /// The plain border of a marked file, and the selection count.
     pub marked: Style,
     /// Errors.
@@ -30,9 +28,6 @@ pub(crate) struct Styles {
 pub(crate) const STYLES: Styles = Styles {
     text: Style::new().fg(Color::Reset),
     title: Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
-    cursor_cell: Style::new()
-        .fg(tuilibr::frame::accent())
-        .add_modifier(Modifier::BOLD),
     marked: Style::new().fg(Color::Yellow),
     error: tuilibr::frame::alert(),
     dim: tuilibr::frame::dim(),

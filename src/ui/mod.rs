@@ -256,6 +256,7 @@ mod tests {
     use ratatui::style::{Color, Modifier};
     use std::path::PathBuf;
     use tuilibr::frame::Layout;
+    use tuilibr::frame::buffer;
 
     /// An app with `names` below `/photos`, as after a finished scan.
     pub(super) fn app_with(names: &[&str]) -> App {
@@ -349,7 +350,7 @@ mod tests {
         app.slideshow_interval = std::time::Duration::from_secs(5);
         app.start_slideshow();
         let buffer = render_buffer(&mut app, None, 40, 12);
-        let rows = screen_rows(&buffer);
+        let rows = buffer::rows(&buffer);
         assert!(rows[11].ends_with(" \u{25b6} 5.0s "), "{rows:?}");
         assert_eq!(buffer[(39, 11)].style().bg, Some(Color::Gray));
         assert_ne!(
@@ -359,16 +360,16 @@ mod tests {
         );
 
         app.slideshow_toggle_pause();
-        let rows = screen_rows(&render_buffer(&mut app, Some("a note"), 40, 12));
+        let rows = buffer::rows(&render_buffer(&mut app, Some("a note"), 40, 12));
         assert!(rows[11].ends_with(" a note  \u{23f8} 5.0s "), "{rows:?}");
 
         app.error = Some("broken".to_owned());
-        let rows = screen_rows(&render_buffer(&mut app, None, 40, 12));
+        let rows = buffer::rows(&render_buffer(&mut app, None, 40, 12));
         assert!(rows[11].ends_with(" Error: broken "), "{rows:?}");
 
         app.error = None;
         app.stop_slideshow();
-        let rows = screen_rows(&render_buffer(&mut app, None, 40, 12));
+        let rows = buffer::rows(&render_buffer(&mut app, None, 40, 12));
         assert!(
             !rows[11].contains("5.0s"),
             "no badge after the slideshow: {rows:?}"
@@ -390,24 +391,13 @@ mod tests {
         terminal.backend().buffer().clone()
     }
 
-    pub(super) fn screen_rows(buffer: &Buffer) -> Vec<String> {
-        let area = buffer.area;
-        (0..area.height)
-            .map(|y| {
-                (0..area.width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect()
-    }
-
     pub(super) fn render(app: &mut App, status: Option<&str>, width: u16, height: u16) -> String {
-        screen_rows(&render_buffer(app, status, width, height)).join("\n")
+        buffer::rows(&render_buffer(app, status, width, height)).join("\n")
     }
 
     /// The cell of the first character of `needle`. The test screens hold one character per cell.
     pub(super) fn cell_of<'a>(buffer: &'a Buffer, needle: &str) -> &'a Cell {
-        let (x, y) = screen_rows(buffer)
+        let (x, y) = buffer::rows(buffer)
             .iter()
             .enumerate()
             .find_map(|(y, row)| {
@@ -501,7 +491,7 @@ mod tests {
         assert_shows(&screen, "File");
         assert_shows(&screen, "Name    a.jpg");
         assert_shows(&screen, "Format  JPG");
-        let rows = screen_rows(&render_buffer(&mut app, None, 120, 30));
+        let rows = buffer::rows(&render_buffer(&mut app, None, 120, 30));
         assert!(rows[0].starts_with("\u{256d}\u{2500} Info "), "{rows:?}");
         assert!(rows[1].starts_with("\u{2502}File"), "{rows:?}");
 
@@ -529,7 +519,7 @@ mod tests {
         let mut app = app_with(&["a.jpg"]);
         app.pane_layout = Layout::Maximal;
         app.info_visible = true;
-        let rows = screen_rows(&render_buffer(&mut app, None, 50, 30));
+        let rows = buffer::rows(&render_buffer(&mut app, None, 50, 30));
         assert!(rows[0].starts_with("\u{256d}\u{2500} Info "), "{rows:?}");
         assert!(rows[9].starts_with("\u{256d}\u{2500} Files "), "{rows:?}");
         assert_eq!(app.gallery.grid_rect, Rect::new(1, 10, 48, 17));
@@ -562,7 +552,7 @@ mod tests {
 
         app.pane_layout = Layout::Minimal;
         let buffer = render_buffer(&mut app, None, 100, 20);
-        let rows = screen_rows(&buffer);
+        let rows = buffer::rows(&buffer);
         assert_eq!(rows[0].chars().nth(36), Some('\u{2502}'), "{rows:?}");
         assert_eq!(rows[17].chars().nth(36), Some('\u{2502}'), "{rows:?}");
         assert!(rows[0].starts_with("File "), "no title: {rows:?}");

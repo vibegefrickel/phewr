@@ -4,6 +4,7 @@ use exif::{In, Tag};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use tuilibr::frame;
 use tuilibr::pictures::decode;
 #[cfg(feature = "jxl")]
 use tuilibr::pictures::decode::Route;
@@ -28,7 +29,7 @@ pub(crate) fn load(path: &Path) -> ImageInfo {
         rows.push(("Folder".to_owned(), folder.display().to_string()));
     }
     if let Ok(metadata) = std::fs::metadata(path) {
-        rows.push(("Size".to_owned(), human_size(metadata.len())));
+        rows.push(("Size".to_owned(), frame::byte_size(metadata.len())));
         if let Ok(modified) = metadata.modified()
             && let Some(text) = crate::file_meta::format_local(modified, "%Y-%m-%d %H:%M:%S")
         {
@@ -60,21 +61,6 @@ pub(crate) fn megapixels(w: u32, h: u32) -> String {
         format!("{mp:.0} MP")
     } else {
         format!("{mp:.1} MP")
-    }
-}
-
-pub(crate) fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
@@ -300,16 +286,6 @@ mod tests {
     }
 
     #[test]
-    fn human_size_scales_units() {
-        assert_eq!(human_size(0), "0 B");
-        assert_eq!(human_size(512), "512 B");
-        assert_eq!(human_size(2048), "2.0 KB");
-        assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
-        assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GB");
-        assert_eq!(human_size(2048 * 1024 * 1024 * 1024 * 1024), "2048.0 TB");
-    }
-
-    #[test]
     fn megapixels_drop_decimal_from_ten() {
         assert_eq!(megapixels(1920, 1080), "2.1 MP");
         assert_eq!(megapixels(4000, 3000), "12 MP");
@@ -359,7 +335,7 @@ mod tests {
         let rows = &info.rows;
 
         assert_eq!(row(rows, "Name"), Some("photo.jpg"));
-        assert_eq!(row(rows, "Size"), Some(human_size(size).as_str()));
+        assert_eq!(row(rows, "Size"), Some(frame::byte_size(size).as_str()));
         assert!(row(rows, "Modified").is_some());
         assert_eq!(row(rows, "Dimensions"), Some("16 x 8 (0.0 MP)"));
         assert_eq!(row(rows, "Format"), Some("JPG"));
