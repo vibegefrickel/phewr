@@ -70,7 +70,10 @@ The repository pins the toolchain, the formatter and the lints:
   Edition 2024.
 - `rustfmt.toml`: 2024 style, stable options only.
 - `Cargo.toml`, the `[lints]` tables: clippy `pedantic` plus restriction lints, the lint union of
-  tuilibr (2026-11-19). `[lints.cargo] unused_dependencies = "deny"` finds an unused dependency.
+  tuilibr (2026-11-19), and since 2026-11-20 also the crate lints of tuilibr: the cast lints
+  (only `cast_precision_loss` stays allowed), `missing_const_for_fn`, `or_fun_call` and
+  `too_long_first_doc_paragraph`. A cast goes through `tuilibr::cells::to_u16` or the helpers of
+  `numbers.rs`. `[lints.cargo] unused_dependencies = "deny"` finds an unused dependency.
   In `just check`, every warning is an error through `CARGO_BUILD_WARNINGS=deny` in the recipes
   (no `-D warnings` flag, so the build cache stays). phewr is a binary crate: `missing_docs` and
   `missing_debug_implementations` find nothing, and there is no doctest step.
@@ -212,6 +215,8 @@ short form:
 - `search.rs`: the fuzzy filename search on one filter thread (`FilterWorker`).
 - `info.rs`, `file_meta.rs`: the facts of the info panel and of the status row.
 - `icons.rs`: the cell icons (resvg render, octant fallback) and the play stamp.
+- `numbers.rs`: the saturating float roundings to pixel and cell sizes (`round_to_u32`,
+  `round_to_u16`).
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config/`: `config.toml` and the state file with its writer thread.
 - `yazi.rs`: the reveal in yazi and the PATH lookup `find_on_path`.

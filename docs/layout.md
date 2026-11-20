@@ -129,6 +129,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   names as an `Arc`, and runs only the newest query.
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `file_meta.rs`: the facts of one file for the status row (`FileMeta`, `describe`).
+- `numbers.rs`: `round_to_u32` and `round_to_u16`, the saturating roundings of a float pixel or
+  cell size. `app`, `gallery`, `icons` and the benches share them.
 - `icons.rs`: the large icons of the grid cells: `render` (the Lucide SVGs of `assets/icons/`
   through resvg), the octant fallback and the play stamp of the stills.
 - `styles.rs`: `STYLES`, one style per role on the screen.
