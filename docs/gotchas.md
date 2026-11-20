@@ -487,9 +487,15 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   rebuilds the hash from its inputs, so a change of the input or of its order fails the test. The
   prune removes temp files of the cache and partial cube files of the tone map that are older than
   1 hour.
-- **Thumbnail cache folder:** the thumbnails of phewr sit at the top of `~/Library/Caches/phewr`
-  (`default_disk_cache_dir` in `app/disk_cache/mod.rs`). Do not move them, because a move makes
-  the cache of the maintainer cold. The test `the_cache_folder_stays_where_it_was` holds the path.
+- **Thumbnail cache folder (2026-11-20):** the thumbnails of phewr sit at the top of the XDG
+  cache folder (`$XDG_CACHE_HOME/phewr`, else `~/.cache/phewr`, through `tuilibr::dirs::AppDirs`).
+  The maintainer decided that the folders of every app follow XDG. Until then they sat in
+  `~/Library/Caches/phewr`. At start, before anything opens a file in it, `adopt_old_cache` in
+  `app/disk_cache/mod.rs` renames the old folder one time, only when the new folder does not
+  exist and the old one does. So the cache stays warm. A failed rename (another volume) starts an
+  empty cache, and the old folder stays: a cache needs no copy. When both exist, phewr keeps the
+  new one and leaves the old one. phewr never deletes the old folder and gives no note. Without a
+  usable `HOME`, the cache goes to `<temp>/phewr-cache`, never below the viewed folder.
   `prune_disk_cache` refuses a folder that holds a subfolder, so phewr must keep no subfolder
   there. The shared module has no default folder. Another app passes
   `thumbnail_dir_below(<its cache root>)`.

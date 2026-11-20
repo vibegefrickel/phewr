@@ -85,8 +85,10 @@ the queues and `Priority`, and `tuilibr::pictures::jobs::pool` holds the pool of
 - The code is in `tuilibr::pictures::jobs::disk_cache`. `mod.rs` holds `FileStamp`, `CacheEntry`,
   `LazyEntry`, `thumbnail_dir_below` and the key. `write.rs` holds the temp file write and the
   prune.
-- The module has no default folder. `app/disk_cache/mod.rs` holds `default_disk_cache_dir`, the
-  folder of phewr (`~/Library/Caches/phewr`). The prune refuses a folder that holds a subfolder.
+- The module has no default folder. phewr gets its folder from `config::Paths` (on
+  `tuilibr::dirs::AppDirs`): `~/.cache/phewr`. `app/disk_cache/mod.rs` holds `adopt_old_cache`,
+  the one-time move of `~/Library/Caches/phewr`. The prune refuses a folder that holds a
+  subfolder.
 - The loop file code is in `tuilibr::pictures::motion::loop_file`. phewr has no loop file code in
   `app/disk_cache/`. The file is `<hash>.loop`. It holds QOI frames with their times.
 - The magic of a loop file is `PHEWRLP1`. The key version is `<app>-loop-v1`, and `app_name()`

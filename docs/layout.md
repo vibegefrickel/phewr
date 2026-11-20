@@ -60,7 +60,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   of each job (`run_caught`, `load_or_decode`) and `start_loop_jobs`. The player of tuilibr keeps
   the loops, the jobs and the budget.
   `loop_source` gives the file of a loop: the motion of a Live Photo still, else the file itself.
-- `yazi.rs`: the reveal of the last file in yazi, and the PATH lookup `find_on_path`.
+- `yazi.rs`: the reveal of the last file in yazi. The PATH lookup is
+  `tuilibr::programs::find_on_path`.
 - `app/`: `App`, the whole view state. `mod.rs` holds the struct, its fields and its
   construction. One file per topic: `info_panel.rs` (`view_file`, the
   file of the info panel and the status row), `grid_zoom.rs` (the cell size and the state file),
@@ -78,7 +79,7 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   cache read slots, the misses and the generation, and `ThumbImage`. `mod.rs` also holds the job
   bounds `MAX_THUMB_JOBS`, `MAX_PREVIEW_JOBS` and `MAX_CACHE_READS`, and `THUMB_CACHE_LIMITS`.
   `decode.rs` holds the work of one job (`warm_disk_cache`, the embedded preview, the animation
-  flag)), `disk_cache/` (`default_disk_cache_dir` in `mod.rs`, the cache folder of phewr). The loop file
+  flag)), `disk_cache/` (`adopt_old_cache` in `mod.rs`, the one-time move of the old cache folder). The loop file
   code is in `tuilibr::pictures::motion::loop_file`. `grid_loops/` is listed above.
 - `tuilibr::pictures`: the shared picture module (decoders, resize, shape, jobs, the Kitty layer,
   the test builders). It lives in tuilibr since 2026-11-19. `tuilibr/docs/pictures.md` holds its module tree. This page lists only the files of phewr.
@@ -131,8 +132,6 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   names as an `Arc`, and runs only the newest query.
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `file_meta.rs`: the facts of one file for the status row (`FileMeta`, `describe`).
-- `numbers.rs`: `round_to_u32` and `round_to_u16`, the saturating roundings of a float pixel or
-  cell size. `app`, `gallery`, `icons` and the benches share them.
 - `icons.rs`: the large icons of the grid cells: `render` (the Lucide SVGs of `assets/icons/`
   through resvg), the octant fallback and the play stamp of the stills.
 - `styles.rs`: `STYLES`, one style per role on the screen.

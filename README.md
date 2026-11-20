@@ -254,7 +254,7 @@ phewr uses the colors of your terminal theme. It has no color options.
 | Path | Content |
 |------|---------|
 | `~/.local/state/phewr/state.toml` | the zoom level of the last 200 folders |
-| `~/Library/Caches/phewr/` | the thumbnail cache, at most 512 MB |
+| `~/.cache/phewr/` | the thumbnail cache, at most 512 MB. phewr moves an old `~/Library/Caches/phewr/` there one time, and you can delete the old folder if it stays |
 
 At start, phewr asks the terminal how it accepts images. If the terminal reads temp files, phewr
 sends only a file path, which is the fastest way. The section "Kitty graphics" of the help (`?`)

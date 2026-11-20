@@ -72,8 +72,8 @@ The repository pins the toolchain, the formatter and the lints:
 - `Cargo.toml`, the `[lints]` tables: clippy `pedantic` plus restriction lints, the lint union of
   tuilibr (2026-11-19), and since 2026-11-20 also the crate lints of tuilibr: the cast lints
   (only `cast_precision_loss` stays allowed), `missing_const_for_fn`, `or_fun_call` and
-  `too_long_first_doc_paragraph`. A cast goes through `tuilibr::cells::to_u16` or the helpers of
-  `numbers.rs`. `[lints.cargo] unused_dependencies = "deny"` finds an unused dependency.
+  `too_long_first_doc_paragraph`. A cast goes through `tuilibr::cells` (`to_u16`, `round_to_u32`,
+  `round_to_u16`). `[lints.cargo] unused_dependencies = "deny"` finds an unused dependency.
   In `just check`, every warning is an error through `CARGO_BUILD_WARNINGS=deny` in the recipes
   (no `-D warnings` flag, so the build cache stays). phewr is a binary crate: `missing_docs` and
   `missing_debug_implementations` find nothing, and there is no doctest step.
@@ -95,9 +95,13 @@ Files at run time:
   Each key loads on its own (`config::load_at`, 2026-11-20). A wrong type or a rejected value keeps
   the default of that key, and a syntax error or a file that phewr cannot read keeps every default.
   One start note (`Config::start_note`) in the omnibox names the problems.
-- State (the remembered zoom levels): `~/.local/state/phewr/state.toml`.
-- Thumbnail cache: `~/Library/Caches/phewr/`, QOI files and the `.loop` files of the grid loops,
-  pruned at 512 MB.
+- State (the remembered zoom levels): `~/.local/state/phewr/state.toml`, or
+  `$XDG_STATE_HOME/phewr/state.toml`. `tuilibr::files::write_atomic` writes it through a temp file
+  `.<name>.<pid>.<seq>.tmp`.
+- Thumbnail cache: `~/.cache/phewr/`, or `$XDG_CACHE_HOME/phewr/` (since 2026-11-20, before
+  `~/Library/Caches/phewr/`), QOI files and the `.loop` files of the grid loops, pruned at 512 MB.
+  Without a usable `HOME`, the cache goes to `<temp>/phewr-cache`. The folders come from
+  `tuilibr::dirs::AppDirs` (`config::Paths`).
 
 ## Rules
 
@@ -215,11 +219,9 @@ short form:
 - `search.rs`: the fuzzy filename search on one filter thread (`FilterWorker`).
 - `info.rs`, `file_meta.rs`: the facts of the info panel and of the status row.
 - `icons.rs`: the cell icons (resvg render, octant fallback) and the play stamp.
-- `numbers.rs`: the saturating float roundings to pixel and cell sizes (`round_to_u32`,
-  `round_to_u16`).
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config/`: `config.toml` and the state file with its writer thread.
-- `yazi.rs`: the reveal in yazi and the PATH lookup `find_on_path`.
+- `yazi.rs`: the reveal in yazi. The PATH lookup is `tuilibr::programs::find_on_path`.
 - Feature `video`: `video/` (the session lookup, `session_first_frame` and `session_loop`),
   `player/` (only the terminal player), `video_handoff/` (the player start, the prestart, the mpv
   window) and `mpv.rs`. `tuilibr::pictures::motion` holds the probe and the ffmpeg runs. It holds
@@ -470,9 +472,11 @@ Most code of this section lives in `tuilibr::pictures`, and a change of it goes 
   `phewr`, so the key stays `phewr-thumbnail-v22`. When the thumbnail output changes, increase the
   `v22` part in tuilibr. If several workers change the output at the same time, each takes its
   own version, higher than main and than every branch in flight.
-- **Thumbnail cache folder** (phewr code, `app/disk_cache/`): the thumbnails of phewr sit at the top of `~/Library/Caches/phewr`
-  (`default_disk_cache_dir`). Do not move them. The prune refuses a folder that holds a
-  subfolder, so phewr must keep no subfolder there.
+- **Thumbnail cache folder** (phewr code, `app/disk_cache/`): the thumbnails of phewr sit at the top of the XDG cache
+  folder `~/.cache/phewr` (maintainer, 2026-11-20). At start, `adopt_old_cache` renames
+  `~/Library/Caches/phewr` one time, only when the new folder does not exist. A failed rename
+  starts an empty cache. phewr never deletes the old folder. The prune refuses a folder that
+  holds a subfolder, so phewr must keep no subfolder there.
 - **Disk cache format:** QOI files. A hit reads and decodes in about 0.75 ms.
 - **Resize and pixel layouts:** every resize uses Catmull-Rom and the fastest layout of
   `fast_image_resize`. Only a downscale to 1/2 or less resizes as RGB. An opaque image goes out
