@@ -5,14 +5,23 @@ use crate::scanner::LivePhotos;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Instant;
-use tuilibr::pictures::kitty::loops::player::{LoopOutcome, LoopResult, LoopTicket, run_caught};
+use tuilibr::pictures::kitty::loops::player::{
+    LoopOutcome, LoopResult, LoopTicket, run_caught_with,
+};
 use tuilibr::pictures::motion::loop_file::load_or_decode;
 use tuilibr::pictures::motion::loop_frames::LoopFrames;
 use tuilibr::pictures::resize::padding::{pad_loop_frame, thumb_target_px};
 
 impl App {
+    /// The text of the last panic of a loop job, if one panicked.
+    #[cfg(test)]
+    pub(crate) fn last_loop_panic(&self) -> Option<String> {
+        let last = self.grid_loops.last_panic.lock();
+        last.unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
     /// Give the finished loop jobs to the player and start new ones.
     pub(crate) fn poll_grid_loops(&mut self) {
         let loops = self.graphics.loops();
@@ -40,6 +49,7 @@ impl App {
             images: &self.images,
             live: &self.live,
             tx: &self.grid_loops.tx,
+            last_panic: &self.grid_loops.last_panic,
             cache_dir: &self.disk_cache_dir,
             target: thumb_target_px(self.gallery.thumb_box(), self.cell_px),
             cell_px: self.cell_px,
@@ -61,6 +71,7 @@ struct LoopSpawner<'a> {
     images: &'a [PathBuf],
     live: &'a LivePhotos,
     tx: &'a mpsc::Sender<LoopResult<usize>>,
+    last_panic: &'a Arc<Mutex<Option<String>>>,
     cache_dir: &'a Path,
     target: (u32, u32),
     cell_px: (u32, u32),
@@ -75,10 +86,11 @@ impl LoopSpawner<'_> {
             return false;
         };
         let tx = self.tx.clone();
+        let last_panic = Arc::clone(self.last_panic);
         let cache_dir = self.cache_dir.to_path_buf();
         let (target, cell_px) = (self.target, self.cell_px);
         let job = move || {
-            let outcome = run_caught(|| {
+            let outcome = run_noting_panic(&last_panic, || {
                 let frames = loop_frames(&cache_dir, &path, target, ticket.cancel());
                 LoopOutcome::of(frames, |frame, shown| {
                     pad_loop_frame(frame, shown, target, cell_px)
@@ -95,6 +107,16 @@ impl LoopSpawner<'_> {
             .spawn(job)
             .is_ok()
     }
+}
+
+/// Run a loop job. A panic gives `Failed`, and its text goes to `last_panic` for a test.
+pub(super) fn run_noting_panic(
+    last_panic: &Mutex<Option<String>>,
+    job: impl FnOnce() -> LoopOutcome,
+) -> LoopOutcome {
+    run_caught_with(job, |text| {
+        *last_panic.lock().unwrap_or_else(PoisonError::into_inner) = Some(text.to_owned());
+    })
 }
 
 /// The file of the loop of `index`: the motion of a Live Photo still, else the file itself.

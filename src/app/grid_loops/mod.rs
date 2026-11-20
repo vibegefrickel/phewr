@@ -9,7 +9,7 @@ mod jobs;
 mod tests;
 
 use super::{App, ViewMode};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use tuilibr::pictures::kitty::loops::player::{LoopLimits, LoopPlayer, LoopResult};
 use tuilibr::pictures::motion::clock::LoopClock;
@@ -24,6 +24,9 @@ pub(crate) struct GridLoops {
     pub(crate) player: LoopPlayer<usize>,
     tx: mpsc::Sender<LoopResult<usize>>,
     rx: mpsc::Receiver<LoopResult<usize>>,
+    /// The text of the last panic of a loop job. phewr writes nothing to the terminal while the
+    /// TUI runs and has no log file, so the text stays here for a test and a debugger.
+    last_panic: Arc<Mutex<Option<String>>>,
     /// The clock of the player, so a test can name the time of a tick.
     #[cfg(all(test, feature = "video"))]
     pub(crate) clock: LoopClock,
@@ -39,6 +42,7 @@ impl GridLoops {
                 .with_clock(clock),
             tx,
             rx,
+            last_panic: Arc::default(),
             #[cfg(all(test, feature = "video"))]
             clock,
         }

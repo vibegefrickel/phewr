@@ -183,6 +183,76 @@ fn mouse_capture_wanted_follows_config_and_window() {
     assert!(!mouse_capture_wanted(true, true));
 }
 
+/// A session without a terminal, with the mouse on or off as `main` starts it from the config.
+fn mouse_session(mouse: bool) -> tuilibr::terminal::Session {
+    tuilibr::terminal::Session::detached(tuilibr::terminal::Modes {
+        mouse,
+        ..Default::default()
+    })
+}
+
+/// The bytes of the mouse modes: 1000, 1002 and 1006, never 1003.
+#[cfg(feature = "video")]
+const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+#[cfg(feature = "video")]
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+
+/// What `switch_mouse` writes before, during and after an mpv window, with `mouse` from the
+/// config. The session starts like `main` starts it.
+#[cfg(feature = "video")]
+fn window_cycle_bytes(mouse: bool) -> [String; 3] {
+    use crate::test_support::char_key;
+    use crate::test_support::video::{fake_runner, gallery_app_on_video, window_state};
+    use crate::video_handoff::{play_videos, poll_mpv_window};
+
+    let mut app = gallery_app_on_video(&["a.jpg", "clip.mp4"], 1);
+    let mut state = window_state();
+    let (_log, mut runner) = fake_runner();
+    let mut session = mouse_session(mouse);
+    let mut step = |app: &crate::app::App| {
+        let mut out = Vec::new();
+        // Two calls: the second one must write nothing.
+        super::switch_mouse(&mut session, &mut out, mouse, app).unwrap();
+        super::switch_mouse(&mut session, &mut out, mouse, app).unwrap();
+        String::from_utf8(out).unwrap()
+    };
+    let before = step(&app);
+
+    char_key(&mut app, 'p');
+    play_videos(&mut app, &mut state, &mut runner);
+    assert!(app.watches_video_window());
+    let during = step(&app);
+
+    runner.window.take().unwrap().send(Some(0)).unwrap();
+    poll_mpv_window(&mut app, &mut state);
+    assert!(!app.watches_video_window());
+    [before, during, step(&app)]
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn mpv_window_releases_the_mouse_and_gives_it_back() {
+    let [before, during, after] = window_cycle_bytes(true);
+    assert_eq!(before, "", "the mouse is on already");
+    assert_eq!(during, MOUSE_OFF, "one time");
+    assert_eq!(after, MOUSE_ON, "one time");
+}
+
+#[cfg(feature = "video")]
+#[test]
+fn mouse_off_in_config_writes_nothing_around_a_window() {
+    assert_eq!(window_cycle_bytes(false), ["", "", ""]);
+}
+
+#[test]
+fn mouse_off_in_config_writes_nothing() {
+    let app = app();
+    let mut session = mouse_session(false);
+    let mut out = Vec::new();
+    super::switch_mouse(&mut session, &mut out, false, &app).unwrap();
+    assert!(out.is_empty());
+}
+
 #[cfg(feature = "video")]
 #[test]
 fn help_popup_holds_player() {

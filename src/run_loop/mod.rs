@@ -88,7 +88,7 @@ pub(crate) fn run(
 
         #[cfg(feature = "video")]
         poll_mpv_window(app, state);
-        session.set_mouse(mouse_capture_wanted(state.mouse, window_open(app)))?;
+        switch_mouse(session, &mut io::stdout(), state.mouse, app)?;
         poll_background(app, &mut pending_emits);
 
         // The player starts before the draw. A fallback view then comes back in this pass.
@@ -171,6 +171,16 @@ const fn window_open(app: &App) -> bool {
         let _ = app;
         false
     }
+}
+
+/// Switch the mouse reports to `out`: off while an mpv window plays, and off with `mouse = false`.
+fn switch_mouse(
+    session: &mut Session,
+    out: &mut impl io::Write,
+    enabled: bool,
+    app: &App,
+) -> io::Result<()> {
+    session.set_mouse_to(out, mouse_capture_wanted(enabled, window_open(app)))
 }
 
 const fn mouse_capture_wanted(enabled: bool, window_open: bool) -> bool {

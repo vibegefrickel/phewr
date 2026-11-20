@@ -486,3 +486,13 @@ fn real_live_still_loops_its_motion() {
     assert_eq!(loop_frames(&app, still), frames.frames.len());
     assert!(frames.frames.len() >= 2);
 }
+
+#[test]
+fn panicked_loop_job_fails_and_keeps_its_text() {
+    let app = grid_app(test_dir().path(), &["clip.mp4"], &Config::default());
+    assert_eq!(app.last_loop_panic(), None);
+    let outcome =
+        super::jobs::run_noting_panic(&app.grid_loops.last_panic, || panic!("decoder {}", "broke"));
+    assert!(matches!(outcome, LoopOutcome::Failed));
+    assert_eq!(app.last_loop_panic().as_deref(), Some("decoder broke"));
+}

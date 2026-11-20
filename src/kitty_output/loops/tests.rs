@@ -575,6 +575,28 @@ fn loops_wait_for_waiting_stills() {
     assert!(started, "the next pass sends the loop");
 }
 
+/// A loop that waiting stills hold back gives no zero wake: the run loop sleeps until the next tick
+/// instead of spinning.
+#[test]
+fn held_loop_gives_no_zero_wake() {
+    let mut app = clip_app(3);
+    add_loop(&mut app, 1, 3);
+    let mut out = Vec::new();
+    let mut update = Update::new(&mut out);
+    update.add_pixel_bytes(EMIT_PASS_BYTES);
+    write_grid_to(&mut app, &mut update, Instant::now(), Vec::new(), false).unwrap();
+    update.finish().unwrap();
+    let now = app.grid_loops.clock.instant_of(0);
+    let pass = play_grid_loops_to(&mut app, &mut Vec::new(), now).unwrap();
+    assert!(!pass.started, "the stills hold the loop back");
+    assert!(!app.loops_to_send(), "a held loop is not ready to send");
+    // The run loop stores `pass.waiting` as `pending_emits`.
+    assert_ne!(
+        crate::run_loop::next_timeout(&app, &pass.waiting),
+        Duration::ZERO
+    );
+}
+
 /// After a focus gain, the next tick sends the pixels of its frame again.
 #[test]
 fn focus_gain_sends_tick_frame_again() {
