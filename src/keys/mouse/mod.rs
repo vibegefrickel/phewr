@@ -29,7 +29,7 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent, now: Instant) -> io
     }
 }
 
-fn is_press(kind: MouseEventKind) -> bool {
+const fn is_press(kind: MouseEventKind) -> bool {
     matches!(kind, MouseEventKind::Down(_))
 }
 

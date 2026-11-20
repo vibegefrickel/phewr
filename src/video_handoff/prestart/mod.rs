@@ -52,7 +52,7 @@ pub(crate) struct VideoPrestart {
 
 impl VideoPrestart {
     #[cfg(test)]
-    pub(crate) fn running(&self) -> bool {
+    pub(crate) const fn running(&self) -> bool {
         self.player.is_some()
     }
 

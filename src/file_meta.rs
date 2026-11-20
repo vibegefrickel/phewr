@@ -106,7 +106,7 @@ fn read_video(path: &Path, meta: &mut FileMeta) -> bool {
 }
 
 #[cfg(not(feature = "video"))]
-fn read_video(_path: &Path, _meta: &mut FileMeta) -> bool {
+const fn read_video(_path: &Path, _meta: &mut FileMeta) -> bool {
     false
 }
 
@@ -123,7 +123,7 @@ pub(crate) fn motion_length_cached(motion: &Path) -> Option<f64> {
 }
 
 #[cfg(not(feature = "video"))]
-pub(crate) fn motion_length_cached(_motion: &Path) -> Option<f64> {
+pub(crate) const fn motion_length_cached(_motion: &Path) -> Option<f64> {
     None
 }
 
@@ -137,7 +137,7 @@ pub(crate) fn motion_length_probed(motion: &Path) -> Option<f64> {
 }
 
 #[cfg(not(feature = "video"))]
-pub(crate) fn motion_length_probed(_motion: &Path) -> Option<f64> {
+pub(crate) const fn motion_length_probed(_motion: &Path) -> Option<f64> {
     None
 }
 
@@ -180,7 +180,7 @@ impl FileMeta {
 }
 
 /// The whole seconds of a player time for `tuilibr::time::media_length`: a negative time is 0.
-pub(crate) fn whole_seconds(seconds: f64) -> u64 {
+pub(crate) const fn whole_seconds(seconds: f64) -> u64 {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,

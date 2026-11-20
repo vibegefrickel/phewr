@@ -10,8 +10,10 @@
 //! drawn last. A border that the grid edge cuts stays open at that edge.
 use crate::config::{MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
 use crate::icons;
+use crate::numbers::round_to_u16;
 use ratatui::layout::Rect;
 use std::ops::Range;
+use tuilibr::cells;
 use tuilibr::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use tuilibr::text_field::TextField;
 
@@ -26,7 +28,9 @@ const MAX_THUMB_COLS: u16 = 120;
 const MIN_THUMB_ROWS: u16 = 3;
 const MAX_THUMB_ROWS: u16 = 60;
 
-const DEFAULT_CELL_RATIO: f64 = 2.0;
+/// The pixel height of a default cell that is one pixel wide.
+const DEFAULT_CELL_RATIO_ROWS: u32 = 2;
+const DEFAULT_CELL_RATIO: f64 = DEFAULT_CELL_RATIO_ROWS as f64;
 const MIN_GRID_COLS: usize = 2;
 
 /// The grid: its geometry, the cursor and the filter.
@@ -146,7 +150,7 @@ impl GalleryState {
     }
 
     /// What the grid shows: the rows, the columns and the box size.
-    fn grid_shape(&self) -> (usize, usize, u16, u16, u16) {
+    const fn grid_shape(&self) -> (usize, usize, u16, u16, u16) {
         (
             self.visible_rows,
             self.grid_cols,
@@ -167,12 +171,12 @@ impl GalleryState {
         grid
     }
 
-    pub(crate) fn image_aspect(&self) -> f64 {
+    pub(crate) const fn image_aspect(&self) -> f64 {
         self.image_aspect
     }
 
     /// The box that every thumbnail is decoded for.
-    pub(crate) fn thumb_box(&self) -> Rect {
+    pub(crate) const fn thumb_box(&self) -> Rect {
         Rect::new(0, 0, self.thumb_cols, self.thumb_rows)
     }
 
@@ -264,7 +268,7 @@ impl GalleryState {
     /// cell ratio.
     fn holds_icon(&self, layout: &RowLayout) -> bool {
         let cell_px = if self.cell_px.0 == 0 || self.cell_px.1 == 0 {
-            (1, DEFAULT_CELL_RATIO as u32)
+            (1, DEFAULT_CELL_RATIO_ROWS)
         } else {
             self.cell_px
         };
@@ -274,17 +278,17 @@ impl GalleryState {
     /// The box size, the shaped width and the column count of `rows` rows in `grid_rect`.
     fn row_layout(&self, rows: usize) -> RowLayout {
         let grid_rect = self.grid_rect;
-        let rows = rows as u16;
+        let rows = cells::to_u16(rows);
         let cell_area_height = grid_rect.height.saturating_sub(gaps(rows));
         let cell_height = (cell_area_height / rows).max(MIN_THUMB_ROWS);
         let thumb_rows = cell_height.clamp(MIN_THUMB_ROWS, MAX_THUMB_ROWS);
-        let shaped_width = (f64::from(thumb_rows) * self.cols_per_row).round() as u16;
+        let shaped_width = round_to_u16(f64::from(thumb_rows) * self.cols_per_row);
         // The count uses the clamped width, else the clamp of `thumb_cols` pushes the last
         // columns past the right edge of a far zoomed-out portrait grid.
         let grid_cols = (usize::from(grid_rect.width.saturating_sub(GAP))
             / usize::from(shaped_width.max(MIN_THUMB_COLS) + GAP))
         .max(MIN_GRID_COLS);
-        let cols = grid_cols as u16;
+        let cols = cells::to_u16(grid_cols);
         let cell_area_width = grid_rect.width.saturating_sub(gaps(cols));
         let thumb_cols = (cell_area_width / cols).clamp(MIN_THUMB_COLS, MAX_THUMB_COLS);
         RowLayout {
@@ -314,7 +318,7 @@ impl GalleryState {
         usize::from(MIN_VISIBLE_ROWS).min(self.max_visible_rows())
     }
 
-    pub(crate) fn reset_cursor(&mut self) {
+    pub(crate) const fn reset_cursor(&mut self) {
         self.cursor = 0;
         self.scroll_offset = 0;
         self.kept_place = None;
@@ -335,14 +339,14 @@ impl GalleryState {
         self.extra_rows = spread(
             layout.cell_area_height,
             self.thumb_rows,
-            self.visible_rows as u16,
+            cells::to_u16(self.visible_rows),
         );
         self.grid_cols = layout.grid_cols;
         self.thumb_cols = layout.thumb_cols;
         self.extra_cols = spread(
             layout.cell_area_width,
             self.thumb_cols,
-            self.grid_cols as u16,
+            cells::to_u16(self.grid_cols),
         );
         if before != (self.grid_cols, self.visible_rows) {
             self.keep_cursor_place(place);
@@ -403,11 +407,11 @@ impl GalleryState {
         self.filtered_indices.get(self.cursor).copied()
     }
 
-    pub(crate) fn cursor_row(&self) -> usize {
+    pub(crate) const fn cursor_row(&self) -> usize {
         self.cursor / self.grid_cols
     }
 
-    pub(crate) fn ensure_cursor_visible(&mut self) {
+    pub(crate) const fn ensure_cursor_visible(&mut self) {
         let row = self.cursor_row();
         if row < self.scroll_offset {
             self.scroll_offset = row;
@@ -493,7 +497,7 @@ impl GalleryState {
     }
 
     /// The cells of one screen, filled or empty.
-    pub(crate) fn visible_cells(&self) -> usize {
+    pub(crate) const fn visible_cells(&self) -> usize {
         self.visible_rows * self.grid_cols
     }
 
@@ -513,8 +517,8 @@ impl GalleryState {
 
     /// The thumbnail area of the visible cell `vis_idx`.
     pub(crate) fn thumb_rect(&self, vis_idx: usize) -> Rect {
-        let col = (vis_idx % self.grid_cols) as u16;
-        let row = (vis_idx / self.grid_cols) as u16;
+        let col = cells::to_u16(vis_idx % self.grid_cols);
+        let row = cells::to_u16(vis_idx / self.grid_cols);
         Rect {
             x: self.col_x(col),
             y: self.row_y(row),
@@ -541,18 +545,18 @@ fn shown_level(levels: &[usize], zoom_rows: usize) -> usize {
         .iter()
         .rev()
         .find(|&&rows| rows <= zoom_rows)
-        .or(levels.first())
+        .or_else(|| levels.first())
         .copied()
         .unwrap_or(1)
 }
 
-fn gaps(count: u16) -> u16 {
+const fn gaps(count: u16) -> u16 {
     (count + 1) * GAP
 }
 
 /// How many of the `count` cells get one cell more. Zero when clamped cells cannot fill
 /// `total`.
-fn spread(total: u16, base: u16, count: u16) -> u16 {
+const fn spread(total: u16, base: u16, count: u16) -> u16 {
     let rest = total.saturating_sub(base.saturating_mul(count));
     if rest < count { rest } else { 0 }
 }

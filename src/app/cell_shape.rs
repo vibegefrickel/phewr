@@ -49,7 +49,7 @@ impl App {
 
     /// True while the header read runs. The thumbnail decodes wait: no cell decodes twice for two
     /// cell sizes.
-    pub(crate) fn cell_shape_pending(&self) -> bool {
+    pub(crate) const fn cell_shape_pending(&self) -> bool {
         self.shape_rx.is_some()
     }
 

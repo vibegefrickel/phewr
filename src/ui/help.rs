@@ -100,7 +100,7 @@ pub(super) fn draw_help_popup(
 }
 
 /// The rows of the Kitty section: the medium and the loop path.
-fn kitty_rows(transfer: Transfer, loops: Option<Loops>) -> [(&'static str, &'static str); 2] {
+const fn kitty_rows(transfer: Transfer, loops: Option<Loops>) -> [(&'static str, &'static str); 2] {
     [
         ("Transfer", describe(transfer)),
         ("Grid loops", describe_loops(loops)),

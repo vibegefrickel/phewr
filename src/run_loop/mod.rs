@@ -163,7 +163,7 @@ fn clears_status(event: &Event) -> bool {
 }
 
 /// True while an mpv window plays. The mouse then belongs to the window.
-fn window_open(app: &App) -> bool {
+const fn window_open(app: &App) -> bool {
     #[cfg(feature = "video")]
     {
         app.watches_video_window()
@@ -175,7 +175,7 @@ fn window_open(app: &App) -> bool {
     }
 }
 
-fn mouse_capture_wanted(enabled: bool, window_open: bool) -> bool {
+const fn mouse_capture_wanted(enabled: bool, window_open: bool) -> bool {
     enabled && !window_open
 }
 

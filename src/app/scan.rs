@@ -134,7 +134,7 @@ impl App {
         self.live_motion(index).is_some()
     }
 
-    pub(crate) fn is_scanning(&self) -> bool {
+    pub(crate) const fn is_scanning(&self) -> bool {
         !self.scan_complete
     }
 

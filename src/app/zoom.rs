@@ -1,6 +1,7 @@
 //! Zoom and pan in the fullscreen view, with the full-resolution source behind them.
 
 use super::App;
+use crate::numbers::round_to_u32;
 use std::io;
 use std::sync::mpsc;
 use tuilibr::pictures::decode::{
@@ -120,11 +121,11 @@ impl App {
 
     /// The pan position, for the mouse drag tests outside this module.
     #[cfg(test)]
-    pub(crate) fn pan_position(&self) -> (f64, f64) {
+    pub(crate) const fn pan_position(&self) -> (f64, f64) {
         (self.zoom_state.pan_x, self.zoom_state.pan_y)
     }
 
-    fn clamp_pan(&mut self) {
+    const fn clamp_pan(&mut self) {
         self.zoom_state.pan_x = self.zoom_state.pan_x.clamp(0.0, 1.0);
         self.zoom_state.pan_y = self.zoom_state.pan_y.clamp(0.0, 1.0);
     }
@@ -182,15 +183,15 @@ impl App {
         let base = fit.min(1.0);
         let eff = base * self.zoom;
 
-        let crop_w = ((f64::from(vw) / eff).round() as u32).clamp(1, ow);
-        let crop_h = ((f64::from(vh) / eff).round() as u32).clamp(1, oh);
+        let crop_w = round_to_u32(f64::from(vw) / eff).clamp(1, ow);
+        let crop_h = round_to_u32(f64::from(vh) / eff).clamp(1, oh);
         let max_x = ow.saturating_sub(crop_w);
         let max_y = oh.saturating_sub(crop_h);
-        let x = (self.zoom_state.pan_x * f64::from(max_x)).round() as u32;
-        let y = (self.zoom_state.pan_y * f64::from(max_y)).round() as u32;
+        let x = round_to_u32(self.zoom_state.pan_x * f64::from(max_x));
+        let y = round_to_u32(self.zoom_state.pan_y * f64::from(max_y));
 
-        let dst_w = ((f64::from(crop_w) * eff).round() as u32).max(1).min(vw);
-        let dst_h = ((f64::from(crop_h) * eff).round() as u32).max(1).min(vh);
+        let dst_w = round_to_u32(f64::from(crop_w) * eff).max(1).min(vw);
+        let dst_h = round_to_u32(f64::from(crop_h) * eff).max(1).min(vh);
         Some(src.crop_resized((x, y, crop_w, crop_h), (dst_w, dst_h)))
     }
 }

@@ -6,7 +6,7 @@ use crate::scanner::canonicalize_or_self;
 use std::path::{Path, PathBuf};
 
 impl App {
-    fn kind_at(&self, index: usize) -> Option<EntryKind> {
+    const fn kind_at(&self, index: usize) -> Option<EntryKind> {
         if index < self.folder_count {
             Some(EntryKind::Folder)
         } else if index < self.images.len() {
@@ -25,16 +25,16 @@ impl App {
         self.is_folder(index) && self.filenames.get(index).is_some_and(|name| name == "..")
     }
 
-    pub(crate) fn file_count(&self) -> usize {
+    pub(crate) const fn file_count(&self) -> usize {
         self.images.len().saturating_sub(self.folder_count)
     }
 
-    pub(crate) fn has_files(&self) -> bool {
+    pub(crate) const fn has_files(&self) -> bool {
         self.file_count() > 0
     }
 
     /// The entry after the folders.
-    pub(crate) fn first_file(&self) -> usize {
+    pub(crate) const fn first_file(&self) -> usize {
         self.folder_count
     }
 

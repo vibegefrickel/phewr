@@ -44,7 +44,7 @@ impl App {
 
     /// True while the player plays the motion of a Live Photo.
     #[cfg(feature = "video")]
-    pub(crate) fn plays_motion(&self) -> bool {
+    pub(crate) const fn plays_motion(&self) -> bool {
         self.motion.is_some()
     }
 
@@ -176,7 +176,7 @@ impl App {
     }
 
     #[cfg(feature = "video")]
-    pub(crate) fn watches_video_window(&self) -> bool {
+    pub(crate) const fn watches_video_window(&self) -> bool {
         self.video_window.is_some()
     }
 
@@ -218,7 +218,7 @@ impl App {
 
     /// True while phewr shows the file `index` of an mpv window and no overlay takes the keys.
     #[cfg(feature = "video")]
-    fn follows_window(&self, index: usize) -> bool {
+    const fn follows_window(&self, index: usize) -> bool {
         index == self.current
             && index < self.images.len()
             && !self.help_visible
@@ -299,6 +299,7 @@ impl App {
         not(feature = "video"),
         expect(
             clippy::unused_self,
+            clippy::missing_const_for_fn,
             reason = "without the video feature, no view plays a video"
         )
     )]
@@ -361,7 +362,7 @@ impl App {
     /// Without the `video` feature, the scan lists no videos.
     #[cfg(not(feature = "video"))]
     #[expect(clippy::unused_self, reason = "the same signature as the video build")]
-    pub(crate) fn is_video(&self, _index: usize) -> bool {
+    pub(crate) const fn is_video(&self, _index: usize) -> bool {
         false
     }
 }

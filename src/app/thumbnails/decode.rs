@@ -44,12 +44,12 @@ pub(super) fn animation_flag(
 
 /// Without the player, no file is an animation.
 #[cfg(not(feature = "video"))]
-fn has_animation_extension(_path: &Path) -> bool {
+const fn has_animation_extension(_path: &Path) -> bool {
     false
 }
 
 #[cfg(not(feature = "video"))]
-fn is_animated(_path: &Path) -> bool {
+const fn is_animated(_path: &Path) -> bool {
     false
 }
 
@@ -64,7 +64,7 @@ pub(super) fn is_playable(path: &Path, animated: Option<bool>) -> bool {
 }
 
 #[cfg(not(feature = "video"))]
-pub(super) fn is_playable(_path: &Path, _animated: Option<bool>) -> bool {
+pub(super) const fn is_playable(_path: &Path, _animated: Option<bool>) -> bool {
     false
 }
 
@@ -144,6 +144,13 @@ fn decode_thumbnail(cache_dir: &Path, path: &Path, target: (u32, u32)) -> io::Re
 }
 
 /// True for the libheif formats, camera RAW and PSD.
+#[cfg_attr(
+    not(any(feature = "heic", all(feature = "sips", target_os = "macos"))),
+    expect(
+        clippy::missing_const_for_fn,
+        reason = "only the libheif and embedded JPEG checks are not const"
+    )
+)]
 pub(super) fn has_embedded_preview(path: &Path) -> bool {
     #[cfg(not(any(feature = "heic", all(feature = "sips", target_os = "macos"))))]
     let _ = path;

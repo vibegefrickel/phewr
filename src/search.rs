@@ -48,7 +48,7 @@ impl FilterWorker {
     }
 
     #[cfg(test)]
-    fn names(&self) -> &Arc<Vec<String>> {
+    const fn names(&self) -> &Arc<Vec<String>> {
         &self.names
     }
 }

@@ -561,9 +561,15 @@ mod jpeg {
 
     fn gradient_jpeg(dir: &Path) -> PathBuf {
         let path = dir.join("gradient.jpg");
-        RgbImage::from_fn(640, 480, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 99]))
-            .save(&path)
-            .unwrap();
+        RgbImage::from_fn(640, 480, |x, y| {
+            Rgb([
+                u8::try_from(x % 256).unwrap(),
+                u8::try_from(y % 256).unwrap(),
+                99,
+            ])
+        })
+        .save(&path)
+        .unwrap();
         path
     }
 

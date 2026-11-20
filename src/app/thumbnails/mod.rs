@@ -202,7 +202,7 @@ impl App {
             .or_else(|| waiting.iter().position(ready))
     }
 
-    fn slots_of(&mut self, phase: ThumbPhase) -> &mut JobSlots {
+    const fn slots_of(&mut self, phase: ThumbPhase) -> &mut JobSlots {
         match phase {
             ThumbPhase::CacheRead => &mut self.thumb_jobs.cache_reads,
             ThumbPhase::Preview => &mut self.thumb_jobs.previews,

@@ -20,7 +20,7 @@ pub(crate) struct Slideshow {
 }
 
 impl Slideshow {
-    pub(crate) fn new(interval: Duration, paused: bool, next_at: Instant) -> Self {
+    pub(crate) const fn new(interval: Duration, paused: bool, next_at: Instant) -> Self {
         Self {
             interval,
             paused,
@@ -32,7 +32,7 @@ impl Slideshow {
 }
 
 impl App {
-    pub(crate) fn slideshow_running(&self) -> bool {
+    pub(crate) const fn slideshow_running(&self) -> bool {
         self.slideshow.is_some()
     }
 
@@ -73,7 +73,7 @@ impl App {
             .map(|show| show.interval)
     }
 
-    pub(crate) fn stop_slideshow(&mut self) {
+    pub(crate) const fn stop_slideshow(&mut self) {
         if self.slideshow.take().is_some() {
             self.needs_render = true;
         }

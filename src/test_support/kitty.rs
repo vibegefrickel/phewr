@@ -140,7 +140,10 @@ impl FakeTerminal {
             .collect();
         let number = |key: &str| keys.get(key).and_then(|value| value.parse::<u32>().ok());
         let cell_box = match (number("c"), number("r")) {
-            (Some(cols), Some(rows)) => Some((cols as u16, rows as u16)),
+            (Some(cols), Some(rows)) => Some((
+                u16::try_from(cols).unwrap_or(u16::MAX),
+                u16::try_from(rows).unwrap_or(u16::MAX),
+            )),
             _ => None,
         };
         // A further chunk carries only `m=` and, for a frame, `a=f`.
@@ -178,7 +181,7 @@ impl FakeTerminal {
             }
             Some("a") => {
                 let id = number("i").unwrap_or(0);
-                let animation = self.animations.entry(id).or_insert(Animation {
+                let animation = self.animations.entry(id).or_insert_with(|| Animation {
                     gaps: vec![0],
                     state: None,
                     loops: None,
@@ -246,7 +249,7 @@ impl FakeTerminal {
             return;
         };
         *stored += bytes;
-        let animation = self.animations.entry(id).or_insert(Animation {
+        let animation = self.animations.entry(id).or_insert_with(|| Animation {
             gaps: vec![0],
             state: None,
             loops: None,

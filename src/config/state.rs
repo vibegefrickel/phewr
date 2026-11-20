@@ -32,14 +32,14 @@ pub(super) enum ZoomValue {
 }
 
 impl ZoomValue {
-    fn rows(&self) -> u16 {
+    const fn rows(&self) -> u16 {
         match self {
             Self::Rows(rows) => *rows,
             Self::Detailed(entry) => entry.rows,
         }
     }
 
-    fn order(&self) -> u64 {
+    const fn order(&self) -> u64 {
         match self {
             Self::Rows(_) => 0,
             Self::Detailed(entry) => entry.order,

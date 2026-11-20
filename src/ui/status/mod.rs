@@ -133,7 +133,7 @@ pub(super) fn video_error(app: &App) -> Option<&str> {
 }
 
 #[cfg(not(feature = "video"))]
-pub(super) fn video_error(_app: &App) -> Option<&str> {
+pub(super) const fn video_error(_app: &App) -> Option<&str> {
     None
 }
 

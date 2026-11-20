@@ -3,6 +3,7 @@
 use crate::app::App;
 use crate::image_list::SharedImageList;
 use crate::kitty_output::render_fullscreen_image_to;
+use crate::numbers::round_to_u32;
 use image::{DynamicImage, RgbaImage};
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
@@ -139,11 +140,11 @@ fn measure(path: &Path) {
         )
         .min(1.0)
             * zoom;
-        let crop_w = ((f64::from(BOX_PX.0) / eff).round() as u32).clamp(1, w);
-        let crop_h = ((f64::from(BOX_PX.1) / eff).round() as u32).clamp(1, h);
+        let crop_w = round_to_u32(f64::from(BOX_PX.0) / eff).clamp(1, w);
+        let crop_h = round_to_u32(f64::from(BOX_PX.1) / eff).clamp(1, h);
         let crop = ((w - crop_w) / 2, (h - crop_h) / 2, crop_w, crop_h);
-        let dst_w = ((f64::from(crop_w) * eff).round() as u32).clamp(1, BOX_PX.0);
-        let dst_h = ((f64::from(crop_h) * eff).round() as u32).clamp(1, BOX_PX.1);
+        let dst_w = round_to_u32(f64::from(crop_w) * eff).clamp(1, BOX_PX.0);
+        let dst_h = round_to_u32(f64::from(crop_h) * eff).clamp(1, BOX_PX.1);
         let (mut rgba_app, mut rgb_app) = (fullscreen_app(), fullscreen_app());
         let times = medians(
             || {

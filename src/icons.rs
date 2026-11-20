@@ -94,7 +94,7 @@ pub(crate) fn stamp_play(image: &mut image::RgbaImage) {
     /// The edge is the triangle at this scale, drawn first.
     const EDGE_SCALE: f64 = 1.18;
     let (width, height) = image.dimensions();
-    let size = (f64::from(height) * ICON_HEIGHT_SHARE).round() as u32;
+    let size = crate::numbers::round_to_u32(f64::from(height) * ICON_HEIGHT_SHARE);
     if size < 4 || size > width {
         return;
     }
@@ -134,6 +134,11 @@ pub(crate) fn render(icon: Icon, size: (u32, u32), color: [u8; 3]) -> Option<ima
         .pixels()
         .iter()
         .flat_map(|pixel| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "the alpha byte times a share of at most 1 stays in 0..=255"
+            )]
             let alpha = (f32::from(pixel.alpha()) * ICON_ALPHA).round() as u8;
             [color[0], color[1], color[2], alpha]
         })
@@ -145,6 +150,10 @@ pub(crate) fn render(icon: Icon, size: (u32, u32), color: [u8; 3]) -> Option<ima
 fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
     let alpha = u32::from(over[3]);
     // A weighted mean of two bytes fits into a byte.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a weighted mean of two bytes is at most 255"
+    )]
     let mix = |u: u8, o: u8| ((u32::from(o) * alpha + u32::from(u) * (255 - alpha)) / 255) as u8;
     [
         mix(under[0], over[0]),
@@ -156,6 +165,11 @@ fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
 
 /// The icon rows for a box of `thumb_rows` rows. `None` below two rows. The count never falls
 /// when the box grows, so no smaller box holds an icon if this box holds none.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a rounded share of a u16 row count stays in range"
+)]
 pub(crate) fn icon_rows(thumb_rows: u16) -> Option<u16> {
     let rows = (f64::from(thumb_rows) * ICON_HEIGHT_SHARE).round() as u16;
     (rows >= MIN_ICON_ROWS).then_some(rows)
@@ -264,6 +278,11 @@ mod tests {
 
     #[test]
     fn svg_icons_render_in_color() {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "255 times a share of at most 1 stays in 0..=255"
+        )]
         let max_alpha = (255.0 * ICON_ALPHA).round() as u8;
         for icon in Icon::ALL {
             let picture = render(icon, (72, 43), [10, 200, 30]).unwrap();

@@ -138,7 +138,7 @@ const fn first_id(icon: Icon) -> u32 {
     ICON_ID_BASE + icon as u32 * SLOTS
 }
 
-fn image_ids(icon: Icon) -> std::ops::Range<u32> {
+const fn image_ids(icon: Icon) -> std::ops::Range<u32> {
     first_id(icon)..first_id(icon) + SLOTS
 }
 

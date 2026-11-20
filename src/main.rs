@@ -14,6 +14,7 @@ mod keys;
 mod kitty_output;
 #[cfg(feature = "video")]
 mod mpv;
+mod numbers;
 #[cfg(feature = "video")]
 mod player;
 mod prefetch;
@@ -144,7 +145,7 @@ fn exit_with(message: &str) -> ! {
     std::process::exit(1);
 }
 
-fn apply_cli_overrides(config: &mut Config, interval: Option<f64>, info: bool) {
+const fn apply_cli_overrides(config: &mut Config, interval: Option<f64>, info: bool) {
     if let Some(interval) = interval {
         config.slideshow_interval = interval;
     }

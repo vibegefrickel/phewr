@@ -54,7 +54,7 @@ struct Run {
 }
 
 impl Run {
-    fn new(base: f64, now: Instant) -> Self {
+    const fn new(base: f64, now: Instant) -> Self {
         Self {
             started: now,
             start: None,
@@ -88,7 +88,7 @@ impl Frame {
         Some(Self { size, alpha, data })
     }
 
-    pub(crate) fn dimensions(&self) -> (u32, u32) {
+    pub(crate) const fn dimensions(&self) -> (u32, u32) {
         self.size
     }
 
@@ -172,7 +172,7 @@ impl Player {
 
     /// Restart the open time and the first-frame deadline at Enter, for a player that started
     /// ahead.
-    pub(crate) fn begin_at(&mut self, now: Instant) {
+    pub(crate) const fn begin_at(&mut self, now: Instant) {
         self.opened = now;
         self.run.started = now;
     }
@@ -303,7 +303,7 @@ impl Player {
     }
 
     /// Repeat the clip until `duration` passed since the open.
-    pub(crate) fn play_at_least(&mut self, duration: Duration) {
+    pub(crate) const fn play_at_least(&mut self, duration: Duration) {
         if matches!(self.repeat, Repeat::Never | Repeat::Until(_)) {
             self.repeat = Repeat::Until(duration);
         }
@@ -384,7 +384,7 @@ impl Player {
     }
 
     /// The clip length in seconds, or 0 when the container does not tell it.
-    pub(crate) fn duration(&self) -> f64 {
+    pub(crate) const fn duration(&self) -> f64 {
         self.info.duration
     }
 

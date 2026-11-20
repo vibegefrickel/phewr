@@ -132,7 +132,7 @@ fn prefetch_hits_for_next_and_previous() {
             "next, dwell {}: {hits}/{STEPS} prefetch hits, longest take {} on the UI thread, mean wait {}",
             millis(pause),
             millis(longest_take),
-            millis(total_wait / STEPS as u32)
+            millis(total_wait / u32::try_from(STEPS).unwrap_or(u32::MAX))
         ));
 
         let mut hits = 0;
@@ -153,7 +153,7 @@ fn prefetch_hits_for_next_and_previous() {
             "previous, dwell {}: {hits}/{STEPS} prefetch hits, longest take {} on the UI thread, mean wait {}",
             millis(pause),
             millis(longest_take),
-            millis(total_wait / STEPS as u32)
+            millis(total_wait / u32::try_from(STEPS).unwrap_or(u32::MAX))
         ));
     }
 }

@@ -167,7 +167,7 @@ impl App {
         Some(facts)
     }
 
-    pub(crate) fn meta_pending(&self) -> bool {
+    pub(crate) const fn meta_pending(&self) -> bool {
         self.meta.in_flight.is_some()
     }
 }

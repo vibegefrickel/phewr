@@ -66,7 +66,7 @@ pub(crate) struct FolderPrefetch {
 
 impl FolderPrefetch {
     /// A folder switch puts the cursor on `..` again.
-    pub(super) fn disarm_parent(&mut self) {
+    pub(super) const fn disarm_parent(&mut self) {
         self.parent_armed = false;
     }
 

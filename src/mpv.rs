@@ -86,7 +86,7 @@ pub(crate) enum Step {
 }
 
 /// `None` for an exit that is no step.
-pub(crate) fn step(code: Option<i32>) -> Option<Step> {
+pub(crate) const fn step(code: Option<i32>) -> Option<Step> {
     match code {
         Some(NEXT_FILE) => Some(Step::Next),
         Some(PREVIOUS_FILE) => Some(Step::Previous),
