@@ -518,7 +518,13 @@ fn over_budget_retries_back_on_screen() {
     place_stills(&mut app, &mut terminal);
     app.gallery.scroll_rows(-1);
     place_stills(&mut app, &mut terminal);
-    assert_eq!(started_jobs(&mut app), vec![0], "the cell came back");
+    // A failure lasts one visit too (tuilibr, 2026-11-20), so the failed cells of the row that
+    // came back try again with the over-budget cell.
+    assert_eq!(
+        started_jobs(&mut app),
+        vec![0, 1, 2, 3],
+        "the row came back"
+    );
 }
 
 /// A loop that lost a frame and no longer fits the budget leaves the terminal with all its

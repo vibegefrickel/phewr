@@ -357,13 +357,15 @@ mod tests {
     }
 
     #[test]
-    fn modifier_keys_do_not_type() {
+    fn a_control_key_does_not_type_and_an_alt_letter_types() {
         let mut app = gallery_app(3);
         char_key(&mut app, '/');
         char_key(&mut app, 'q');
         press_with(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
-        press_with(&mut app, KeyCode::Char('w'), KeyModifiers::ALT);
         assert_eq!(app.gallery.search_query.text(), "q");
+        // Alt plus a letter types it in every app (the maintainer, 2026-11-20).
+        press_with(&mut app, KeyCode::Char('w'), KeyModifiers::ALT);
+        assert_eq!(app.gallery.search_query.text(), "qw");
     }
 
     #[test]
