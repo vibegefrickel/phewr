@@ -3,7 +3,7 @@
 ## Handoff
 
 - Date: 2026-11-20
-- Commit: 84a4cbb
+- Commit: c7d1733
 - Done: phewr is an app of the crate `~/Projects/dev/tuilibr`: the picture module, the frame (the bar, the help, the accent, the two panes, the omnibox), the terminal session and the motion module come from the crate. Each phase merged with a docs commit, see "Done".
 - Done: the maintainer test run passed steps 10 to 13 and the grid part of step 14, and auto-review workers fixed its findings. The rest of the run is in "Later".
 - Done: the dependency round in all five repositories, the lint union, Rust 1.100, `version = "0.1.0"`, the shared audit text and the fast pre-commit hook.
@@ -13,9 +13,10 @@
 - Done (2026-11-20, committed): the dialog padding of tuilibr (the help needs 104 columns for two columns, its body starts under the title). The README names tuilibr a private sibling crate, with no clone URL. The fixtures of tuilibr are static files: tuilibr removed every `make.sh`, and nothing needs jpeg-xl.
 - Done (2026-11-20): the lint details (`e1e8ea2`, docs `e93b4e3`): the cast lints, `missing_const_for_fn`, `or_fun_call`, `too_long_first_doc_paragraph`. 86 hits: 64 fixes, 9 `expect` items with a reason. The helpers are `tuilibr::cells::to_u16` and `numbers.rs`.
 - Done (2026-11-20): the crate lints of tuilibr in phewr (`e1e8ea2`). The grid loops run on the loop player of tuilibr (`84a4cbb`, 708 tests): a hidden job is cancelled, the over-budget ids are deleted, a folder switch starts no job on the old cells. tuilibr fixed the three player gaps of phewr.
-- Open (agent): see "Now": merge batch A after the commits of the maintainer, merge the waiting loop docs, then batches B and C (the briefs are in "Now").
-- Open (user): commit tuilibr (the whole working tree), then the two phewr test edits of tuilibr-82 (they block the merge of batch A). Decide whether the grid loops play beside the open info pane. The test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios).
-- Health: `just check` passes on Rust 1.100.0 with 706 tests (684 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
+- Done (2026-11-20): the duplication review of tuilibr in phewr, auto-review workers: batch A (`b81f40c`: `truncate_width`, `display_width`, `to_u16`, `Session::set_mouse`, the const styles, no `unicode-width`), the UI half of B and C (`a5be1ea`: `edit_text`, `byte_size`, `DoubleClick`, `scroll_to_show`, `accent_bold`, `buffer::rows`, `first_misfit`), the plumbing half (`58ed2b8`: `programs::find_on_path`, `cells` rounding, `files::write_atomic`, `AppDirs`, the cache moves to `~/.cache/phewr` with one rename at start), the crate gaps (`87278c8`: the mouse byte test, the panic text of a loop job, no zero wake). Docs `9b4739a`, `25b5675`, `f015d65`, `c7d1733`. 713 tests, 691 lean.
+- Open (agent): no active worker. The next batch waits for the maintainer or for a crate change of tuilibr-82.
+- Open (user): commit tuilibr first: phewr main calls `remove_stale_temps_of`, `set_mouse_to`, `Session::detached` and `run_caught_with`, which are only in the tuilibr working tree. Start phewr one time, so the cache moves to `~/.cache/phewr`. Then you can delete `~/Library/Caches/phewr` if it stays. Decide about the loops beside the info pane. The test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios).
+- Health: `just check` passes on Rust 1.100.0 with 713 tests (691 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
 - Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key. The herdr test decides if this needs a fix. The filter lives in tuilibr now.
 
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
@@ -38,90 +39,7 @@ State of the main goal (2026-11-09):
 
 ## Now
 
-State at the end of 2026-11-20 (the maintainer turned off the machine, the order of tuilibr-82: start nothing new).
-
-1. Batch A (worker `phewr-crate-switch-a`, approved by the auto review, not merged). Its worktree keeps the change: `truncate_width`, `display_width`, `to_u16`, `Session::set_mouse` (the run loop takes `&mut Session`), the const `alert` and `dim` in `STYLES`, no `unicode-width`, and `drop(take_stale())`. The merge needs two commits of the maintainer first: tuilibr (its whole working tree: the const styles, the Alt rule, the player fixes, batches B and C), then the two phewr test edits of tuilibr-82 (`src/keys/gallery.rs`, `src/kitty_output/loops/tests.rs`, message `test: an Alt letter types, a failed loop cell retries on its next visit`). Then `merge.sh phewr-crate-switch-a` with the message of its report (`refactor(ui): the width, the cut, the casts and the mouse from tuilibr`). The herdr agent of the worker is gone after the restart. The worktree and the state stay.
-2. The docs of the loop player (`84a4cbb`) wait uncommitted in the docs worktree (`~/.herdr/worktrees/phewr/orchestrator-docs`: AGENTS.md, docs/app-state.md, docs/grid-and-kitty.md, docs/layout.md). Merge them with `docs.sh --merge` after batch A, then add the doc notes of batch A (the run loop takes `&mut Session`, `head_within` and `sync_mouse_capture` are gone, the mouse bytes are untested: a gap of `Session::set_mouse`, which writes to stdout).
-3. Batches B and C of tuilibr, after batch A: two workers in a row, auto review. Report to tuilibr-82. The cache choice of the phewr session: one `rename` of `~/Library/Caches/phewr` to the XDG cache folder, else an empty cache, the old folder stays. The three briefs follow, because `/tmp` can be gone.
-
-   The brief of tuilibr-82 (`/tmp/phewr-brief-crate-bc.md`):
-
-    # phewr: adopt batches B and C of tuilibr (2026-11-20)
-
-    The crate holds new shared helpers since 2026-11-20 (batches B and C of the duplication review), in the tuilibr main tree; read `tuilibr/AGENTS.md`, `src/lib.rs` and the doc of each module named below. The maintainer decided: Alt plus a letter types it in every text input, Ctrl-U clears the whole input, the folders follow XDG everywhere, and std-only plumbing lives in the crate.
-
-    ## Replace
-
-    - The before/after compare in `keys/gallery.rs` → `TextField::edit_text`.
-    - `yazi::find_on_path` → `programs::find_on_path` (same signature).
-    - `info::human_size` → `frame::byte_size`.
-    - `numbers.rs` → `cells::{round_to_u32, round_to_u16}`.
-    - `MouseState::double_click` → `frame::DoubleClick<usize>`.
-    - `ensure_cursor_visible` → `frame::scroll_to_show` (a view of 0 rows counts as 1).
-    - `STYLES.cursor_cell` → `frame::accent_bold()`; `styles.rs` `error`/`dim` → `frame::alert()`/`frame::dim()`, which are const now.
-    - `screen_rows` → `frame::buffer::rows`; the help checks → `first_misfit`.
-    - `write_state` and `prune_stale_temp_files` → `files::write_atomic` and `files::remove_stale_temps(dir, 1 h)` (the temp name becomes `.<name>.<pid>.<seq>.tmp`; sweep the old `<name>.<pid>.tmp` leftovers one time).
-    - The `Paths` XDG code → `dirs::AppDirs`.
-
-    ## Behaviour
-
-    - The two test edits for the Alt rule and the per-visit loop failure are already in phewr main (tuilibr-82, uncommitted).
-    - The folders: the disk cache moves from `~/Library/Caches/phewr` to `~/.cache/phewr`; config and state already follow XDG. A thumbnail cache may also start empty instead of a move; say which you chose. Update the test in `app/disk_cache/mod.rs:28`.
-
-    ## Order
-
-    After the batch A worker.
-
-    ## The folder move (XDG)
-
-    When the folders of the app move, the app moves the old folder one time at start, before anything opens a file in it: only when the new folder does not exist and the old one does, with one `std::fs::rename` (same volume), else a copy and then a delete of the old folder after the copy succeeded. Log the move. Never delete user data without a successful copy. A test covers the move, the "both exist" case (keep the new, leave the old, log it) and the "none exists" case.
-
-    ## Rules
-
-    - Run it as workers in worktrees with auto review. Split it into two workers if the diff gets large (for example the UI helpers first, then the plumbing).
-    - Read AGENTS.md of the app first. Each removed copy gets the crate call; keep app behaviour except where this brief names a change.
-    - `just check` passes. Report to tuilibr-82: the removed lines, the snapshots that changed and why, and any gap in the crate (I fix gaps in the crate).
-
-   The first worker, the UI half (`/tmp/phewr-brief-crate-b.md`):
-
-    Goal: phewr uses the UI helpers of tuilibr batches B and C in place of its own copies, with no visible change.
-
-    Context: the full brief of tuilibr-82 is `/tmp/phewr-brief-crate-bc.md`. Read it first. This worker does its UI half. A second worker does the plumbing half later (`find_on_path`, `numbers.rs`, `write_atomic`, `AppDirs`, the cache folder). Do not touch those. The crate code is in the tuilibr main tree (`../tuilibr`, `src/lib.rs` and the doc of each module). Do not edit `../tuilibr`.
-
-    Steps, each a switch to the crate:
-    1. The before/after compare of the search query in `src/keys/gallery.rs` becomes `TextField::edit_text`.
-    2. `info::human_size` (`src/info.rs:66`) becomes `frame::byte_size`. Remove the copy and its test `human_size_scales_units`. If the text of a size changes (units, decimals), name each changed test.
-    3. `MouseState::double_click` (`src/app/mouse.rs:41`) becomes `frame::DoubleClick<usize>`. Keep the clock seam: the tests pass the time (`handle_event_at`).
-    4. `GalleryState::ensure_cursor_visible` (`src/gallery/mod.rs:414`) becomes `frame::scroll_to_show`. A view of 0 rows counts as 1 there: make sure that no phewr test depends on the old 0-row case, or name it.
-    5. `STYLES.cursor_cell` (`src/styles.rs:12,33`, used in `src/ui/grid/mod.rs:49,71`) becomes `frame::accent_bold()`. If batch A did not switch `error` and `dim` to `frame::alert()` and `frame::dim()`, do it here.
-    6. `screen_rows` (`src/ui/mod.rs:393`, the test helper) becomes `frame::buffer::rows`. The help checks in `src/ui/help.rs` tests take `first_misfit`.
-
-    Rules: `AGENTS.md` of phewr. No crate change. Keep the behaviour, except where step 2 or 4 changes a text or an edge. Do not edit `README.md`, `AGENTS.md` or `docs/`.
-
-    Done when:
-    - `just check` passes.
-    - The report lists the removed lines (files and counts), each test that changed with the reason, any gap in the crate, the doc notes, and this commit message: `refactor(ui): the text edit, the double click, the scroll, the styles and the test rows from tuilibr`.
-
-   The second worker, the plumbing half (`/tmp/phewr-brief-crate-c.md`):
-
-    Goal: phewr uses the plumbing of tuilibr batches B and C in place of its own copies, and its thumbnail cache moves to the XDG cache folder `~/.cache/phewr`.
-
-    Context: the full brief of tuilibr-82 is `/tmp/phewr-brief-crate-bc.md`. Read it first. This worker does its plumbing half. The UI half merged before this worker. The crate code is in the tuilibr main tree (`../tuilibr`). Do not edit `../tuilibr`.
-
-    Steps:
-    1. `yazi::find_on_path` (`src/yazi.rs:107`) becomes `programs::find_on_path`. Remove the copy and its test.
-    2. `src/numbers.rs` goes: its callers (`app/zoom.rs`, `gallery/mod.rs`, `icons.rs`, `bench/layout_bench.rs`) call `cells::round_to_u32` and `cells::round_to_u16`. Remove the module from `main.rs`. If an `expect` of a cast lint is no longer needed, remove it.
-    3. `config/state.rs` `write_state` (line 355) and `prune_stale_temp_files` (line 380) become `files::write_atomic` and `files::remove_stale_temps(dir, 1 h)`. The temp name becomes `.<name>.<pid>.<seq>.tmp`. Sweep the old `<name>.<pid>.tmp` leftovers of phewr one time at start (one small function, with a test in a `tempfile::tempdir()`).
-    4. `config::Paths` (`src/config/mod.rs:103`) and its XDG code become `dirs::AppDirs`. Keep `Paths::from_vars`-style seams for the tests: a test never sets `HOME` or `XDG_*`.
-    5. The cache folder, the decision of the phewr session: the thumbnail cache moves from `~/Library/Caches/phewr` to the XDG cache folder (`$XDG_CACHE_HOME/phewr`, else `~/.cache/phewr`), through `AppDirs`. At start, before anything opens a file in it: when the new folder does not exist and the old one does, move it with one `std::fs::rename`. When the rename fails (another volume), the cache starts empty and the old folder stays: a cache needs no copy. When both exist, keep the new one and leave the old one. Never delete the old folder. phewr has no log file and writes nothing to the terminal while the TUI runs, so the move gives no note. Tests in a `tempfile::tempdir()`: the move, both exist, none exists, a failed rename. Update the test in `src/app/disk_cache/mod.rs:28`. The prune rule stays: the cache folder holds no subfolder.
-
-    Rules: `AGENTS.md` of phewr. No crate change. Keep the behaviour except the cache folder and the temp name. Do not edit `README.md`, `AGENTS.md` or `docs/`.
-
-    Done when:
-    - `just check` passes.
-    - The report lists the removed lines (files and counts), each test that changed with the reason, any gap in the crate, the doc notes (`AGENTS.md` "Files at run time", the gotcha "Thumbnail cache folder", `docs/gotchas.md`, `docs/app-state.md`, the README), and this commit message: `refactor: the paths, the atomic writes and the program lookup from tuilibr, the cache moves to ~/.cache/phewr`.
-
-4. Open decision of the maintainer: the grid loops stop while the info pane shows (`grid_loops_shown`, a rule from the time when the info pane was an overlay). Must they play beside the open info pane?
+phewr has no active batch (2026-11-20). Open decision of the maintainer: the grid loops stop while the info pane shows (`grid_loops_shown`, a rule from the time when the info pane was an overlay). Must they play beside the open info pane?
 
 ## Next
 
