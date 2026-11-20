@@ -456,8 +456,9 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   click in the info pane does nothing. The double-click uses `handle_event_at` with a
   clock, so tests never sleep. `[gallery] mouse = false` turns the capture off. The run loop
   releases the mouse while an mpv window plays, through `Session::set_mouse` of tuilibr: `run`
-  takes the `&mut Session` of `main` (2026-11-20). `set_mouse` writes to stdout, so no test
-  checks the mouse bytes, only `mouse_capture_wanted`. A horizontal
+  takes the `&mut Session` of `main` (2026-11-20). `switch_mouse` calls `Session::set_mouse_to`
+  with stdout, and the tests pass a `Vec` and a `Session::detached` to check the exact bytes of
+  the release and the return. A horizontal
   wheel does nothing in the grid, so a touchpad scroll never zooms by accident (2026-11-17).
 - **Cell shape:** the shape comes from the headers of the first 64 files, once per scan, and
   stays until the next directory switch.

@@ -170,7 +170,8 @@ The probe at the start or the config picks the path (`Loops` in `KittyBackend`).
 - Each ffmpeg run takes at most 2 decode threads (`-threads 2 -filter_threads 1`).
 - New stills or another view cancel the running loop runs. The flag ends ffmpeg within 20 ms. The
   cells get new jobs later.
-- `run_caught` of the player sends a failure for a job that panics. A job runs
+- `run_caught_with` of the player sends a failure for a job that panics, and phewr keeps the
+  panic text in `GridLoops::last_panic` (only tests read it, phewr has no log). A job runs
   `motion::loop_file::load_or_decode`.
 - The help popup, the info panel and the other views stop the loops (`grid_loops_shown()`), and
   a cell under them starts no job.
