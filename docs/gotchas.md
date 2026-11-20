@@ -384,7 +384,9 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   (`LateAnswerFilter::kitty_answers_came`), so the filter never swallows an answer of the self
   check. Before, one count held both kinds, and a self check `ENOENT` before a late OSC 10 answer
   let the OSC 10 answer through as keys. The filter swallows Alt+`_` only while a Kitty answer is
-  owed, and Alt+`]` only while the OSC 10 answer is owed.
+  owed, and Alt+`]` only while the OSC 10 answer is owed. Since 2026-11-20, the filter forgets
+  the owed answers after `tuilibr::terminal::answers::OWED_FOR` (5 s), unless an answer is in
+  progress. So a terminal that answers DA1 but never OSC 10 loses no Alt+`]` for the whole run.
 - **Self check (2026-11-11):** when the self check is on, the engine places with `q=1`
   (`Screen::with_self_check`, the argument `errors` of `place_as_to`). The terminal then answers
   an error for a placement of a picture that it does not hold, `ENOENT: image not found`. A
@@ -493,9 +495,10 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   cache folder (`$XDG_CACHE_HOME/phewr`, else `~/.cache/phewr`, through `tuilibr::dirs::AppDirs`).
   The maintainer decided that the folders of every app follow XDG. Until then they sat in
   `~/Library/Caches/phewr`. At start, before anything opens a file in it, `adopt_old_cache` in
-  `app/disk_cache/mod.rs` renames the old folder one time, only when the new folder does not
-  exist and the old one does. So the cache stays warm. A failed rename (another volume) starts an
-  empty cache, and the old folder stays: a cache needs no copy. When both exist, phewr keeps the
+  `app/disk_cache/mod.rs` renames the old folder one time through `tuilibr::dirs::move_once`, only
+  when nothing is at the new place (also no dangling link) and the old one exists. So the cache
+  stays warm. On another volume (`OtherVolume::Leave`) or after a failed rename, the cache starts
+  empty, and the old folder stays: a cache needs no copy. When both exist, phewr keeps the
   new one and leaves the old one. phewr never deletes the old folder and gives no note. Without a
   usable `HOME`, the cache goes to `<temp>/phewr-cache`, never below the viewed folder.
   `prune_disk_cache` refuses a folder that holds a subfolder, so phewr must keep no subfolder

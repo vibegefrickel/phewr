@@ -419,7 +419,8 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   animation or through ticks (`Loops`). herdr gets the ticks without the animation probe:
   herdr 0.9.5 answers the probe itself but plays no Kitty animation (maintainer, 2026-11-03).
   `PHEWR_KITTY_LOOPS` and `[gallery] loops` win. `[gallery] animate = false` turns the loops off.
-  The loops run on the loop player of tuilibr (`kitty::loops::player::LoopPlayer`, 2026-11-20).
+  While the info pane or an overlay shows, the cells keep their stills (`App::grid_loops_shown`,
+  kept by the maintainer on 2026-11-20). The loops run on the loop player of tuilibr (`kitty::loops::player::LoopPlayer`, 2026-11-20).
   Each grid frame and each poll name the visible video, animated and Live cells with a sharp
   still (`App::show_grid_loops`). A hidden cell loses its loop and its job at once, a loop above
   the budget deletes its ids, and an over-budget cell tries again when it comes back on screen.
@@ -475,8 +476,8 @@ Most code of this section lives in `tuilibr::pictures`, and a change of it goes 
   own version, higher than main and than every branch in flight.
 - **Thumbnail cache folder** (phewr code, `app/disk_cache/`): the thumbnails of phewr sit at the top of the XDG cache
   folder `~/.cache/phewr` (maintainer, 2026-11-20). At start, `adopt_old_cache` renames
-  `~/Library/Caches/phewr` one time, only when the new folder does not exist. A failed rename
-  starts an empty cache. phewr never deletes the old folder. The prune refuses a folder that
+  `~/Library/Caches/phewr` one time with `tuilibr::dirs::move_once`, only when nothing is at the
+  new place, also no dangling link. Another volume or a failed rename starts an empty cache. phewr never deletes the old folder. The prune refuses a folder that
   holds a subfolder, so phewr must keep no subfolder there.
 - **Disk cache format:** QOI files. A hit reads and decodes in about 0.75 ms.
 - **Resize and pixel layouts:** every resize uses Catmull-Rom and the fastest layout of

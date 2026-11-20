@@ -87,7 +87,7 @@ the queues and `Priority`, and `tuilibr::pictures::jobs::pool` holds the pool of
   prune.
 - The module has no default folder. phewr gets its folder from `config::Paths` (on
   `tuilibr::dirs::AppDirs`): `~/.cache/phewr`. `app/disk_cache/mod.rs` holds `adopt_old_cache`,
-  the one-time move of `~/Library/Caches/phewr`. The prune refuses a folder that holds a
+  the one-time move (`tuilibr::dirs::move_once`) of `~/Library/Caches/phewr`. The prune refuses a folder that holds a
   subfolder.
 - The loop file code is in `tuilibr::pictures::motion::loop_file`. phewr has no loop file code in
   `app/disk_cache/`. The file is `<hash>.loop`. It holds QOI frames with their times.

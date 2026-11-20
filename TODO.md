@@ -3,21 +3,19 @@
 ## Handoff
 
 - Date: 2026-11-20
-- Commit: c7d1733
-- Done: phewr is an app of the crate `~/Projects/dev/tuilibr`: the picture module, the frame (the bar, the help, the accent, the two panes, the omnibox), the terminal session and the motion module come from the crate. Each phase merged with a docs commit, see "Done".
-- Done: the maintainer test run passed steps 10 to 13 and the grid part of step 14, and auto-review workers fixed its findings. The rest of the run is in "Later".
-- Done: the dependency round in all five repositories, the lint union, Rust 1.100, `version = "0.1.0"`, the shared audit text and the fast pre-commit hook.
-- Done: every Kitty write runs in an `Update` of the `Screen` (`6fcfa6d`, docs `ad30940`). The cursor reset after the draws is gone.
-- Done (2026-11-19 and 2026-11-20, committed): the maintainer review of the panes. The boxes show only with the info pane. The default is maximal, like every app, and a test pins that the grid, the fullscreen view and the slideshow get no box. The main box title is then the folder path with `~`, and the status row leaves the path out. The info pane stays dim. `B` without the info pane keeps the pictures.
-- Done (2026-11-20): each config key loads on its own (`bd5c837`, docs 099e75f, 704 tests, 682 lean). A wrong type or a rejected value keeps the default of its key, a syntax error or an unreadable file keeps every default, and one start note names the problems.
-- Done (2026-11-20, committed): the dialog padding of tuilibr (the help needs 104 columns for two columns, its body starts under the title). The README names tuilibr a private sibling crate, with no clone URL. The fixtures of tuilibr are static files: tuilibr removed every `make.sh`, and nothing needs jpeg-xl.
-- Done (2026-11-20): the lint details (`e1e8ea2`, docs `e93b4e3`): the cast lints, `missing_const_for_fn`, `or_fun_call`, `too_long_first_doc_paragraph`. 86 hits: 64 fixes, 9 `expect` items with a reason. The helpers are `tuilibr::cells::to_u16` and `numbers.rs`.
-- Done (2026-11-20): the crate lints of tuilibr in phewr (`e1e8ea2`). The grid loops run on the loop player of tuilibr (`84a4cbb`, 708 tests): a hidden job is cancelled, the over-budget ids are deleted, a folder switch starts no job on the old cells. tuilibr fixed the three player gaps of phewr.
-- Done (2026-11-20): the duplication review of tuilibr in phewr, auto-review workers: batch A (`b81f40c`: `truncate_width`, `display_width`, `to_u16`, `Session::set_mouse`, the const styles, no `unicode-width`), the UI half of B and C (`a5be1ea`: `edit_text`, `byte_size`, `DoubleClick`, `scroll_to_show`, `accent_bold`, `buffer::rows`, `first_misfit`), the plumbing half (`58ed2b8`: `programs::find_on_path`, `cells` rounding, `files::write_atomic`, `AppDirs`, the cache moves to `~/.cache/phewr` with one rename at start), the crate gaps (`87278c8`: the mouse byte test, the panic text of a loop job, no zero wake). Docs `9b4739a`, `25b5675`, `f015d65`, `c7d1733`. 713 tests, 691 lean.
-- Open (agent): no active worker. The next batch waits for the maintainer or for a crate change of tuilibr-82.
-- Open (user): commit tuilibr first: phewr main calls `remove_stale_temps_of`, `set_mouse_to`, `Session::detached` and `run_caught_with`, which are only in the tuilibr working tree. Start phewr one time, so the cache moves to `~/.cache/phewr`. Then you can delete `~/Library/Caches/phewr` if it stays. Decide about the loops beside the info pane. The test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios).
-- Health: `just check` passes on Rust 1.100.0 with 713 tests (691 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
-- Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key. The herdr test decides if this needs a fix. The filter lives in tuilibr now.
+- Commit: 36d3c33
+- Done: phewr is an app of the crate `~/Projects/dev/tuilibr`: the picture module, the frame, the terminal session and the motion module come from the crate. Each phase merged with a docs commit.
+- Done: the maintainer test run passed steps 10 to 13 and the grid part of step 14. The rest of the run is in "Later".
+- Done: the dependency round, the lint union and the crate lints of tuilibr, Rust 1.100, `version = "0.1.0"`, the shared audit text and the fast pre-commit hook.
+- Done: every Kitty write runs in an `Update` of the `Screen`. Each config key loads on its own, with one start note.
+- Done: the grid loops run on the loop player of tuilibr (`84a4cbb`). The duplication review of tuilibr in phewr is done (`b81f40c`, `a5be1ea`, `58ed2b8`, `87278c8`).
+- Done: tuilibr is committed with the API that phewr main calls. The thumbnail cache is in `~/.cache/phewr`, and `~/Library/Caches/phewr` is gone.
+- Done: the maintainer cleaned up this file (`36d3c33`). The consolidate run of 2026-11-20 changed only this section.
+- Done (uncommitted, for tuilibr-82): `adopt_old_cache` calls `tuilibr::dirs::move_once` with `OtherVolume::Leave`. The late-answer filter of tuilibr forgets the owed answers after 5 s, so the DA1 note is gone. Both need the uncommitted tuilibr tree.
+- Open (agent): no active worker and no ready batch. The next batch waits for the test run or for a crate change of the tuilibr session.
+- Done: the grid loops keep their stills while the info pane shows (maintainer, 2026-11-20). AGENTS.md and `docs/grid-and-kitty.md` name the rule.
+- Open (user): run the rest of the test run with the installed build: step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios.
+- Health: `just check` passes on Rust 1.100.0 with 713 tests (691 lean), with the audit. `cargo deny` is silent. No workers, no worktrees, no stashes.
 
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
 
@@ -39,7 +37,7 @@ State of the main goal (2026-11-09):
 
 ## Now
 
-phewr has no active batch (2026-11-20). Open decision of the maintainer: the grid loops stop while the info pane shows (`grid_loops_shown`, a rule from the time when the info pane was an overlay). Must they play beside the open info pane?
+phewr has no active batch (2026-11-20).
 
 ## Next
 
@@ -58,12 +56,10 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Later
 
-
 - `just audit` is part of `just check` since `5e64e7a` (the maintainer installed the tools on 2026-11-19, the dotfiles Brewfile lists them, shellcheck and shfmt were added there uncommitted). The shared audit text of the five repositories is in since `4226e18` (the maintainer said yes on 2026-11-19): the tools come from the Brewfile, the shell step runs on every tracked `*.sh`, `cargo insta test` only in a repo with insta.
 - The pre-commit hook of the dotfiles is `just fmt-check lint` on the working tree (decision of 2026-11-19), the full `just check` runs at the worker merge and in the pre-push hook. The error at the first commit of the day came from a tuilibr tree that did not compile for a few minutes.
 
 ### The maintainer test run (moved from "Now" on 2026-11-19, phase 7 of the picture plan)
-
 
 Maintainer tests in Ghostty and in herdr: run the 14 steps in `~/Pictures/phewr-test/TESTS.md`. The folder holds a test set for each step (photos, colors, animations, videos, camera RAW from raw.pixls.us, every format, folders, placeholders and Live Photos). Steps 9 and 10 include the grid loops: every video and animated cell must loop after its still. Measured on 2026-10-30: 30 looping cells cost about 3 % of one core in total (phewr 0.2 %, Ghostty 1.7 %, herdr 1.3 %).
 

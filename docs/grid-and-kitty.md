@@ -116,6 +116,10 @@ the picture plan). It holds `Placements`, `Screen`, `Update`, `Placing` and `Lay
   gets the bytes of the stills only, `take_stale()` goes into the deletes, and `place` runs for
   each cell. No loop frame goes out while stills of the last pass wait. The pixel lookup of the
   flush tries `pixels_of` of the player after the icons.
+- The loops play only in the grid view without an overlay and without the info pane
+  (`App::grid_loops_shown`). While the info pane shows, the cells keep their stills. The rule
+  comes from the time when the info pane was an overlay, and the maintainer kept it on
+  2026-11-20.
 - A lost frame of a visible loop gives the still and a new transfer of the loop. Nothing calls
   `Screen::lost` today, and the trim keeps every frame of a visible loop. So
   this path has no trigger yet. `Screen::answer` takes the same path for a lost picture of the
