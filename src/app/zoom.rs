@@ -1,9 +1,9 @@
 //! Zoom and pan in the fullscreen view, with the full-resolution source behind them.
 
 use super::App;
-use crate::numbers::round_to_u32;
 use std::io;
 use std::sync::mpsc;
+use tuilibr::cells::round_to_u32;
 use tuilibr::pictures::decode::{
     Decoded, EmbeddedThumbnail, ScreenImage, decode_image, spawn_foreground,
 };

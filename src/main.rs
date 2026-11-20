@@ -14,7 +14,6 @@ mod keys;
 mod kitty_output;
 #[cfg(feature = "video")]
 mod mpv;
-mod numbers;
 #[cfg(feature = "video")]
 mod player;
 mod prefetch;
@@ -189,6 +188,13 @@ fn main() -> io::Result<()> {
     }
 
     let config_paths = config::Paths::from_env();
+    if let Some(home) = &config_paths.home {
+        app::disk_cache::adopt_old_cache(
+            &app::disk_cache::old_cache_dir(home),
+            &config_paths.cache,
+        );
+    }
+    config::remove_legacy_temps(&config_paths.state);
     let mut config = config::load(&config_paths);
     tuilibr::pictures::decode::color::set_target(config.colorspace);
     apply_cli_overrides(&mut config, cli.interval, cli.info);
@@ -225,7 +231,13 @@ fn main() -> io::Result<()> {
     state.cell_size_from_terminal = start.cell_from_terminal;
     let cell_px = (u32::from(start.cell.width), u32::from(start.cell.height));
     state.answers = LateAnswerFilter::new(start.owed);
-    let mut app = App::with_config(cell_px, shared_list, &config, config_paths.state);
+    let mut app = App::with_config(
+        cell_px,
+        shared_list,
+        &config,
+        config_paths.state,
+        config_paths.cache,
+    );
     app.grid_icons.set_color(start.foreground);
     prepare_app(
         &mut app,

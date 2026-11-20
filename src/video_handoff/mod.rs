@@ -8,7 +8,6 @@ use crate::config::{Config, VideoPlayer};
 use crate::mpv;
 use crate::player::Player;
 use crate::run_loop::LoopState;
-use crate::yazi::find_on_path;
 pub(crate) use prestart::{VideoPrestart, prestart_timeout};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -17,6 +16,7 @@ use tuilibr::pictures::kitty::Transfer;
 use tuilibr::pictures::motion::decoder::{Decoder, SystemDecoder};
 use tuilibr::pictures::motion::first_frame::cube_dirs;
 use tuilibr::pictures::motion::frame_box::frame_limit;
+use tuilibr::programs::find_on_path;
 pub(crate) use window::poll_mpv_window;
 
 const MPV_MISSING_NOTE: &str = "mpv not found on PATH";

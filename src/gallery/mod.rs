@@ -10,10 +10,10 @@
 //! drawn last. A border that the grid edge cuts stays open at that edge.
 use crate::config::{MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS};
 use crate::icons;
-use crate::numbers::round_to_u16;
 use ratatui::layout::Rect;
 use std::ops::Range;
 use tuilibr::cells;
+use tuilibr::cells::round_to_u16;
 use tuilibr::frame::scroll_to_show;
 use tuilibr::pictures::shape::DEFAULT_IMAGE_ASPECT;
 use tuilibr::text_field::TextField;

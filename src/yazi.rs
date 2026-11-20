@@ -3,10 +3,10 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use tuilibr::programs::find_on_path;
 
 /// A yazi that does not answer must not hold phewr.
 const YA_TIMEOUT: Duration = Duration::from_secs(1);
@@ -103,21 +103,9 @@ pub(crate) fn run_briefly(program: &Path, args: &[OsString]) -> io::Result<()> {
     Ok(())
 }
 
-/// The first executable `program` in `path`, like a shell lookup.
-pub(crate) fn find_on_path(program: &str, path: Option<&OsStr>) -> Option<PathBuf> {
-    std::env::split_paths(path?)
-        .filter(|directory| !directory.as_os_str().is_empty())
-        .map(|directory| directory.join(program))
-        .find(|candidate| {
-            candidate.metadata().is_ok_and(|metadata| {
-                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-            })
-        })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{find_on_path, reveal_in_yazi, run_briefly, select_in_yazi};
+    use super::{reveal_in_yazi, run_briefly, select_in_yazi};
     use std::ffi::{OsStr, OsString};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -257,32 +245,6 @@ mod tests {
             assert!(calls.is_empty(), "{case}");
         }
         assert_eq!(std::fs::read_dir(lists.path()).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn find_on_path_takes_first_executable() {
-        let root = tempfile::tempdir().unwrap();
-        let plain = root.path().join("plain");
-        let executable = root.path().join("executable");
-        std::fs::create_dir_all(&plain).unwrap();
-        std::fs::create_dir_all(&executable).unwrap();
-        std::fs::write(plain.join("mpv"), "").unwrap();
-        std::fs::write(executable.join("mpv"), "").unwrap();
-        std::fs::set_permissions(
-            executable.join("mpv"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
-
-        let path = std::env::join_paths([&plain, &executable]).unwrap();
-        assert_eq!(
-            find_on_path("mpv", Some(&path)),
-            Some(executable.join("mpv"))
-        );
-        assert_eq!(find_on_path("mpv", Some(OsStr::new(""))), None);
-        assert_eq!(find_on_path("mpv", None), None);
-        let only_plain = std::env::join_paths([&plain]).unwrap();
-        assert_eq!(find_on_path("mpv", Some(&only_plain)), None);
     }
 
     #[test]

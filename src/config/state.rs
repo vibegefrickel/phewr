@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
+use tuilibr::files;
 
 /// The most folders with a remembered zoom level.
 const MAX_ZOOM_FOLDERS: usize = 200;
@@ -353,31 +354,24 @@ pub(super) fn read_state(path: &Path) -> StateFile {
 const STALE_TEMP_AGE: Duration = Duration::from_hours(1);
 
 pub(super) fn write_state(path: &Path, state: &StateFile) {
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    prune_stale_temp_files(path);
     if let Ok(contents) = toml::to_string(state) {
-        // Write beside the file and rename. A crash never leaves half a state file.
-        let mut temp = path.as_os_str().to_owned();
-        temp.push(format!(".{}.tmp", std::process::id()));
-        let temp = PathBuf::from(temp);
-        if std::fs::write(&temp, contents).is_err() || std::fs::rename(&temp, path).is_err() {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "a leftover temp file is harmless"
-            )]
-            let _ = std::fs::remove_file(&temp);
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a failed save keeps the old file, and the next change saves again"
+        )]
+        let _ = files::write_atomic(path, contents.as_bytes(), None);
+        if let (Some(parent), Some(name)) =
+            (path.parent(), path.file_name().and_then(|n| n.to_str()))
+        {
+            #[expect(clippy::let_underscore_must_use, reason = "the next save tries again")]
+            let _ = files::remove_stale_temps_of(parent, name, STALE_TEMP_AGE);
         }
     }
 }
 
-/// Remove the stale temp files `<name>.*.tmp` beside the state file. A fresh one can belong to
-/// a running phewr.
-fn prune_stale_temp_files(path: &Path) {
+/// Removes the temp files `<name>.<pid>.tmp` that phewr before the temp name of tuilibr left beside
+/// the state file. The start runs this one time.
+pub(crate) fn remove_legacy_temps(path: &Path) {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return;
     };
@@ -387,18 +381,12 @@ fn prune_stale_temp_files(path: &Path) {
     };
     for entry in entries.flatten() {
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        let stale = file_name.starts_with(&prefix)
-            && Path::new(&file_name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"))
-            && entry
-                .metadata()
-                .and_then(|meta| meta.modified())
-                .ok()
-                .and_then(|modified| modified.elapsed().ok())
-                .is_some_and(|age| age > STALE_TEMP_AGE);
-        if stale {
-            #[expect(clippy::let_underscore_must_use, reason = "the next save tries again")]
+        let is_legacy = file_name
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(".tmp"))
+            .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()));
+        if is_legacy {
+            #[expect(clippy::let_underscore_must_use, reason = "the next start tries again")]
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -512,9 +500,9 @@ mod tests {
     fn save_removes_stale_temp_files() {
         let root = test_root();
         let state_path = root.path().join("state.toml");
-        let stale = root.path().join("state.toml.111.tmp");
-        let fresh = root.path().join("state.toml.222.tmp");
-        let other = root.path().join("other.toml.333.tmp");
+        let stale = root.path().join(".state.toml.111.0.tmp");
+        let fresh = root.path().join(".state.toml.222.0.tmp");
+        let other = root.path().join(".other.toml.333.0.tmp");
         for path in [&stale, &fresh, &other] {
             std::fs::write(path, "x").unwrap();
         }
@@ -534,6 +522,26 @@ mod tests {
         assert!(fresh.exists());
         assert!(other.exists(), "only the temp files of the state file go");
         assert!(state_path.exists());
+    }
+
+    #[test]
+    fn start_removes_legacy_temp_files() {
+        let root = test_root();
+        let state_path = root.path().join("state.toml");
+        let legacy = root.path().join("state.toml.111.tmp");
+        let current = root.path().join(".state.toml.111.0.tmp");
+        let other = root.path().join("other.toml.333.tmp");
+        let state = root.path().join("state.toml.bak");
+        for path in [&legacy, &current, &other, &state] {
+            std::fs::write(path, "x").unwrap();
+        }
+
+        remove_legacy_temps(&state_path);
+
+        assert!(!legacy.exists());
+        assert!(current.exists(), "the temp name of tuilibr is not legacy");
+        assert!(other.exists(), "only the temp files of the state file go");
+        assert!(state.exists());
     }
 
     #[test]

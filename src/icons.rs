@@ -94,7 +94,7 @@ pub(crate) fn stamp_play(image: &mut image::RgbaImage) {
     /// The edge is the triangle at this scale, drawn first.
     const EDGE_SCALE: f64 = 1.18;
     let (width, height) = image.dimensions();
-    let size = crate::numbers::round_to_u32(f64::from(height) * ICON_HEIGHT_SHARE);
+    let size = tuilibr::cells::round_to_u32(f64::from(height) * ICON_HEIGHT_SHARE);
     if size < 4 || size > width {
         return;
     }

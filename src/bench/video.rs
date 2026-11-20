@@ -514,7 +514,7 @@ fn probe_and_first_frame() {
     let cache = tempfile::tempdir().unwrap();
     let cube_dirs = [cache.path()];
     let wait = Duration::from_secs(10);
-    let ffprobe = crate::yazi::find_on_path("ffprobe", std::env::var_os("PATH").as_deref());
+    let ffprobe = tuilibr::programs::find_on_path("ffprobe", std::env::var_os("PATH").as_deref());
     let Some(ffprobe) = ffprobe else {
         return;
     };

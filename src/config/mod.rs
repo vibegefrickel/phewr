@@ -6,6 +6,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use toml::{Table, Value};
+use tuilibr::dirs::AppDirs;
 use tuilibr::frame::Layout;
 use tuilibr::pictures::decode::color::ColorTarget;
 use tuilibr::pictures::kitty::Loops;
@@ -13,7 +14,7 @@ use tuilibr::pictures::kitty::Loops;
 mod state;
 
 use state::read_state;
-pub(crate) use state::{StateChange, StateWriter};
+pub(crate) use state::{StateChange, StateWriter, remove_legacy_temps};
 #[cfg(test)]
 pub(crate) use state::{load_folder_zoom, load_global_zoom, save_visible_rows};
 
@@ -99,31 +100,52 @@ impl Default for Config {
     }
 }
 
+/// The files and folders of phewr below the XDG folders (`tuilibr::dirs::AppDirs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Paths {
     pub(crate) config: PathBuf,
     pub(crate) state: PathBuf,
+    /// The thumbnail cache folder: `$XDG_CACHE_HOME/phewr`, else `~/.cache/phewr`.
+    pub(crate) cache: PathBuf,
+    /// The home folder, for the old cache folder. `None` without a usable `HOME`.
+    pub(crate) home: Option<PathBuf>,
 }
 
 impl Paths {
-    /// Reads `HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` at each call.
+    /// Reads `HOME` and the `XDG_*_HOME` variables at each call.
     pub(crate) fn from_env() -> Self {
-        Self::from_vars(
-            &home_dir(),
-            std::env::var_os("XDG_CONFIG_HOME"),
-            std::env::var_os("XDG_STATE_HOME"),
-        )
+        Self::from_vars(|name| std::env::var_os(name))
     }
 
-    /// Takes the values of the variables. A test needs no environment.
-    fn from_vars(
-        home: &Path,
-        xdg_config_home: Option<OsString>,
-        xdg_state_home: Option<OsString>,
-    ) -> Self {
+    /// Takes the lookup of the variables. A test needs no environment.
+    ///
+    /// An unset or empty `HOME` is no usable home. Then the cache sits in
+    /// `<temp>/phewr-cache`, never below the folder that the user views. The config and the state
+    /// follow an absolute `XDG_*_HOME`, else they sit in `<temp>/phewr`.
+    fn from_vars(lookup: impl Fn(&str) -> Option<OsString>) -> Self {
+        if let Ok(dirs) = AppDirs::from_vars("phewr", None, &lookup) {
+            return Self {
+                config: dirs.config.join("config.toml"),
+                state: dirs.state.join("state.toml"),
+                cache: dirs.cache,
+                home: Some(dirs.home),
+            };
+        }
+        let below = |variable: &str, file: &str| {
+            lookup(variable)
+                .map(PathBuf::from)
+                .filter(|base| base.is_absolute())
+                .map_or_else(
+                    || std::env::temp_dir().join("phewr"),
+                    |base| base.join("phewr"),
+                )
+                .join(file)
+        };
         Self {
-            config: xdg_path(xdg_config_home, home, ".config", "phewr/config.toml"),
-            state: xdg_path(xdg_state_home, home, ".local/state", "phewr/state.toml"),
+            config: below("XDG_CONFIG_HOME", "config.toml"),
+            state: below("XDG_STATE_HOME", "state.toml"),
+            cache: std::env::temp_dir().join("phewr-cache"),
+            home: None,
         }
     }
 }
@@ -331,18 +353,6 @@ impl<'a> Section<'a> {
     }
 }
 
-/// Join `file` to an absolute XDG base, else to `home/fallback`.
-fn xdg_path(base: Option<OsString>, home: &Path, fallback: &str, file: &str) -> PathBuf {
-    base.map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(fallback))
-        .join(file)
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
-}
-
 #[cfg(test)]
 mod tests {
     use super::state::{StateFile, write_state};
@@ -352,16 +362,54 @@ mod tests {
     #[test]
     fn paths_follow_absolute_xdg_values() {
         let home = Path::new("/home/a");
-        let fallback = Paths::from_vars(home, None, None);
+        let lookup = |vars: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                vars.iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(*value))
+            }
+        };
+        let fallback = Paths::from_vars(lookup(&[("HOME", "/home/a")]));
         assert_eq!(fallback.config, home.join(".config/phewr/config.toml"));
         assert_eq!(fallback.state, home.join(".local/state/phewr/state.toml"));
+        assert_eq!(fallback.cache, home.join(".cache/phewr"));
+        assert_eq!(fallback.home.as_deref(), Some(home));
 
-        let xdg = Paths::from_vars(home, Some("/x/c".into()), Some("/x/s".into()));
+        let xdg = Paths::from_vars(lookup(&[
+            ("HOME", "/home/a"),
+            ("XDG_CONFIG_HOME", "/x/c"),
+            ("XDG_STATE_HOME", "/x/s"),
+            ("XDG_CACHE_HOME", "/x/k"),
+        ]));
         assert_eq!(xdg.config, Path::new("/x/c/phewr/config.toml"));
         assert_eq!(xdg.state, Path::new("/x/s/phewr/state.toml"));
+        assert_eq!(xdg.cache, Path::new("/x/k/phewr"));
 
-        let relative = Paths::from_vars(home, Some("c".into()), Some("s".into()));
+        let relative = Paths::from_vars(lookup(&[
+            ("HOME", "/home/a"),
+            ("XDG_CONFIG_HOME", "c"),
+            ("XDG_STATE_HOME", "s"),
+            ("XDG_CACHE_HOME", "k"),
+        ]));
         assert_eq!(relative, fallback);
+    }
+
+    #[test]
+    fn paths_without_usable_home_never_use_the_current_folder() {
+        let temp = std::env::temp_dir();
+        for home in [None, Some("")] {
+            let vars = |name: &str| match name {
+                "HOME" => home.map(OsString::from),
+                "XDG_CONFIG_HOME" => Some(OsString::from("/x/c")),
+                "XDG_CACHE_HOME" => Some(OsString::from("/x/k")),
+                _ => None,
+            };
+            let paths = Paths::from_vars(vars);
+            assert_eq!(paths.home, None);
+            assert_eq!(paths.cache, temp.join("phewr-cache"));
+            assert_eq!(paths.config, Path::new("/x/c/phewr/config.toml"));
+            assert_eq!(paths.state, temp.join("phewr/state.toml"));
+        }
     }
 
     pub(super) fn test_root() -> TempDir {
@@ -711,32 +759,5 @@ mod tests {
         std::fs::write(&state_path, "thumb_cols = 40\nthumb_rows = 12\n").unwrap();
         let config = load_at(&root.path().join("config.toml"), &state_path);
         assert_eq!(config.visible_rows, DEFAULT_VISIBLE_ROWS);
-    }
-
-    #[test]
-    fn xdg_path_needs_absolute_base() {
-        let home = Path::new("/home/synthetic");
-        assert_eq!(
-            xdg_path(None, home, ".config", "phewr/config.toml"),
-            home.join(".config/phewr/config.toml")
-        );
-        assert_eq!(
-            xdg_path(
-                Some(OsString::from("relative/config")),
-                home,
-                ".config",
-                "phewr/config.toml"
-            ),
-            home.join(".config/phewr/config.toml")
-        );
-        assert_eq!(
-            xdg_path(
-                Some(OsString::from("/xdg/state")),
-                home,
-                ".local/state",
-                "phewr/state.toml"
-            ),
-            PathBuf::from("/xdg/state/phewr/state.toml")
-        );
     }
 }

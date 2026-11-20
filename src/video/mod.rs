@@ -5,7 +5,6 @@
 //! video cell keeps its play icon, and a video opens in the mpv window. The decode code is in
 //! `tuilibr::pictures::motion`.
 
-use crate::yazi::find_on_path;
 use image::RgbaImage;
 use std::ffi::OsStr;
 use std::io;
@@ -14,6 +13,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use tuilibr::pictures::motion::first_frame::first_frame_of;
 use tuilibr::pictures::motion::loop_frames::{LoopFrames, loop_of};
+use tuilibr::programs::find_on_path;
 
 /// `None` when PATH has no such program. `file_meta` runs ffprobe without ffmpeg.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

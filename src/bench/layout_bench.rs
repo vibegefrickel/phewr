@@ -3,11 +3,11 @@
 use crate::app::App;
 use crate::image_list::SharedImageList;
 use crate::kitty_output::render_fullscreen_image_to;
-use crate::numbers::round_to_u32;
 use image::{DynamicImage, RgbaImage};
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use tuilibr::cells::round_to_u32;
 use tuilibr::pictures::decode::color::{self, ColorTarget};
 use tuilibr::pictures::decode::screen::ScreenImage;
 use tuilibr::pictures::decode::{EmbeddedThumbnail, decode_image};
