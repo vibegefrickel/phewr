@@ -135,8 +135,8 @@ Files at run time:
 
 ### Tests
 
-`docs/testing.md` holds the long form: every `PHEWR_TEST_*` variable, every fixture folder and
-its `make.sh`, and the real-file tests by name.
+`docs/testing.md` holds the long form: every `PHEWR_TEST_*` variable, every fixture folder,
+and the real-file tests by name.
 
 - Unit tests sit in a `#[cfg(test)] mod tests` at the end of each module. A long test module
   moves into a `tests.rs` file of the module directory. A module with a directory lives in

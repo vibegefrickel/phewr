@@ -25,8 +25,9 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   `TUILIBR_TEST_SDR_VIDEO` also feeds the first
   frame test of `tuilibr::pictures::motion::first_frame`. The bench `previews::raw_files` reads every
   RAW file of `PHEWR_TEST_RAW_DIR`.
-- The picture module is `tuilibr::pictures`. Its tests, its fixtures and their `make.sh` files are
-  in tuilibr (`tuilibr/docs/pictures.md`). The module tests read `TUILIBR_TEST_*`. The tests of
+- The picture module is `tuilibr::pictures`. Its tests and its fixtures are in tuilibr
+  (`tuilibr/docs/pictures.md`). The fixtures are static files: no script rebuilds them, and no
+  test needs a JPEG XL tool (maintainer, 2026-11-20). The module tests read `TUILIBR_TEST_*`. The tests of
   phewr read `PHEWR_TEST_*`.
 - The dev dependency on tuilibr has the feature `test-support`. `test_support` of phewr re-exports
   `tuilibr::pictures::test_support`. phewr has no fixture folder, and `test_support::fixture(name)` is gone.
@@ -41,7 +42,7 @@ This page holds the long form of the test rules in `AGENTS.md`: the variables of
   `still.png` and `still.webp` are in tuilibr. `PHEWR_BENCH_COLORSPACE=srgb just bench` measures
   with the sRGB target.
 - The fixtures `anim.*` (4 small animated files: GIF, WebP, APNG, AVIF) and `video/` (the HDR10, 12-bit and layout
-  clips) and their `make.sh` files are in the fixture folder of tuilibr. Their tests
+  clips) are in the fixture folder of tuilibr. Their tests
   (`real_hdr10_peak_sources`, `real_12_bit_clips_decode`, `real_layouts_download_on_gpu`) run in
   tuilibr. See `tuilibr/docs/pictures.md`, "The motion module".
   `cargo nextest run --no-default-features` passes too.

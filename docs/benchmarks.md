@@ -114,7 +114,7 @@ filter `bench::` finds all 26 benches. `just bench-live` runs only the group `be
 ## Test helpers (`src/test_support/`, `tuilibr::pictures::test_support`)
 
 - The animated fixtures (`anim.gif`, `anim.webp`, `anim.png`, `anim.avif`) hold 3 frames of
-  16x12 pixels. The stills hold one frame. `jxl/` (in tuilibr) holds the color charts of its `make.sh`.
+  16x12 pixels. The stills hold one frame. `jxl/` (in tuilibr) holds the color charts.
 - The benches use the camera size 1620x1080 for `write_cr3_with_preview`, and
   `write_tiff_raw_with_preview` for a full-size preview. Both writers are in
   `tuilibr::pictures::test_support::files`.

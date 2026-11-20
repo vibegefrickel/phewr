@@ -11,7 +11,7 @@
 - Done (2026-11-19, committed by the maintainer): the maintainer review of the panes. The boxes show only with the info pane. Since 2026-11-20 the default is maximal again, like every app (uncommitted). The main box title is then the folder path with `~`, and the status row leaves the path out. The info pane stays dim. `B` without the info pane keeps the pictures.
 - Done (2026-11-20): each config key loads on its own (`bd5c837`, docs 099e75f, 704 tests, 682 lean). A wrong type or a rejected value keeps the default of its key, a syntax error or an unreadable file keeps every default, and one start note names the problems.
 - Open (agent): no active worker and no agent item in "Later". The next batch waits for the maintainer: the test run, or the next tuilibr phase that touches phewr.
-- Open (user): the test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios). The byte-equal run of `tuilibr/tests/fixtures/hdr/make.sh`.
+- Open (user): the test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios).
 - Health: `just check` passes on Rust 1.100.0 with 704 tests (682 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
 - Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key. The herdr test decides if this needs a fix. The filter lives in tuilibr now.
 
@@ -54,7 +54,6 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Later
 
-- The byte-equal run of `tuilibr/tests/fixtures/hdr/make.sh` (the maintainer): it rebuilds the hdr fixtures with the phewr test `write_the_player_hdr_cubes`, and the files must stay byte-equal.
 
 - `just audit` is part of `just check` since `5e64e7a` (the maintainer installed the tools on 2026-11-19, the dotfiles Brewfile lists them, shellcheck and shfmt were added there uncommitted). The shared audit text of the five repositories is in since `4226e18` (the maintainer said yes on 2026-11-19): the tools come from the Brewfile, the shell step runs on every tracked `*.sh`, `cargo insta test` only in a repo with insta.
 - The pre-commit hook of the dotfiles is `just fmt-check lint` on the working tree (decision of 2026-11-19), the full `just check` runs at the worker merge and in the pre-push hook. The error at the first commit of the day came from a tuilibr tree that did not compile for a few minutes.
