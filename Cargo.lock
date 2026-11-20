@@ -1675,7 +1675,6 @@ dependencies = [
  "toml",
  "tuilibr",
  "turbojpeg",
- "unicode-width",
 ]
 
 [[package]]

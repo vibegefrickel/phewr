@@ -187,7 +187,6 @@ turbojpeg = { version = "1.5", default-features = false, features = [
   "pkg-config",
   "require-simd",
 ], optional = true }
-unicode-width = "0.2"
 
 [dev-dependencies]
 # The benches compare the resize layouts.

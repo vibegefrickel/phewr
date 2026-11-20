@@ -10,7 +10,6 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
 };
 use std::borrow::Cow;
-use unicode_width::UnicodeWidthStr;
 
 /// The rows of a folder name below the folder icon.
 const FOLDER_NAME_ROWS: u16 = 1;
@@ -196,34 +195,13 @@ fn draw_centered_text(frame: &mut Frame<'_>, text: Cow<'_, str>, style: Style, a
     );
 }
 
-/// The longest head of `text` that fits `room` columns. The width of a prefix grows with its
-/// length, so a binary search over the char boundaries gives the same head as a left to right scan.
-fn head_within(text: &str, room: usize) -> &str {
-    let boundaries: Vec<usize> = text
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain([text.len()])
-        .collect();
-    let fitting =
-        boundaries.partition_point(|&end| text.get(..end).is_some_and(|head| head.width() <= room));
-    let end = boundaries
-        .get(fitting.saturating_sub(1))
-        .copied()
-        .unwrap_or(0);
-    text.get(..end).unwrap_or(text)
-}
-
 /// The folder name of `img_idx`, cut to `width` with a margin.
 fn folder_name_text(app: &App, img_idx: usize, width: u16) -> Cow<'_, str> {
-    let raw_filename = app.filenames[img_idx].as_str();
     let max_label = usize::from(width).saturating_sub(2);
-    if raw_filename.width() > max_label {
-        let room = max_label.saturating_sub(1);
-        let head = head_within(raw_filename, room);
-        Cow::Owned(format!("{head}\u{2026}"))
-    } else {
-        Cow::Borrowed(raw_filename)
-    }
+    Cow::Owned(tuilibr::frame::truncate_width(
+        app.filenames[img_idx].as_str(),
+        max_label,
+    ))
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 use super::{
     BUSY_POLL, CACHE_READ_POLL, FIRST_PICTURE_POLL, IDLE_POLL, LoopState, SHAPE_POLL,
     SHAPE_POLL_WINDOW, clears_status, draw_ui, handle_input, mouse_capture_wanted, next_timeout,
-    release_held, sync_mouse_capture, waits_for_a_fast_shape, window_open,
+    release_held, waits_for_a_fast_shape, window_open,
 };
 use crate::app::ViewMode;
 use crate::config::Config;
@@ -176,43 +176,9 @@ fn slow_shape_read_waits_normally() {
 }
 
 #[test]
-fn window_releases_mouse() {
-    let mut state = LoopState::new(&Config::default());
-    assert!(state.mouse_captured);
-    let mut out = Vec::new();
-
-    sync_mouse_capture(&mut out, &mut state, false).unwrap();
-    assert!(out.is_empty(), "nothing changed");
-    sync_mouse_capture(&mut out, &mut state, true).unwrap();
-    assert!(!state.mouse_captured);
-    assert!(
-        String::from_utf8_lossy(&out).contains("\x1b[?1000l"),
-        "{out:?}"
-    );
-    out.clear();
-    sync_mouse_capture(&mut out, &mut state, true).unwrap();
-    assert!(out.is_empty(), "released once");
-    sync_mouse_capture(&mut out, &mut state, false).unwrap();
-    assert!(state.mouse_captured);
-    assert!(
-        String::from_utf8_lossy(&out).contains("\x1b[?1000h"),
-        "{out:?}"
-    );
-}
-
-#[test]
-fn mouse_off_writes_no_capture() {
-    let config = Config {
-        mouse: false,
-        ..Config::default()
-    };
-    let mut state = LoopState::new(&config);
-    let mut out = Vec::new();
-    for window in [false, true, false] {
-        sync_mouse_capture(&mut out, &mut state, window).unwrap();
-    }
-    assert!(out.is_empty());
+fn mouse_capture_wanted_follows_config_and_window() {
     assert!(!mouse_capture_wanted(false, false));
+    assert!(!mouse_capture_wanted(false, true));
     assert!(mouse_capture_wanted(true, false));
     assert!(!mouse_capture_wanted(true, true));
 }

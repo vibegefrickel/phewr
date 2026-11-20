@@ -209,7 +209,7 @@ pub(super) fn place_gallery_images_to(app: &mut App, out: &mut impl Write) -> io
         app.graphics_storage_dirty = false;
         app.stale_image_ids.clear();
         // The wipe deleted the frames of the old loops too.
-        app.grid_loops.player.take_stale();
+        drop(app.grid_loops.player.take_stale());
         app.thumb_cache.take_evicted_ids();
     } else {
         // A preview of a cell off the screen goes. A visible one keeps its place until its

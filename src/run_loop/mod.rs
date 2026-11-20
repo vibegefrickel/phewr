@@ -16,10 +16,10 @@ use crate::ui;
 use crate::video_handoff::{VideoState, play_videos, poll_mpv_window};
 use crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::prelude::*;
-use std::io::{self, Write};
+use std::io;
 use std::time::{Duration, Instant};
 use tuilibr::pictures::kitty::query::query_cell_pixel_size;
-use tuilibr::terminal::{answers::LateAnswerFilter, disable_mouse, enable_mouse};
+use tuilibr::terminal::{Session, answers::LateAnswerFilter};
 
 /// The wait while a background result is on its way.
 const BUSY_POLL: Duration = Duration::from_millis(10);
@@ -45,8 +45,6 @@ pub(crate) struct LoopState {
     pub(crate) answers: LateAnswerFilter,
     /// `[gallery] mouse`.
     pub(crate) mouse: bool,
-    /// True while the terminal reports the mouse.
-    pub(crate) mouse_captured: bool,
     /// True when the terminal answered the cell size query at start. A resize then asks again.
     pub(crate) cell_size_from_terminal: bool,
     #[cfg(feature = "video")]
@@ -60,7 +58,6 @@ impl LoopState {
             answers: LateAnswerFilter::default(),
             cell_size_from_terminal: false,
             mouse: config.mouse,
-            mouse_captured: config.mouse,
             #[cfg(feature = "video")]
             video: VideoState::new(config),
         }
@@ -69,6 +66,7 @@ impl LoopState {
 
 pub(crate) fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
     app: &mut App,
     state: &mut LoopState,
 ) -> io::Result<()> {
@@ -90,7 +88,7 @@ pub(crate) fn run(
 
         #[cfg(feature = "video")]
         poll_mpv_window(app, state);
-        sync_mouse_capture(terminal.backend_mut(), state, window_open(app))?;
+        session.set_mouse(mouse_capture_wanted(state.mouse, window_open(app)))?;
         poll_background(app, &mut pending_emits);
 
         // The player starts before the draw. A fallback view then comes back in this pass.
@@ -177,25 +175,6 @@ const fn window_open(app: &App) -> bool {
 
 const fn mouse_capture_wanted(enabled: bool, window_open: bool) -> bool {
     enabled && !window_open
-}
-
-/// Capture or release the mouse when the wanted state changed.
-pub(crate) fn sync_mouse_capture(
-    out: &mut impl Write,
-    state: &mut LoopState,
-    window_open: bool,
-) -> io::Result<()> {
-    let wanted = mouse_capture_wanted(state.mouse, window_open);
-    if wanted == state.mouse_captured {
-        return Ok(());
-    }
-    if wanted {
-        enable_mouse(out)?;
-    } else {
-        disable_mouse(out)?;
-    }
-    state.mouse_captured = wanted;
-    Ok(())
 }
 
 /// Draw the chrome, write the Kitty pictures, and draw again when the pictures ask for it.

@@ -237,7 +237,7 @@ fn main() -> io::Result<()> {
     );
     app.file_list = file_list;
     app.home_dir = std::env::home_dir();
-    let run_result = run(&mut terminal, &mut app, &mut state);
+    let run_result = run(&mut terminal, &mut session, &mut app, &mut state);
     let delete_result = delete_pictures(terminal.backend_mut());
     let restore_result = session.restore();
     let reveal_path = app.reveal_path();

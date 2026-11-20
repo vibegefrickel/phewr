@@ -115,9 +115,8 @@ mod tests {
         assert_terminal_background, cell_of, render, render_buffer, screen_rows,
     };
     use ratatui::style::{Color, Modifier};
-    use tuilibr::frame::{Section, column_rows};
+    use tuilibr::frame::{Section, column_rows, display_width};
     use tuilibr::pictures::kitty::{Loops, Transfer};
-    use unicode_width::UnicodeWidthStr as _;
 
     /// Every Kitty section that a run can show.
     fn kitty_rows_all() -> Vec<[(&'static str, &'static str); 2]> {
@@ -143,12 +142,12 @@ mod tests {
             .chain(&kitty);
         for (title, keys) in sections {
             assert!(
-                title.width() <= usize::from(KEY_WIDTH + TEXT_WIDTH),
+                display_width(title) <= usize::from(KEY_WIDTH + TEXT_WIDTH),
                 "{title}"
             );
             for (key, text) in *keys {
-                assert!(key.width() < usize::from(KEY_WIDTH), "{key}");
-                assert!(text.width() <= usize::from(TEXT_WIDTH), "{text}");
+                assert!(display_width(key) < usize::from(KEY_WIDTH), "{key}");
+                assert!(display_width(text) <= usize::from(TEXT_WIDTH), "{text}");
             }
         }
         // The border and the padding take 2 rows each, and the margin 2. The box sits above the

@@ -34,8 +34,8 @@ pub(crate) const STYLES: Styles = Styles {
         .fg(tuilibr::frame::accent())
         .add_modifier(Modifier::BOLD),
     marked: Style::new().fg(Color::Yellow),
-    error: Style::new().fg(Color::Red),
-    dim: Style::new().fg(Color::DarkGray),
+    error: tuilibr::frame::alert(),
+    dim: tuilibr::frame::dim(),
     badge: Style::new().fg(Color::Black).bg(Color::Gray),
     badge_error: Style::new().fg(Color::Black).bg(Color::Red),
     mode_normal: Color::Red,

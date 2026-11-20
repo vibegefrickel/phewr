@@ -78,7 +78,6 @@ pub(crate) fn state_with_decoder(
         answers: tuilibr::terminal::answers::LateAnswerFilter::default(),
         cell_size_from_terminal: false,
         mouse: true,
-        mouse_captured: true,
         video: VideoState {
             player,
             mpv: Some(PathBuf::from("/bin/mpv")),

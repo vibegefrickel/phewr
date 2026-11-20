@@ -5,8 +5,10 @@ use super::STYLES;
 use crate::app::{App, ViewMode};
 use ratatui::{prelude::*, widgets::Paragraph};
 use std::path::Path;
-use tuilibr::frame::{BarText, BarView, ModeView, SEPARATOR, draw_bar, split::NARROW_BELOW};
-use unicode_width::UnicodeWidthStr;
+use tuilibr::cells::to_u16;
+use tuilibr::frame::{
+    BarText, BarView, ModeView, SEPARATOR, display_width, draw_bar, split::NARROW_BELOW,
+};
 
 /// The middle texts and the right groups of one view.
 pub(super) struct BarParts {
@@ -90,9 +92,7 @@ pub(super) fn draw_slideshow_badge(
     let Some(line) = slideshow_badge(app, status) else {
         return;
     };
-    let width = u16::try_from(line.width())
-        .unwrap_or(u16::MAX)
-        .min(area.width);
+    let width = to_u16(line.width()).min(area.width);
     if width == 0 || area.height == 0 {
         return;
     }
@@ -226,12 +226,12 @@ fn folder_span(
     };
     let middle_width: usize = middle
         .iter()
-        .map(|text| text.parts.join(SEPARATOR).width())
+        .map(|text| display_width(&text.parts.join(SEPARATOR)))
         .filter(|width| *width > 0)
         .map(|width| width + 2)
         .sum();
     // The mode block and the path add one space at each side.
-    let budget = usize::from(width).saturating_sub(name.width() + 2 + middle_width + 2);
+    let budget = usize::from(width).saturating_sub(display_width(name) + 2 + middle_width + 2);
     let path = shorten_path(&display_path(dir, app.home_dir.as_deref()), budget)?;
     Some(Span::styled(format!(" {path} "), STYLES.dim))
 }
@@ -270,9 +270,7 @@ pub(super) fn draw_slideshow_mode(frame: &mut Frame<'_>, app: &App, area: Rect) 
         format!(" {name} "),
         STYLES.badge.add_modifier(Modifier::BOLD),
     );
-    let width = u16::try_from(block.width())
-        .unwrap_or(u16::MAX)
-        .min(area.width);
+    let width = to_u16(block.width()).min(area.width);
     let rect = Rect {
         x: area.x,
         y: area.bottom() - 1,
@@ -297,13 +295,13 @@ pub(super) fn display_path(path: &Path, home: Option<&Path>) -> String {
 /// `text` when it fits in `budget` columns, else its tail behind `…/`. The last folder stays
 /// whole. `None` when not even that fits.
 pub(super) fn shorten_path(text: &str, budget: usize) -> Option<String> {
-    if text.width() <= budget {
+    if display_width(text) <= budget {
         return Some(text.to_owned());
     }
     let parts: Vec<&str> = text.split('/').collect();
     (1..parts.len())
         .map(|start| format!("\u{2026}/{}", parts[start..].join("/")))
-        .find(|candidate| candidate.width() <= budget)
+        .find(|candidate| display_width(candidate) <= budget)
 }
 
 /// The name and the position of the cursor. `None` when the filter matches nothing.

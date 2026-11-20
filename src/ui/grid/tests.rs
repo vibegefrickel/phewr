@@ -468,54 +468,6 @@ fn wide_characters_fit_folder_name() {
 }
 
 #[test]
-fn head_matches_whole_width() {
-    for text in [
-        "ab\u{5199}\u{771f}\u{263a}\u{fe0f}cd\u{263a}\u{fe0f}\u{5199}e",
-        "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}family.jpg",
-        "\u{231a}\u{fe0e}watch",
-        "\u{1f3f3}\u{fe0f}\u{200d}\u{1f308}x",
-    ] {
-        check_head(text);
-    }
-}
-
-fn check_head(text: &str) {
-    use unicode_width::UnicodeWidthStr;
-
-    // VS15 lowers the width of its base, so such a text has no unique scan result.
-    let widths: Vec<usize> = text
-        .char_indices()
-        .map(|(index, ch)| {
-            text.get(..index + ch.len_utf8())
-                .map_or(0, UnicodeWidthStr::width)
-        })
-        .collect();
-    let monotone = widths.windows(2).all(|pair| pair[0] <= pair[1]);
-    let scan = |room: usize| {
-        let mut head = String::new();
-        for ch in text.chars() {
-            head.push(ch);
-            if head.width() > room {
-                head.pop();
-                break;
-            }
-        }
-        head
-    };
-    for room in 0..=text.width() + 2 {
-        let head = super::head_within(text, room);
-        if monotone {
-            assert_eq!(head, scan(room), "{room}: {text}");
-        }
-        assert!(head.width() <= room, "{room}: {head}");
-        if let Some(next) = text.strip_prefix(head).and_then(|rest| rest.chars().next()) {
-            let longer = format!("{head}{next}");
-            assert!(longer.width() > room, "{room}: {longer}");
-        }
-    }
-}
-
-#[test]
 fn narrow_grid_cuts_first_cell() {
     // 6 columns: the cell width clamps to 5, so the first border needs 7 columns.
     let mut app = app_with(&["a.jpg", "b.jpg", "c.jpg"]);

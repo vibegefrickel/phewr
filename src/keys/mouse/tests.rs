@@ -474,7 +474,6 @@ fn mouse_off_never_captures() {
     };
     let state = LoopState::new(&config);
     assert!(!state.mouse);
-    assert!(!state.mouse_captured);
     let mut app = gallery_app_with(9, &config);
     click_cell(&mut app, 4, Instant::now());
     assert_eq!(app.gallery.cursor, 4, "the handler itself still works");
