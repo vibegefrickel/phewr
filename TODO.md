@@ -3,16 +3,17 @@
 ## Handoff
 
 - Date: 2026-11-20
-- Commit: 83345e2
+- Commit: 00cdb7a
 - Done: phewr is an app of the crate `~/Projects/dev/tuilibr`: the picture module, the frame (the bar, the help, the accent, the two panes, the omnibox), the terminal session and the motion module come from the crate. Each phase merged with a docs commit, see "Done".
 - Done: the maintainer test run passed steps 10 to 13 and the grid part of step 14, and auto-review workers fixed its findings. The rest of the run is in "Later".
 - Done: the dependency round in all five repositories, the lint union, Rust 1.100, `version = "0.1.0"`, the shared audit text and the fast pre-commit hook.
 - Done: every Kitty write runs in an `Update` of the `Screen` (`6fcfa6d`, docs `ad30940`). The cursor reset after the draws is gone.
-- Done (2026-11-19, committed by the maintainer): the maintainer review of the panes. The boxes show only with the info pane. Since 2026-11-20 the default is maximal again, like every app (uncommitted). The main box title is then the folder path with `~`, and the status row leaves the path out. The info pane stays dim. `B` without the info pane keeps the pictures.
+- Done (2026-11-19 and 2026-11-20, committed): the maintainer review of the panes. The boxes show only with the info pane. The default is maximal, like every app, and a test pins that the grid, the fullscreen view and the slideshow get no box. The main box title is then the folder path with `~`, and the status row leaves the path out. The info pane stays dim. `B` without the info pane keeps the pictures.
 - Done (2026-11-20): each config key loads on its own (`bd5c837`, docs 099e75f, 704 tests, 682 lean). A wrong type or a rejected value keeps the default of its key, a syntax error or an unreadable file keeps every default, and one start note names the problems.
+- Done (2026-11-20, committed): the dialog padding of tuilibr (the help needs 104 columns for two columns, its body starts under the title). The README names tuilibr a private sibling crate, with no clone URL. The fixtures of tuilibr are static files: tuilibr removed every `make.sh`, and nothing needs jpeg-xl.
 - Open (agent): no active worker and no agent item in "Later". The next batch waits for the maintainer: the test run, or the next tuilibr phase that touches phewr.
 - Open (user): the test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios).
-- Health: `just check` passes on Rust 1.100.0 with 704 tests (682 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
+- Health: `just check` passes on Rust 1.100.0 with 706 tests (684 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
 - Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key. The herdr test decides if this needs a fix. The filter lives in tuilibr now.
 
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
