@@ -576,6 +576,30 @@ mod tests {
         assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 100, 18));
     }
 
+    /// The default layout is maximal, but its boxes need the info pane: the grid, the fullscreen
+    /// view and the slideshow get no box and fill the area above the bar (maintainer, 2026-11-20).
+    #[test]
+    fn maximal_draws_no_box_without_the_info_pane() {
+        let mut app = crate::test_support::fullscreen_app(3, 0);
+        assert_eq!(app.pane_layout, Layout::Maximal, "the default");
+        assert!(!app.info_visible);
+        let screen = render(&mut app, None, 80, 12);
+        assert_hides(&screen, "\u{256d}");
+        assert_eq!(app.image_rect, Rect::new(0, 0, 80, 10), "fullscreen");
+
+        app.start_slideshow();
+        let screen = render(&mut app, None, 80, 12);
+        assert_hides(&screen, "\u{256d}");
+        assert_eq!(app.image_rect, Rect::new(0, 0, 80, 12), "slideshow");
+        app.stop_slideshow();
+
+        let mut app = app_with(&["a.jpg", "b.jpg"]);
+        assert_eq!(app.pane_layout, Layout::Maximal);
+        let screen = render(&mut app, None, 80, 12);
+        assert_hides(&screen, "\u{256d}");
+        assert_eq!(app.gallery.grid_rect, Rect::new(0, 0, 80, 10), "grid");
+    }
+
     /// The fullscreen box carries the folder path too, cut from its start to the box width, and
     /// the picture goes inside it.
     #[test]

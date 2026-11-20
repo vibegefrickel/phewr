@@ -91,8 +91,9 @@ impl Default for Config {
             live_photos: true,
             loops: None,
             colorspace: ColorTarget::default(),
-            // phewr starts without boxes (maintainer, 2026-11-19): the grid fills the screen.
-            layout: Layout::Minimal,
+            // Maximal like every app (maintainer, 2026-11-20). The boxes show only with the info
+            // pane, so the grid, the fullscreen view and the slideshow have no box.
+            layout: Layout::Maximal,
             start_note: None,
         }
     }
@@ -484,7 +485,7 @@ mod tests {
         }
     }
 
-    /// An unknown layout keeps the minimal frame and the other keys, and leaves a start note.
+    /// An unknown layout keeps the maximal frame and the other keys, and leaves a start note.
     #[test]
     fn reads_gallery_layout() {
         let root = test_root();
@@ -493,15 +494,15 @@ mod tests {
         let config = load_at(&config_path, &state_path);
         assert_eq!(
             (config.layout, config.start_note),
-            (Layout::Minimal, None),
-            "minimal by default"
+            (Layout::Maximal, None),
+            "maximal by default"
         );
         for (value, expected, note) in [
             ("minimal", Layout::Minimal, None),
             (" Maximal ", Layout::Maximal, None),
             (
                 "boxed",
-                Layout::Minimal,
+                Layout::Maximal,
                 Some("config.toml: unknown layout \"boxed\", defaults for these"),
             ),
         ] {

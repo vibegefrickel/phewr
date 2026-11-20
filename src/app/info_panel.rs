@@ -128,16 +128,16 @@ mod tests {
     fn toggle_layout_deletes_the_pictures() {
         let dir = test_dir();
         let mut app = app_with_files(dir.path(), &["a.png"]);
-        assert_eq!(app.pane_layout, Layout::Minimal);
+        assert_eq!(app.pane_layout, Layout::Maximal);
         app.needs_render = false;
         app.toggle_layout().unwrap();
-        assert_eq!(app.pane_layout, Layout::Maximal);
+        assert_eq!(app.pane_layout, Layout::Minimal);
         assert!(!app.needs_render);
         assert!(app.graphics_out.take_bytes().is_empty());
 
         app.info_visible = true;
         app.toggle_layout().unwrap();
-        assert_eq!(app.pane_layout, Layout::Minimal);
+        assert_eq!(app.pane_layout, Layout::Maximal);
         assert!(app.needs_render);
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
     }
@@ -175,7 +175,7 @@ mod tests {
         app.toggle_info().unwrap();
         app.toggle_layout().unwrap();
         assert!(!app.info_visible);
-        assert_eq!(app.pane_layout, Layout::Minimal);
+        assert_eq!(app.pane_layout, Layout::Maximal);
         assert!(app.loaded.is_some());
         assert!(app.graphics_out.take_bytes().is_empty());
     }

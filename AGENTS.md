@@ -260,16 +260,16 @@ decisions. Read the long form before you change the code that an item names.
   "Animated images"). A running slideshow holds it for at least the interval
   (`Player::play_at_least`).
 - **Panes:** the info pane is the left pane of the tuilibr frame and the grid or the picture the
-  main pane (2026-11-19). Minimal (the default, `[gallery] layout`) draws one divider
-  (`frame::split`, `divider`), maximal puts each pane in a box (`frame::split_boxed`,
-  `pane_box`), and `B` toggles the layout for the session. Without the info pane (Tab, the right
+  main pane (2026-11-19). Maximal (the default, `[gallery] layout`, like every app) puts each
+  pane in a box (`frame::split_boxed`, `pane_box`), minimal draws one divider (`frame::split`,
+  `divider`), and `B` toggles the layout for the session. Without the info pane (Tab, the right
   click, `[info] show_on_start`), no box and no divider frame the grid or the picture, also in
   maximal (`ui::boxed`). The title of the main box is the folder path with `~`, cut from its
   start, and the status row leaves the path out while the box shows it. The info pane is dim
   (`frame::dim_pane`), the main pane keeps the focus. Below `NARROW_BELOW` (60 columns) the info pane sits above the main pane. A pane
   change (`App::change_panes`) deletes the pictures, and only the grid marks itself dirty; the
   fullscreen view keeps its decode and fits it to the new `image_rect`. An unknown layout value
-  keeps minimal with a start note (`Config::start_note`).
+  keeps maximal with a start note (`Config::start_note`).
 - **Slideshow view:** a running or paused slideshow has no panes and no status row
   (`App::slideshow_fills_screen`, `ui::status_rows`), and Tab, `B` and the right click do nothing
   there. So `image_rect` is the whole screen. The image goes out at its decoded size, and the terminal

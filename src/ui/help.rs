@@ -13,7 +13,7 @@ use tuilibr::pictures::kitty::{
 const KEY_WIDTH: u16 = 20;
 
 /// The cells of the description column: the longest ones, `Mark, yazi selects on quit` and
-/// `Slideshow on / off (image)`. Both columns fit 102 screen columns side by side.
+/// `Slideshow on / off (image)`. Both columns fit 104 screen columns side by side.
 const TEXT_WIDTH: u16 = 26;
 
 /// The left column: the gallery and its search line.
@@ -245,6 +245,30 @@ mod tests {
         assert_shows(&screen, " Kitty graphics");
     }
 
+    /// The body of the box starts in the column of the first letter of the title (the dialog
+    /// padding of tuilibr, 2026-11-20).
+    #[test]
+    fn body_starts_under_the_title() {
+        let mut app = app_with(&["a.jpg"]);
+        app.help_visible = true;
+        let rows = screen_rows(&render_buffer(&mut app, None, 120, 60));
+        // The screen column of the first cell of `text`, in characters, not in bytes.
+        let column = |text: &str| {
+            rows.iter().find_map(|row| {
+                row.find(text)
+                    .and_then(|at| row.get(..at))
+                    .map(|head| head.chars().count())
+            })
+        };
+        assert!(column("phewr keys").is_some(), "{}", rows.join("\n"));
+        assert_eq!(
+            column("Gallery"),
+            column("phewr keys"),
+            "{}",
+            rows.join("\n")
+        );
+    }
+
     /// One column does not fit 30 rows, so the box keeps two columns and cuts text, not keys.
     #[test]
     fn low_narrow_terminal_keeps_two_columns() {
@@ -263,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn two_columns_from_102_columns() {
+    fn two_columns_from_104_columns() {
         let mut app = app_with(&["a.jpg"]);
         app.help_visible = true;
         let mut two_columns = |width| {
@@ -273,10 +297,10 @@ mod tests {
             assert!(gallery.is_some() && fullscreen.is_some(), "{width} columns");
             (gallery == fullscreen, rows.join("\n"))
         };
-        let (two, screen) = two_columns(102);
-        assert!(two, "102 columns");
+        let (two, screen) = two_columns(104);
+        assert!(two, "104 columns");
         assert_shows(&screen, "Pause / resume slideshow");
         assert_shows(&screen, "Grid size (Shift if sent)");
-        assert!(!two_columns(101).0, "one column below");
+        assert!(!two_columns(103).0, "one column below");
     }
 }

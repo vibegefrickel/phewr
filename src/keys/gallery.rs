@@ -305,10 +305,10 @@ mod tests {
         assert_ne!(app.info_visible, info);
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
         char_key(&mut app, 'B');
-        assert_eq!(app.pane_layout, Layout::Maximal);
+        assert_eq!(app.pane_layout, Layout::Minimal);
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
         char_key(&mut app, 'B');
-        assert_eq!(app.pane_layout, Layout::Minimal);
+        assert_eq!(app.pane_layout, Layout::Maximal);
         char_key(&mut app, '?');
         assert!(app.help_visible);
         char_key(&mut app, 'i');
