@@ -2,16 +2,17 @@
 
 ## Handoff
 
-- Date: 2026-11-19
-- Commit: b32b473
+- Date: 2026-11-20
+- Commit: 099e75f
 - Done: phewr is an app of the crate `~/Projects/dev/tuilibr`: the picture module, the frame (the bar, the help, the accent, the two panes, the omnibox), the terminal session and the motion module come from the crate. Each phase merged with a docs commit, see "Done".
 - Done: the maintainer test run passed steps 10 to 13 and the grid part of step 14, and auto-review workers fixed its findings. The rest of the run is in "Later".
 - Done: the dependency round in all five repositories, the lint union, Rust 1.100, `version = "0.1.0"`, the shared audit text and the fast pre-commit hook.
 - Done: every Kitty write runs in an `Update` of the `Screen` (`6fcfa6d`, docs `ad30940`). The cursor reset after the draws is gone.
-- Done (uncommitted): the maintainer review of the panes. phewr starts in the minimal layout. The boxes of maximal show only with the info pane. The main box title is then the folder path with `~`, and the status row leaves the path out. The info pane stays dim. `B` without the info pane keeps the pictures.
-- Open (agent): no active worker. Next, from "Later": `config::load_at` drops every setting on one parse error.
-- Open (user): commit the pane change and `TODO.md` in phewr, `scripts/Brewfile` in the dotfiles, and the phase 4d section of `tuilibr/docs/plan.md`. Tell the tuilibr session that phewr starts minimal and boxes only with the info pane, against "default maximal for every app". The test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios). The public URL of tuilibr for the README, and the byte-equal run of `tuilibr/tests/fixtures/hdr/make.sh`.
-- Health: `just check` passes on Rust 1.100.0 with 696 tests (674 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
+- Done (2026-11-19, committed by the maintainer): the maintainer review of the panes. phewr starts in the minimal layout. The boxes of maximal show only with the info pane. The main box title is then the folder path with `~`, and the status row leaves the path out. The info pane stays dim. `B` without the info pane keeps the pictures.
+- Done (2026-11-20): each config key loads on its own (`bd5c837`, docs 099e75f, 704 tests, 682 lean). A wrong type or a rejected value keeps the default of its key, a syntax error or an unreadable file keeps every default, and one start note names the problems.
+- Open (agent): no active worker and no agent item in "Later". The next batch waits for the maintainer: the test run, or the next tuilibr phase that touches phewr.
+- Open (user): commit `TODO.md` in phewr and `scripts/Brewfile` in the dotfiles. Tell the tuilibr session that phewr starts minimal and boxes only with the info pane, against "default maximal for every app". The test run with the installed build (step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios). The public URL of tuilibr for the README, and the byte-equal run of `tuilibr/tests/fixtures/hdr/make.sh`.
+- Health: `just check` passes on Rust 1.100.0 with 704 tests (682 lean), with the audit. `cargo deny` is silent: `deny.toml` skips six known duplicate pairs, with the crate that pulls each. No workers, no worktrees, no stashes.
 - Note: a terminal that answers DA1 but never OSC 10 keeps one owed answer for the whole run. Then Alt+`]` and the printable keys after it go, until Alt+`\`, Ctrl+`g` or another key. The herdr test decides if this needs a fix. The filter lives in tuilibr now.
 
 Main goal: **phewr is a speed-focused viewer for all common image and video formats in the terminal, with full mouse support.**
@@ -53,7 +54,6 @@ Order: speed first, then formats. There is no release before Q1 2027 (decided 20
 
 ## Later
 
-- `config::load_at` parses the whole config file with `.ok()`: one value of a wrong type (a string where a number goes, a typo in a bool) drops every setting to the defaults, without a note (found by the dotfiles session on 2026-11-19). Fix: parse each section on its own, or keep the parse error and show it as a start note, so the other settings stay.
 - The README has the placeholder `<the tuilibr clone URL>`, because tuilibr has no public URL yet. When the maintainer publishes tuilibr, put the URL there.
 - The byte-equal run of `tuilibr/tests/fixtures/hdr/make.sh` (the maintainer): it rebuilds the hdr fixtures with the phewr test `write_the_player_hdr_cubes`, and the files must stay byte-equal.
 
@@ -98,6 +98,7 @@ After the tests:
 
 ## Done
 
+- Config loader (2026-11-20, `bd5c837`, worker `phewr-config-load`, auto review): `config::load_at` reads each key on its own, `Config::start_note` replaces `layout_note`. The pre-review gave 1 suggestion (doc comments) and 2 notes (silent rejected values, silent read errors). The worker fixed all three.
 - The tuilibr phases in phewr (2026-11-19): 4a the bar and the dialog boxes (`ba8d0cd`), 3 the picture module (`cbaec43`), 4b and 4c the frame API and the white accent (`df96d37`), 4 step 1 the terminal (`356d8fc`), the two panes (`9a982b4`), the omnibox (`a26c564`), 4d the motion module (`82428d8`, docs `9d47e61`). The plans and the decisions are in `tuilibr/docs/plan.md`.
 - Every Kitty write in an `Update` (2026-11-19, `6fcfa6d`, worker `phewr-update`, docs `ad30940`): the fullscreen picture and the player frame put the delete, the clear and the picture into one synchronized update with the cursor save and restore. The cursor reset in `run_loop::draw_pass` is gone.
 - Lint union, Rust 1.100 and the dependency round (2026-11-19, `144252a`, `00d6fcb`, `e8c45c1`): one auto-review worker per repository, `rust-version = "1.100"`, `version = "0.1.0"`.
