@@ -170,9 +170,6 @@ lru = "0.19"
 nucleo-matcher = "0.3"
 ratatui = "0.30"
 rayon = "1.12"
-# The Lucide icons of the grid cells (`assets/icons/`), rendered at the pixel size of the cell.
-# No text, no fonts and no raster images: the icons are paths only.
-resvg = { version = "0.50", default-features = false }
 serde = { version = "1", features = ["derive"] }
 # The JSON events of the mpv window (`--input-ipc-server`).
 serde_json = { version = "1", optional = true }

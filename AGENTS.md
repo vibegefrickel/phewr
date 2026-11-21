@@ -22,9 +22,9 @@ It is a fork of [rview](https://github.com/jrf/rview) by jrf (MIT).
   and the dotfiles install does the same. There is no CI.
 
 The stack: ratatui 0.30, crossterm 0.29, clap, tuilibr (the shared crate of the three apps, a path
-dependency `../tuilibr`, `deny.toml` allows the wildcard path), rayon, lru, serde/toml, resvg
-(without default features, for the grid icons). tuilibr holds the screen frame and the picture
-module `tuilibr::pictures`. The image decoders and jxl-oxide, jxl-render (both with exact pins),
+dependency `../tuilibr`, `deny.toml` allows the wildcard path), rayon, lru and serde/toml.
+tuilibr holds the screen frame, the picture module `tuilibr::pictures` and the Phosphor icon
+module `tuilibr::icons`. The image decoders and jxl-oxide, jxl-render (both with exact pins),
 libheif, turbojpeg, fast_image_resize and moxcms (for the stills) come in through tuilibr. phewr
 keeps `libheif-rs` and `turbojpeg` for its tests and benches and `fast_image_resize` as a dev
 dependency. phewr keeps no `moxcms`: the player cubes live in `tuilibr::pictures::motion`. The features `turbo` (libjpeg-turbo) and `heic`
@@ -218,7 +218,7 @@ short form:
 - `prefetch/`: the decode of the fullscreen neighbors.
 - `search.rs`: the fuzzy filename search on one filter thread (`FilterWorker`).
 - `info.rs`, `file_meta.rs`: the facts of the info panel and of the status row.
-- `icons.rs`: the cell icons (resvg render, octant fallback) and the play stamp.
+- `icons.rs`: the cell icons (`tuilibr::icons` render, octant fallback) and the play stamp.
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config/`: `config.toml` and the state file with its writer thread.
 - `yazi.rs`: the reveal in yazi. The PATH lookup is `tuilibr::programs::find_on_path`.
@@ -427,9 +427,9 @@ The generic Kitty layer lives in `tuilibr::pictures::kitty`. A change of it goes
   Jobs start only for the cells that are visible at the poll, so a folder switch starts no job on
   the old cells. The loop clock is `motion::clock::LoopClock`. The loop cache stays warm: the
   magic is `PHEWRLP1` and the version is `<app>-loop-v1` through `app_name()`.
-- **Cell icons:** a cell without a thumbnail shows a Lucide icon as a Kitty image in the terminal
-  foreground (OSC 10). Without an OSC 10 answer, the icons are octant text. The design is in
-  `docs/grid-and-kitty.md` ("Grid icons").
+- **Cell icons:** a cell without a thumbnail shows a Phosphor icon of `tuilibr::icons` as a Kitty
+  image in the terminal foreground (OSC 10). Without an OSC 10 answer, the icons are octant text.
+  The design is in `docs/grid-and-kitty.md` ("Grid icons").
 - **Cell size:** `CSI 16 t` gives the cell size, because TIOCGWINSZ includes the window padding
   of Ghostty. If the terminal answered at start, the run loop asks again after each resize. The
   read takes every byte of the tty, so a key typed in that millisecond is lost. A terminal that

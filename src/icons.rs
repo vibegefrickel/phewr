@@ -1,6 +1,6 @@
-//! The large icons of the grid cells. With the terminal foreground known, an icon is a Lucide
-//! SVG (`assets/icons/`) that `render` turns into pixels for a Kitty image. Without it, the icon
-//! is octant blocks (2x4 dots per cell) that Ghostty draws itself. A cell too small for an icon
+//! The large icons of the grid cells. With the terminal foreground known, `render` turns a
+//! Phosphor icon of `tuilibr::icons` into pixels for a Kitty image. Without it, the icon is
+//! octant blocks (2x4 dots per cell) that Ghostty draws itself. A cell too small for an icon
 //! of two rows gets a one-cell symbol. `stamp_play` draws the play triangle into the pixels of a
 //! still: Kitty draws a picture above the text.
 
@@ -34,13 +34,15 @@ impl Icon {
     #[cfg(test)]
     pub(crate) const ALL: [Self; 4] = [Self::Loading, Self::Video, Self::Folder, Self::Parent];
 
-    /// The Lucide icon (ISC license, `assets/icons/LICENSE`).
-    const fn svg(self) -> &'static str {
+    /// The shared set supplies the pixels while this enum keeps the grid ids and text fallback.
+    const fn phosphor(self) -> tuilibr::icons::Icon {
+        use tuilibr::icons::Icon as Phosphor;
+
         match self {
-            Self::Loading => include_str!("../assets/icons/image.svg"),
-            Self::Video => include_str!("../assets/icons/play.svg"),
-            Self::Folder => include_str!("../assets/icons/folder.svg"),
-            Self::Parent => include_str!("../assets/icons/folder-up.svg"),
+            Self::Loading => Phosphor::Image,
+            Self::Video => Phosphor::Play,
+            Self::Folder => Phosphor::FolderSimple,
+            Self::Parent => Phosphor::ArrowElbowLeftUp,
         }
     }
 
@@ -119,31 +121,22 @@ pub(crate) fn stamp_play(image: &mut image::RgbaImage) {
 /// Render `icon` into a picture of `size` pixels in `color`, at `ICON_ALPHA`. The icon is a
 /// square of the full height, centered. `None` for an empty size.
 pub(crate) fn render(icon: Icon, size: (u32, u32), color: [u8; 3]) -> Option<image::RgbaImage> {
-    use resvg::{tiny_skia, usvg};
+    use tuilibr::icons::{Look, Weight};
+    use tuilibr::terminal::Palette;
 
-    let tree = usvg::Tree::from_str(icon.svg(), &usvg::Options::default()).ok()?;
-    let mut pixmap = tiny_skia::Pixmap::new(size.0, size.1)?;
-    let side = size.0.min(size.1) as f32;
-    let scale = side / tree.size().width().max(tree.size().height());
-    let left = (size.0 as f32 - side) / 2.0;
-    let top = (size.1 as f32 - side) / 2.0;
-    let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(left, top);
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-    // The SVG strokes in black, so only the alpha carries the shape.
-    let pixels = pixmap
-        .pixels()
-        .iter()
-        .flat_map(|pixel| {
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "the alpha byte times a share of at most 1 stays in 0..=255"
-            )]
-            let alpha = (f32::from(pixel.alpha()) * ICON_ALPHA).round() as u8;
-            [color[0], color[1], color[2], alpha]
-        })
-        .collect();
-    image::RgbaImage::from_raw(size.0, size.1, pixels)
+    let palette = Palette::new([None; 16], Some(color));
+    let look = Look::plain(Weight::Regular, Color::Reset);
+    let mut picture = tuilibr::icons::render(icon.phosphor(), look, &palette, size)?.to_rgba8();
+    for pixel in picture.pixels_mut() {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the alpha byte times a share of at most 1 stays in 0..=255"
+        )]
+        let alpha = (f32::from(pixel[3]) * ICON_ALPHA).round() as u8;
+        pixel[3] = alpha;
+    }
+    Some(picture)
 }
 
 /// `over` on `under`, with the alpha of `over`.
@@ -277,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn svg_icons_render_in_color() {
+    fn phosphor_icons_render_in_color() {
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,

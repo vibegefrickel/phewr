@@ -132,8 +132,8 @@ This page holds the full module map of `src/`. `AGENTS.md` ("Layout") holds the 
   names as an `Arc`, and runs only the newest query.
 - `info.rs`: file data and EXIF for the info panel, and the EXIF orientation.
 - `file_meta.rs`: the facts of one file for the status row (`FileMeta`, `describe`).
-- `icons.rs`: the large icons of the grid cells: `render` (the Lucide SVGs of `assets/icons/`
-  through resvg), the octant fallback and the play stamp of the stills.
+- `icons.rs`: the large icons of the grid cells: `render` (the Phosphor icons of
+  `tuilibr::icons`), the octant fallback and the play stamp of the stills.
 - `styles.rs`: `STYLES`, one style per role on the screen.
 - `config/`: `mod.rs` holds `config.toml`. `Paths` (`from_env`, `from_vars`) holds the two file
   paths, `load(&Paths)` reads the config, `load_at` takes the paths for the tests. `state.rs`

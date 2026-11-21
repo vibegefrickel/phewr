@@ -447,13 +447,13 @@ This page holds the long form of each gotcha in `AGENTS.md`. Each item names the
   (`tuilibr::pictures::kitty::protocol::probe::chosen_loops`). herdr 0.9.5 keeps its own Kitty image store with
   animation frames and answers the probe itself, but it plays no Kitty animation. The ticks
   play there (maintainer, 2026-11-03). `PHEWR_KITTY_LOOPS` and `[gallery] loops` win over herdr.
-- **Cell icons:** a grid cell without a thumbnail shows a large dim Lucide icon: `image` for a
-  picture, `play` for a video, `folder` for a folder and `folder-up` for `..`, without a name
-  (`icons.rs`, `draw_cell_icon` in `ui/grid/mod.rs`). The icon box is about 30 % of the cell height
-  and square in pixels (`App::cell_px`). A cell that cannot hold 2 rows, or an icon that the grid
-  edge cuts, gets the one-cell symbol (`Icon::symbol`). The help popup hides the icons, as it
-  hides the pictures. A HEIC preview counts as a thumbnail. The design is in
-  `docs/grid-and-kitty.md` ("Grid icons").
+- **Cell icons:** a grid cell without a thumbnail shows a large dim Phosphor icon without a name
+  (`icons.rs`, `draw_cell_icon` in `ui/grid/mod.rs`). The icon is `image` for a picture, `play` for
+  a video, `folder-simple` for a folder and `arrow-elbow-left-up` for `..`. The icon box is about
+  30 % of the cell height and square in pixels (`App::cell_px`). A cell that cannot hold 2 rows gets
+  the one-cell symbol (`Icon::symbol`). An icon that the grid edge cuts gets the same symbol. The
+  help popup hides the icons, as it hides the pictures. A HEIC preview counts as a thumbnail. The
+  design is in `docs/grid-and-kitty.md` ("Grid icons").
 - **Cell shape:** `App::request_cell_shape` reads the headers of the first `SHAPE_SAMPLE` (64) files
   on a thread, once per scan (`tuilibr::pictures::shape`). The shape stays until the next directory switch,
   so the columns never move while the user browses. The buckets and the per-format rules are in

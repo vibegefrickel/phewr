@@ -224,15 +224,15 @@ the picture plan). It holds `Placements`, `Screen`, `Update`, `Placing` and `Lay
 
 ### Grid icons
 
-- The icons are the Lucide SVGs in `assets/icons/` (ISC license, `assets/icons/LICENSE`), with
-  `stroke-width` 1.5 instead of 2. `include_str!` puts them into the binary.
+- The icons are the Phosphor SVGs of `tuilibr::icons` (MIT license,
+  `../tuilibr/assets/icons/LICENSE`) in the regular weight.
 - The start write (`tuilibr::pictures::kitty::query`) asks for the terminal foreground with OSC 10,
   before the Kitty probes. The
   terminal answers in order, so the read needs no end condition of its own. The query ends with
   BEL, and an answer with `ESC \` does not count as a Kitty answer.
-- `icons::render` draws an icon with resvg at the pixel size of the icon box. The pixels are the
-  foreground color at 45 % of the SVG alpha (`ICON_ALPHA`). One render takes 0.11 ms at 144x129
-  px and 0.25 ms at 400x344 px (release build). `GridIcons` keeps at most 64 renders in memory.
+- `icons::render` takes the icon from `tuilibr::icons::render` at the pixel size of the icon box.
+  The pixels are the foreground color at 45 % of the SVG alpha (`ICON_ALPHA`). `GridIcons` keeps
+  at most 64 renders in memory.
 - Each icon has 4 fixed image ids below the loop ids (`ICON_ID_BASE`, `SLOTS`), one per pixel
   size. The first grid rows get the spare rows, so one grid can need 2 sizes of an icon. A new
   size takes a free id, else the id of a size that no visible cell needs. The placements of
