@@ -3,17 +3,15 @@
 ## Handoff
 
 - Date: 2026-11-20
-- Commit: 36d3c33
+- Commit: 532c914 (tuilibr `04e8215`)
 - Done: phewr is an app of the crate `~/Projects/dev/tuilibr`: the picture module, the frame, the terminal session and the motion module come from the crate. Each phase merged with a docs commit.
 - Done: the maintainer test run passed steps 10 to 13 and the grid part of step 14. The rest of the run is in "Later".
 - Done: the dependency round, the lint union and the crate lints of tuilibr, Rust 1.100, `version = "0.1.0"`, the shared audit text and the fast pre-commit hook.
 - Done: every Kitty write runs in an `Update` of the `Screen`. Each config key loads on its own, with one start note.
-- Done: the grid loops run on the loop player of tuilibr (`84a4cbb`). The duplication review of tuilibr in phewr is done (`b81f40c`, `a5be1ea`, `58ed2b8`, `87278c8`).
-- Done: tuilibr is committed with the API that phewr main calls. The thumbnail cache is in `~/.cache/phewr`, and `~/Library/Caches/phewr` is gone.
-- Done: the maintainer cleaned up this file (`36d3c33`). The consolidate run of 2026-11-20 changed only this section.
-- Done (uncommitted, for tuilibr-82): `adopt_old_cache` calls `tuilibr::dirs::move_once` with `OtherVolume::Leave`. The late-answer filter of tuilibr forgets the owed answers after 5 s, so the DA1 note is gone. Both need the uncommitted tuilibr tree.
+- Done: the grid loops run on the loop player of tuilibr (`84a4cbb`). The duplication review of tuilibr in phewr is done (`b81f40c`, `a5be1ea`, `58ed2b8`, `87278c8`). The thumbnail cache is in `~/.cache/phewr`.
+- Done (`532c914`): the grid loops keep their stills while the info pane shows (maintainer decision). AGENTS.md and `docs/grid-and-kitty.md` name the rule.
+- Done (`532c914`, for tuilibr-82): `adopt_old_cache` calls `tuilibr::dirs::move_once` with `OtherVolume::Leave`. The late-answer filter of tuilibr forgets the owed answers after `OWED_FOR` (5 s), so the DA1 note is gone.
 - Open (agent): no active worker and no ready batch. The next batch waits for the test run or for a crate change of the tuilibr session.
-- Done: the grid loops keep their stills while the info pane shows (maintainer, 2026-11-20). AGENTS.md and `docs/grid-and-kitty.md` name the rule.
 - Open (user): run the rest of the test run with the installed build: step 14 points 3 to 8, herdr Part 2, Shift+wheel, the loss limit, the phase 7 scenarios.
 - Health: `just check` passes on Rust 1.100.0 with 713 tests (691 lean), with the audit. `cargo deny` is silent. No workers, no worktrees, no stashes.
 
