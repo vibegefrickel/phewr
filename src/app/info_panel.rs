@@ -7,7 +7,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 impl App {
-    /// Tab and the right click: show or hide the info pane. A slideshow shows no panes, so the
+    /// Tab, `Ctrl-B` and the right click: show or hide the info pane. Without the info pane, no
+    /// layout draws a box, so `Ctrl-B` needs no change of the layout. A slideshow shows no panes, so the
     /// toggle does nothing there.
     pub(crate) fn toggle_info(&mut self) -> io::Result<()> {
         if self.slideshow_fills_screen() {

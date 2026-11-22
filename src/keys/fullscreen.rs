@@ -4,6 +4,7 @@ use super::step_key;
 use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::io;
+use tuilibr::frame;
 
 pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     match key.code {
@@ -19,6 +20,7 @@ pub(crate) fn handle_fullscreen_key(app: &mut App, key: KeyEvent) -> io::Result<
             app.enter_gallery();
         }
         KeyCode::Tab => app.toggle_info()?,
+        KeyCode::Char('b') if frame::is_list_key(&key) => app.toggle_info()?,
         KeyCode::Char('B') => app.toggle_layout()?,
         // The fullscreen view shows a file that plays after a failed open of its player, and on
         // the still of a Live Photo before a running slideshow plays its motion. The player view

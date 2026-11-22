@@ -134,13 +134,13 @@ return {
 |-----|--------|
 | `h` `j` `k` `l`, arrows | Move |
 | `g` `G`, `Home` `End` | First / last |
-| `Ctrl-b` `Ctrl-f`, `PgUp` `PgDn` | Page up / down |
+| `PgUp` `PgDn`, `Ctrl-f` | Page up / down |
 | `Enter` | Open an image fullscreen, play a video, or open a folder |
 | `Backspace` | Go to the parent folder |
 | `p` | Play the video in an mpv window, with sound |
 | `s` | Start a slideshow from the cursor |
 | `+` `-` `0` | Larger / smaller / default thumbnails (each step changes the columns) |
-| `Tab` | Show or hide the info pane |
+| `Tab`, `Ctrl-B` | Show or hide the info pane |
 | `/` | Search in the row under the bar. `Enter` applies, `Esc` clears. The cursor keys, `Home`, `End`, `Alt`+arrows (words), `Ctrl`+`W`, `Ctrl`+`U` and `Ctrl`+`K` edit the query. |
 | `B` | Toggle the layout while the info pane shows: maximal (boxes, the folder path as the title) or minimal (one divider) |
 | `Space` | Mark or unmark (the marks go to yazi on quit) |
@@ -166,7 +166,7 @@ pixels, file size, format and date. For a video, it shows the length, the frame 
 | `s` | Start / stop the slideshow |
 | `Space` | Pause / resume the slideshow |
 | `[` `]` | Shorter / longer slideshow interval (0.5 s steps) |
-| `Tab` | Show or hide the info pane |
+| `Tab`, `Ctrl-B` | Show or hide the info pane |
 | `p` | Play the video in an mpv window, with sound |
 | `q` | Back to the gallery. In a slideshow, `q` stops it too. |
 | `Esc` | Stop the slideshow, or go back to the gallery |

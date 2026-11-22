@@ -3,7 +3,7 @@
 use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io;
-use tuilibr::text_field::edit_for_key;
+use tuilibr::{frame, text_field::edit_for_key};
 
 /// The keys of the search line: Enter applies the filter, Esc clears it, and the readline keys of
 /// `edit_for_key` edit the field. Only a change of the text runs the filter again.
@@ -68,6 +68,7 @@ pub(super) fn handle_gallery_key(app: &mut App, key: KeyEvent) -> io::Result<boo
             app.request_video_window();
         }
         KeyCode::Tab => app.toggle_info()?,
+        KeyCode::Char('b') if frame::is_list_key(&key) => app.toggle_info()?,
         KeyCode::Char('B') => app.toggle_layout()?,
         // A zoom marks the grid dirty, and the next grid write deletes the old pictures.
         KeyCode::Char('+' | '=') => {
@@ -108,7 +109,6 @@ fn move_cursor(app: &mut App, code: KeyCode, ctrl: bool) -> bool {
         KeyCode::Up | KeyCode::Char('k') => app.gallery.move_up(),
         KeyCode::Down | KeyCode::Char('j') => app.gallery.move_down(),
         KeyCode::PageUp => app.gallery.move_page_up(),
-        KeyCode::Char('b') if ctrl => app.gallery.move_page_up(),
         KeyCode::PageDown => app.gallery.move_page_down(),
         KeyCode::Char('f') if ctrl => app.gallery.move_page_down(),
         KeyCode::Char('g') | KeyCode::Home => app.gallery.move_to_first(),
@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(app.gallery.cursor, 0);
         press_with(&mut app, KeyCode::Char('f'), KeyModifiers::CONTROL);
         assert_eq!(app.gallery.cursor, 6);
-        press_with(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::PageUp);
         assert_eq!(app.gallery.cursor, 0);
         char_key(&mut app, 'f');
         assert_eq!(app.gallery.cursor, 0, "f without Ctrl does nothing");
@@ -303,6 +303,13 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         assert_ne!(app.info_visible, info);
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));
+        press_with(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.info_visible, info,
+            "Ctrl-B toggles the info pane like Tab"
+        );
+        assert_eq!(app.gallery.cursor, 0, "Ctrl-B pages no more");
+        press(&mut app, KeyCode::Tab);
         char_key(&mut app, 'B');
         assert_eq!(app.pane_layout, Layout::Minimal);
         assert!(text(&app.graphics_out.take_bytes()).contains("a=d"));

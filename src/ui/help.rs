@@ -28,8 +28,8 @@ const GALLERY_COLUMN: &[Section<'static>] = &[
             ("+ / -, Shift+wheel", "Grid size (Shift if sent)"),
             ("0", "Reset thumbnail size"),
             ("Wheel", "Scroll the grid"),
-            ("PgDn/PgUp, ^f/^b", "Page down / up"),
-            ("Tab / right click", "Toggle info pane"),
+            ("PgDn/PgUp, ^f", "Page down / up"),
+            ("Tab, ^b, r-click", "Toggle info pane"),
             ("B", "Minimal / maximal layout"),
             ("s", "Slideshow from cursor"),
             #[cfg(feature = "video")]
@@ -62,7 +62,7 @@ const FULLSCREEN_SECTIONS: [Section<'static>; 2] = [
             ("+ / -, wheel", "Zoom in / out (image)"),
             ("0", "Reset zoom to fit (image)"),
             ("h/j/k/l, drag", "Pan when zoomed (image)"),
-            ("Tab / right click", "Toggle info pane (image)"),
+            ("Tab, ^b, r-click", "Toggle info pane (image)"),
             ("B", "Minimal / maximal (image)"),
             ("s", "Slideshow on / off (image)"),
             #[cfg(feature = "video")]
