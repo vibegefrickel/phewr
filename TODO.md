@@ -39,7 +39,7 @@ phewr has no active batch (2026-11-20).
 
 ## Next
 
-Order: speed first, then formats. There is no release before Q1 2027 (decided 2026-11-03), and the maintainer plans no Homebrew release (2026-11-09). Users clone the repository and build phewr. The maintainer pushes only the source to Codeberg for the dotfiles install.
+Order: speed first, then formats. There is no release before Q1 2027 (decided 2026-11-03), and the maintainer plans no Homebrew release (2026-11-09). Users clone the repository and build phewr. The maintainer pushes only the source to GitHub for the dotfiles install.
 
 1. Speed
    - herdr is slower than plain Ghostty (maintainer, 2026-10-24). Measured on 2026-10-30 with Ghostty 1.4.0 and herdr 0.9.5 (write side, 1080p frames through `t=t`): plain Ghostty accepts 1047 fps RGB and 797 fps RGBA, a herdr pane 967 fps RGB and 369 fps RGBA (the native path waits for the host `OK` per frame), and a scroll retires the native path for the rest of the connection (668 and 730 fps after it). The RGBA fast path for phewr waits for the answer to the herdr issue: send `f=32`, so that the herdr `t=f` fast path applies. Measure it before you build it: `~/Projects/dev/kitty-frames-ack.py` (2026-11-11) sends with `q=1` and times the OK answers, so it measures the display side, not the write side. Run `python3 kitty-frames-ack.py grid 24` and `grid 32` (40 cells, 10 scrolls, like the grid) and `frames 24` and `frames 32` (90 frames of 1080p, like the player) in plain Ghostty and in a herdr pane. If the scroll time of `grid 32` in herdr is not below `grid 24`, or if herdr scrolls without lag on Ghostty 1.4.0, drop the idea.

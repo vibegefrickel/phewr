@@ -20,7 +20,7 @@ and mpv are optional. Without ffmpeg, videos have no thumbnails and play only in
 
 ```sh
 brew install rustup just pkgconf jpeg-turbo libheif ffmpeg mpv
-git clone https://codeberg.org/webgefrickel/phewr.git
+git clone https://github.com/vibegefrickel/phewr.git
 cd phewr
 just install
 ```

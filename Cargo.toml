@@ -8,7 +8,7 @@ rust-version = "1.100"
 publish = false
 description = "Terminal image and video gallery for the Kitty graphics protocol: thumbnail grid, slideshow, EXIF, HEIC"
 license = "MIT"
-repository = "https://codeberg.org/webgefrickel/phewr"
+repository = "https://github.com/vibegefrickel/phewr"
 
 # The lint set is the rule set. `just check` turns every warning into an error. A local
 # exception is `#[expect(lint, reason = "...")]`, never `#[allow]`.
